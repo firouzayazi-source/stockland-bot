@@ -4486,7 +4486,9 @@ if __name__ == "__main__":
     import time
     while True:
         try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as e:
-            logger.exception("Polling crashed, restarting in 5s: %s", e)
-            time.sleep(5)
+            bot.infinity_polling(
+                timeout=60,
+                long_polling_timeout=60,
+                restart_on_change=False,
+                skip_pending=True,
+            )
