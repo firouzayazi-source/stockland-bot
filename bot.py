@@ -4482,6 +4482,11 @@ if __name__ == "__main__":
     _ensure_delivery_table()
     _ensure_ticket_tables()
     logger.info("Bot started...")
+    bot.infinity_polling(
+        timeout=60,
+        long_polling_timeout=60,
+        skip_pending=True,
+    )
 
     import time
     while True:
