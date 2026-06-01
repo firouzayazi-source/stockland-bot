@@ -72,6 +72,3 @@ def set_main_button_enabled(btn_key: str, enabled: bool) -> None:
 
 def ui_cache_clear() -> None:
     _ui_cache.clear()
-
-
-set_ui_cache_clear_callback(ui_cache_clear)
