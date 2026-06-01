@@ -4429,10 +4429,6 @@ def handle_card2card_text(message):
 
 
 # ========= MAIN =========
-
-
-
-
 @bot.message_handler(content_types=["document"])
 def handle_admin_backup_restore_document(message):
     uid = message.from_user.id
@@ -4482,18 +4478,11 @@ if __name__ == "__main__":
     _ensure_delivery_table()
     _ensure_ticket_tables()
     logger.info("Bot started...")
-    bot.infinity_polling(
-        timeout=60,
-        long_polling_timeout=60,
-        skip_pending=True,
-    )
 
     import time
     while True:
         try:
-            bot.infinity_polling(
-                timeout=60,
-                long_polling_timeout=60,
-                restart_on_change=False,
-                skip_pending=True,
-            )
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            logger.exception("Polling crashed, restarting in 5s: %s", e)
+            time.sleep(5)
