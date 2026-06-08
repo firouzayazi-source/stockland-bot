@@ -68,7 +68,7 @@ def start_wallet_charge_payment(
     # ---- call internal API ----
     try:
         resp = requests.post(
-            f"{PAYMENT_API_BASE_URL}/payment/create",
+            f"{PAYMENT_API_BASE_URL}/pay.php",
             json=payload,
             timeout=15
         )
