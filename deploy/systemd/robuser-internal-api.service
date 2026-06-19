@@ -1,5 +1,5 @@
 [Unit]
-Description=Robuser Bot
+Description=Robuser Internal API
 After=network.target
 Wants=network.target
 
@@ -7,7 +7,7 @@ Wants=network.target
 Type=simple
 WorkingDirectory=/opt/Robuser
 EnvironmentFile=/etc/robuser.env
-ExecStart=/opt/Robuser/venv/bin/python /opt/Robuser/bot.py
+ExecStart=/opt/Robuser/venv/bin/python /opt/Robuser/services/internal_api.py
 Restart=always
 RestartSec=2
 Environment=PYTHONUNBUFFERED=1
