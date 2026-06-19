@@ -87,6 +87,7 @@ from state import (
     ensure_admin,
 )
 from backup_tools import (
+    BACKUP_DIR,
     _ensure_backup_dir,
     create_db_backup,
     validate_backup_db,
@@ -1195,7 +1196,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
     # ----------------------------
     # بررسی و کسر موجودی (نسخه قطعی)
     # ----------------------------
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_FULL_PATH)
     cur = conn.cursor()
 
     cur.execute("SELECT balance FROM wallets WHERE user_id=?", (uid,))
@@ -1306,13 +1307,14 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
             bot.send_message(chat_id, "در حال حاضر محصولی برای این دسته ثبت نشده است.")
         return
 
-    kb = types.InlineKeyboardMarkup(row_width=2 if admin_view else 1)
+    kb = types.InlineKeyboardMarkup(row_width=1)
     partner_ok = (not admin_view) and (user_id is not None) and is_partner_approved(int(user_id))
+    has_visible = False
     for p in products:
         pid, _, title, price, desc, is_active, partner_price = p
         if not admin_view and not is_active:
             continue
-
+        has_visible = True
         if admin_view:
             status_icon = "✅" if is_active else "❌"
             text = f"{status_icon} {title} | {price:,} تومان"
@@ -1323,30 +1325,18 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
             cb = f"{category}_select_{pid}"
         kb.add(types.InlineKeyboardButton(text, callback_data=cb))
 
-        if admin_view:
-            kb.add(
-                types.InlineKeyboardButton(
-                    "➕ افزودن محصول جدید", callback_data=f"admin_new_product_{category}"
-                )
-            )
-            kb.add(
-                types.InlineKeyboardButton(
-                    "🔙 بازگشت به دسته‌ها", callback_data="admin_products"
-                )
-            )
-        else:
-            back_cb = "back_main" if category == "apple" else "other_categories"
-            kb.add(
-                types.InlineKeyboardButton(
-                    "🔙 بازگشت", callback_data=back_cb
-                )
-            )
+    if not has_visible and not admin_view:
+        bot.send_message(chat_id, "در حال حاضر محصولی برای این دسته ثبت نشده است.")
+        return
 
-        bot.send_message(
-            chat_id,
-            "لطفا یکی از سرویس‌های زیر را انتخاب کنید:",
-            reply_markup=kb
-        )
+    if admin_view:
+        kb.add(types.InlineKeyboardButton("➕ افزودن محصول جدید", callback_data=f"admin_new_product_{category}"))
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت به دسته‌ها", callback_data="admin_products"))
+    else:
+        back_cb = "back_main" if category == "apple" else "other_categories"
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
+
+    bot.send_message(chat_id, "لطفا یکی از سرویس‌های زیر را انتخاب کنید:", reply_markup=kb)
 
 #======================= handle_confirm_full ======================
 
@@ -2321,7 +2311,28 @@ def handle_admin_text(message):
             admin_states.pop(aid, None)
             bot.reply_to(message, "خطا در وضعیت. دوباره از تنظیمات اقدام کنید.")
             return
-
+        txt = (message.text or "").strip()
+        if not txt:
+            bot.reply_to(message, "متن خالی قابل ذخیره نیست. دوباره ارسال کنید:")
+            return
+        if txt == "/reset":
+            try:
+                delete_ui_text(k)
+                ui_cache_clear()
+            except Exception:
+                pass
+            admin_states.pop(aid, None)
+            bot.reply_to(message, f"✅ بازنشانی شد: {t(k, DEFAULT_UI_TEXTS.get(k, k))}")
+            return
+        try:
+            set_ui_text(k, txt)
+            ui_cache_clear()
+        except Exception as e:
+            bot.reply_to(message, f"خطا در ذخیره: {e}")
+            return
+        admin_states.pop(aid, None)
+        bot.reply_to(message, f"✅ ذخیره شد: {t(k, DEFAULT_UI_TEXTS.get(k, k))}")
+        return
 
     if mode == "product_chat_text":
         pid = int(state.get("product_id") or 0)
@@ -2353,32 +2364,6 @@ def handle_admin_text(message):
                 send_admin_product_detail(message, product)
         except Exception:
             pass
-        return
-
-        txt = (message.text or "").strip()
-        if not txt:
-            bot.reply_to(message, "متن خالی قابل ذخیره نیست. دوباره ارسال کنید:")
-            return
-
-        if txt == "/reset":
-            try:
-                delete_ui_text(k)
-                ui_cache_clear()
-            except Exception:
-                pass
-            admin_states.pop(aid, None)
-            bot.reply_to(message, f"✅ بازنشانی شد: {t(k, DEFAULT_UI_TEXTS.get(k, k))}")
-            return
-
-        try:
-            set_ui_text(k, txt)
-            ui_cache_clear()
-        except Exception as e:
-            bot.reply_to(message, f"خطا در ذخیره: {e}")
-            return
-
-        admin_states.pop(aid, None)
-        bot.reply_to(message, f"✅ ذخیره شد: {t(k, DEFAULT_UI_TEXTS.get(k, k))}")
         return
 
     if mode == "partner_search":
@@ -2760,6 +2745,9 @@ def handle_callbacks(call: types.CallbackQuery):
     uid = call.from_user.id
     # --- toggle active/inactive for other_services ---
     if data.startswith("toggle_other_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
         service_key = data.replace("toggle_other_", "")
 
         import sqlite3
@@ -2776,6 +2764,16 @@ def handle_callbacks(call: types.CallbackQuery):
         return
     # ---------------------------------------------------
     
+    if data == "noop":
+        bot.answer_callback_query(call.id)
+        return
+
+    if data == "cancel_purchase":
+        bot.answer_callback_query(call.id)
+        clear_user_state(uid)
+        bot.send_message(call.message.chat.id, "خرید لغو شد.", reply_markup=main_menu())
+        return
+
     if data.startswith("ticket_close_"):
         bot.answer_callback_query(call.id)
         tid = safe_int(data.replace("ticket_close_", "", 1))
