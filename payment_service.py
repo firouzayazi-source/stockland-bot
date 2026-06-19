@@ -18,6 +18,8 @@ Design notes
   double-credits (idempotency via `status='pending'` guards).
 """
 
+import hashlib
+import hmac
 import html
 import logging
 import os
@@ -27,7 +29,7 @@ import time
 from datetime import datetime, timezone, date
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 
@@ -421,12 +423,162 @@ def maybe_start_bot_polling() -> None:
     _bot_thread_started = True
 
 
+PHP_SECRET = os.getenv("PHP_SECRET") or ""
+
+
 @app.get("/health")
 def health():
     conn = db_connect()
     try:
         conn.execute("SELECT 1;").fetchone()
-        return {"ok": True, "bot_polling": _bot_thread_started}
+        return {"ok": True, "bot_polling": _bot_thread_started, "php_bridge": bool(PHP_SECRET)}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# PHP Bridge: /payment/finalize
+# PHP callback روی هاست این endpoint را صدا می‌زند پس از تأیید پرداخت از زرین‌پال
+# ---------------------------------------------------------------------------
+@app.post("/payment/finalize")
+def payment_finalize(payload: dict, request: Request):
+    ensure_schema()
+
+    # تأیید secret
+    secret = (
+        request.headers.get("X-Stockland-Secret")
+        or payload.get("secret")
+        or ""
+    )
+    if not PHP_SECRET or not hmac.compare_digest(str(PHP_SECRET), str(secret)):
+        raise HTTPException(403, "Unauthorized")
+
+    try:
+        user_id        = int(payload["user_id"])
+        chat_id        = int(payload.get("chat_id") or user_id)
+        amount         = int(payload["amount"])
+        payment_type   = str(payload.get("payment_type") or "wallet").lower()
+        wallet_reserved= int(payload.get("wallet_reserved") or 0)
+        ref_id         = str(payload.get("ref_id") or "")
+        authority      = str(payload.get("authority") or "")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Invalid payload: {exc}")
+
+    conn = db_connect()
+    try:
+        # idempotency: اگه قبلاً این authority پردازش شده، دوباره انجام نده
+        if authority:
+            existing = conn.execute(
+                "SELECT status FROM zarinpal_transactions WHERE authority=? LIMIT 1;",
+                (authority,)
+            ).fetchone()
+            if existing and str(existing["status"]) == "paid":
+                return {"ok": True, "status": "already_processed"}
+
+        buyer_type = infer_buyer_type(conn, user_id)
+        total_amount = amount + wallet_reserved
+
+        # ذخیره تراکنش در دیتابیس
+        if authority:
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO zarinpal_transactions
+                        (user_id, amount, authority, status, created_at, payment_type,
+                         wallet_reserved, total_amount, buyer_type, chat_id, ref_id, paid_at)
+                    VALUES (?,?,?,'paid',?,?,?,?,?,?,?,?);
+                    """,
+                    (user_id, amount, authority, now_iso(), payment_type,
+                     wallet_reserved, total_amount, buyer_type, chat_id, ref_id, now_iso()),
+                )
+            except Exception:
+                # ممکنه authority تکراری باشد
+                conn.execute(
+                    "UPDATE zarinpal_transactions SET status='paid', ref_id=?, paid_at=? "
+                    "WHERE authority=? AND status='pending';",
+                    (ref_id, now_iso(), authority),
+                )
+
+        # ─── شارژ کیف پول ─────────────────────────────────
+        if payment_type == "wallet":
+            mark_wallet_charge(conn, user_id, amount)
+            conn.commit()
+            send_telegram_message(
+                chat_id,
+                f"✅ کیف پول شما با موفقیت شارژ شد.\n"
+                f"مبلغ: {amount:,} تومان\n"
+                f"کد پیگیری: {ref_id}",
+            )
+            return {"ok": True, "type": "wallet", "amount": amount}
+
+        # ─── خرید محصول ───────────────────────────────────
+        product_id = int(payload.get("product_id") or 0)
+        if not product_id:
+            raise HTTPException(400, "product_id is required for product payment")
+
+        product = get_product(conn, product_id)
+        if not product:
+            conn.commit()
+            send_telegram_message(chat_id, "⚠️ پرداخت موفق بود ولی محصول یافت نشد. با پشتیبانی تماس بگیرید.")
+            raise HTTPException(404, "Product not found")
+
+        title    = str(product["title"])
+        category = str(product["category"])
+
+        deduct_wallet_reserved(conn, user_id, wallet_reserved)
+        order_id  = create_order(conn, user_id, category, product_id, title, total_amount, buyer_type)
+        feed_item = claim_feed_item(conn, product_id)
+
+        if feed_item:
+            feed_id, feed_data = feed_item
+            conn.commit()
+            send_telegram_message(
+                chat_id,
+                (
+                    "✅ سفارش شما ثبت و تحویل شد.\n\n"
+                    f"شماره سفارش: #{order_id}\n"
+                    f"سرویس: {title}\n"
+                    f"مبلغ کل: {total_amount:,} تومان\n"
+                    f"کد پیگیری: {ref_id}\n\n"
+                    f"<code>{feed_data}</code>"
+                ),
+                parse_mode="HTML",
+            )
+            if ADMIN_ID:
+                send_telegram_message(
+                    ADMIN_ID,
+                    f"📦 تحویل خودکار (PHP Bridge)\n\n"
+                    f"Order: #{order_id} | User: {user_id}\n"
+                    f"Product: {title} (#{product_id})\n"
+                    f"Feed: #{feed_id}",
+                )
+            return {"ok": True, "type": "product", "order_id": order_id, "delivered": True}
+        else:
+            enqueue_pending_delivery(conn, order_id, user_id, chat_id, product_id, title, total_amount)
+            conn.commit()
+            send_telegram_message(
+                chat_id,
+                (
+                    "✅ سفارش شما ثبت شد.\n\n"
+                    f"شماره سفارش: #{order_id}\n"
+                    f"سرویس: {title}\n"
+                    f"مبلغ کل: {total_amount:,} تومان\n"
+                    "موجودی محصول تکمیل است، به‌محض شارژ ارسال خواهد شد."
+                ),
+            )
+            if ADMIN_ID:
+                send_telegram_message(ADMIN_ID, f"⚠️ سفارش بدون موجودی\nOrder: #{order_id} | User: {user_id} | Product: {title}")
+            return {"ok": True, "type": "product", "order_id": order_id, "delivered": False}
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("payment_finalize failed")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(500, "Internal error")
     finally:
         conn.close()
 
