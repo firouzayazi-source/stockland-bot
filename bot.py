@@ -85,6 +85,7 @@ from state import (
     clear_user_state,
     clear_admin_state,
     ensure_admin,
+    admin_has_perm,
 )
 from backup_tools import (
     BACKUP_DIR,
@@ -830,6 +831,24 @@ def safe_claim_next_feed_item(product_id: int):
 
 # ensure table on boot (so admin callbacks also work even if nobody ran /start yet)
 _ensure_delivery_table()
+
+
+@bot.message_handler(commands=["admin", "panel"])
+def handle_admin_command(message):
+    uid = message.from_user.id
+    if not ensure_admin(uid):
+        return
+    panel_url = "https://stockland-bot-production.up.railway.app/admin/"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("🌐 پنل مدیریت وب", url=panel_url),
+        types.InlineKeyboardButton("📦 محصولات", url=panel_url + "products"),
+        types.InlineKeyboardButton("🗃 موجودی", url=panel_url + "feed"),
+        types.InlineKeyboardButton("⚙️ تنظیمات", url=panel_url + "settings"),
+        types.InlineKeyboardButton("👥 ادمین‌ها", url=panel_url + "admins"),
+        types.InlineKeyboardButton("💾 دیتابیس", url=panel_url + "database"),
+    )
+    bot.send_message(uid, "🛍 پنل مدیریت استوک لند:", reply_markup=kb)
 
 
 @bot.message_handler(commands=["start"])
@@ -2984,114 +3003,31 @@ def handle_callbacks(call: types.CallbackQuery):
         return
 
     if data == "admin_settings":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "تنظیمات 👇", reply_markup=admin_settings_menu())
+        panel_url = f"https://stockland-bot-production.up.railway.app/admin/settings"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل تنظیمات", url=panel_url))
+        bot.send_message(call.message.chat.id, "تنظیمات به پنل وب منتقل شده است:", reply_markup=kb)
         return
 
-
-    
-
-    if data == "admin_main_btn_manage":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
+    if data in ("admin_main_btn_manage", "admin_ui_main_buttons", "admin_ui_texts",
+                "admin_ui_captions", "admin_backup_menu"):
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "👇 مدیریت دکمه‌های اصلی", reply_markup=admin_main_btn_manage_menu())
+        panel_url = f"https://stockland-bot-production.up.railway.app/admin/"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل مدیریت", url=panel_url))
+        bot.send_message(call.message.chat.id, "این بخش به پنل وب منتقل شده:", reply_markup=kb)
         return
 
-    if data.startswith("admin_main_btn_toggle_"):
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-
-        btn_key = data.replace("admin_main_btn_toggle_", "", 1).strip()
-
-        if btn_key not in MAIN_BUTTON_KEYS:
-            bot.answer_callback_query(call.id, "نامعتبر", show_alert=True)
-            return
-
-        currently_enabled = [k for k in MAIN_BUTTON_KEYS if is_main_button_enabled(k)]
-        cur = is_main_button_enabled(btn_key)
-
-        # prevent disabling the last enabled button
-        if cur and len(currently_enabled) <= 1:
-            bot.answer_callback_query(call.id, "حداقل یک دکمه باید فعال بماند.", show_alert=True)
-            return
-
-        set_main_button_enabled(btn_key, not cur)
-        bot.answer_callback_query(call.id, "ثبت شد ✅")
-
-        try:
-            bot.edit_message_reply_markup(
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=admin_main_btn_manage_menu(),
-            )
-        except Exception:
-            # fallback if edit not possible
-            bot.send_message(call.message.chat.id, "به‌روزرسانی شد ✅", reply_markup=admin_main_btn_manage_menu())
-        return
-
-    if data == "admin_backup_menu":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
+    if (data.startswith("admin_main_btn_toggle_") or data.startswith("admin_ui_edit_") or
+            data in ("admin_export_backup", "admin_import_backup",
+                     "admin_full_reset_1", "admin_full_reset_2", "admin_full_reset_do")):
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "بکاپ/بازیابی 👇", reply_markup=admin_backup_menu())
+        panel_url = "https://stockland-bot-production.up.railway.app/admin/"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🌐 پنل مدیریت وب", url=panel_url))
+        bot.send_message(call.message.chat.id, "این بخش از پنل وب مدیریت می‌شود:", reply_markup=kb)
         return
-
-    if data == "admin_export_backup":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        try:
-            fp = create_db_backup()
-            bot.send_document(call.message.chat.id, open(fp, "rb"), caption="بکاپ دیتابیس ✅")
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"خطا در گرفتن بکاپ: {e}")
-        return
-
-    if data == "admin_import_backup":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        admin_states[uid] = {"mode": "await_backup_upload"}
-        bot.send_message(call.message.chat.id, "فایل بکاپ دیتابیس (.sqlite) را ارسال کنید.")
-        return
-
-    if data == "admin_full_reset_1":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "⚠️ هشدار: این عملیات غیرقابل بازگشت است. برای ادامه تایید کنید.", reply_markup=admin_full_reset_confirm_menu(step=1))
-        return
-
-    if data == "admin_full_reset_2":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "مرحله دوم تایید: اگر مطمئن هستید تایید نهایی را بزنید.", reply_markup=admin_full_reset_confirm_menu(step=2))
-        return
-
-    if data == "admin_full_reset_do":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        try:
-            full_reset_database()
-            bot.send_message(call.message.chat.id, "ریست کامل انجام شد ✅ (همه چیز خالی شد)")
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"خطا در ریست کامل: {e}")
-        return
-
 
     if data == "admin_feed_panel":
         if not ensure_admin(uid):
@@ -3237,64 +3173,6 @@ def handle_callbacks(call: types.CallbackQuery):
 
         bot.answer_callback_query(call.id, "حذف شد 🗑", show_alert=False)
         send_admin_feed_panel_list(call.message.chat.id, page=page, mode=mode, message_id=call.message.message_id)
-        return
-
-    if data == "admin_ui_main_buttons":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        keys = [
-            ("MAIN_BTN_OTHER_PRODUCTS", DEFAULT_UI_TEXTS["MAIN_BTN_OTHER_PRODUCTS"]),
-            ("MAIN_BTN_BUY_APPLE_ID", DEFAULT_UI_TEXTS["MAIN_BTN_BUY_APPLE_ID"]),
-            ("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS["MAIN_BTN_MY_ORDERS"]),
-            ("MAIN_BTN_WALLET", DEFAULT_UI_TEXTS["MAIN_BTN_WALLET"]),
-            ("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS["MAIN_BTN_PARTNER_REQUEST"]),
-            ("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS["MAIN_BTN_PARTNER_PANEL"]),
-            ("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS["MAIN_BTN_GUIDE"]),
-            ("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS["MAIN_BTN_SUPPORT"]),
-        ]
-        bot.send_message(call.message.chat.id, "متن دکمه‌های اصلی را انتخاب کنید:", reply_markup=admin_ui_list_menu(keys))
-        return
-
-    if data == "admin_ui_texts":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        kb = types.InlineKeyboardMarkup(row_width=1)
-        kb.add(
-            types.InlineKeyboardButton("👨‍💻 متن پشتیبانی", callback_data="admin_ui_edit_SUPPORT_TEXT"),
-            types.InlineKeyboardButton("🔑 متن راهنما", callback_data="admin_ui_edit_HELP_TEXT"),
-            types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_settings"),
-        )
-        bot.send_message(call.message.chat.id, "کدام متن را می‌خواهید ویرایش کنید؟", reply_markup=kb)
-        return
-
-    if data == "admin_ui_captions":
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        keys = [
-            ("TXT_MAIN_MENU_TITLE", DEFAULT_UI_TEXTS["TXT_MAIN_MENU_TITLE"]),
-        ]
-        bot.send_message(call.message.chat.id, "متن‌های ثابت را انتخاب کنید:", reply_markup=admin_ui_list_menu(keys))
-        return
-
-    if data.startswith("admin_ui_edit_"):
-        if not ensure_admin(uid):
-            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        k = data.replace("admin_ui_edit_", "", 1)
-        default = DEFAULT_UI_TEXTS.get(k, k)
-        current = t(k, default)
-        admin_states[uid] = {"mode": "ui_edit", "ui_key": k}
-        bot.send_message(
-            call.message.chat.id,
-            f"کلید: {k}\nمتن فعلی: {current}\n\nمتن جدید را ارسال کنید.\n(برای بازنشانی به پیش‌فرض، فقط بنویسید: /reset)",
-        )
         return
 
     if data == "admin_products":

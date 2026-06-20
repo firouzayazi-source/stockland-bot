@@ -198,6 +198,21 @@ def ensure_schema() -> None:
             );
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE,
+                name TEXT NOT NULL,
+                web_username TEXT UNIQUE,
+                web_password_hash TEXT,
+                permissions TEXT DEFAULT '[]',
+                is_active INTEGER DEFAULT 1,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
         conn.commit()
     finally:
         conn.close()
