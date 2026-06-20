@@ -287,6 +287,27 @@ def init_db(db_path=None):
             sample_products,
         )
 
+    # جدول دسته‌بندی‌های داینامیک (نامحدود، درختی)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+            emoji TEXT DEFAULT '',
+            sort_order INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    # ستون category_id برای محصولات (ارجاع به جدول categories)
+    try:
+        cur.execute("ALTER TABLE products ADD COLUMN category_id INTEGER REFERENCES categories(id);")
+    except sqlite3.OperationalError:
+        pass
+
     # جدول متن‌های رابط کاربری (UI)
     cur.execute(
         """
@@ -1396,3 +1417,191 @@ def list_ui_texts(prefix: str | None = None) -> list[tuple[str, str, str]]:
     rows = cur.fetchall() or []
     conn.close()
     return rows
+
+
+# ========= CATEGORIES =========
+
+def get_root_categories(active_only: bool = True) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = "AND is_active=1" if active_only else ""
+        return conn.execute(
+            f"SELECT * FROM categories WHERE parent_id IS NULL {where} ORDER BY sort_order, name;"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_subcategories(parent_id: int, active_only: bool = True) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = "AND is_active=1" if active_only else ""
+        return conn.execute(
+            f"SELECT * FROM categories WHERE parent_id=? {where} ORDER BY sort_order, name;",
+            (parent_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_category(cat_id: int):
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM categories WHERE id=? LIMIT 1;", (cat_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def get_category_by_slug(slug: str):
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM categories WHERE slug=? LIMIT 1;", (slug,)).fetchone()
+    finally:
+        conn.close()
+
+
+def get_category_products(cat_id: int, active_only: bool = True) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = "AND is_active=1" if active_only else ""
+        return conn.execute(
+            f"SELECT * FROM products WHERE category_id=? {where} ORDER BY id;",
+            (cat_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_category_by_button_text(text: str):
+    """یافتن دسته ریشه بر اساس متن دکمه Reply Keyboard"""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        cats = conn.execute(
+            "SELECT * FROM categories WHERE parent_id IS NULL AND is_active=1;"
+        ).fetchall()
+        text = (text or "").strip()
+        for cat in cats:
+            emoji = (cat["emoji"] or "").strip()
+            btn = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+            if btn == text:
+                return cat
+        return None
+    finally:
+        conn.close()
+
+
+def create_category(name: str, parent_id: int | None, emoji: str = "", sort_order: int = 0) -> int:
+    slug = "".join(c if c.isalnum() else "_" for c in name).lower()[:40]
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        cur = conn.execute(
+            "INSERT INTO categories (name, slug, parent_id, emoji, sort_order, is_active, created_at) VALUES (?,?,?,?,?,1,?);",
+            (name.strip(), slug, parent_id, emoji.strip(), sort_order, now)
+        )
+        cat_id = cur.lastrowid
+        conn.commit()
+        return cat_id
+    finally:
+        conn.close()
+
+
+def update_category(cat_id: int, name: str, emoji: str, sort_order: int, is_active: int) -> None:
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE categories SET name=?, emoji=?, sort_order=?, is_active=? WHERE id=?;",
+            (name.strip(), emoji.strip(), sort_order, is_active, cat_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_category(cat_id: int) -> None:
+    """حذف دسته و همه زیردسته‌ها و محصولات مرتبط"""
+    conn = _get_connection()
+    try:
+        conn.execute("PRAGMA foreign_keys=ON;")
+        # پیدا کردن همه IDs به صورت recursive
+        all_ids = _collect_category_ids(conn, cat_id)
+        for cid in all_ids:
+            conn.execute("DELETE FROM product_feed WHERE product_id IN (SELECT id FROM products WHERE category_id=?);", (cid,))
+            conn.execute("DELETE FROM products WHERE category_id=?;", (cid,))
+        conn.execute("DELETE FROM categories WHERE id IN ({});".format(",".join("?" * len(all_ids))), all_ids)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _collect_category_ids(conn, cat_id: int) -> list:
+    ids = [cat_id]
+    children = conn.execute("SELECT id FROM categories WHERE parent_id=?;", (cat_id,)).fetchall()
+    for child in children:
+        ids.extend(_collect_category_ids(conn, child[0]))
+    return ids
+
+
+def get_category_path(cat_id: int) -> list:
+    """مسیر کامل از ریشه تا دسته (breadcrumb)"""
+    path = []
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        cid = cat_id
+        while cid:
+            cat = conn.execute("SELECT * FROM categories WHERE id=? LIMIT 1;", (cid,)).fetchone()
+            if not cat:
+                break
+            path.insert(0, cat)
+            cid = cat["parent_id"]
+    finally:
+        conn.close()
+    return path
+
+
+def toggle_category(cat_id: int) -> None:
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE categories SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE id=?;", (cat_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_all_categories_flat() -> list:
+    """همه دسته‌ها برای نمایش در select box پنل"""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM categories ORDER BY parent_id NULLS FIRST, sort_order, name;").fetchall()
+    finally:
+        conn.close()
+
+
+def add_product_with_category(category_id: int, title: str, price: int, partner_price: int | None,
+                               limit_c: int, limit_p: int, description: str) -> int:
+    slug = "".join(c if c.isalnum() else "_" for c in title).lower()[:40] or "product"
+    conn = _get_connection()
+    try:
+        cat = conn.execute("SELECT slug FROM categories WHERE id=? LIMIT 1;", (category_id,)).fetchone()
+        cat_slug = cat[0] if cat else str(category_id)
+        cur = conn.execute(
+            """INSERT INTO products (category, category_id, product_key, title, price, partner_price,
+               daily_limit_customer, daily_limit_partner, description, is_active)
+               VALUES (?,?,?,?,?,?,?,?,?,1);""",
+            (cat_slug, category_id, slug, title.strip(), price,
+             partner_price if partner_price and partner_price > 0 else None,
+             limit_c, limit_p, description.strip())
+        )
+        pid = cur.lastrowid
+        conn.commit()
+        return pid
+    finally:
+        conn.close()
