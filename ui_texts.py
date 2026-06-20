@@ -211,3 +211,59 @@ TEXT_GROUPS = {
         "MSG_PARTNER_CITY_REQUEST", "MSG_PARTNER_SHOP_REQUEST",
     ],
 }
+
+# توضیح هر کلید — کجا نمایش داده می‌شود
+TEXT_DESCRIPTIONS = {
+    # دکمه‌های منو
+    "MAIN_BTN_MY_ORDERS":        "دکمه Reply Keyboard | منوی اصلی",
+    "MAIN_BTN_WALLET":           "دکمه Reply Keyboard | منوی اصلی",
+    "MAIN_BTN_PARTNER_REQUEST":  "دکمه Reply Keyboard | منوی اصلی — برای کاربران عادی",
+    "MAIN_BTN_PARTNER_PANEL":    "دکمه Reply Keyboard | منوی اصلی — فقط برای همکاران تأیید‌شده",
+    "MAIN_BTN_GUIDE":            "دکمه Reply Keyboard | منوی اصلی",
+    "MAIN_BTN_SUPPORT":          "دکمه Reply Keyboard | منوی اصلی",
+    "BTN_WALLET_CHARGE":         "دکمه Inline | زیر موجودی کیف‌پول",
+    "BTN_WALLET_GATEWAY":        "دکمه Inline | انتخاب روش پرداخت",
+    "BTN_WALLET_CARD":           "دکمه Inline | انتخاب روش پرداخت",
+    "TXT_BACK_BTN":              "دکمه Inline | بازگشت به دسته قبلی",
+    "TXT_BACK_MAIN_BTN":         "دکمه Inline | بازگشت به منوی اصلی",
+    "TXT_CANCEL_BTN":            "دکمه Inline | لغو خرید",
+    # پیام‌های اصلی
+    "MSG_WELCOME":               "پیام | بعد از /start — {name} = نام کاربر",
+    "MSG_BTN_DISABLED":          "پیام | وقتی بخشی غیرفعال است",
+    "TXT_MAIN_MENU_TITLE":       "عنوان | در برخی پیام‌های منو",
+    "TXT_SELECT_CATEGORY":       "پیام | بالای لیست دسته‌بندی‌ها",
+    "TXT_SELECT_PRODUCT":        "پیام | بالای لیست محصولات",
+    "TXT_NO_PRODUCTS":           "پیام | وقتی دسته محصولی ندارد",
+    # کیف پول
+    "MSG_WALLET_BALANCE":        "پیام | نمایش موجودی — {balance} = مبلغ",
+    "MSG_WALLET_SELECT_METHOD":  "پیام | انتخاب روش شارژ",
+    "MSG_WALLET_AMOUNT_REQUEST": "پیام | درخواست مبلغ شارژ — {min_amount} = حداقل",
+    "MSG_WALLET_AMOUNT_INVALID": "پیام خطا | مبلغ وارد‌شده عدد نیست",
+    "MSG_WALLET_MIN_AMOUNT":     "پیام خطا | مبلغ کمتر از حداقل — {min_amount} = حداقل",
+    "MSG_WALLET_TOPUP_SUCCESS":  "پیام موفق | بعد از شارژ — {amount} = مبلغ، {ref_id} = کد پیگیری",
+    # جریان خرید
+    "MSG_PURCHASE_REDIRECT":     "پیام | قبل از انتقال به درگاه پرداخت",
+    "MSG_PURCHASE_CANCELLED":    "پیام | بعد از لغو خرید",
+    "MSG_PURCHASE_SUCCESS":      "پیام موفق | بعد از خرید — {order_id}، {title}، {price}، {feed_data}",
+    "MSG_PURCHASE_QUEUED":       "پیام | خرید ثبت شد ولی موجودی ندارد — {order_id}، {title}",
+    "MSG_PURCHASE_NO_STOCK":     "پیام | موجودی تمام شد",
+    "MSG_INSUFFICIENT_BALANCE":  "پیام خطا | موجودی کافی نیست — {balance}، {price}",
+    "MSG_DAILY_LIMIT_REACHED":   "پیام خطا | سقف روزانه — {limit} = سقف",
+    "MSG_PAYMENT_ERROR":         "پیام خطا | خطای درگاه پرداخت",
+    "MSG_PAYMENT_BTN":           "دکمه Inline | ورود به درگاه پرداخت",
+    # سفارش‌ها
+    "MSG_NO_ORDERS":             "پیام | وقتی کاربر هنوز خریدی ندارد",
+    "MSG_ORDERS_HEADER":         "عنوان | بالای لیست سفارش‌ها",
+    # پشتیبانی
+    "SUPPORT_TEXT":              "پیام | بعد از فشردن دکمه پشتیبانی",
+    "HELP_TEXT":                 "پیام | بعد از فشردن دکمه راهنما — از HTML پشتیبانی می‌کند",
+    # همکاران
+    "MSG_PARTNER_ALREADY":       "پیام | کاربر قبلاً تأیید شده",
+    "MSG_PARTNER_PENDING":       "پیام | درخواست در صف بررسی",
+    "MSG_PARTNER_APPROVED":      "پیام | بعد از تأیید همکار",
+    "MSG_PARTNER_REJECTED":      "پیام | بعد از رد درخواست",
+    "MSG_PARTNER_REQUEST_SENT":  "پیام | بعد از ارسال درخواست",
+    "MSG_PARTNER_PHONE_REQUEST": "پیام | درخواست شماره موبایل",
+    "MSG_PARTNER_CITY_REQUEST":  "پیام | درخواست شهر",
+    "MSG_PARTNER_SHOP_REQUEST":  "پیام | درخواست نام فروشگاه",
+}
