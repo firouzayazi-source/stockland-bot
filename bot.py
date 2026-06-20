@@ -485,550 +485,164 @@ def _ensure_delivery_table():
 # قابلیت چت برای هر محصول (اختیاری). اگر برای محصول فعال شود، بعد از خرید/تحویل یک تیکت باز می‌شود
 # و تا زمانی که کاربر یا ادمین آن را ببندند، پیام‌های کاربر به ادمین و پاسخ ادمین به کاربر ارسال می‌شود.
 
-def _ensure_ticket_tables():
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TICKET SYSTEM v2 — طراحی از صفر
+# ═══════════════════════════════════════════════════════════════════════════
+
+from db import (
+    ticket_ensure_schema, ticket_create, ticket_get, ticket_get_open_support,
+    ticket_get_open_product, ticket_add_message, ticket_user_sent,
+    ticket_admin_replied, ticket_close, ticket_get_messages,
+    ticket_count_waiting, ticket_get_all, TICKET_MAX_USER_MSGS,
+)
+
+BOT_BASE_URL = os.getenv("BOT_WEBHOOK_URL", "").rstrip("/")
+RAILWAY_PANEL = "https://stockland-bot-production.up.railway.app/admin"
+
+
+def _tg_send_to_user(user_id: int, text: str, reply_markup=None, parse_mode="HTML") -> bool:
+    """ارسال پیام به کاربر از طریق ربات."""
     try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        # products.chat_enabled
-        cols = [r[1] for r in _conn.execute("PRAGMA table_info(products);").fetchall()]
-        if "chat_enabled" not in cols:
-            _conn.execute("ALTER TABLE products ADD COLUMN chat_enabled INTEGER DEFAULT 0;")
-        # products.chat_text
-        if "chat_text" not in cols:
-            _conn.execute("ALTER TABLE products ADD COLUMN chat_text TEXT;")
-        # tickets
-        _conn.execute(
-            """CREATE TABLE IF NOT EXISTS tickets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                product_id INTEGER NOT NULL,
-                order_no INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                created_at TEXT NOT NULL,
-                closed_at TEXT,
-                closed_by TEXT
-            );"""
-        )
-        _conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_status ON tickets(user_id, status);")
-        _conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_product_status ON tickets(product_id, status);")
-        _conn.commit()
-        _conn.close()
-    except Exception:
-        pass
+        bot.send_message(int(user_id), text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return True
+    except Exception as ex:
+        logger.error("_tg_send_to_user(%s) failed: %s", user_id, ex)
+        return False
 
 
-def _get_product_chat_enabled(product_id: int) -> int:
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        row = _conn.execute("SELECT chat_enabled FROM products WHERE id=?;", (int(product_id),)).fetchone()
-        _conn.close()
-        return int(row[0] or 0) if row else 0
-    except Exception:
-        return 0
+# ─── Keyboards ──────────────────────────────────────────────────────────────
 
-
-def _set_product_chat_enabled(product_id: int, enabled: int) -> None:
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
-        _conn.commit()
-        _conn.close()
-    except Exception:
-        pass
-
-
-def _get_product_chat_text(product_id: int) -> str:
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        row = _conn.execute("SELECT chat_text FROM products WHERE id=?;", (int(product_id),)).fetchone()
-        _conn.close()
-        return (row[0] or "").strip() if row else ""
-    except Exception:
-        return ""
-
-
-def _set_product_chat_text(product_id: int, text_val: str | None) -> None:
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute("UPDATE products SET chat_text=? WHERE id=?;", (text_val, int(product_id)))
-        _conn.commit()
-        _conn.close()
-    except Exception:
-        pass
-
-
-def _create_ticket(user_id: int, product_id: int, order_no: int) -> int | None:
-    """Create a new ticket; returns ticket_id."""
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        now = datetime.utcnow().isoformat()
-        _conn.execute(
-            "INSERT INTO tickets(user_id, product_id, order_no, status, created_at) VALUES(?,?,?,?,?);",
-            (int(user_id), int(product_id), int(order_no), "open", now),
-        )
-        tid = _conn.execute("SELECT last_insert_rowid();").fetchone()[0]
-        _conn.commit()
-        _conn.close()
-        return int(tid)
-    except Exception:
-        return None
-
-
-def _close_ticket(ticket_id: int, closed_by: str) -> None:
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        now = datetime.utcnow().isoformat()
-        _conn.execute(
-            "UPDATE tickets SET status='closed', closed_at=?, closed_by=? WHERE id=?;",
-            (now, str(closed_by)[:32], int(ticket_id)),
-        )
-        _conn.commit()
-        _conn.close()
-    except Exception:
-        pass
-
-
-def _get_open_ticket_for_user(user_id: int) -> tuple[int, int, int] | None:
-    """Return (ticket_id, product_id, order_no) for latest open ticket."""
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        row = _conn.execute(
-            "SELECT id, product_id, order_no FROM tickets WHERE user_id=? AND status='open' ORDER BY id DESC LIMIT 1;",
-            (int(user_id),),
-        ).fetchone()
-        _conn.close()
-        if not row:
-            return None
-        return int(row[0]), int(row[1]), int(row[2])
-    except Exception:
-        return None
-
-
-def _get_ticket(ticket_id: int) -> tuple[int, int, int, int, str] | None:
-    """Return (id, user_id, product_id, order_no, status)."""
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        row = _conn.execute(
-            "SELECT id, user_id, product_id, order_no, status FROM tickets WHERE id=?;",
-            (int(ticket_id),),
-        ).fetchone()
-        _conn.close()
-        if not row:
-            return None
-        return int(row[0]), int(row[1]), int(row[2]), int(row[3]), str(row[4])
-    except Exception:
-        return None
-
-
-def _ticket_user_keyboard(ticket_id: int):
+def _ticket_user_kb(ticket_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("❌ بستن چت", callback_data=f"ticket_close_{ticket_id}"))
+    kb.add(types.InlineKeyboardButton("🔒 پایان مکالمه", callback_data=f"ticket_v2_close_{ticket_id}"))
     return kb
 
 
-def _ticket_admin_keyboard(ticket_id: int, user_id: int):
+def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("✉️ پاسخ", callback_data=f"ticket_reply_{ticket_id}_{user_id}"),
-        types.InlineKeyboardButton("⛔️ بستن", callback_data=f"ticket_admin_close_{ticket_id}"),
+        types.InlineKeyboardButton("✏️ پاسخ از تلگرام", callback_data=f"ticket_v2_reply_{ticket_id}_{user_id}"),
+        types.InlineKeyboardButton("🔒 بستن تیکت", callback_data=f"ticket_v2_admin_close_{ticket_id}"),
     )
+    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{RAILWAY_PANEL}/tickets/{ticket_id}"))
     return kb
 
-def _store_delivery_message(feed_id: int, order_id: int | None, chat_id: int, message_id: int):
-    _ensure_delivery_table()
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute(
-            "INSERT OR REPLACE INTO delivery_messages(feed_id, order_id, chat_id, message_id, created_at) VALUES(?,?,?,?,?);",
-            (int(feed_id), (int(order_id) if order_id is not None else None), int(chat_id), int(message_id), datetime.utcnow().isoformat()),
-        )
-        _conn.commit()
-        _conn.close()
-    except Exception:
-        pass
 
-def _get_delivery_message(feed_id: int):
-    """Return (chat_id, message_id, order_id) or None."""
-    _ensure_delivery_table()
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        row = _conn.execute(
-            "SELECT chat_id, message_id, order_id FROM delivery_messages WHERE feed_id=?;",
-            (int(feed_id),),
-        ).fetchone()
-        _conn.close()
-        if not row:
-            return None
-        return int(row[0]), int(row[1]), (int(row[2]) if row[2] is not None else None)
-    except Exception:
-        return None
+# ─── Support Ticket Flow (کاربر) ─────────────────────────────────────────────
 
-def _get_order_id_map(feed_ids: list[int]) -> dict[int, int]:
-    """Map feed_id -> order_id for rows that have an order_id."""
-    _ensure_delivery_table()
-    out: dict[int, int] = {}
-    try:
-        if not feed_ids:
-            return out
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        qmarks = ",".join(["?"] * len(feed_ids))
-        rows = _conn.execute(
-            f"SELECT feed_id, order_id FROM delivery_messages WHERE feed_id IN ({qmarks});",
-            tuple(int(x) for x in feed_ids),
-        ).fetchall()
-        _conn.close()
-        for fid, oid in rows or []:
-            if oid is None:
-                continue
-            out[int(fid)] = int(oid)
-    except Exception:
-        pass
-    return out
-
-
-def _get_feed_id_by_order_id(order_id: int | None) -> int | None:
-    """Return feed_id for this order_id if this order was auto-delivered from feed."""
-    if order_id is None:
-        return None
-    _ensure_delivery_table()
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        row = _conn.execute(
-            "SELECT feed_id FROM delivery_messages WHERE order_id=? LIMIT 1;",
-            (int(order_id),),
-        ).fetchone()
-        _conn.close()
-        if not row or row[0] is None:
-            return None
-        return int(row[0])
-    except Exception:
-        return None
-
-def _delete_delivery_message_record(feed_id: int):
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute("DELETE FROM delivery_messages WHERE feed_id=?;", (int(feed_id),))
-        _conn.commit()
-        _conn.close()
-    except Exception:
-        pass
-
-
-
-# ================== ORDER DISPLAY NUMBER (HUMAN-FRIENDLY) ==================
-# هدف: شماره سفارش قابل نمایش از 1 شروع شود (حتی اگر ID داخلی دیتابیس ادامه‌دار باشد).
-# نکته: order_id داخلی برای لینک‌ها/پیگیری داخلی حفظ می‌شود؛ display_no فقط برای نمایش است.
-def _ensure_order_display_table():
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute(
-            """CREATE TABLE IF NOT EXISTS order_display (
-                order_id INTEGER PRIMARY KEY,
-                display_no INTEGER UNIQUE NOT NULL,
-                created_at TEXT NOT NULL
-            );"""
-        )
-
-        # Backfill (once): اگر قبلاً سفارش‌ها وجود داشته ولی شمارۀ نمایشی ندارند،
-        # از روی سفارش‌های موجود شمارۀ 1..n می‌سازیم. این دقیقاً مشکل ID داخلیِ ادامه‌دار (مثلاً 11) را حل می‌کند.
-        cnt = _conn.execute("SELECT COUNT(*) FROM order_display;").fetchone()
-        if cnt and int(cnt[0]) == 0:
-            rows = _conn.execute("SELECT id, created_at FROM orders ORDER BY id ASC;").fetchall()
-            dn = 1
-            for oid, _created in rows or []:
-                _conn.execute(
-                    "INSERT OR IGNORE INTO order_display(order_id, display_no, created_at) VALUES(?,?,?);",
-                    (int(oid), int(dn), (_created or datetime.utcnow().isoformat())),
-                )
-                dn += 1
-
-        _conn.commit()
-        _conn.close()
-    except Exception:
-        pass
-
-def _allocate_order_display_no(order_id: int) -> int:
-    """Allocate and persist a sequential display number (1..n) for this order_id."""
-    _ensure_order_display_table()
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute("BEGIN IMMEDIATE;")
-        # اگر قبلاً تخصیص داده شده
-        row = _conn.execute("SELECT display_no FROM order_display WHERE order_id=?;", (int(order_id),)).fetchone()
-        if row and row[0] is not None:
-            dn = int(row[0])
-            _conn.execute("COMMIT;")
-            _conn.close()
-            return dn
-        # تخصیص جدید
-        row2 = _conn.execute("SELECT COALESCE(MAX(display_no), 0) + 1 FROM order_display;").fetchone()
-        dn = int(row2[0]) if row2 and row2[0] is not None else int(order_id)
-        _conn.execute(
-            "INSERT INTO order_display(order_id, display_no, created_at) VALUES(?,?,?);",
-            (int(order_id), int(dn), datetime.utcnow().isoformat()),
-        )
-        _conn.execute("COMMIT;")
-        _conn.close()
-        return dn
-    except Exception:
-        try:
-            _conn.execute("ROLLBACK;")
-            _conn.close()
-        except Exception:
-            pass
-        return int(order_id)
-
-def _get_order_display_no(order_id: int | None) -> int | None:
-    if order_id is None:
-        return None
-    _ensure_order_display_table()
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        row = _conn.execute("SELECT display_no FROM order_display WHERE order_id=?;", (int(order_id),)).fetchone()
-        _conn.close()
-        if not row or row[0] is None:
-            return None
-        return int(row[0])
-    except Exception:
-        return None
-
-def _display_order_no(order_id: int | None) -> int | None:
-    """Display 'Order ID' that matches what admin sees.
-
-    Rule:
-    - اگر این سفارش از محصول تحویل شده باشد: همان Feed ID نمایش داده می‌شود (Order ID == Feed ID).
-    - در غیر این صورت: شماره نمایشی 1..n (یا fallback به id داخلی).
-    """
-    if order_id is None:
-        return None
-    fid = _get_feed_id_by_order_id(order_id)
-    if fid is not None:
-        return int(fid)
-    dn = _get_order_display_no(order_id)
-    return dn if dn is not None else int(order_id)
-
-
-# ================== SAFE CLAIM FEED ITEM (CONSISTENT ID/DATA) ==================
-# هدف: آیتم محصول دقیقا با همان id که تحویل می‌شود در DB تحویل‌شده شود (بدون mismatch).
-def safe_claim_next_feed_item(product_id: int):
-    try:
-        import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute("BEGIN IMMEDIATE;")
-        row = _conn.execute(
-            "SELECT id, data FROM product_feed WHERE product_id=? AND delivered=0 ORDER BY id ASC LIMIT 1;",
-            (int(product_id),),
-        ).fetchone()
-        if not row:
-            _conn.commit()
-            _conn.close()
-            return None
-        fid, data = int(row[0]), row[1]
-        _conn.execute(
-            "UPDATE product_feed SET delivered=1 WHERE id=? AND product_id=?;",
-            (int(fid), int(product_id)),
-        )
-        _conn.commit()
-        _conn.close()
-        return fid, data
-    except Exception:
-        try:
-            _conn.close()
-        except Exception:
-            pass
-        return None
-
-
-# ensure table on boot (so admin callbacks also work even if nobody ran /start yet)
-_ensure_delivery_table()
-
-
-@bot.message_handler(commands=["admin", "panel"])
-def handle_admin_command(message):
-    uid = message.from_user.id
-    if not ensure_admin(uid):
-        return
-    panel_url = "https://stockland-bot-production.up.railway.app/admin/"
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        types.InlineKeyboardButton("🌐 پنل مدیریت وب", url=panel_url),
-        types.InlineKeyboardButton("📦 محصولات", url=panel_url + "products"),
-        types.InlineKeyboardButton("🗃 موجودی", url=panel_url + "feed"),
-        types.InlineKeyboardButton("⚙️ تنظیمات", url=panel_url + "settings"),
-        types.InlineKeyboardButton("👥 ادمین‌ها", url=panel_url + "admins"),
-        types.InlineKeyboardButton("💾 دیتابیس", url=panel_url + "database"),
-    )
-    bot.send_message(uid, "🛍 پنل مدیریت استوک لند:", reply_markup=kb)
-
-
-@bot.message_handler(commands=["start"])
-def handle_start(message):
-    init_db(DB_PATH)
-    ensure_pending_schema()
-    _ensure_delivery_table()
-    _ensure_ticket_tables()
-
-    uid = message.from_user.id
-    username = message.from_user.username
-    full_name = (message.from_user.first_name or "") + " " + (message.from_user.last_name or "")
-    full_name = full_name.strip()
-
-    # ثبت/به‌روزرسانی کاربر برای Broadcast
-    try:
-        upsert_user(uid, username, full_name)
-    except Exception:
-        pass
-
-    text = tf("MSG_WELCOME", name=full_name or "دوست عزیز")
-    bot.send_message(message.chat.id, text, reply_markup=main_menu(user_id=uid))
-
-def safe_edit_message_text(*args, **kwargs):
-    """
-    Stack-navigation policy:
-    - Never edit an existing message to "open" a new page.
-    - Always send a new message instead.
-
-    This function is kept for backward compatibility with old call-sites that were using
-    edit_message_text. It will parse the common (text, chat_id, message_id, ...) signature
-    and convert it to send_message(chat_id, text, ...).
-    """
-    # Extract text
-    text = None
-    if args:
-        text = args[0]
-    if text is None:
-        text = kwargs.get("text")
-    # Extract chat_id (accept kwargs or positional arg#1)
-    chat_id = kwargs.get("chat_id")
-    if chat_id is None and len(args) >= 2:
-        chat_id = args[1]
-
-    # If we still can't determine chat_id, do nothing (best-effort).
-    if chat_id is None:
-        return None
-
-    # Map supported kwargs from edit_* to send_message
-    reply_markup = kwargs.get("reply_markup")
-    parse_mode = kwargs.get("parse_mode")
-    disable_web_page_preview = kwargs.get("disable_web_page_preview")
-    entities = kwargs.get("entities")
-
-    try:
-        return bot.send_message(
-            chat_id,
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            disable_web_page_preview=disable_web_page_preview,
-            entities=entities,
-        )
-    except Exception:
-        return None
-
-# ========= TICKET CHAT (USER) =========
-@bot.message_handler(func=lambda m: (not ensure_admin(m.from_user.id)) and (user_states.get(m.from_user.id, {}).get("mode") in ("ticket_chat", "ticket_support")))
-def handle_ticket_chat_user(message):
-    uid = message.from_user.id
-    st = user_states.get(uid) or {}
-    mode = st.get("mode")
-    tid = st.get("ticket_id")
-
-    if not tid:
-        clear_user_state(uid)
-        return
-
-    tk = _get_ticket(int(tid))
-    if not tk or tk[4] != "open":
-        latest = _get_open_ticket_for_user(int(uid))
-        if latest:
-            new_tid, _pid, _ord = latest
-            user_states[uid] = {"mode": mode, "ticket_id": int(new_tid)}
-            tk = _get_ticket(int(new_tid))
-        else:
-            clear_user_state(uid)
-            bot.send_message(message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
-            return
-
-    ticket_id, user_id, product_id, order_no, status = tk
-
-    # پیام ادمین متفاوت برای تیکت عمومی و تیکت محصول
-    is_general = (int(product_id) == 0)
-    if is_general:
-        header = (
-            f"💬 <b>پیام پشتیبانی عمومی</b>\n"
-            f"Ticket: <code>{ticket_id}</code>\n"
-            f"User ID: <code>{user_id}</code>\n\n"
-        )
-    else:
-        header = (
-            f"💬 <b>پیام کاربر</b>\n"
-            f"Ticket: <code>{ticket_id}</code>\n"
-            f"Order: <b>#{order_no}</b>\n"
-            f"Product ID: <code>{product_id}</code>\n"
-            f"User ID: <code>{user_id}</code>\n\n"
-        )
-
-    txt = (message.text or "").strip()
-
-    # ذخیره پیام در تاریخچه
-    try:
-        save_ticket_message(
-            ticket_id, "user",
-            txt or f"[{message.content_type}]",
-            message.content_type if message.content_type != "text" else None
-        )
-    except Exception:
-        pass
-
-    # ارسال به ادمین
-    if message.content_type == "text" and txt:
+def _support_ticket_start(chat_id: int, user_id: int) -> None:
+    """ایجاد یا ادامه تیکت پشتیبانی."""
+    ticket_ensure_schema()
+    existing = ticket_get_open_support(user_id)
+    if existing:
+        ticket_id = existing["id"]
+        user_states[user_id] = {"mode": "ticket_v2", "ticket_id": ticket_id}
+        kb = _ticket_user_kb(ticket_id)
         bot.send_message(
-            ADMIN_ID, header + html.escape(txt),
-            reply_markup=_ticket_admin_keyboard(ticket_id, user_id),
-            parse_mode="HTML"
+            chat_id,
+            f"💬 ادامه مکالمه تیکت <b>#{ticket_id}</b>\nپیام خود را ارسال کنید:",
+            reply_markup=kb, parse_mode="HTML"
         )
     else:
-        try:
-            bot.send_message(
-                ADMIN_ID, header + "<i>(فایل/مدیا)</i>",
-                reply_markup=_ticket_admin_keyboard(ticket_id, user_id),
-                parse_mode="HTML"
-            )
-            bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
-        except Exception:
-            pass
+        ticket_id = ticket_create(user_id, type_="support")
+        user_states[user_id] = {"mode": "ticket_v2", "ticket_id": ticket_id}
+        kb = _ticket_user_kb(ticket_id)
+        bot.send_message(
+            chat_id,
+            f"💬 تیکت پشتیبانی <b>#{ticket_id}</b> باز شد.\n\n"
+            "پیام خود را ارسال کنید. در اولین فرصت پاسخ داده خواهد شد.\n"
+            "⚠️ لطفاً از ارسال چند پیام پشت سر هم خودداری کنید.",
+            reply_markup=kb, parse_mode="HTML"
+        )
 
-    # پیام تأیید به کاربر
-    if is_general:
+
+def _ticket_v2_handle_user_message(message) -> None:
+    """handler اصلی پیام کاربر به تیکت."""
+    uid = message.from_user.id
+    st = user_states.get(uid, {})
+    ticket_id = st.get("ticket_id")
+
+    if not ticket_id:
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
+        return
+
+    ticket = ticket_get(int(ticket_id))
+    if not ticket or ticket["status"] == "closed":
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
+        return
+
+    # ─── Anti-spam: سقف ۳ پیام متوالی ─────────────────────────────────────
+    cur_count = int(ticket["user_msg_count"] or 0)
+    if cur_count >= TICKET_MAX_USER_MSGS:
+        bot.reply_to(
+            message,
+            f"⚠️ شما {TICKET_MAX_USER_MSGS} پیام ارسال کرده‌اید.\n"
+            "لطفاً منتظر پاسخ پشتیبانی بمانید، سپس می‌توانید ادامه دهید."
+        )
+        return
+
+    # ─── ذخیره پیام ────────────────────────────────────────────────────────
+    txt = (message.text or "").strip()
+    media = message.content_type if message.content_type != "text" else None
+    ticket_add_message(int(ticket_id), "user", txt or f"[{message.content_type}]", media_type=media)
+    new_count = ticket_user_sent(int(ticket_id))
+
+    # ─── ارسال به ادمین ───────────────────────────────────────────────────
+    ticket_type_label = "🛒 محصول" if ticket["type"] == "product" else "💬 پشتیبانی"
+    header = (
+        f"{ticket_type_label} | تیکت <b>#{ticket_id}</b>\n"
+        f"User: <code>{uid}</code>\n\n"
+    )
+    try:
+        if message.content_type == "text" and txt:
+            bot.send_message(ADMIN_ID, header + html.escape(txt),
+                           reply_markup=_ticket_admin_kb(int(ticket_id), uid), parse_mode="HTML")
+        else:
+            bot.send_message(ADMIN_ID, header + f"<i>[{message.content_type}]</i>",
+                           reply_markup=_ticket_admin_kb(int(ticket_id), uid), parse_mode="HTML")
+            bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
+    except Exception as ex:
+        logger.error("Forward to admin failed: %s", ex)
+
+    # ─── تأیید به کاربر ──────────────────────────────────────────────────
+    remaining = TICKET_MAX_USER_MSGS - new_count
+    if remaining > 0:
         bot.reply_to(
             message,
             "✅ پیام شما دریافت شد.\n"
-            "در اولین فرصت به شما پاسخ خواهیم داد.\n"
-            "لطفاً از ارسال چند پیام با هم خودداری کنید. با تشکر 🙏"
+            "در اولین فرصت پاسخ خواهیم داد. با تشکر 🙏"
         )
     else:
-        bot.reply_to(message, "✅ ارسال شد.")
+        bot.reply_to(
+            message,
+            "✅ پیام شما دریافت شد.\n"
+            "لطفاً منتظر پاسخ پشتیبانی بمانید."
+        )
 
 
-@bot.message_handler(func=lambda m: (not ensure_admin(m.from_user.id)) and (user_states.get(m.from_user.id, {}).get("mode") in ("ticket_chat", "ticket_support")), content_types=["photo","document","video","audio","voice","sticker","animation"])
-def handle_ticket_chat_user_media(message):
-    handle_ticket_chat_user(message)
+# ─── Handler پیام‌های متنی کاربر در حالت تیکت ────────────────────────────────
+
+@bot.message_handler(
+    func=lambda m: (
+        not ensure_admin(m.from_user.id) or
+        user_states.get(m.from_user.id, {}).get("mode") == "ticket_v2"
+    ) and user_states.get(m.from_user.id, {}).get("mode") == "ticket_v2"
+)
+def _handle_ticket_v2_text(message):
+    _ticket_v2_handle_user_message(message)
+
+
+@bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "ticket_v2",
+    content_types=["photo", "document", "video", "audio", "voice", "sticker"]
+)
+def _handle_ticket_v2_media(message):
+    _ticket_v2_handle_user_message(message)
+
+
 
 
 
@@ -2268,26 +1882,23 @@ def handle_support(message):
         return
 
     uid = message.from_user.id
+    text_support = t("SUPPORT_TEXT", DEFAULT_UI_TEXTS.get("SUPPORT_TEXT", ""))
+    ticket_ensure_schema()
+    existing = ticket_get_open_support(uid)
 
-    # چک کن تیکت باز داره یا نه
-    existing = _get_open_ticket_for_user(uid)
-
-    text = t("SUPPORT_TEXT", DEFAULT_UI_TEXTS.get("SUPPORT_TEXT", ""))
-    kb = types.InlineKeyboardMarkup(row_width=1)
-
+    kb = types.InlineKeyboardMarkup()
     if existing:
-        ticket_id = existing[0]
         kb.add(types.InlineKeyboardButton(
-            f"💬 ادامه مکالمه (تیکت #{ticket_id})",
-            callback_data=f"continue_support_ticket_{ticket_id}"
+            f"💬 ادامه مکالمه (تیکت #{existing['id']})",
+            callback_data=f"ticket_v2_continue_{existing['id']}"
         ))
     else:
         kb.add(types.InlineKeyboardButton(
             "📩 ارسال پیام به پشتیبانی",
-            callback_data="create_support_ticket"
+            callback_data="ticket_v2_new"
         ))
 
-    bot.send_message(message.chat.id, text, reply_markup=kb)
+    bot.send_message(message.chat.id, text_support, reply_markup=kb)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_PARTNER_PANEL"))
@@ -2478,36 +2089,49 @@ def handle_admin_text(message):
 
     mode = state.get("mode")
 
-    if mode == "ticket_reply":
-        tid = int(state.get("ticket_id") or 0)
-        target_uid = int(state.get("target_user_id") or 0)
-        if not tid or not target_uid:
+    # ─── پاسخ ادمین به تیکت از تلگرام (v2) ──────────────────────────────
+    if mode == "ticket_v2_admin_reply":
+        tid_val = int(state.get("ticket_id") or 0)
+        target_uid = int(state.get("target_uid") or 0)
+        if not tid_val or not target_uid:
             clear_admin_state(aid)
-            bot.reply_to(message, "تیکت نامعتبر است.")
+            bot.reply_to(message, "تیکت نامعتبر.")
             return
-        tk = _get_ticket(tid)
-        if not tk or tk[4] != "open":
+
+        txt = (message.text or "").strip()
+        if txt == "/done":
+            clear_admin_state(aid)
+            bot.reply_to(message, "پایان حالت پاسخ.")
+            return
+        if not txt:
+            bot.reply_to(message, "پیام خالی — دوباره ارسال کنید:")
+            return
+
+        ticket = ticket_get(tid_val)
+        if not ticket or ticket["status"] == "closed":
             clear_admin_state(aid)
             bot.reply_to(message, "این تیکت بسته شده است.")
             return
-        txt = (message.text or "").strip()
-        if not txt:
-            bot.reply_to(message, "پیام خالی است. دوباره ارسال کنید:")
-            return
-        # send to user
+
+        # ذخیره پاسخ ادمین در DB
+        ticket_add_message(tid_val, "admin", txt, source="telegram")
+        ticket_admin_replied(tid_val)
+
+        # ارسال به کاربر
         try:
-            bot.send_message(target_uid, f"💬 پاسخ پشتیبانی (Order #{tk[3]}):\n{txt}", reply_markup=_ticket_user_keyboard(tid))
+            _tg_send_to_user(
+                target_uid,
+                f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid_val}):\n\n{html.escape(txt)}"
+            )
         except Exception:
             pass
-        # ذخیره پاسخ در تاریخچه تیکت
-        try:
-            save_ticket_message(tid, "admin", txt)
-        except Exception:
-            pass
-        bot.reply_to(message, "✅ ارسال شد.")
-        # keep admin in reply mode unless /done
-        if txt.strip() == "/done":
-            clear_admin_state(aid)
+
+        bot.reply_to(message, "✅ پاسخ ارسال شد.")
+        return
+
+    if mode == "ticket_reply":  # backward compat
+        clear_admin_state(aid)
+        bot.reply_to(message, "لطفاً از پنل یا دستور /ticket پاسخ دهید.")
         return
 
     if mode == "ui_edit":
@@ -2969,51 +2593,82 @@ def handle_callbacks(call: types.CallbackQuery):
         return
     # ---------------------------------------------------
     
-    if data == "create_support_ticket":
+    # ─── TICKET v2 callbacks ──────────────────────────────────────────────
+    if data == "ticket_v2_new":
         bot.answer_callback_query(call.id)
-        _ensure_ticket_tables()
-        # ساخت تیکت عمومی (product_id=0, order_no=0)
-        ticket_id = _create_ticket(uid, product_id=0, order_no=0)
-        if not ticket_id:
-            bot.send_message(call.message.chat.id, "خطا در ایجاد تیکت. دوباره تلاش کنید.")
-            return
-        user_states[uid] = {"mode": "ticket_support", "ticket_id": ticket_id}
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("❌ پایان مکالمه", callback_data=f"close_support_ticket_{ticket_id}"))
-        bot.send_message(
-            call.message.chat.id,
-            f"💬 تیکت پشتیبانی #{ticket_id} باز شد.\n\n"
-            "پیام خود را ارسال کنید. پس از دریافت پاسخ به شما اطلاع داده می‌شود.\n"
-            "⚠️ لطفاً از ارسال چند پیام پشت سر هم خودداری کنید.",
-            reply_markup=kb
-        )
+        _support_ticket_start(call.message.chat.id, uid)
         return
 
-    if data.startswith("continue_support_ticket_"):
+    if data.startswith("ticket_v2_continue_"):
         bot.answer_callback_query(call.id)
         try:
-            ticket_id = int(data.split("_")[-1])
+            tid_val = int(data.split("_")[-1])
         except ValueError:
             return
-        user_states[uid] = {"mode": "ticket_support", "ticket_id": ticket_id}
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("❌ پایان مکالمه", callback_data=f"close_support_ticket_{ticket_id}"))
-        bot.send_message(
-            call.message.chat.id,
-            f"💬 ادامه مکالمه تیکت #{ticket_id}\nپیام خود را ارسال کنید:",
-            reply_markup=kb
-        )
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid_val}
+        ticket = ticket_get(tid_val)
+        if not ticket or ticket["status"] == "closed":
+            bot.send_message(call.message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
+            return
+        kb = _ticket_user_kb(tid_val)
+        bot.send_message(call.message.chat.id, f"💬 ادامه تیکت #{tid_val} — پیام خود را ارسال کنید:", reply_markup=kb)
         return
 
-    if data.startswith("close_support_ticket_"):
+    if data.startswith("ticket_v2_close_"):
         bot.answer_callback_query(call.id)
         try:
-            ticket_id = int(data.split("_")[-1])
+            tid_val = int(data.split("_")[-1])
         except ValueError:
             return
         clear_user_state(uid)
-        _close_ticket(ticket_id, "user")
-        bot.send_message(call.message.chat.id, "✅ مکالمه پشتیبانی پایان یافت. ممنون از صبر شما.", reply_markup=main_menu(user_id=uid))
+        ticket_close(tid_val)
+        bot.send_message(call.message.chat.id, "✅ مکالمه پشتیبانی پایان یافت.", reply_markup=main_menu(user_id=uid))
+        return
+
+    if data.startswith("ticket_v2_reply_"):
+        # ادمین می‌خواد از تلگرام پاسخ بده
+        bot.answer_callback_query(call.id)
+        if not ensure_admin(uid):
+            return
+        parts = data.split("_")
+        try:
+            tid_val = int(parts[3])
+            target_uid = int(parts[4])
+        except (IndexError, ValueError):
+            return
+        admin_states[uid] = {"mode": "ticket_v2_admin_reply", "ticket_id": tid_val, "target_uid": target_uid}
+        bot.send_message(
+            uid,
+            f"✏️ پاسخ به تیکت #{tid_val} (کاربر {target_uid}):\n\n"
+            "پیام خود را ارسال کنید. برای لغو: /done",
+            reply_markup=types.ForceReply(selective=True)
+        )
+        return
+
+    if data.startswith("ticket_v2_admin_close_"):
+        bot.answer_callback_query(call.id, "تیکت بسته شد ✅")
+        if not ensure_admin(uid):
+            return
+        try:
+            tid_val = int(data.split("_")[-1])
+        except ValueError:
+            return
+        ticket_close(tid_val)
+        ticket_row = ticket_get(tid_val)
+        if ticket_row:
+            try:
+                _tg_send_to_user(
+                    ticket_row["user_id"],
+                    f"✅ تیکت #{tid_val} توسط پشتیبانی بسته شد."
+                )
+            except Exception:
+                pass
+        return
+
+    if data == "create_support_ticket" or data.startswith("continue_support_ticket_"):
+        # backward compat — هدایت به سیستم جدید
+        bot.answer_callback_query(call.id)
+        _support_ticket_start(call.message.chat.id, uid)
         return
 
     if data == "noop":
@@ -4306,9 +3961,9 @@ def handle_admin_backup_restore_document(message):
 
 if __name__ == "__main__":
     init_db(DB_PATH)
+    ticket_ensure_schema()
     _ensure_delivery_table()
-    _ensure_ticket_tables()
-    logger.info("Bot started...")
+    logger.info("Bot started (ticket system v2)...")
 
     import time
     while True:
