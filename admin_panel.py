@@ -15,9 +15,12 @@ import json
 import os
 import shutil
 import sqlite3
+import threading
+import time
 from datetime import datetime
 
-from fastapi import APIRouter, Form, Request, UploadFile
+import requests as _requests
+from fastapi import APIRouter, BackgroundTasks, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 router = APIRouter(prefix="/admin")
@@ -171,6 +174,8 @@ def _layout(title: str, body: str, admin_info=None,
         {nav_link("/admin/orders", "🧾 سفارش‌ها", "orders")}
         {nav_link("/admin/wallets", "💰 کیف‌پول", "wallets")}
         {nav_link("/admin/partners", "🤝 همکاران", "partners")}
+        {nav_link("/admin/tickets", "🎫 تیکت‌ها", "orders")}
+        {nav_link("/admin/broadcast", "📢 پیام‌رسانی", "broadcast")}
         {nav_link("/admin/settings", "⚙️ تنظیمات", "settings")}
         {nav_link("/admin/database", "💾 دیتابیس", "database")}
         {nav_link("/admin/admins", "👥 ادمین‌ها", "admins")}
@@ -2007,6 +2012,546 @@ async def wallet_adjust(request: Request, uid: str=Form(""), amount: str=Form("0
     finally:
         conn.close()
     return _redir(f"/admin/wallets?flash=موجودی+{user_id}+به+{new_bal:,}+تومان+تنظیم+شد")
+
+# ─────────────────────────── Telegram Helper ───────────────────────────────
+
+def _tg_send(chat_id: int, text: str, parse_mode: str = "HTML",
+              reply_markup: dict | None = None) -> bool:
+    token = _env("BOT_TOKEN")
+    if not token:
+        return False
+    try:
+        data: dict = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup)
+        r = _requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json=data, timeout=15
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def _tg_send_photo(chat_id: int, photo_url: str, caption: str = "",
+                    reply_markup: dict | None = None) -> bool:
+    token = _env("BOT_TOKEN")
+    if not token:
+        return False
+    try:
+        data: dict = {"chat_id": chat_id, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup)
+        r = _requests.post(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            json=data, timeout=15
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+# ─────────────────────────── Tickets ───────────────────────────────────────
+
+def _ticket_status_badge(status: str) -> str:
+    colors = {"open": "green", "in_progress": "yellow", "closed": "gray"}
+    labels = {"open": "باز", "in_progress": "در بررسی", "closed": "بسته"}
+    c = colors.get(status, "slate")
+    l = labels.get(status, status)
+    return f'<span class="px-2 py-0.5 text-xs rounded-full bg-{c}-100 text-{c}-700">{l}</span>'
+
+
+@router.get("/tickets", response_class=HTMLResponse)
+async def tickets_list(request: Request, status_filter: str = "", flash: str = ""):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    conn = _db()
+    try:
+        where = "WHERE t.status=?" if status_filter else ""
+        params = (status_filter, 100) if status_filter else (100,)
+        tickets = conn.execute(f"""
+            SELECT t.*, p.title as product_title,
+                   (SELECT COUNT(*) FROM ticket_messages tm WHERE tm.ticket_id=t.id) as msg_count
+            FROM tickets t
+            LEFT JOIN products p ON t.product_id=p.id
+            {where} ORDER BY
+              CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
+              t.id DESC LIMIT ?;
+        """, params).fetchall()
+        stats = {
+            "open": conn.execute("SELECT COUNT(*) FROM tickets WHERE status='open';").fetchone()[0],
+            "in_progress": conn.execute("SELECT COUNT(*) FROM tickets WHERE status='in_progress';").fetchone()[0],
+            "closed": conn.execute("SELECT COUNT(*) FROM tickets WHERE status='closed';").fetchone()[0],
+        }
+    finally:
+        conn.close()
+
+    tab_nav = '<div class="flex gap-2 mb-4">'
+    for lbl, val, count in [
+        ("همه", "", stats["open"] + stats["in_progress"] + stats["closed"]),
+        (f"باز ({stats['open']})", "open", stats["open"]),
+        (f"در بررسی ({stats['in_progress']})", "in_progress", stats["in_progress"]),
+        (f"بسته ({stats['closed']})", "closed", stats["closed"]),
+    ]:
+        active = "bg-indigo-600 text-white" if status_filter == val else "bg-white text-gray-600 hover:bg-gray-50"
+        tab_nav += f'<a href="/admin/tickets?status_filter={val}" class="px-4 py-2 rounded-lg border text-sm {active}">{lbl}</a>'
+    tab_nav += "</div>"
+
+    rows = ""
+    for t in tickets:
+        rows += f"""
+        <tr class="border-b hover:bg-gray-50 text-sm">
+          <td class="px-4 py-3 text-gray-400">#{t["id"]}</td>
+          <td class="px-4 py-3 font-mono text-xs"><code>{t["user_id"]}</code></td>
+          <td class="px-4 py-3">{e(t["product_title"] or "-")}</td>
+          <td class="px-4 py-3 text-gray-400">#{t["order_no"]}</td>
+          <td class="px-4 py-3">{_ticket_status_badge(t["status"])}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{int(t["msg_count"] or 0)} پیام</td>
+          <td class="px-4 py-3">{(t["created_at"] or "")[:10]}</td>
+          <td class="px-4 py-3">{_btn("مشاهده", f"/admin/tickets/{t['id']}", "indigo", small=True)}</td>
+        </tr>"""
+
+    body = f"""
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">🎫 تیکت‌های پشتیبانی</h1>
+    {tab_nav}
+    <div class="card overflow-hidden">
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
+          <th class="px-4 py-3">محصول</th><th class="px-4 py-3">سفارش</th>
+          <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پیام‌ها</th>
+          <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3"></th>
+        </tr></thead>
+        <tbody>{rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>تیکتی یافت نشد</td></tr>"}</tbody>
+      </table>
+    </div>"""
+
+    return _layout("تیکت‌ها", body, adm, flash=flash)
+
+
+@router.get("/tickets/{tid}", response_class=HTMLResponse)
+async def ticket_detail(request: Request, tid: int, flash: str = ""):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    conn = _db()
+    try:
+        ticket = conn.execute("""
+            SELECT t.*, p.title as product_title
+            FROM tickets t LEFT JOIN products p ON t.product_id=p.id
+            WHERE t.id=? LIMIT 1;
+        """, (tid,)).fetchone()
+
+        if not ticket:
+            return _redir("/admin/tickets")
+
+        messages = conn.execute(
+            "SELECT * FROM ticket_messages WHERE ticket_id=? ORDER BY id ASC;", (tid,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # نمایش مکالمه
+    chat_html = ""
+    for msg in messages:
+        is_admin = msg["sender"] == "admin"
+        align = "justify-end" if is_admin else "justify-start"
+        bubble_color = "bg-indigo-600 text-white" if is_admin else "bg-gray-100 text-gray-800"
+        sender_label = "ادمین" if is_admin else "کاربر"
+        media_badge = ""
+        if msg["media_type"]:
+            media_badge = f' <span class="text-xs opacity-70">[{msg["media_type"]}]</span>'
+        chat_html += f"""
+        <div class="flex {align} mb-3">
+          <div class="max-w-xs lg:max-w-md">
+            <div class="text-xs text-gray-400 mb-1 {"text-right" if is_admin else "text-left"}">{sender_label} · {(msg["created_at"] or "")[:16]}</div>
+            <div class="{bubble_color} rounded-2xl px-4 py-2 text-sm">
+              {e(msg["text"] or "")}{media_badge}
+            </div>
+          </div>
+        </div>"""
+
+    if not messages:
+        chat_html = '<p class="text-center text-gray-400 text-sm py-8">پیامی در این تیکت ثبت نشده است.<br><span class="text-xs">پیام‌های قبل از این آپدیت در اینجا نمایش داده نمی‌شوند.</span></p>'
+
+    status_btns = ""
+    if ticket["status"] != "open":
+        status_btns += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline">
+          <input type="hidden" name="status" value="open">
+          <button class="btn-sm bg-green-100 text-green-700 rounded">بازکردن</button>
+        </form>"""
+    if ticket["status"] != "in_progress":
+        status_btns += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline mr-1">
+          <input type="hidden" name="status" value="in_progress">
+          <button class="btn-sm bg-yellow-100 text-yellow-700 rounded">در بررسی</button>
+        </form>"""
+    if ticket["status"] != "closed":
+        status_btns += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline mr-1">
+          <input type="hidden" name="status" value="closed">
+          <button class="btn-sm bg-gray-100 text-gray-600 rounded">بستن تیکت</button>
+        </form>"""
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← تیکت‌ها", "/admin/tickets", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">🎫 تیکت #{tid}</h1>
+      {_ticket_status_badge(ticket["status"])}
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6">
+      <div class="md:col-span-2">
+        <div class="card p-4 mb-4" style="min-height:300px;max-height:500px;overflow-y:auto;" id="chat-box">
+          {chat_html}
+        </div>
+        {f'''<form method="post" action="/admin/tickets/{tid}/reply" class="card p-4">
+          <div class="flex gap-3">
+            {_textarea("text", "پاسخ خود را بنویسید...", rows=3)}
+            {_btn("ارسال پاسخ ↑", color="indigo")}
+          </div>
+        </form>''' if ticket["status"] != "closed" else '<div class="card p-4 text-center text-gray-400 text-sm">این تیکت بسته است.</div>'}
+      </div>
+
+      <div class="space-y-4">
+        <div class="card p-5">
+          <h3 class="font-bold text-gray-700 mb-3">اطلاعات تیکت</h3>
+          <div class="text-sm space-y-2">
+            <div><span class="text-gray-500">User ID:</span> <code class="text-xs">{ticket["user_id"]}</code></div>
+            <div><span class="text-gray-500">محصول:</span> {e(ticket["product_title"] or "-")}</div>
+            <div><span class="text-gray-500">سفارش:</span> #{ticket["order_no"]}</div>
+            <div><span class="text-gray-500">تاریخ:</span> {(ticket["created_at"] or "")[:16]}</div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <h3 class="font-bold text-gray-700 mb-3">وضعیت</h3>
+          <div class="space-y-2">{status_btns}</div>
+        </div>
+        <div class="card p-5">
+          <h3 class="font-bold text-gray-700 mb-2">ارسال پیام مستقیم به کاربر</h3>
+          <form method="post" action="/admin/tickets/{tid}/direct">
+            {_textarea("direct_msg", "پیام مستقیم (خارج از تیکت)...", rows=3)}
+            <div class="mt-2">{_btn("ارسال", color="green")}</div>
+          </form>
+        </div>
+      </div>
+    </div>
+    <script>
+      var box = document.getElementById('chat-box');
+      if(box) box.scrollTop = box.scrollHeight;
+    </script>"""
+
+    return _layout(f"تیکت #{tid}", body, adm, flash=flash)
+
+
+@router.post("/tickets/{tid}/reply")
+async def ticket_reply(request: Request, tid: int, text: str = Form("")):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    text = text.strip()
+    if not text:
+        return _redir(f"/admin/tickets/{tid}?flash=متن+خالی+است")
+
+    conn = _db()
+    try:
+        ticket = conn.execute("SELECT user_id, order_no, status FROM tickets WHERE id=? LIMIT 1;", (tid,)).fetchone()
+        if not ticket or ticket["status"] == "closed":
+            return _redir(f"/admin/tickets/{tid}?flash=تیکت+بسته+است")
+        user_id = ticket["user_id"]
+        order_no = ticket["order_no"]
+    finally:
+        conn.close()
+
+    # ارسال به کاربر از طریق ربات
+    ok = _tg_send(user_id, f"💬 <b>پاسخ پشتیبانی</b> (Order #{order_no}):\n\n{html.escape(text)}")
+
+    # ذخیره در تاریخچه
+    conn = _db()
+    try:
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO ticket_messages (ticket_id, sender, text, created_at) VALUES (?,?,?,?);",
+            (tid, "admin", text, now)
+        )
+        if not conn.execute("SELECT 1 FROM tickets WHERE id=? AND status='in_progress';", (tid,)).fetchone():
+            conn.execute("UPDATE tickets SET status='in_progress' WHERE id=?;", (tid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    msg = "پاسخ ارسال شد" if ok else "پاسخ ذخیره شد (ارسال به تلگرام ناموفق)"
+    return _redir(f"/admin/tickets/{tid}?flash={msg}")
+
+
+@router.post("/tickets/{tid}/direct")
+async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    direct_msg = direct_msg.strip()
+    if not direct_msg:
+        return _redir(f"/admin/tickets/{tid}")
+
+    conn = _db()
+    try:
+        ticket = conn.execute("SELECT user_id FROM tickets WHERE id=? LIMIT 1;", (tid,)).fetchone()
+        user_id = ticket["user_id"] if ticket else None
+    finally:
+        conn.close()
+
+    if user_id:
+        _tg_send(user_id, f"📩 <b>پیام مستقیم از پشتیبانی:</b>\n\n{html.escape(direct_msg)}")
+
+    return _redir(f"/admin/tickets/{tid}?flash=پیام+مستقیم+ارسال+شد")
+
+
+@router.post("/tickets/{tid}/status")
+async def ticket_status(request: Request, tid: int, status: str = Form("")):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    valid = {"open", "in_progress", "closed"}
+    if status not in valid:
+        return _redir(f"/admin/tickets/{tid}")
+
+    conn = _db()
+    try:
+        now = datetime.now().isoformat()
+        if status == "closed":
+            conn.execute("UPDATE tickets SET status=?, closed_at=?, closed_by='admin' WHERE id=?;", (status, now, tid))
+        else:
+            conn.execute("UPDATE tickets SET status=? WHERE id=?;", (status, tid))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return _redir(f"/admin/tickets/{tid}?flash=وضعیت+تغییر+کرد")
+
+
+# ─────────────────────────── Broadcast ─────────────────────────────────────
+
+# وضعیت broadcast جاری
+_broadcast_state: dict = {"running": False, "total": 0, "sent": 0, "failed": 0, "done": False}
+_broadcast_lock = threading.Lock()
+
+
+def _do_broadcast(user_ids: list[int], text: str, photo_url: str,
+                   inline_buttons: list[dict], token: str) -> None:
+    global _broadcast_state
+    with _broadcast_lock:
+        _broadcast_state.update({"running": True, "total": len(user_ids), "sent": 0, "failed": 0, "done": False})
+
+    markup = None
+    if inline_buttons:
+        markup = {"inline_keyboard": [inline_buttons]}
+
+    for uid in user_ids:
+        try:
+            if photo_url:
+                _tg_send_photo(uid, photo_url, caption=text, reply_markup=markup)
+            else:
+                _tg_send(uid, text, reply_markup=markup)
+            with _broadcast_lock:
+                _broadcast_state["sent"] += 1
+        except Exception:
+            with _broadcast_lock:
+                _broadcast_state["failed"] += 1
+        time.sleep(0.05)  # rate limit safety
+
+    with _broadcast_lock:
+        _broadcast_state["running"] = False
+        _broadcast_state["done"] = True
+
+
+@router.get("/broadcast", response_class=HTMLResponse)
+async def broadcast_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "broadcast")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        total_users = conn.execute("SELECT COUNT(*) FROM users;").fetchone()[0]
+        total_buyers = conn.execute("SELECT COUNT(DISTINCT user_id) FROM orders;").fetchone()[0]
+        non_buyers = total_users - total_buyers
+        products = conn.execute("SELECT id, title FROM products WHERE is_active=1 ORDER BY title;").fetchall()
+        categories = conn.execute("SELECT id, name FROM categories WHERE is_active=1 ORDER BY name;").fetchall()
+    finally:
+        conn.close()
+
+    prod_opts = "".join(f'<option value="{p["id"]}">{e(p["title"])}</option>' for p in products)
+    cat_opts = "".join(f'<option value="{c["id"]}">{e(c["name"])}</option>' for c in categories)
+
+    # وضعیت broadcast جاری
+    status_html = ""
+    with _broadcast_lock:
+        st = dict(_broadcast_state)
+    if st["total"] > 0:
+        pct = int(st["sent"] / max(st["total"], 1) * 100)
+        status_color = "green" if st["done"] else "indigo"
+        status_html = f"""
+        <div class="card p-5 mb-6 border-r-4 border-{status_color}-500">
+          <h3 class="font-bold text-{status_color}-700 mb-2">{"✅ ارسال تمام شد" if st["done"] else "🔄 در حال ارسال..."}</h3>
+          <div class="bg-gray-100 rounded-full h-3 mb-2">
+            <div class="bg-{status_color}-500 h-3 rounded-full" style="width:{pct}%"></div>
+          </div>
+          <div class="text-sm text-gray-600">
+            ارسال‌شده: {st["sent"]} | ناموفق: {st["failed"]} | کل: {st["total"]}
+          </div>
+        </div>"""
+
+    body = f"""
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">📢 پیام‌رسانی و Broadcast</h1>
+
+    {status_html}
+
+    <div class="grid md:grid-cols-3 gap-4 mb-6">
+      {_card("کل کاربران", str(total_users), "در سیستم", "indigo")}
+      {_card("خریداران", str(total_buyers), "حداقل یک خرید", "green")}
+      {_card("بدون خرید", str(non_buyers), "عضو بدون خرید", "orange")}
+    </div>
+
+    <div class="card p-6">
+      <h2 class="font-bold text-gray-700 mb-4">ارسال پیام جدید</h2>
+      <form method="post" action="/admin/broadcast/send" class="space-y-4">
+
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">مخاطبان *</label>
+          <select name="target" id="target-select" onchange="toggleTargetOptions(this.value)"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            <option value="all">همه کاربران ({total_users} نفر)</option>
+            <option value="buyers">خریداران ({total_buyers} نفر)</option>
+            <option value="non_buyers">بدون خرید ({non_buyers} نفر)</option>
+            <option value="product">خریداران یک محصول خاص</option>
+            <option value="category">خریداران یک دسته خاص</option>
+          </select>
+        </div>
+
+        <div id="product-select" style="display:none">
+          <label class="text-sm font-medium text-gray-700 block mb-1">محصول</label>
+          <select name="product_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            {prod_opts}
+          </select>
+        </div>
+
+        <div id="category-select" style="display:none">
+          <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی</label>
+          <select name="category_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            {cat_opts}
+          </select>
+        </div>
+
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">متن پیام * (HTML پشتیبانی می‌شود)</label>
+          {_textarea("text", "متن پیام را بنویسید...\n<b>بولد</b> و <i>ایتالیک</i> پشتیبانی می‌شود.", rows=5)}
+        </div>
+
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">آدرس عکس (اختیاری)</label>
+          {_input("photo_url", "https://example.com/image.jpg")}
+        </div>
+
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">دکمه‌های Inline (اختیاری)</label>
+          <div class="text-xs text-gray-400 mb-1">فرمت: متن|لینک — هر دکمه در یک خط</div>
+          {_textarea("buttons", "دکمه اول|https://t.me/yourbot\nدکمه دوم|https://site.com", rows=3)}
+        </div>
+
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
+          ⚠️ بعد از ارسال، عملیات در پس‌زمینه انجام می‌شود. صفحه را ببندید و بعداً وضعیت را چک کنید.
+        </div>
+
+        {_btn("📢 شروع ارسال", color="green")}
+      </form>
+    </div>
+
+    <script>
+    function toggleTargetOptions(val) {{
+      document.getElementById('product-select').style.display = val === 'product' ? '' : 'none';
+      document.getElementById('category-select').style.display = val === 'category' ? '' : 'none';
+    }}
+    </script>"""
+
+    return _layout("پیام‌رسانی", body, adm, flash=flash)
+
+
+@router.post("/broadcast/send")
+async def broadcast_send(request: Request, background_tasks: BackgroundTasks,
+    target: str = Form("all"), text: str = Form(""), photo_url: str = Form(""),
+    buttons: str = Form(""), product_id: str = Form(""), category_id: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "broadcast")
+    if guard: return guard
+
+    with _broadcast_lock:
+        if _broadcast_state["running"]:
+            return _redir("/admin/broadcast?flash=یک+broadcast+در+حال+اجرا+است")
+
+    text = text.strip()
+    if not text:
+        return _redir("/admin/broadcast?flash=متن+پیام+الزامی+است")
+
+    # parse inline buttons
+    inline_buttons = []
+    for line in (buttons or "").strip().splitlines():
+        line = line.strip()
+        if "|" in line:
+            parts = line.split("|", 1)
+            if len(parts) == 2 and parts[1].strip().startswith("http"):
+                inline_buttons.append({"text": parts[0].strip(), "url": parts[1].strip()})
+
+    # get target users
+    pid = int(product_id) if product_id.strip().isdigit() else None
+    cid = int(category_id) if category_id.strip().isdigit() else None
+
+    conn = _db()
+    try:
+        if target == "all":
+            rows = conn.execute("SELECT user_id FROM users;").fetchall()
+        elif target == "buyers":
+            rows = conn.execute("SELECT DISTINCT user_id FROM orders;").fetchall()
+        elif target == "non_buyers":
+            rows = conn.execute("""
+                SELECT u.user_id FROM users u
+                LEFT JOIN orders o ON u.user_id=o.user_id WHERE o.user_id IS NULL;
+            """).fetchall()
+        elif target == "product" and pid:
+            rows = conn.execute("SELECT DISTINCT user_id FROM orders WHERE product_id=?;", (str(pid),)).fetchall()
+        elif target == "category" and cid:
+            rows = conn.execute("""
+                SELECT DISTINCT o.user_id FROM orders o
+                JOIN products p ON CAST(o.product_id AS INTEGER)=p.id WHERE p.category_id=?;
+            """, (cid,)).fetchall()
+        else:
+            rows = []
+        user_ids = [int(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+    if not user_ids:
+        return _redir("/admin/broadcast?flash=هیچ+کاربری+یافت+نشد")
+
+    token = _env("BOT_TOKEN")
+    background_tasks.add_task(_do_broadcast, user_ids, text, photo_url.strip(), inline_buttons, token)
+
+    return _redir(f"/admin/broadcast?flash=ارسال+به+{len(user_ids)}+کاربر+آغاز+شد")
+
+
+@router.get("/broadcast/status")
+async def broadcast_status(request: Request):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+    with _broadcast_lock:
+        st = dict(_broadcast_state)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(st)
+
 
 # ─────────────────────────── Partners ──────────────────────────────────────
 
