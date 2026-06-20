@@ -302,11 +302,38 @@ def init_db(db_path=None):
         );
         """
     )
-    # ستون category_id برای محصولات (ارجاع به جدول categories)
+    # ستون category_id برای محصولات
     try:
         cur.execute("ALTER TABLE products ADD COLUMN category_id INTEGER REFERENCES categories(id);")
     except sqlite3.OperationalError:
         pass
+
+    # جدول کاربران (برای Broadcast)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_seen TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+    # جدول پیام‌های تیکت (تاریخچه مکالمه)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ticket_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER NOT NULL,
+            sender TEXT NOT NULL,
+            text TEXT,
+            media_type TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
 
     # جدول متن‌های رابط کاربری (UI)
     cur.execute(
@@ -1603,5 +1630,146 @@ def add_product_with_category(category_id: int, title: str, price: int, partner_
         pid = cur.lastrowid
         conn.commit()
         return pid
+    finally:
+        conn.close()
+
+
+# ========= USERS (Broadcast) =========
+
+def upsert_user(user_id: int, username: str | None = None, full_name: str | None = None) -> None:
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            """INSERT INTO users (user_id, username, full_name, first_seen, last_seen)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 username=excluded.username,
+                 full_name=excluded.full_name,
+                 last_seen=excluded.last_seen;""",
+            (user_id, username, full_name, now, now)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def get_broadcast_users(target: str = "all", product_id: int | None = None,
+                        category_id: int | None = None) -> list[int]:
+    """بازگرداندن لیست user_id برای broadcast بر اساس target"""
+    conn = _get_connection()
+    try:
+        if target == "all":
+            rows = conn.execute("SELECT user_id FROM users ORDER BY user_id;").fetchall()
+        elif target == "buyers":
+            rows = conn.execute("SELECT DISTINCT user_id FROM orders ORDER BY user_id;").fetchall()
+        elif target == "non_buyers":
+            rows = conn.execute("""
+                SELECT u.user_id FROM users u
+                LEFT JOIN orders o ON u.user_id = o.user_id
+                WHERE o.user_id IS NULL ORDER BY u.user_id;
+            """).fetchall()
+        elif target == "product" and product_id:
+            rows = conn.execute(
+                "SELECT DISTINCT user_id FROM orders WHERE product_id=? ORDER BY user_id;",
+                (str(product_id),)
+            ).fetchall()
+        elif target == "category" and category_id:
+            rows = conn.execute("""
+                SELECT DISTINCT o.user_id FROM orders o
+                JOIN products p ON CAST(o.product_id AS INTEGER) = p.id
+                WHERE p.category_id=? ORDER BY o.user_id;
+            """, (category_id,)).fetchall()
+        else:
+            rows = []
+        return [int(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_users_stats() -> dict:
+    conn = _get_connection()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM users;").fetchone()[0]
+        buyers = conn.execute("SELECT COUNT(DISTINCT user_id) FROM orders;").fetchone()[0]
+        return {"total": total, "buyers": buyers, "non_buyers": total - buyers}
+    finally:
+        conn.close()
+
+
+# ========= TICKET MESSAGES =========
+
+def save_ticket_message(ticket_id: int, sender: str, text: str | None,
+                         media_type: str | None = None) -> None:
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            "INSERT INTO ticket_messages (ticket_id, sender, text, media_type, created_at) VALUES (?,?,?,?,?);",
+            (ticket_id, sender, text, media_type, now)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def get_ticket_messages(ticket_id: int) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT * FROM ticket_messages WHERE ticket_id=? ORDER BY id ASC;",
+            (ticket_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_all_tickets(status: str | None = None, limit: int = 100) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = "WHERE t.status=?" if status else ""
+        params = (status, limit) if status else (limit,)
+        return conn.execute(f"""
+            SELECT t.*, p.title as product_title,
+                   (SELECT COUNT(*) FROM ticket_messages tm WHERE tm.ticket_id=t.id) as msg_count
+            FROM tickets t
+            LEFT JOIN products p ON t.product_id=p.id
+            {where} ORDER BY t.id DESC LIMIT ?;
+        """, params).fetchall()
+    finally:
+        conn.close()
+
+
+def get_ticket_by_id(ticket_id: int):
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT t.*, p.title as product_title
+            FROM tickets t LEFT JOIN products p ON t.product_id=p.id
+            WHERE t.id=? LIMIT 1;
+        """, (ticket_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def update_ticket_status(ticket_id: int, status: str) -> None:
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        if status == "closed":
+            conn.execute(
+                "UPDATE tickets SET status=?, closed_at=?, closed_by='admin' WHERE id=?;",
+                (status, now, ticket_id)
+            )
+        else:
+            conn.execute("UPDATE tickets SET status=? WHERE id=?;", (status, ticket_id))
+        conn.commit()
     finally:
         conn.close()
