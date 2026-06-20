@@ -606,43 +606,53 @@ def _ticket_v2_handle_user_message(message) -> None:
         )
         return
 
-    # ─── ذخیره پیام ────────────────────────────────────────────────────────
+    # ─── ذخیره پیام با file_id ────────────────────────────────────────────
     txt = (message.text or "").strip()
     media = message.content_type if message.content_type != "text" else None
-    ticket_add_message(int(ticket_id), "user", txt or f"[{message.content_type}]", media_type=media)
+    file_id = None
+    if media:
+        try:
+            if message.content_type == "photo":
+                file_id = message.photo[-1].file_id
+            elif message.content_type == "document":
+                file_id = message.document.file_id
+            elif message.content_type == "video":
+                file_id = message.video.file_id
+            elif message.content_type == "audio":
+                file_id = message.audio.file_id
+            elif message.content_type == "voice":
+                file_id = message.voice.file_id
+        except Exception:
+            pass
+
+    ticket_add_message(
+        int(ticket_id), "user",
+        txt or f"[{message.content_type}]",
+        media_type=media,
+        media_file_id=file_id
+    )
     new_count = ticket_user_sent(int(ticket_id))
 
-    # ─── ارسال به ادمین ───────────────────────────────────────────────────
-    ticket_type_label = "🛒 محصول" if ticket["type"] == "product" else "💬 پشتیبانی"
-    header = (
-        f"{ticket_type_label} | تیکت <b>#{ticket_id}</b>\n"
-        f"User: <code>{uid}</code>\n\n"
+    # ─── نوتیف ساده به ادمین (بدون forward کامل) ─────────────────────────
+    panel_url = f"https://stockland-bot-production.up.railway.app/admin/tickets/{ticket_id}"
+    notif_text = (
+        f"🔔 پیام جدید در تیکت <b>#{ticket_id}</b>\n"
+        f"کاربر: <code>{uid}</code>\n"
+        f"برای پاسخ به پنل مراجعه کنید."
     )
+    notif_kb = types.InlineKeyboardMarkup()
+    notif_kb.add(types.InlineKeyboardButton("🌐 مشاهده در پنل", url=panel_url))
     try:
-        if message.content_type == "text" and txt:
-            bot.send_message(ADMIN_ID, header + html.escape(txt),
-                           reply_markup=_ticket_admin_kb(int(ticket_id), uid), parse_mode="HTML")
-        else:
-            bot.send_message(ADMIN_ID, header + f"<i>[{message.content_type}]</i>",
-                           reply_markup=_ticket_admin_kb(int(ticket_id), uid), parse_mode="HTML")
-            bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
+        bot.send_message(ADMIN_ID, notif_text, reply_markup=notif_kb, parse_mode="HTML")
     except Exception as ex:
-        logger.error("Forward to admin failed: %s", ex)
+        logger.error("Admin notification failed: %s", ex)
 
     # ─── تأیید به کاربر ──────────────────────────────────────────────────
     remaining = TICKET_MAX_USER_MSGS - new_count
     if remaining > 0:
-        bot.reply_to(
-            message,
-            "✅ پیام شما دریافت شد.\n"
-            "در اولین فرصت پاسخ خواهیم داد. با تشکر 🙏"
-        )
+        bot.reply_to(message, "✅ پیام شما دریافت شد.\nدر اولین فرصت پاسخ خواهیم داد. با تشکر 🙏")
     else:
-        bot.reply_to(
-            message,
-            "✅ پیام شما دریافت شد.\n"
-            "لطفاً منتظر پاسخ پشتیبانی بمانید."
-        )
+        bot.reply_to(message, "✅ پیام شما دریافت شد.\nلطفاً منتظر پاسخ پشتیبانی بمانید.")
 
 
 # ─── Handler پیام‌های متنی کاربر در حالت تیکت ────────────────────────────────

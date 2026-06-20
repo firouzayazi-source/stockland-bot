@@ -1819,15 +1819,20 @@ def ticket_ensure_schema() -> None:
                 sender TEXT NOT NULL,
                 text TEXT,
                 media_type TEXT,
+                media_file_id TEXT,
                 source TEXT NOT NULL DEFAULT 'telegram',
                 created_at TEXT NOT NULL
             );
         """)
-        # migration: add source column
-        try:
-            conn.execute("ALTER TABLE ticket_messages ADD COLUMN source TEXT NOT NULL DEFAULT 'telegram';")
-        except Exception:
-            pass
+        # migration: add missing columns
+        for col, typedef in [
+            ("source",        "TEXT NOT NULL DEFAULT 'telegram'"),
+            ("media_file_id", "TEXT"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE ticket_messages ADD COLUMN {col} {typedef};")
+            except Exception:
+                pass
 
         conn.commit()
     finally:
@@ -1890,14 +1895,15 @@ def ticket_get_open_product(user_id: int, order_id: int):
 
 
 def ticket_add_message(ticket_id: int, sender: str, text: str | None,
-                        media_type: str | None = None, source: str = "telegram") -> int:
+                        media_type: str | None = None, source: str = "telegram",
+                        media_file_id: str | None = None) -> int:
     conn = _get_connection()
     try:
         now = datetime.utcnow().isoformat()
         cur = conn.execute(
-            "INSERT INTO ticket_messages (ticket_id, sender, text, media_type, source, created_at) "
-            "VALUES (?,?,?,?,?,?);",
-            (ticket_id, sender, text, media_type, source, now)
+            "INSERT INTO ticket_messages (ticket_id, sender, text, media_type, media_file_id, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?);",
+            (ticket_id, sender, text, media_type, media_file_id, source, now)
         )
         msg_id = cur.lastrowid
         conn.execute("UPDATE tickets SET updated_at=? WHERE id=?;", (now, ticket_id))

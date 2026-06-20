@@ -43,6 +43,7 @@ ALL_PERMISSIONS = {
     "products":  "مدیریت محصولات",
     "feed":      "مدیریت موجودی",
     "orders":    "مشاهده سفارش‌ها",
+    "tickets":   "مدیریت تیکت‌ها",
     "wallets":   "مدیریت کیف‌پول",
     "partners":  "مدیریت همکاران",
     "settings":  "تنظیمات ربات",
@@ -142,12 +143,19 @@ def e(s) -> str:
     return html.escape(str(s or ""))
 
 def _open_ticket_count() -> int:
-    """تعداد تیکت‌هایی که منتظر پاسخ ادمین هستند."""
     try:
         conn = _db()
-        n = conn.execute(
-            "SELECT COUNT(*) FROM tickets WHERE status='waiting_admin';"
-        ).fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM tickets WHERE status='waiting_admin';").fetchone()[0]
+        conn.close()
+        return int(n)
+    except Exception:
+        return 0
+
+
+def _pending_partner_count() -> int:
+    try:
+        conn = _db()
+        n = conn.execute("SELECT COUNT(*) FROM partners WHERE status='pending';").fetchone()[0]
         conn.close()
         return int(n)
     except Exception:
@@ -176,6 +184,11 @@ def _layout(title: str, body: str, admin_info=None,
         f'<span class="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{open_tickets}</span>'
         if open_tickets > 0 else ""
     )
+    pending_partners = _pending_partner_count() if admin_info else 0
+    partner_badge = (
+        f'<span class="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{pending_partners}</span>'
+        if pending_partners > 0 else ""
+    )
 
     def nav_link(href, label, perm=None, badge=""):
         if perm and not is_super and perm not in perms:
@@ -192,7 +205,7 @@ def _layout(title: str, body: str, admin_info=None,
         {nav_link("/admin/feed", "🗃 موجودی", "feed")}
         {nav_link("/admin/orders", "🧾 سفارش‌ها", "orders")}
         {nav_link("/admin/wallets", "💰 کیف‌پول", "wallets")}
-        {nav_link("/admin/partners", "🤝 همکاران", "partners")}
+        {nav_link("/admin/partners", "🤝 همکاران", "partners", badge=partner_badge)}
         {nav_link("/admin/tickets", "🎫 تیکت‌ها", "orders", badge=ticket_badge)}
         {nav_link("/admin/broadcast", "📢 پیام‌رسانی", "broadcast")}
         {nav_link("/admin/settings", "⚙️ تنظیمات", "settings")}
@@ -2755,40 +2768,59 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     is_closed = (ticket["status"] == "closed")
     user_id_val = int(ticket["user_id"])
 
-    # ── مکالمه ──────────────────────────────────────────────────────────────
+    # ── مکالمه با نمایش عکس ─────────────────────────────────────────────────
+    bot_token = _env("BOT_TOKEN")
     chat_html = ""
+    last_msg_id = 0
     for msg in messages:
         is_adm = msg["sender"] == "admin"
         pos = "items-end" if is_adm else "items-start"
         bubble = "bg-indigo-600 text-white" if is_adm else "bg-white border border-gray-200 text-gray-800"
         lbl = "ادمین 👤" if is_adm else f"کاربر ({user_id_val})"
-        txt_safe = e(msg["text"] or "")
-        if msg["media_type"]:
-            txt_safe += f' <em class="text-xs opacity-60">[{e(msg["media_type"])}]</em>'
+        src_badge = "" if msg["source"] == "telegram" else ' <span class="text-xs opacity-50">[پنل]</span>'
+        last_msg_id = max(last_msg_id, int(msg["id"] or 0))
+
+        content_html = ""
+        if msg["media_type"] == "photo" and msg.get("media_file_id") and bot_token:
+            # نمایش عکس از Telegram CDN
+            file_url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={msg['media_file_id']}"
+            img_proxy = f"/admin/tickets/media/{e(msg['media_file_id'])}"
+            content_html = f'<img src="{img_proxy}" class="rounded-lg max-w-full mt-1" style="max-height:200px" onerror="this.style.display=\'none\'">'
+            if msg["text"] and msg["text"] != "[photo]":
+                content_html += f'<div class="mt-1">{e(msg["text"])}</div>'
+        elif msg["media_type"] and msg["media_type"] not in ("text", None):
+            icon = {"document": "📎", "video": "🎥", "audio": "🎵", "voice": "🎤", "sticker": "🎭"}.get(msg["media_type"], "📁")
+            content_html = f'{icon} <em class="text-xs opacity-80">[{msg["media_type"]}]</em>'
+            if msg["text"] and not msg["text"].startswith("["):
+                content_html += f' {e(msg["text"])}'
+        else:
+            content_html = e(msg["text"] or "")
+
         chat_html += f"""
-        <div class="flex flex-col {pos} mb-3">
-          <div class="text-xs text-gray-400 mb-1">{lbl} · {(msg["created_at"] or "")[:16]}</div>
-          <div class="{bubble} rounded-2xl px-4 py-2 text-sm max-w-xs" style="white-space:pre-wrap">{txt_safe}</div>
+        <div class="flex flex-col {pos} mb-3" data-msg-id="{msg['id']}">
+          <div class="text-xs text-gray-400 mb-1">{lbl}{src_badge} · {(msg["created_at"] or "")[:16]}</div>
+          <div class="{bubble} rounded-2xl px-4 py-2 text-sm" style="max-width:85%;word-break:break-word;white-space:pre-wrap">{content_html}</div>
         </div>"""
 
     if not chat_html:
-        chat_html = '<div class="text-center py-8 text-gray-400 text-sm">پیامی ثبت نشده</div>'
+        chat_html = '<div class="text-center py-8 text-gray-400 text-sm" id="no-msgs">پیامی ثبت نشده</div>'
 
     # ── فرم پاسخ ─────────────────────────────────────────────────────────────
     reply_form = ""
     if not is_closed:
         reply_form = f"""
         <div class="card p-4 mt-4">
-          <form method="post" action="/admin/tickets/{tid}/reply">
+          <form method="post" action="/admin/tickets/{tid}/reply" id="reply-form">
             <div class="mb-3">
               <label class="text-xs text-gray-500 block mb-1">
                 پاسخ به کاربر <code class="bg-gray-100 px-1 rounded">{user_id_val}</code>
               </label>
-              <textarea name="text" rows="3" required
+              <textarea name="text" id="reply-text" rows="3" required
                 placeholder="متن پاسخ را بنویسید..."
                 class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-300"></textarea>
             </div>
-            <div class="flex justify-end">
+            <div class="flex justify-between items-center">
+              <span class="text-xs text-gray-300">Ctrl+Enter برای ارسال سریع</span>
               <button type="submit"
                 class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl text-sm font-medium">
                 📤 ارسال پاسخ
@@ -2797,13 +2829,12 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
           </form>
         </div>"""
 
-    # ── وضعیت دکمه‌ها ────────────────────────────────────────────────────────
+    # ── وضعیت دکمه‌ها (با status های جدید v2) ─────────────────────────────
     status_btns = ""
     cur_status = ticket["status"]
     for lbl2, val2, cls2 in [
-        ("🔓 بازکردن", "open", "bg-green-50 text-green-700 border-green-200"),
-        ("⏳ در بررسی", "in_progress", "bg-yellow-50 text-yellow-700 border-yellow-200"),
-        ("🔒 بستن", "closed", "bg-gray-100 text-gray-600 border-gray-200"),
+        ("🔓 بازکردن", "waiting_admin", "bg-green-50 text-green-700 border-green-200"),
+        ("🔒 بستن تیکت", "closed", "bg-gray-100 text-gray-600 border-gray-200"),
     ]:
         if val2 != cur_status:
             status_btns += f"""
@@ -2863,8 +2894,42 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     </div>
     <script>
       (function(){{
-        var b=document.getElementById('chat-box');
-        if(b) b.scrollTop=b.scrollHeight;
+        var b = document.getElementById('chat-box');
+        if(b) b.scrollTop = b.scrollHeight;
+
+        // Ctrl+Enter
+        var ta = document.getElementById('reply-text');
+        if(ta) ta.addEventListener('keydown', function(e){{
+          if(e.ctrlKey && e.key === 'Enter') document.getElementById('reply-form') && document.getElementById('reply-form').submit();
+        }});
+
+        // Auto-refresh هر ۱۰ ثانیه
+        var lastId = {last_msg_id};
+        var ticketId = {tid};
+        function fetchNew() {{
+          fetch('/admin/tickets/' + ticketId + '/messages.json?after=' + lastId)
+            .then(function(r){{ return r.json(); }})
+            .then(function(data){{
+              if(!data.messages || data.messages.length === 0) return;
+              var nm = document.getElementById('no-msgs');
+              if(nm) nm.remove();
+              data.messages.forEach(function(msg){{
+                lastId = Math.max(lastId, msg.id);
+                var d = document.createElement('div');
+                var isA = msg.sender === 'admin';
+                d.className = 'flex flex-col ' + (isA ? 'items-end' : 'items-start') + ' mb-3';
+                var bbl = isA ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-800';
+                var lbl = isA ? 'ادمین 👤' : 'کاربر';
+                var txt = (msg.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                if(msg.media_type) txt = '[' + msg.media_type + '] ' + txt;
+                d.innerHTML = '<div class="text-xs text-gray-400 mb-1">' + lbl + ' · ' + (msg.created_at||'').slice(0,16) + '</div>' +
+                  '<div class="' + bbl + ' rounded-2xl px-4 py-2 text-sm" style="max-width:85%;white-space:pre-wrap">' + txt + '</div>';
+                if(b) b.appendChild(d);
+              }});
+              if(b) b.scrollTop = b.scrollHeight;
+            }}).catch(function(){{}});
+        }}
+        setInterval(fetchNew, 10000);
       }})();
     </script>"""
 
@@ -2944,8 +3009,80 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
     return _redir(f"/admin/tickets/{tid}?flash=پیام+مستقیم+ارسال+شد")
 
 
+@router.get("/tickets/{tid}/messages.json")
+async def ticket_messages_json(request: Request, tid: int, after: int = 0):
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    if not adm:
+        return JSONResponse({"messages": []}, status_code=401)
+    conn = _db()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, sender, text, media_type, media_file_id, source, created_at "
+            "FROM ticket_messages WHERE ticket_id=? AND id>? ORDER BY id ASC;",
+            (tid, after)
+        ).fetchall()
+        return JSONResponse({"messages": [dict(r) for r in rows]})
+    finally:
+        conn.close()
+
+
+@router.get("/tickets/media/{file_id}")
+async def ticket_media(request: Request, file_id: str):
+    """Proxy عکس‌های تیکت از Telegram."""
+    from fastapi.responses import Response
+    adm = _get_admin(request)
+    if not adm:
+        return Response(status_code=403)
+    token = _env("BOT_TOKEN")
+    if not token:
+        return Response(status_code=404)
+    try:
+        # گرفتن file_path از Telegram
+        r1 = _requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}", timeout=10)
+        fp = r1.json().get("result", {}).get("file_path", "")
+        if not fp:
+            return Response(status_code=404)
+        r2 = _requests.get(f"https://api.telegram.org/file/bot{token}/{fp}", timeout=15)
+        ct = r2.headers.get("content-type", "image/jpeg")
+        return Response(content=r2.content, media_type=ct)
+    except Exception:
+        return Response(status_code=502)
+
+
 @router.post("/tickets/{tid}/status")
 async def ticket_status(request: Request, tid: int, status: str = Form("")):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    valid = {"waiting_admin", "waiting_user", "closed", "open", "in_progress"}
+    if status not in valid:
+        return _redir(f"/admin/tickets/{tid}?flash=وضعیت+نامعتبر")
+
+    # نرمال‌سازی: اگه status قدیمی بود، به جدید تبدیل کن
+    status_map = {"open": "waiting_admin", "in_progress": "waiting_user"}
+    status = status_map.get(status, status)
+
+    conn = _db()
+    try:
+        now = datetime.now().isoformat()
+        if status == "closed":
+            conn.execute(
+                "UPDATE tickets SET status='closed', closed_at=?, updated_at=? WHERE id=?;",
+                (now, now, tid)
+            )
+        else:
+            conn.execute("UPDATE tickets SET status=?, updated_at=? WHERE id=?;", (status, now, tid))
+        conn.commit()
+    except Exception as ex:
+        _tg_logger.error("ticket_status error: %s", ex)
+        return _redir(f"/admin/tickets/{tid}?flash=خطا+در+تغییر+وضعیت")
+    finally:
+        conn.close()
+
+    return _redir(f"/admin/tickets/{tid}?flash=وضعیت+تیکت+تغییر+کرد")
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
