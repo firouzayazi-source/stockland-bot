@@ -439,92 +439,70 @@ def _set_ui(conn, key: str, value: str) -> None:
 async def settings_get(request: Request, tab: str = "texts", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
-    if guard:
-        return guard
+    if guard: return guard
+
+    try:
+        from ui_texts import DEFAULT_UI_TEXTS as _DEFAULTS, TEXT_GROUPS as _GROUPS, MAIN_BUTTON_KEYS as _BTN_KEYS
+    except ImportError:
+        _DEFAULTS = {}
+        _GROUPS = {}
+        _BTN_KEYS = []
 
     conn = _db()
     try:
-        # UI texts
-        texts = {k: _get_ui(conn, k) for k in DEFAULT_UI_TEXTS}
-
-        # Button enabled/disabled
+        db_texts = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ui_texts;").fetchall()}
         btn_states = {}
-        for k in MAIN_BUTTONS:
-            flag_key = f"MAIN_BTN_ENABLED_{k}"
-            val = _get_ui(conn, flag_key)
+        for k in _BTN_KEYS:
+            flag = f"MAIN_BTN_ENABLED_{k}"
+            val = db_texts.get(flag, "1")
             btn_states[k] = val not in ("0", "false", "off", "no")
-
-        # Other services
-        services = conn.execute(
-            "SELECT service_key, title, emoji, is_active FROM other_services ORDER BY title;"
-        ).fetchall()
     finally:
         conn.close()
 
-    # Tab: متن‌ها
-    text_fields = ""
-    for key, default in DEFAULT_UI_TEXTS.items():
-        label = key.replace("MAIN_BTN_", "دکمه: ").replace("TXT_", "عنوان: ").replace("_TEXT", " متن").replace("_", " ")
-        is_long = "TEXT" in key or "TITLE" in key
-        val = texts.get(key, default)
-        text_fields += f"""
-        <div class="mb-4">
-          <label class="text-xs font-medium text-gray-500 block mb-1">{e(label)}</label>
-          {"_textarea(key, default, val, rows=3)" if is_long else f'<input type="text" name="{e(key)}" value="{e(val)}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">'}
+    def get_val(key):
+        return db_texts.get(key, _DEFAULTS.get(key, ""))
+
+    # ─── Tab: همه متن‌ها (گروه‌بندی‌شده) ───────────────────────────────
+    texts_content = ""
+    for group_name, keys in _GROUPS.items():
+        fields = ""
+        for key in keys:
+            val = get_val(key)
+            default = _DEFAULTS.get(key, "")
+            is_long = len(default) > 80 or "\n" in default
+            if is_long:
+                field = f'<textarea name="{e(key)}" rows="3" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 font-mono">{e(val)}</textarea>'
+            else:
+                field = f'<input type="text" name="{e(key)}" value="{e(val)}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">'
+            fields += f"""
+            <div class="mb-3">
+              <label class="text-xs font-medium text-gray-500 block mb-1">
+                {e(key)}
+                <span class="text-gray-300 font-normal mr-2">پیش‌فرض: {e(default[:50])}{'...' if len(default)>50 else ''}</span>
+              </label>
+              {field}
+            </div>"""
+
+        texts_content += f"""
+        <div class="mb-6">
+          <h3 class="font-semibold text-gray-700 mb-3 pb-2 border-b">{e(group_name)}</h3>
+          {fields}
         </div>"""
 
-    # Fix: replace placeholder textarea calls
-    for key, default in DEFAULT_UI_TEXTS.items():
-        if "TEXT" in key or "TITLE" in key:
-            val = texts.get(key, default)
-            text_fields = text_fields.replace(
-                f'"_textarea(key, default, val, rows=3)"',
-                f'<textarea name="{e(key)}" rows="3" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">{e(val)}</textarea>'
-            )
-
-    # Rebuild text fields properly
-    text_fields = ""
-    for key, default in DEFAULT_UI_TEXTS.items():
-        label = {
-            "MAIN_BTN_OTHER_PRODUCTS": "دکمه: سایر محصولات",
-            "MAIN_BTN_BUY_APPLE_ID":  "دکمه: اپل آیدی",
-            "MAIN_BTN_MY_ORDERS":     "دکمه: خریدهای من",
-            "MAIN_BTN_WALLET":        "دکمه: کیف پول",
-            "MAIN_BTN_PARTNER_REQUEST":"دکمه: درخواست نمایندگی",
-            "MAIN_BTN_PARTNER_PANEL": "دکمه: پنل همکار",
-            "MAIN_BTN_GUIDE":         "دکمه: راهنما",
-            "MAIN_BTN_SUPPORT":       "دکمه: پشتیبانی",
-            "SUPPORT_TEXT":           "متن پشتیبانی",
-            "HELP_TEXT":              "متن راهنما",
-            "TXT_MAIN_MENU_TITLE":    "عنوان منوی اصلی",
-        }.get(key, key)
-        val = texts.get(key, default)
-        is_long = key in ("SUPPORT_TEXT", "HELP_TEXT")
-        if is_long:
-            field = f'<textarea name="{e(key)}" rows="4" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">{e(val)}</textarea>'
-        else:
-            field = f'<input type="text" name="{e(key)}" value="{e(val)}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">'
-        text_fields += f"""
-        <div class="mb-4">
-          <label class="text-xs font-medium text-gray-500 block mb-1">{e(label)}</label>
-          {field}
-        </div>"""
-
-    # Tab: دکمه‌ها
-    btn_rows = ""
+    # ─── Tab: دکمه‌های منو ──────────────────────────────────────────────
     btn_labels = {
-        "MAIN_BTN_OTHER_PRODUCTS": "سایر محصولات فروشگاه",
-        "MAIN_BTN_BUY_APPLE_ID":  "سرویس اپل آیدی",
-        "MAIN_BTN_MY_ORDERS":     "خریدهای من",
-        "MAIN_BTN_WALLET":        "کیف پول",
-        "MAIN_BTN_PARTNER_REQUEST":"درخواست نمایندگی",
-        "MAIN_BTN_PARTNER_PANEL": "پنل همکار",
-        "MAIN_BTN_GUIDE":         "راهنما",
-        "MAIN_BTN_SUPPORT":       "پشتیبانی",
+        "MAIN_BTN_MY_ORDERS":       "خریدهای من",
+        "MAIN_BTN_WALLET":          "کیف پول",
+        "MAIN_BTN_PARTNER_REQUEST": "درخواست نمایندگی",
+        "MAIN_BTN_PARTNER_PANEL":   "پنل همکار",
+        "MAIN_BTN_GUIDE":           "راهنما",
+        "MAIN_BTN_SUPPORT":         "پشتیبانی",
     }
-    for k in MAIN_BUTTONS:
+    btn_rows = ""
+    for k in _BTN_KEYS:
         enabled = btn_states.get(k, True)
-        badge = '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">فعال</span>' if enabled else '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">غیرفعال</span>'
+        badge = '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">فعال</span>' if enabled else \
+                '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">غیرفعال</span>'
         btn_rows += f"""
         <tr class="border-b hover:bg-gray-50">
           <td class="px-4 py-3 text-sm">{e(btn_labels.get(k, k))}</td>
@@ -532,98 +510,40 @@ async def settings_get(request: Request, tab: str = "texts", flash: str = ""):
           <td class="px-4 py-3">
             <form method="post" action="/admin/settings/toggle-btn">
               <input type="hidden" name="key" value="{e(k)}">
-              <button class="px-3 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50">
+              <button class="btn-sm border border-gray-300 rounded hover:bg-gray-50">
                 {"غیرفعال کن" if enabled else "فعال کن"}
               </button>
             </form>
           </td>
         </tr>"""
 
-    # Tab: دسته‌بندی‌ها
-    svc_rows = ""
-    for s in services:
-        badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if s["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
-        svc_rows += f"""
-        <tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-sm">{e(s["emoji"] or "")} {e(s["title"])}</td>
-          <td class="px-4 py-3 text-xs text-gray-400"><code>{e(s["service_key"])}</code></td>
-          <td class="px-4 py-3">{badge}</td>
-          <td class="px-4 py-3 flex gap-2">
-            <form method="post" action="/admin/settings/toggle-svc">
-              <input type="hidden" name="key" value="{e(s['service_key'])}">
-              <button class="px-2 py-1 text-xs border rounded hover:bg-gray-50">{"غیرفعال" if s["is_active"] else "فعال"}</button>
-            </form>
-            {"" if s["service_key"] == "general" else f'''
-            <form method="post" action="/admin/settings/delete-svc" onsubmit="return confirm('حذف شود؟')">
-              <input type="hidden" name="key" value="{e(s["service_key"])}">
-              <button class="px-2 py-1 text-xs border border-red-200 text-red-500 rounded hover:bg-red-50">حذف</button>
-            </form>'''}
-          </td>
-        </tr>"""
-
     tabs = {
-        "texts":    ("📝 متن‌ها", f"""
-            <form method="post" action="/admin/settings/save-texts" class="space-y-2">
-              {text_fields}
-              <div class="pt-4">{_btn("ذخیره همه متن‌ها", color="green")}</div>
-            </form>"""),
-        "buttons":  ("🔘 دکمه‌های منو", f"""
-            <table class="w-full text-right">
-              <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-                <th class="px-4 py-3">دکمه</th><th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-              </tr></thead>
-              <tbody>{btn_rows}</tbody>
-            </table>"""),
-        "services": ("🗂 دسته‌بندی‌ها", f"""
-            <div class="mb-4">
-              <form method="post" action="/admin/settings/add-svc" class="flex gap-3 items-end flex-wrap">
-                <div><label class="text-xs text-gray-500 block mb-1">عنوان</label>
-                  {_input("title", "نام دسته جدید", required=True)}</div>
-                <div><label class="text-xs text-gray-500 block mb-1">ایموجی (اختیاری)</label>
-                  {_input("emoji", "🧩")}</div>
-                {_btn("➕ افزودن", color="green")}
-              </form>
-            </div>
-            <table class="w-full text-right">
-              <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-                <th class="px-4 py-3">عنوان</th><th class="px-4 py-3">کلید</th>
-                <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-              </tr></thead>
-              <tbody>{svc_rows or "<tr><td colspan='4' class='text-center py-4 text-gray-400'>دسته‌ای ثبت نشده</td></tr>"}</tbody>
-            </table>"""),
+        "texts":   ("📝 همه متن‌ها",   f'<form method="post" action="/admin/settings/save-texts" class="space-y-2">{texts_content}<div class="pt-4">{_btn("💾 ذخیره همه متن‌ها", color="green")}</div></form>'),
+        "buttons": ("🔘 دکمه‌های منو", f'<table class="w-full text-right"><thead><tr class="text-xs text-gray-500 border-b bg-gray-50"><th class="px-4 py-3">دکمه</th><th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th></tr></thead><tbody>{btn_rows}</tbody></table>'),
     }
 
-    tab_nav = ""
+    tab_nav = '<div class="flex gap-2 mb-6">'
     for tid, (tlabel, _) in tabs.items():
         active = "bg-indigo-600 text-white" if tab == tid else "bg-white text-gray-600 hover:bg-gray-50"
         tab_nav += f'<a href="/admin/settings?tab={tid}" class="px-4 py-2 rounded-lg border text-sm {active} transition">{tlabel}</a>'
+    tab_nav += "</div>"
 
-    _, (_, tab_content) = [(k, v) for k, v in tabs.items() if k == tab][0], tabs.get(tab, list(tabs.values())[0])
+    active_content = tabs.get(tab, list(tabs.values())[0])[1]
 
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-6">⚙️ تنظیمات ربات</h1>
-    <div class="flex gap-2 mb-6">{tab_nav}</div>
-    <div class="bg-white rounded-xl shadow p-6">{tab_content}</div>"""
+    {tab_nav}
+    <div class="card p-6">{active_content}</div>"""
 
     return _layout("تنظیمات", body, adm, flash=flash)
-
-@router.post("/settings/save-texts")
-async def settings_save_texts(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
-    if guard: return guard
+    if guard:
+        return guard
 
-    form = await request.form()
     conn = _db()
-    try:
-        for key in DEFAULT_UI_TEXTS:
-            val = (form.get(key) or "").strip()
-            if val:
-                _set_ui(conn, key, val)
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/settings?tab=texts&flash=متن‌ها+ذخیره+شد")
+
+
 
 @router.post("/settings/toggle-btn")
 async def settings_toggle_btn(request: Request, key: str = Form("")):
