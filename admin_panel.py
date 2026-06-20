@@ -141,6 +141,16 @@ def _redir(path: str) -> RedirectResponse:
 def e(s) -> str:
     return html.escape(str(s or ""))
 
+def _open_ticket_count() -> int:
+    try:
+        conn = _db()
+        n = conn.execute("SELECT COUNT(*) FROM tickets WHERE status='open';").fetchone()[0]
+        conn.close()
+        return int(n)
+    except Exception:
+        return 0
+
+
 def _layout(title: str, body: str, admin_info=None,
             flash: str = "", flash_ok: bool = True) -> HTMLResponse:
 
@@ -154,14 +164,20 @@ def _layout(title: str, body: str, admin_info=None,
           <span>{icon}</span> {e(flash)}
         </div>"""
 
-    # Build nav based on permissions
     perms = admin_info[2] if admin_info else []
     is_super = admin_info[1] if admin_info else False
 
-    def nav_link(href, label, perm=None):
+    # نوتیف تیکت‌های باز
+    open_tickets = _open_ticket_count() if admin_info else 0
+    ticket_badge = (
+        f'<span class="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{open_tickets}</span>'
+        if open_tickets > 0 else ""
+    )
+
+    def nav_link(href, label, perm=None, badge=""):
         if perm and not is_super and perm not in perms:
             return ""
-        return f'<a href="{href}" class="text-indigo-200 hover:text-white text-sm transition">{label}</a>'
+        return f'<a href="{href}" class="text-indigo-200 hover:text-white text-sm transition flex items-center gap-1">{badge}{label}</a>'
 
     nav = f"""
     <nav class="bg-indigo-900 text-white shadow-xl sticky top-0 z-50">
@@ -174,7 +190,7 @@ def _layout(title: str, body: str, admin_info=None,
         {nav_link("/admin/orders", "🧾 سفارش‌ها", "orders")}
         {nav_link("/admin/wallets", "💰 کیف‌پول", "wallets")}
         {nav_link("/admin/partners", "🤝 همکاران", "partners")}
-        {nav_link("/admin/tickets", "🎫 تیکت‌ها", "orders")}
+        {nav_link("/admin/tickets", "🎫 تیکت‌ها", "orders", badge=ticket_badge)}
         {nav_link("/admin/broadcast", "📢 پیام‌رسانی", "broadcast")}
         {nav_link("/admin/settings", "⚙️ تنظیمات", "settings")}
         {nav_link("/admin/database", "💾 دیتابیس", "database")}
@@ -1816,19 +1832,30 @@ async def products_list(request: Request, flash: str = ""):
     for p in products:
         avail = int(p["feed_avail"] or 0)
         ac = "red" if avail==0 else ("yellow" if avail<5 else "green")
-        status = '<span class="text-xs text-green-600">فعال</span>' if p["is_active"] else '<span class="text-xs text-red-500">غیرفعال</span>'
+        status_badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if p["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
         rows += f"""
         <tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-sm font-medium">{e(p["title"])}</td>
-          <td class="px-4 py-3 text-xs text-gray-500">{e(p["category"])}</td>
+          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(p["title"])}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{e(p["category"])}</td>
           <td class="px-4 py-3 text-sm font-medium text-indigo-700">{int(p["price"]):,}</td>
-          <td class="px-4 py-3">{status}</td>
+          <td class="px-4 py-3">{status_badge}</td>
           <td class="px-4 py-3">
             <span class="px-2 py-0.5 text-xs rounded-full bg-{ac}-100 text-{ac}-700">{avail}/{int(p["feed_total"] or 0)}</span>
           </td>
-          <td class="px-4 py-3 flex gap-2">
-            {_btn("ویرایش", f"/admin/products/{p['id']}", "indigo", small=True)}
-            {_btn("موجودی", f"/admin/feed/{p['id']}", "teal", small=True)}
+          <td class="px-4 py-3">
+            <div class="flex gap-1 flex-wrap">
+              {_btn("ویرایش", f"/admin/products/{p['id']}", "indigo", small=True)}
+              {_btn("موجودی", f"/admin/feed/{p['id']}", "teal", small=True)}
+              <form method="post" action="/admin/products/{p['id']}/toggle" class="inline">
+                <button class="btn-sm {"bg-red-50 text-red-600 border border-red-200" if p["is_active"] else "bg-green-50 text-green-600 border border-green-200"} rounded-lg px-2 py-1">
+                  {"⊘" if p["is_active"] else "✓"}
+                </button>
+              </form>
+              <form method="post" action="/admin/products/{p['id']}/delete" class="inline"
+                onsubmit="return confirm('محصول {e(p["title"])} حذف شود؟ موجودی باید قبلاً پاک شده باشد.')">
+                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded-lg px-2 py-1">🗑</button>
+              </form>
+            </div>
           </td>
         </tr>"""
 
@@ -2622,8 +2649,155 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
         messages = conn.execute(
             "SELECT * FROM ticket_messages WHERE ticket_id=? ORDER BY id ASC;", (tid,)
         ).fetchall()
+
+        # mark as in_progress when admin views it
+        if ticket["status"] == "open":
+            conn.execute("UPDATE tickets SET status='in_progress' WHERE id=?;", (tid,))
+            conn.commit()
     finally:
         conn.close()
+
+    is_general = (not ticket["product_id"] or int(ticket["product_id"]) == 0)
+    ticket_type = "پشتیبانی عمومی" if is_general else f"محصول: {e(ticket['product_title'] or '-')}"
+
+    # نمایش مکالمه
+    chat_html = ""
+    for msg in messages:
+        is_admin_msg = msg["sender"] == "admin"
+        align = "justify-end" if is_admin_msg else "justify-start"
+        bubble = "bg-indigo-600 text-white rounded-t-2xl rounded-bl-2xl" if is_admin_msg else "bg-white border text-gray-800 rounded-t-2xl rounded-br-2xl"
+        sender_label = "👤 ادمین" if is_admin_msg else "👤 کاربر"
+        content = e(msg["text"] or "")
+        if msg["media_type"]:
+            content += f' <span class="opacity-60 text-xs">[{e(msg["media_type"])}]</span>'
+
+        chat_html += f"""
+        <div class="flex {align} mb-3">
+          <div class="max-w-sm lg:max-w-md">
+            <div class="text-xs text-gray-400 mb-1 px-1 {"text-left" if is_admin_msg else ""}">{sender_label} · {(msg["created_at"] or "")[:16]}</div>
+            <div class="{bubble} px-4 py-2.5 text-sm shadow-sm" style="white-space:pre-wrap">{content}</div>
+          </div>
+        </div>"""
+
+    if not messages:
+        chat_html = """
+        <div class="text-center py-12 text-gray-400">
+          <div class="text-3xl mb-2">💬</div>
+          <p class="text-sm">پیامی هنوز ثبت نشده است</p>
+          <p class="text-xs mt-1 text-gray-300">پیام‌های ارسال‌شده از ربات اینجا نمایش داده می‌شوند</p>
+        </div>"""
+
+    # دکمه‌های تغییر وضعیت
+    status_actions = ""
+    if ticket["status"] != "open":
+        status_actions += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline">
+          <input type="hidden" name="status" value="open">
+          <button class="btn-sm bg-green-50 text-green-700 border border-green-200 rounded-lg px-3 py-1.5">🔓 بازکردن</button>
+        </form> """
+    if ticket["status"] == "open" or ticket["status"] == "in_progress":
+        status_actions += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline">
+          <input type="hidden" name="status" value="closed">
+          <button onclick="return confirm('تیکت بسته شود؟')" class="btn-sm bg-gray-100 text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5">🔒 بستن تیکت</button>
+        </form>"""
+
+    is_closed = ticket["status"] == "closed"
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6 flex-wrap">
+      {_btn("← تیکت‌ها", "/admin/tickets", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">🎫 تیکت #{tid}</h1>
+      {_ticket_status_badge(ticket["status"])}
+      <span class="text-sm text-gray-400">{ticket_type}</span>
+      <div class="mr-auto flex gap-2">{status_actions}</div>
+    </div>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+      <!-- مکالمه -->
+      <div class="lg:col-span-2 space-y-4">
+        <!-- نمایش پیام‌ها -->
+        <div class="card p-4 overflow-y-auto" style="min-height:300px;max-height:480px;" id="chat-box">
+          <div class="bg-gray-50 rounded-lg p-3 mb-4 text-xs text-gray-500 text-center">
+            تیکت #{tid} · {(ticket["created_at"] or "")[:16]}
+          </div>
+          {chat_html}
+        </div>
+
+        <!-- فرم پاسخ -->
+        {"" if is_closed else f'''
+        <div class="card p-4">
+          <form method="post" action="/admin/tickets/{tid}/reply" id="reply-form">
+            <div class="flex gap-3 items-end">
+              <div class="flex-1">
+                <label class="text-xs text-gray-500 block mb-1">پاسخ به کاربر <span class="text-gray-400">({ticket["user_id"]})</span></label>
+                <textarea name="text" rows="3" required placeholder="پاسخ خود را اینجا بنویسید..."
+                  class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 resize-none"
+                  onkeydown="if(event.ctrlKey&&event.key===\'Enter\')this.form.submit()"></textarea>
+                <div class="text-xs text-gray-300 mt-1">Ctrl+Enter برای ارسال سریع</div>
+              </div>
+              <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-4 py-2 text-sm font-medium transition self-end">
+                📤 ارسال
+              </button>
+            </div>
+          </form>
+        </div>
+        '''}
+
+        <!-- پیام مستقیم -->
+        {"" if is_closed else f'''
+        <div class="card p-4 border-dashed border-2 border-gray-200">
+          <p class="text-xs text-gray-400 mb-2">📩 پیام مستقیم (بدون ثبت در تاریخچه)</p>
+          <form method="post" action="/admin/tickets/{tid}/direct" class="flex gap-3 items-end">
+            <textarea name="direct_msg" rows="2" placeholder="پیام مستقیم..."
+              class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-gray-300 resize-none"></textarea>
+            <button type="submit" class="bg-gray-500 hover:bg-gray-600 text-white rounded-lg px-3 py-2 text-sm self-end">ارسال</button>
+          </form>
+        </div>
+        '''}
+      </div>
+
+      <!-- اطلاعات تیکت -->
+      <div class="space-y-4">
+        <div class="card p-5">
+          <h3 class="font-bold text-gray-700 mb-3 text-sm">اطلاعات تیکت</h3>
+          <div class="space-y-3 text-sm">
+            <div class="flex justify-between">
+              <span class="text-gray-500">User ID:</span>
+              <code class="text-xs bg-gray-100 px-2 py-0.5 rounded">{ticket["user_id"]}</code>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-500">نوع:</span>
+              <span class="text-gray-700">{ticket_type}</span>
+            </div>
+            {"" if is_general else f'<div class="flex justify-between"><span class="text-gray-500">سفارش:</span><span class="text-gray-700">#{ticket["order_no"]}</span></div>'}
+            <div class="flex justify-between">
+              <span class="text-gray-500">وضعیت:</span>
+              {_ticket_status_badge(ticket["status"])}
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-500">تاریخ:</span>
+              <span class="text-xs text-gray-400">{(ticket["created_at"] or "")[:16]}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-500">پیام‌ها:</span>
+              <span class="font-medium text-indigo-600">{len(messages)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-4 bg-blue-50 border border-blue-100">
+          <p class="text-xs text-blue-600 font-medium mb-1">🔗 لینک مستقیم کاربر</p>
+          <code class="text-xs text-blue-700 break-all">{ticket["user_id"]}</code>
+          <p class="text-xs text-blue-400 mt-1">با ادمین تلگرام پاسخ می‌رسد</p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      var box = document.getElementById('chat-box');
+      if(box) {{ box.scrollTop = box.scrollHeight; }}
+    </script>"""
+
+    return _layout(f"تیکت #{tid}", body, adm, flash=flash)
 
     # نمایش مکالمه
     chat_html = ""
