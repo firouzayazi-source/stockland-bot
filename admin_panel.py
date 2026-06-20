@@ -574,16 +574,24 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold text-gray-800">⚙️ مدیریت متن‌ها و تنظیمات</h1>
     </div>
+
+    <!-- موبایل: نوار بالا | دسکتاپ: sidebar -->
+    <div class="mb-4 lg:hidden overflow-x-auto">
+      <div class="flex gap-2 pb-2 min-w-max">
+        {" ".join(f'<a href="/admin/settings?group={e(g)}" class="px-3 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if g == active_group else "bg-white text-gray-600"}">{group_icons.get(g,"📝")} {e(g)}</a>' for g in group_names)}
+      </div>
+    </div>
+
     <div class="flex gap-6">
-      <!-- Sidebar -->
-      <div class="w-52 shrink-0">
+      <!-- Sidebar فقط دسکتاپ -->
+      <div class="hidden lg:block w-52 shrink-0">
         <div class="card p-2 space-y-0.5 sticky top-20">
           {sidebar}
         </div>
       </div>
       <!-- Content -->
       <div class="flex-1 min-w-0">
-        <div class="card p-6">
+        <div class="card p-4 md:p-6">
           <h2 class="font-bold text-gray-700 text-lg mb-4">{e(active_group)}</h2>
           {content}
         </div>
@@ -2221,18 +2229,36 @@ async def feed_upload(request: Request, pid: int, items: str=Form("")):
     return _redir(f"/admin/feed/{pid}?flash={len(blocks)}+آیتم+اضافه+شد")
 
 @router.post("/feed/{pid}/clear-delivered")
-async def feed_clear(request: Request, pid: int):
+async def feed_clear(request: Request, pid: int, background_tasks: BackgroundTasks):
     adm = _get_admin(request)
     guard = _require(adm, "feed")
     if guard: return guard
+
+    def _do_clear(product_id: int):
+        conn = _db()
+        try:
+            # حذف دسته‌ای با LIMIT برای جلوگیری از قفل شدن DB
+            while True:
+                r = conn.execute(
+                    "DELETE FROM product_feed WHERE rowid IN "
+                    "(SELECT rowid FROM product_feed WHERE product_id=? AND delivered=1 LIMIT 500);",
+                    (product_id,)
+                )
+                conn.commit()
+                if r.rowcount == 0:
+                    break
+        finally:
+            conn.close()
+
+    # شمارش قبل از حذف
     conn = _db()
     try:
-        r = conn.execute("DELETE FROM product_feed WHERE product_id=? AND delivered=1;", (pid,))
-        conn.commit()
-        n = r.rowcount
+        n = conn.execute("SELECT COUNT(*) FROM product_feed WHERE product_id=? AND delivered=1;", (pid,)).fetchone()[0]
     finally:
         conn.close()
-    return _redir(f"/admin/feed/{pid}?flash={n}+آیتم+حذف+شد")
+
+    background_tasks.add_task(_do_clear, pid)
+    return _redir(f"/admin/feed/{pid}?flash={n}+آیتم+در+حال+پاکسازی+است")
 
 @router.post("/feed/item/{fid}/delete")
 async def feed_item_delete(request: Request, fid: int):
