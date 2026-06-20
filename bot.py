@@ -2465,6 +2465,13 @@ def handle_help(message):
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
 def handle_admin_text(message):
     aid = message.from_user.id
+
+    # ─── اگه ادمین در حالت تیکت کاربر (تست) باشه → به handler تیکت برو ──
+    user_st = user_states.get(aid, {})
+    if user_st.get("mode") == "ticket_support":
+        handle_ticket_chat_user(message)
+        return
+
     state = admin_states.get(aid)
     if not state:
         return
@@ -4310,4 +4317,3 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception("Polling crashed, restarting in 5s: %s", e)
             time.sleep(5)
-
