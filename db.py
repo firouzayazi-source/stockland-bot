@@ -1773,4 +1773,240 @@ def update_ticket_status(ticket_id: int, status: str) -> None:
         conn.commit()
     finally:
         conn.close()
-        
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TICKET SYSTEM v2
+# ═══════════════════════════════════════════════════════════════════════════
+
+TICKET_MAX_USER_MSGS = 3  # max consecutive user messages before admin must reply
+
+
+def ticket_ensure_schema() -> None:
+    """Create v2 ticket tables (migration-safe)."""
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL DEFAULT 'support',
+                user_id INTEGER NOT NULL,
+                product_id INTEGER DEFAULT 0,
+                order_id INTEGER DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'waiting_admin',
+                user_msg_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                closed_at TEXT
+            );
+        """)
+        # migration: add columns to old schema
+        for col, typedef in [
+            ("type",           "TEXT NOT NULL DEFAULT 'support'"),
+            ("order_id",       "INTEGER DEFAULT 0"),
+            ("user_msg_count", "INTEGER DEFAULT 0"),
+            ("updated_at",     "TEXT"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} {typedef};")
+            except Exception:
+                pass
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ticket_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL,
+                sender TEXT NOT NULL,
+                text TEXT,
+                media_type TEXT,
+                source TEXT NOT NULL DEFAULT 'telegram',
+                created_at TEXT NOT NULL
+            );
+        """)
+        # migration: add source column
+        try:
+            conn.execute("ALTER TABLE ticket_messages ADD COLUMN source TEXT NOT NULL DEFAULT 'telegram';")
+        except Exception:
+            pass
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ticket_create(user_id: int, type_: str = "support",
+                  product_id: int = 0, order_id: int = 0) -> int:
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        cur = conn.execute(
+            """INSERT INTO tickets (type, user_id, product_id, order_id,
+               status, user_msg_count, created_at, updated_at)
+               VALUES (?,?,?,?,'waiting_admin',0,?,?);""",
+            (type_, user_id, product_id, order_id, now, now)
+        )
+        ticket_id = cur.lastrowid
+        conn.commit()
+        return int(ticket_id)
+    finally:
+        conn.close()
+
+
+def ticket_get(ticket_id: int):
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM tickets WHERE id=? LIMIT 1;", (ticket_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def ticket_get_open_support(user_id: int):
+    """آخرین تیکت پشتیبانی باز کاربر."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT * FROM tickets WHERE user_id=? AND type='support' AND status!='closed' "
+            "ORDER BY id DESC LIMIT 1;",
+            (user_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def ticket_get_open_product(user_id: int, order_id: int):
+    """تیکت محصول باز برای یک سفارش خاص."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT * FROM tickets WHERE user_id=? AND order_id=? AND type='product' "
+            "AND status!='closed' LIMIT 1;",
+            (user_id, order_id)
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def ticket_add_message(ticket_id: int, sender: str, text: str | None,
+                        media_type: str | None = None, source: str = "telegram") -> int:
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        cur = conn.execute(
+            "INSERT INTO ticket_messages (ticket_id, sender, text, media_type, source, created_at) "
+            "VALUES (?,?,?,?,?,?);",
+            (ticket_id, sender, text, media_type, source, now)
+        )
+        msg_id = cur.lastrowid
+        conn.execute("UPDATE tickets SET updated_at=? WHERE id=?;", (now, ticket_id))
+        conn.commit()
+        return int(msg_id)
+    finally:
+        conn.close()
+
+
+def ticket_user_sent(ticket_id: int) -> int:
+    """کاربر پیام فرستاد — وضعیت و counter رو آپدیت کن. returns new count."""
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            "UPDATE tickets SET status='waiting_admin', "
+            "user_msg_count = user_msg_count + 1, updated_at=? WHERE id=?;",
+            (now, ticket_id)
+        )
+        conn.commit()
+        row = conn.execute("SELECT user_msg_count FROM tickets WHERE id=?;", (ticket_id,)).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def ticket_admin_replied(ticket_id: int) -> None:
+    """ادمین پاسخ داد — counter ریست، وضعیت → waiting_user."""
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            "UPDATE tickets SET status='waiting_user', user_msg_count=0, updated_at=? WHERE id=?;",
+            (now, ticket_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ticket_close(ticket_id: int) -> None:
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            "UPDATE tickets SET status='closed', closed_at=?, updated_at=? WHERE id=?;",
+            (now, now, ticket_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ticket_get_messages(ticket_id: int) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT * FROM ticket_messages WHERE ticket_id=? ORDER BY id ASC;", (ticket_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def ticket_count_waiting() -> int:
+    """تعداد تیکت‌هایی که ادمین باید پاسخ بده (badge count)."""
+    conn = _get_connection()
+    try:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM tickets WHERE status='waiting_admin';"
+        ).fetchone()[0])
+    finally:
+        conn.close()
+
+
+def ticket_get_all(status: str | None = None, type_: str | None = None,
+                   limit: int = 100) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        wheres, params = [], []
+        if status:
+            wheres.append("t.status=?"); params.append(status)
+        if type_:
+            wheres.append("t.type=?"); params.append(type_)
+        w = "WHERE " + " AND ".join(wheres) if wheres else ""
+        params.append(limit)
+        return conn.execute(f"""
+            SELECT t.*,
+                   (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
+                   (SELECT text FROM ticket_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_msg
+            FROM tickets t {w}
+            ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
+                     t.updated_at DESC LIMIT ?;
+        """, params).fetchall()
+    finally:
+        conn.close()
+
+
+def ticket_toggle_product_chat(product_id: int) -> bool:
+    """Toggle chat_enabled for a product. Returns new state."""
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE products SET chat_enabled=CASE WHEN chat_enabled=1 THEN 0 ELSE 1 END WHERE id=?;",
+            (product_id,)
+        )
+        conn.commit()
+        row = conn.execute("SELECT chat_enabled FROM products WHERE id=?;", (product_id,)).fetchone()
+        return bool(row[0] if row else 0)
+    finally:
+        conn.close()
