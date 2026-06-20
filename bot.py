@@ -675,6 +675,43 @@ def _handle_ticket_v2_media(message):
     _ticket_v2_handle_user_message(message)
 
 
+# ─── /start و /admin ──────────────────────────────────────────────────────
+
+@bot.message_handler(commands=["admin", "panel"])
+def handle_admin_command(message):
+    uid = message.from_user.id
+    if not ensure_admin(uid):
+        return
+    panel_url = "https://stockland-bot-production.up.railway.app/admin/"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("🌐 ورود به پنل مدیریت", url=panel_url),
+        types.InlineKeyboardButton("🎫 تیکت‌ها", url=panel_url + "tickets"),
+        types.InlineKeyboardButton("📦 محصولات", url=panel_url + "products"),
+        types.InlineKeyboardButton("🗃 موجودی", url=panel_url + "feed"),
+        types.InlineKeyboardButton("🧾 سفارش‌ها", url=panel_url + "orders"),
+    )
+    bot.send_message(uid, "🛍 پنل مدیریت استوک لند:", reply_markup=kb)
+
+
+@bot.message_handler(commands=["start"])
+def handle_start(message):
+    init_db(DB_PATH)
+    ticket_ensure_schema()
+
+    uid = message.from_user.id
+    username = message.from_user.username
+    full_name = ((message.from_user.first_name or "") + " " + (message.from_user.last_name or "")).strip()
+
+    try:
+        upsert_user(uid, username, full_name)
+    except Exception:
+        pass
+
+    text = tf("MSG_WELCOME", name=full_name or "دوست عزیز")
+    bot.send_message(message.chat.id, text, reply_markup=main_menu(user_id=uid), parse_mode="HTML")
+
+
 
 
 
