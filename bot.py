@@ -73,7 +73,6 @@ from db import (
     get_category_path,
     # کاربران و تیکت
     upsert_user,
-    save_ticket_message,
 )
 from services.payments import start_wallet_charge_payment
 from config import (
@@ -499,6 +498,29 @@ from db import (
 
 BOT_BASE_URL = os.getenv("BOT_WEBHOOK_URL", "").rstrip("/")
 RAILWAY_PANEL = "https://stockland-bot-production.up.railway.app/admin"
+
+
+def _get_product_chat_enabled(product_id: int) -> int:
+    """چک chat_enabled برای محصول."""
+    try:
+        import sqlite3 as _sq3
+        _c = _sq3.connect(DB_FULL_PATH)
+        row = _c.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
+        _c.close()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+
+
+def _set_product_chat_enabled(product_id: int, enabled: int) -> None:
+    try:
+        import sqlite3 as _sq3
+        _c = _sq3.connect(DB_FULL_PATH)
+        _c.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
+        _c.commit()
+        _c.close()
+    except Exception:
+        pass
 
 
 def _tg_send_to_user(user_id: int, text: str, reply_markup=None, parse_mode="HTML") -> bool:
@@ -2543,7 +2565,7 @@ def cb_admin_toggle_chat(call: types.CallbackQuery):
 
     # ensure schema exists even if bot started before migrations ran
     try:
-        _ensure_ticket_tables()
+        ticket_ensure_schema()
     except Exception:
         pass
 
@@ -2726,79 +2748,45 @@ def handle_callbacks(call: types.CallbackQuery):
         return
 
     if data.startswith("ticket_close_"):
+        # backward compat → v2
         bot.answer_callback_query(call.id)
         tid = safe_int(data.replace("ticket_close_", "", 1))
-        tk = _get_ticket(int(tid)) if tid else None
-        if not tk:
-            return
-        # only owner can close
-        if int(tk[1]) != int(uid):
-            return
-        _close_ticket(int(tid), "user")
-        clear_user_state(uid)
-        bot.send_message(call.message.chat.id, "✅ چت بسته شد.", reply_markup=main_menu())
-        # notify admin
-        try:
-            bot.send_message(
-                ADMIN_ID,
-                f"⛔️ چت توسط کاربر بسته شد.\n"
-                f"Ticket ID: <code>{int(tid)}</code>\n"
-                f"User ID: <code>{int(tk[1])}</code>\n"
-                f"Product ID: <code>{int(tk[2])}</code>\n"
-                f"Order/Feed ID: <code>{int(tk[3])}</code>",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
+        if tid:
+            ticket_close(int(tid))
+            clear_user_state(uid)
+        bot.send_message(call.message.chat.id, "✅ چت بسته شد.", reply_markup=main_menu(user_id=uid))
         return
 
     if data.startswith("ticket_admin_close_"):
+        # backward compat → v2
         if not ensure_admin(uid):
             bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
             return
         bot.answer_callback_query(call.id)
         tid = safe_int(data.replace("ticket_admin_close_", "", 1))
-        tk = _get_ticket(int(tid)) if tid else None
-        if not tk:
-            return
-        _close_ticket(int(tid), "admin")
-        clear_user_state(int(tk[1]))  # برای خرید/چت بعدی گیر نکند
-        try:
-            bot.send_message(int(tk[1]), "⛔️ چت توسط پشتیبانی بسته شد.", reply_markup=main_menu())
-        except Exception:
-            pass
-        # notify admin (confirmation)
-        try:
-            bot.send_message(
-                ADMIN_ID,
-                f"⛔️ چت توسط ادمین بسته شد.\n"
-                f"Ticket ID: <code>{int(tid)}</code>\n"
-                f"User ID: <code>{int(tk[1])}</code>\n"
-                f"Product ID: <code>{int(tk[2])}</code>\n"
-                f"Order/Feed ID: <code>{int(tk[3])}</code>",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
+        if tid:
+            t_row = ticket_get(int(tid))
+            ticket_close(int(tid))
+            if t_row:
+                clear_user_state(int(t_row["user_id"]))
+                try:
+                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu())
+                except Exception:
+                    pass
         return
 
     if data.startswith("ticket_reply_"):
+        # backward compat → v2
         if not ensure_admin(uid):
             bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
             return
         bot.answer_callback_query(call.id)
-        # ticket_reply_{tid}_{user_id}
         parts = data.split("_")
         tid = safe_int(parts[2]) if len(parts) >= 3 else None
-        target_uid = safe_int(parts[3]) if len(parts) >= 4 else None
-        if not tid or not target_uid:
-            return
-        tk = _get_ticket(int(tid))
-        if not tk or tk[4] != "open":
-            bot.send_message(call.message.chat.id, "این تیکت بسته شده است.")
-            return
-        admin_states[uid] = {"mode": "ticket_reply", "ticket_id": int(tid), "target_user_id": int(target_uid)}
-        bot.send_message(call.message.chat.id, f"✉️ پاسخ خود را برای Order #{tk[3]} ارسال کنید:")
+        target_uid_old = safe_int(parts[3]) if len(parts) >= 4 else None
+        if tid and target_uid_old:
+            admin_states[uid] = {"mode": "ticket_v2_admin_reply", "ticket_id": int(tid), "target_uid": int(target_uid_old)}
+            bot.send_message(uid, f"✏️ پاسخ به تیکت #{tid}: پیام بفرست. /done برای لغو.")
         return
     if data.startswith("admin_toggle_chat_"):
         if not ensure_admin(uid):
