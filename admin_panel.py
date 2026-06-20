@@ -40,16 +40,18 @@ def _db() -> sqlite3.Connection:
 # ─────────────────────────── Permissions ───────────────────────────────────
 
 ALL_PERMISSIONS = {
-    "products":  "مدیریت محصولات",
-    "feed":      "مدیریت موجودی",
-    "orders":    "مشاهده سفارش‌ها",
-    "tickets":   "مدیریت تیکت‌ها",
-    "wallets":   "مدیریت کیف‌پول",
-    "partners":  "مدیریت همکاران",
-    "settings":  "تنظیمات ربات",
-    "database":  "بکاپ و دیتابیس",
-    "admins":    "مدیریت ادمین‌ها",
-    "broadcast": "پیام همگانی",
+    "dashboard":  "مشاهده داشبورد",
+    "categories": "مدیریت دسته‌بندی‌ها",
+    "products":   "مدیریت محصولات",
+    "feed":       "مدیریت موجودی",
+    "orders":     "مشاهده سفارش‌ها",
+    "tickets":    "مدیریت تیکت‌ها",
+    "wallets":    "مدیریت کیف‌پول",
+    "partners":   "مدیریت همکاران",
+    "settings":   "تنظیمات ربات",
+    "database":   "بکاپ و دیتابیس",
+    "admins":     "مدیریت ادمین‌ها",
+    "broadcast":  "پیام همگانی",
 }
 
 # ─────────────────────────── DB Schema for Admins ──────────────────────────
@@ -858,8 +860,41 @@ async def database_page(request: Request, flash: str = ""):
           {import_html}
         </div>"""
 
+    # لیست بکاپ‌های خودکار
+    import glob as _glob, os as _os
+    auto_backups = sorted(_glob.glob(f"{_BACKUP_DIR}/auto_*.sqlite"), reverse=True)
+    backup_rows = ""
+    for bp in auto_backups:
+        fname = _os.path.basename(bp)
+        size_kb = _os.path.getsize(bp) // 1024
+        ts_part = fname.replace("auto_", "").replace(".sqlite", "")
+        backup_rows += f"""
+        <tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-2 text-sm font-mono">{e(ts_part[:8])} {e(ts_part[9:] if len(ts_part)>8 else "")}</td>
+          <td class="px-4 py-2 text-sm text-gray-500">{size_kb} KB</td>
+          <td class="px-4 py-2">
+            <a href="/admin/database/auto-backup/{e(fname)}"
+               class="px-3 py-1 bg-indigo-50 text-indigo-700 rounded text-xs hover:bg-indigo-100">⬇ دانلود</a>
+          </td>
+        </tr>"""
+
+    auto_backup_section = f"""
+    <div class="card p-6 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-bold text-gray-700">🕐 بکاپ‌های خودکار (روزانه)</h2>
+        <span class="text-xs text-gray-400">حداکثر ۵ فایل | هر شب یک بکاپ</span>
+      </div>
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-4 py-2">تاریخ</th><th class="px-4 py-2">حجم</th><th class="px-4 py-2">دانلود</th>
+        </tr></thead>
+        <tbody>{backup_rows or "<tr><td colspan='3' class='text-center py-4 text-gray-400 text-sm'>هنوز بکاپ خودکاری ایجاد نشده</td></tr>"}</tbody>
+      </table>
+    </div>"""
+
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-6">💾 مدیریت دیتابیس</h1>
+    {auto_backup_section}
 
     <!-- بکاپ کامل / بازیابی / ریست -->
     <div class="grid md:grid-cols-3 gap-4 mb-8">
@@ -941,6 +976,21 @@ async def database_page(request: Request, flash: str = ""):
     </div>"""
 
     return _layout("دیتابیس", body, adm, flash=flash)
+
+@router.get("/database/auto-backup/{fname}")
+async def auto_backup_download(request: Request, fname: str):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    import os, re
+    # امنیت: فقط auto_*.sqlite
+    if not re.match(r'^auto_\d{8}_\d{6}\.sqlite$', fname):
+        return _redir("/admin/database?flash=فایل+نامعتبر")
+    path = f"{_BACKUP_DIR}/{fname}"
+    if not os.path.exists(path):
+        return _redir("/admin/database?flash=فایل+یافت+نشد")
+    return FileResponse(path, filename=fname, media_type="application/octet-stream")
+
 
 @router.get("/database/backup")
 async def database_backup(request: Request):
@@ -1034,6 +1084,8 @@ async def database_reset(request: Request, confirm_text: str = Form("")):
 
 import csv
 import io
+import threading as _threading
+import time as _time
 
 _SECTION_MAP = {
     "users":      ("users",      ["user_id", "username", "full_name", "first_seen", "last_seen"]),
@@ -2956,27 +3008,52 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
         if ticket["status"] == "closed":
             return _redir(f"/admin/tickets/{tid}?flash=تیکت+بسته+است")
         user_id = int(ticket["user_id"])
+
+        # ─── migration اطمینان از وجود ستون‌های لازم ─────────────────────
+        for col, typedef in [("source", "TEXT"), ("media_file_id", "TEXT"), ("updated_at", "TEXT"), ("user_msg_count", "INTEGER DEFAULT 0")]:
+            try:
+                conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} {typedef};")
+            except Exception:
+                pass
+            try:
+                conn.execute(f"ALTER TABLE ticket_messages ADD COLUMN {col} {typedef};")
+            except Exception:
+                pass
+
+        # ذخیره در ticket_messages
+        now = datetime.now().isoformat()
+        # بررسی وجود ستون source
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(ticket_messages);").fetchall()]
+        if "source" in cols:
+            conn.execute(
+                "INSERT INTO ticket_messages (ticket_id, sender, text, source, created_at) VALUES (?,?,?,?,?);",
+                (tid, "admin", text, "panel", now)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO ticket_messages (ticket_id, sender, text, created_at) VALUES (?,?,?,?);",
+                (tid, "admin", text, now)
+            )
+
+        # آپدیت وضعیت تیکت
+        ticket_cols = [r[1] for r in conn.execute("PRAGMA table_info(tickets);").fetchall()]
+        if "user_msg_count" in ticket_cols and "updated_at" in ticket_cols:
+            conn.execute(
+                "UPDATE tickets SET status='waiting_user', user_msg_count=0, updated_at=? WHERE id=?;",
+                (now, tid)
+            )
+        elif "updated_at" in ticket_cols:
+            conn.execute("UPDATE tickets SET status='waiting_user', updated_at=? WHERE id=?;", (now, tid))
+        else:
+            conn.execute("UPDATE tickets SET status='waiting_user' WHERE id=?;", (tid,))
+        conn.commit()
+    except Exception as ex:
+        _tg_logger.error("ticket_reply DB error: %s", ex)
+        return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)[:50]}")
     finally:
         conn.close()
 
-    # ─── ذخیره پاسخ در DB ─────────────────────────────────────────────────
-    now = datetime.now().isoformat()
-    conn2 = _db()
-    try:
-        conn2.execute(
-            "INSERT INTO ticket_messages (ticket_id, sender, text, source, created_at) VALUES (?,?,?,?,?);",
-            (tid, "admin", text, "panel", now)
-        )
-        # status → waiting_user، counter reset
-        conn2.execute(
-            "UPDATE tickets SET status='waiting_user', user_msg_count=0, updated_at=? WHERE id=?;",
-            (now, tid)
-        )
-        conn2.commit()
-    finally:
-        conn2.close()
-
-    # ─── ارسال به کاربر از طریق Telegram API ─────────────────────────────
+    # ارسال به کاربر از طریق Telegram API
     msg_text = f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid}):\n\n{html.escape(text)}"
     ok = _tg_send(user_id, msg_text)
 
@@ -3323,6 +3400,73 @@ async def broadcast_status(request: Request):
         st = dict(_broadcast_state)
     from fastapi.responses import JSONResponse
     return JSONResponse(st)
+
+
+@router.get("/broadcast/status")
+async def broadcast_status(request: Request):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+    with _broadcast_lock:
+        st = dict(_broadcast_state)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(st)
+
+
+# ─────────────────────────── Auto Daily Backup ────────────────────────────
+
+_BACKUP_DIR = "/tmp/stockland_backups"
+_MAX_BACKUPS = 5
+_auto_backup_started = False
+
+
+def _do_auto_backup() -> None:
+    """بکاپ خودکار روزانه — حداکثر ۵ فایل نگه می‌داره."""
+    import os, shutil, glob
+    db_path = _env("DB_PATH")
+    if not db_path or not os.path.exists(db_path):
+        return
+    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    ts = _time.strftime("%Y%m%d_%H%M%S")
+    dst = f"{_BACKUP_DIR}/auto_{ts}.sqlite"
+    try:
+        import sqlite3 as _sq
+        src_c = _sq.connect(db_path, timeout=30)
+        dst_c = _sq.connect(dst, timeout=30)
+        src_c.backup(dst_c)
+        dst_c.close()
+        src_c.close()
+    except Exception as ex:
+        _tg_logger.error("Auto-backup failed: %s", ex)
+        return
+
+    # حذف بکاپ‌های قدیمی
+    all_backups = sorted(glob.glob(f"{_BACKUP_DIR}/auto_*.sqlite"))
+    while len(all_backups) > _MAX_BACKUPS:
+        try:
+            os.remove(all_backups.pop(0))
+        except Exception:
+            break
+    _tg_logger.info("Auto-backup done: %s (total: %d)", dst, len(all_backups))
+
+
+def _start_auto_backup_thread() -> None:
+    global _auto_backup_started
+    if _auto_backup_started:
+        return
+    _auto_backup_started = True
+
+    def _runner():
+        while True:
+            _time.sleep(86400)  # هر ۲۴ ساعت
+            try:
+                _do_auto_backup()
+            except Exception as ex:
+                _tg_logger.error("auto-backup thread error: %s", ex)
+
+    t = _threading.Thread(target=_runner, daemon=True, name="auto-backup")
+    t.start()
+    _tg_logger.info("Auto-backup scheduler started (every 24h, max %d files)", _MAX_BACKUPS)
 
 
 # ─────────────────────────── Partners ──────────────────────────────────────

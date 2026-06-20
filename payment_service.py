@@ -412,6 +412,11 @@ def payment_callback_url() -> str:
 def on_startup() -> None:
     ensure_schema()
     maybe_start_bot_polling()
+    try:
+        from admin_panel import _start_auto_backup_thread
+        _start_auto_backup_thread()
+    except Exception:
+        pass
 
 
 def maybe_start_bot_polling() -> None:

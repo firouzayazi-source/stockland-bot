@@ -715,7 +715,15 @@ def handle_start(message):
 
 
 
-# ========= HELPERS =========
+def _display_order_no(order_id) -> int | None:
+    """شماره نمایشی سفارش — فعلاً همان ID."""
+    try:
+        return int(order_id)
+    except Exception:
+        return None
+
+
+
 
 
 def format_price(amount):
@@ -2023,23 +2031,23 @@ def process_reseller_contact(message):
     uid = message.from_user.id
 
     if message.text and message.text.strip() == "❌ انصراف":
-        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
     if message.content_type != "contact" or not message.contact:
         bot.send_message(
             message.chat.id,
             "لطفاً شماره را فقط با دکمه «📱 ارسال شماره تلفن» ارسال کنید.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None),
         )
         return
     if message.contact.user_id and message.contact.user_id != uid:
-        bot.send_message(message.chat.id, "شماره ارسالی متعلق به همین اکانت نیست. دوباره تلاش کنید.", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "شماره ارسالی متعلق به همین اکانت نیست. دوباره تلاش کنید.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     phone = (message.contact.phone_number or "").strip()
     ok, msg = can_submit_partner_request(uid, phone=phone)
     if not ok:
-        bot.send_message(message.chat.id, msg, reply_markup=main_menu())
+        bot.send_message(message.chat.id, msg, reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
     username = message.from_user.username or ""
     full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
@@ -2062,7 +2070,7 @@ def process_reseller_city(message):
     uid = message.from_user.id
     if message.text and message.text.strip() == "❌ انصراف":
         reseller_signup.pop(uid, None)
-        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
     city = (message.text or "").strip()
     if not city or len(city) < 2:
@@ -2071,7 +2079,7 @@ def process_reseller_city(message):
         return
 
     if uid not in reseller_signup:
-        bot.send_message(message.chat.id, "درخواست شما منقضی شد. دوباره از «درخواست نمایندگی 📝» شروع کنید.", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "درخواست شما منقضی شد. دوباره از «درخواست نمایندگی 📝» شروع کنید.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
     reseller_signup[uid]["city"] = city
 
@@ -2085,7 +2093,7 @@ def process_reseller_shop(message):
     uid = message.from_user.id
     if message.text and message.text.strip() == "❌ انصراف":
         reseller_signup.pop(uid, None)
-        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
     shop_name = (message.text or "").strip()
     if not shop_name or len(shop_name) < 2:
@@ -2095,7 +2103,7 @@ def process_reseller_shop(message):
 
     data = reseller_signup.pop(uid, None)
     if not data:
-        bot.send_message(message.chat.id, "درخواست شما منقضی شد. دوباره از «درخواست نمایندگی 📝» شروع کنید.", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "درخواست شما منقضی شد. دوباره از «درخواست نمایندگی 📝» شروع کنید.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     phone = data["phone"]
@@ -2108,7 +2116,7 @@ def process_reseller_shop(message):
     bot.send_message(
         message.chat.id,
         "درخواست شما ثبت شد ✅\nپس از بررسی، در صورت تایید، قیمت همکار برای شما فعال می‌شود.",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None),
     )
 
     try:
@@ -2747,7 +2755,7 @@ def handle_callbacks(call: types.CallbackQuery):
     if data == "cancel_purchase":
         bot.answer_callback_query(call.id)
         clear_user_state(uid)
-        bot.send_message(call.message.chat.id, "خرید لغو شد.", reply_markup=main_menu())
+        bot.send_message(call.message.chat.id, "خرید لغو شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     # ─── ناوبری دسته‌بندی داینامیک ────────────────────────────────────────
@@ -2817,7 +2825,7 @@ def handle_callbacks(call: types.CallbackQuery):
             if t_row:
                 clear_user_state(int(t_row["user_id"]))
                 try:
-                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu())
+                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
                 except Exception:
                     pass
         return
@@ -2950,12 +2958,12 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "back_main":
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu())
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     if data == "other_back":
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu())
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     if data == "admin_products_back":
