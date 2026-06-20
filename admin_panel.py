@@ -142,9 +142,12 @@ def e(s) -> str:
     return html.escape(str(s or ""))
 
 def _open_ticket_count() -> int:
+    """تعداد تیکت‌هایی که منتظر پاسخ ادمین هستند."""
     try:
         conn = _db()
-        n = conn.execute("SELECT COUNT(*) FROM tickets WHERE status='open';").fetchone()[0]
+        n = conn.execute(
+            "SELECT COUNT(*) FROM tickets WHERE status='waiting_admin';"
+        ).fetchone()[0]
         conn.close()
         return int(n)
     except Exception:
@@ -2562,8 +2565,19 @@ def _tg_send_photo(chat_id: int, photo_url: str, caption: str = "",
 # ─────────────────────────── Tickets ───────────────────────────────────────
 
 def _ticket_status_badge(status: str) -> str:
-    colors = {"open": "green", "in_progress": "yellow", "closed": "gray"}
-    labels = {"open": "باز", "in_progress": "در بررسی", "closed": "بسته"}
+    colors = {
+        "waiting_admin": "red",
+        "waiting_user":  "yellow",
+        "closed":        "gray",
+        # backward compat
+        "open": "green", "in_progress": "yellow",
+    }
+    labels = {
+        "waiting_admin": "منتظر ادمین",
+        "waiting_user":  "منتظر کاربر",
+        "closed":        "بسته",
+        "open": "باز", "in_progress": "در بررسی",
+    }
     c = colors.get(status, "slate")
     l = labels.get(status, status)
     return f'<span class="px-2 py-0.5 text-xs rounded-full bg-{c}-100 text-{c}-700">{l}</span>'
@@ -2571,6 +2585,75 @@ def _ticket_status_badge(status: str) -> str:
 
 @router.get("/tickets", response_class=HTMLResponse)
 async def tickets_list(request: Request, status_filter: str = "", flash: str = ""):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    conn = _db()
+    try:
+        where = "WHERE t.status=?" if status_filter else ""
+        params = (status_filter, 100) if status_filter else (100,)
+        tickets = conn.execute(f"""
+            SELECT t.*,
+                   (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count
+            FROM tickets t {where}
+            ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
+                     t.updated_at DESC LIMIT ?;
+        """, params).fetchall()
+        stats = {s: conn.execute(f"SELECT COUNT(*) FROM tickets WHERE status='{s}';").fetchone()[0]
+                 for s in ("waiting_admin", "waiting_user", "closed")}
+    finally:
+        conn.close()
+
+    def status_badge(s):
+        cfg = {
+            "waiting_admin": ("🔴 منتظر پاسخ ادمین", "red"),
+            "waiting_user":  ("🟡 منتظر کاربر", "yellow"),
+            "closed":        ("⚫ بسته", "gray"),
+        }
+        lbl, color = cfg.get(s, (s, "slate"))
+        return f'<span class="px-2 py-0.5 text-xs rounded-full bg-{color}-100 text-{color}-700">{lbl}</span>'
+
+    tabs = [
+        ("همه", "", sum(stats.values())),
+        ("منتظر ادمین 🔴", "waiting_admin", stats["waiting_admin"]),
+        ("منتظر کاربر 🟡", "waiting_user",  stats["waiting_user"]),
+        ("بسته", "closed", stats["closed"]),
+    ]
+    tab_nav = '<div class="flex gap-2 mb-4 flex-wrap">'
+    for lbl, val, cnt in tabs:
+        active = "bg-indigo-600 text-white" if status_filter == val else "bg-white text-gray-600"
+        tab_nav += f'<a href="/admin/tickets?status_filter={val}" class="px-3 py-1.5 rounded-lg border text-sm {active}">{lbl} ({cnt})</a>'
+    tab_nav += "</div>"
+
+    rows = ""
+    for t in tickets:
+        rows += f"""
+        <tr class="border-b hover:bg-gray-50 text-sm cursor-pointer" onclick="location.href='/admin/tickets/{t['id']}'">
+          <td class="px-4 py-3 text-gray-400">#{t["id"]}</td>
+          <td class="px-4 py-3 font-mono text-xs"><code>{t["user_id"]}</code></td>
+          <td class="px-4 py-3"><span class="text-xs bg-gray-100 px-1.5 rounded">{t["type"]}</span></td>
+          <td class="px-4 py-3">{status_badge(t["status"])}</td>
+          <td class="px-4 py-3 text-gray-400 text-xs">{int(t["msg_count"] or 0)} پیام</td>
+          <td class="px-4 py-3 text-gray-400 text-xs">{(t["updated_at"] or "")[:16]}</td>
+          <td class="px-4 py-3">{_btn("مشاهده", f"/admin/tickets/{t['id']}", "indigo", small=True)}</td>
+        </tr>"""
+
+    body = f"""
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">🎫 تیکت‌های پشتیبانی</h1>
+    {tab_nav}
+    <div class="card overflow-hidden">
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
+          <th class="px-4 py-3">نوع</th><th class="px-4 py-3">وضعیت</th>
+          <th class="px-4 py-3">پیام‌ها</th><th class="px-4 py-3">آپدیت</th><th class="px-4 py-3"></th>
+        </tr></thead>
+        <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>تیکتی یافت نشد</td></tr>"}</tbody>
+      </table>
+    </div>"""
+
+    return _layout("تیکت‌ها", body, adm, flash=flash)
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
@@ -2801,40 +2884,41 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
     conn = _db()
     try:
         ticket = conn.execute(
-            "SELECT user_id, order_no, status FROM tickets WHERE id=? LIMIT 1;", (tid,)
+            "SELECT user_id, status FROM tickets WHERE id=? LIMIT 1;", (tid,)
         ).fetchone()
         if not ticket:
             return _redir("/admin/tickets?flash=تیکت+یافت+نشد")
         if ticket["status"] == "closed":
             return _redir(f"/admin/tickets/{tid}?flash=تیکت+بسته+است")
         user_id = int(ticket["user_id"])
-        order_no = ticket["order_no"] or 0
     finally:
         conn.close()
 
-    # ارسال به کاربر از طریق Telegram API
-    order_part = f"(سفارش #{order_no})" if int(order_no) > 0 else "(پشتیبانی عمومی)"
-    msg_text = f"💬 <b>پاسخ پشتیبانی</b> {order_part}:\n\n{html.escape(text)}"
-
-    ok = _tg_send(user_id, msg_text)
-
-    # ذخیره در تاریخچه صرف‌نظر از نتیجه ارسال
+    # ─── ذخیره پاسخ در DB ─────────────────────────────────────────────────
+    now = datetime.now().isoformat()
     conn2 = _db()
     try:
-        now = datetime.now().isoformat()
         conn2.execute(
-            "INSERT INTO ticket_messages (ticket_id, sender, text, created_at) VALUES (?,?,?,?);",
-            (tid, "admin", text, now)
+            "INSERT INTO ticket_messages (ticket_id, sender, text, source, created_at) VALUES (?,?,?,?,?);",
+            (tid, "admin", text, "panel", now)
         )
-        conn2.execute("UPDATE tickets SET status='in_progress' WHERE id=? AND status!='closed';", (tid,))
+        # status → waiting_user، counter reset
+        conn2.execute(
+            "UPDATE tickets SET status='waiting_user', user_msg_count=0, updated_at=? WHERE id=?;",
+            (now, tid)
+        )
         conn2.commit()
     finally:
         conn2.close()
 
+    # ─── ارسال به کاربر از طریق Telegram API ─────────────────────────────
+    msg_text = f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid}):\n\n{html.escape(text)}"
+    ok = _tg_send(user_id, msg_text)
+
     if ok:
         return _redir(f"/admin/tickets/{tid}?flash=پاسخ+ارسال+شد")
     else:
-        return _redir(f"/admin/tickets/{tid}?flash=پاسخ+ذخیره+شد+اما+ارسال+تلگرام+ناموفق+بود")
+        return _redir(f"/admin/tickets/{tid}?flash=ذخیره+شد+اما+ارسال+تلگرام+ناموفق")
 
 
 @router.post("/tickets/{tid}/direct")
