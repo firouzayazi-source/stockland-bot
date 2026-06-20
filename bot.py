@@ -942,53 +942,91 @@ def safe_edit_message_text(*args, **kwargs):
         return None
 
 # ========= TICKET CHAT (USER) =========
-@bot.message_handler(func=lambda m: (not ensure_admin(m.from_user.id)) and (user_states.get(m.from_user.id, {}).get("mode") == "ticket_chat"))
+@bot.message_handler(func=lambda m: (not ensure_admin(m.from_user.id)) and (user_states.get(m.from_user.id, {}).get("mode") in ("ticket_chat", "ticket_support")))
 def handle_ticket_chat_user(message):
     uid = message.from_user.id
     st = user_states.get(uid) or {}
+    mode = st.get("mode")
     tid = st.get("ticket_id")
+
     if not tid:
         clear_user_state(uid)
         return
+
     tk = _get_ticket(int(tid))
     if not tk or tk[4] != "open":
-        # اگر تیکت قبلی بسته شده ولی یک تیکت باز جدید داریم (مثلاً خرید جدید)، به جدید سوییچ کن.
         latest = _get_open_ticket_for_user(int(uid))
         if latest:
             new_tid, _pid, _ord = latest
-            user_states[uid] = {"mode": "ticket_chat", "ticket_id": int(new_tid)}
+            user_states[uid] = {"mode": mode, "ticket_id": int(new_tid)}
             tk = _get_ticket(int(new_tid))
         else:
             clear_user_state(uid)
-            bot.send_message(message.chat.id, "این چت بسته شده است.", reply_markup=main_menu())
+            bot.send_message(message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
             return
 
-    # forward to admin with context + reply buttons
     ticket_id, user_id, product_id, order_no, status = tk
-    header = f"💬 <b>پیام کاربر</b>\nTicket: <code>{ticket_id}</code>\nOrder: <b>#{order_no}</b>\nProduct ID: <code>{product_id}</code>\nUser ID: <code>{user_id}</code>\n\n"
+
+    # پیام ادمین متفاوت برای تیکت عمومی و تیکت محصول
+    is_general = (int(product_id) == 0)
+    if is_general:
+        header = (
+            f"💬 <b>پیام پشتیبانی عمومی</b>\n"
+            f"Ticket: <code>{ticket_id}</code>\n"
+            f"User ID: <code>{user_id}</code>\n\n"
+        )
+    else:
+        header = (
+            f"💬 <b>پیام کاربر</b>\n"
+            f"Ticket: <code>{ticket_id}</code>\n"
+            f"Order: <b>#{order_no}</b>\n"
+            f"Product ID: <code>{product_id}</code>\n"
+            f"User ID: <code>{user_id}</code>\n\n"
+        )
+
     txt = (message.text or "").strip()
 
-    # ذخیره پیام در تاریخچه تیکت
+    # ذخیره پیام در تاریخچه
     try:
-        save_ticket_message(ticket_id, "user", txt or f"[{message.content_type}]",
-                            message.content_type if message.content_type != "text" else None)
+        save_ticket_message(
+            ticket_id, "user",
+            txt or f"[{message.content_type}]",
+            message.content_type if message.content_type != "text" else None
+        )
     except Exception:
         pass
 
+    # ارسال به ادمین
     if message.content_type == "text" and txt:
-        bot.send_message(ADMIN_ID, header + html.escape(txt), reply_markup=_ticket_admin_keyboard(ticket_id, user_id), parse_mode="HTML")
+        bot.send_message(
+            ADMIN_ID, header + html.escape(txt),
+            reply_markup=_ticket_admin_keyboard(ticket_id, user_id),
+            parse_mode="HTML"
+        )
     else:
-        # برای انواع غیرمتنی، فوروارد مستقیم + یک پیام زمینه
         try:
-            bot.send_message(ADMIN_ID, header + "<i>(فایل/مدیا)</i>", reply_markup=_ticket_admin_keyboard(ticket_id, user_id), parse_mode="HTML")
+            bot.send_message(
+                ADMIN_ID, header + "<i>(فایل/مدیا)</i>",
+                reply_markup=_ticket_admin_keyboard(ticket_id, user_id),
+                parse_mode="HTML"
+            )
             bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
         except Exception:
             pass
 
-    bot.reply_to(message, "✅ ارسال شد.")
+    # پیام تأیید به کاربر
+    if is_general:
+        bot.reply_to(
+            message,
+            "✅ پیام شما دریافت شد.\n"
+            "در اولین فرصت به شما پاسخ خواهیم داد.\n"
+            "لطفاً از ارسال چند پیام با هم خودداری کنید. با تشکر 🙏"
+        )
+    else:
+        bot.reply_to(message, "✅ ارسال شد.")
 
 
-@bot.message_handler(func=lambda m: (not ensure_admin(m.from_user.id)) and (user_states.get(m.from_user.id, {}).get("mode") == "ticket_chat"), content_types=["photo","document","video","audio","voice","sticker","animation"])
+@bot.message_handler(func=lambda m: (not ensure_admin(m.from_user.id)) and (user_states.get(m.from_user.id, {}).get("mode") in ("ticket_chat", "ticket_support")), content_types=["photo","document","video","audio","voice","sticker","animation"])
 def handle_ticket_chat_user_media(message):
     handle_ticket_chat_user(message)
 
@@ -2229,8 +2267,27 @@ def handle_support(message):
         bot.reply_to(message, t("MSG_BTN_DISABLED"))
         return
 
+    uid = message.from_user.id
+
+    # چک کن تیکت باز داره یا نه
+    existing = _get_open_ticket_for_user(uid)
+
     text = t("SUPPORT_TEXT", DEFAULT_UI_TEXTS.get("SUPPORT_TEXT", ""))
-    bot.send_message(message.chat.id, text)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    if existing:
+        ticket_id = existing[0]
+        kb.add(types.InlineKeyboardButton(
+            f"💬 ادامه مکالمه (تیکت #{ticket_id})",
+            callback_data=f"continue_support_ticket_{ticket_id}"
+        ))
+    else:
+        kb.add(types.InlineKeyboardButton(
+            "📩 ارسال پیام به پشتیبانی",
+            callback_data="create_support_ticket"
+        ))
+
+    bot.send_message(message.chat.id, text, reply_markup=kb)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_PARTNER_PANEL"))
@@ -2905,6 +2962,53 @@ def handle_callbacks(call: types.CallbackQuery):
         return
     # ---------------------------------------------------
     
+    if data == "create_support_ticket":
+        bot.answer_callback_query(call.id)
+        _ensure_ticket_tables()
+        # ساخت تیکت عمومی (product_id=0, order_no=0)
+        ticket_id = _create_ticket(uid, product_id=0, order_no=0)
+        if not ticket_id:
+            bot.send_message(call.message.chat.id, "خطا در ایجاد تیکت. دوباره تلاش کنید.")
+            return
+        user_states[uid] = {"mode": "ticket_support", "ticket_id": ticket_id}
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("❌ پایان مکالمه", callback_data=f"close_support_ticket_{ticket_id}"))
+        bot.send_message(
+            call.message.chat.id,
+            f"💬 تیکت پشتیبانی #{ticket_id} باز شد.\n\n"
+            "پیام خود را ارسال کنید. پس از دریافت پاسخ به شما اطلاع داده می‌شود.\n"
+            "⚠️ لطفاً از ارسال چند پیام پشت سر هم خودداری کنید.",
+            reply_markup=kb
+        )
+        return
+
+    if data.startswith("continue_support_ticket_"):
+        bot.answer_callback_query(call.id)
+        try:
+            ticket_id = int(data.split("_")[-1])
+        except ValueError:
+            return
+        user_states[uid] = {"mode": "ticket_support", "ticket_id": ticket_id}
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("❌ پایان مکالمه", callback_data=f"close_support_ticket_{ticket_id}"))
+        bot.send_message(
+            call.message.chat.id,
+            f"💬 ادامه مکالمه تیکت #{ticket_id}\nپیام خود را ارسال کنید:",
+            reply_markup=kb
+        )
+        return
+
+    if data.startswith("close_support_ticket_"):
+        bot.answer_callback_query(call.id)
+        try:
+            ticket_id = int(data.split("_")[-1])
+        except ValueError:
+            return
+        clear_user_state(uid)
+        _close_ticket(ticket_id, "user")
+        bot.send_message(call.message.chat.id, "✅ مکالمه پشتیبانی پایان یافت. ممنون از صبر شما.", reply_markup=main_menu(user_id=uid))
+        return
+
     if data == "noop":
         bot.answer_callback_query(call.id)
         return
