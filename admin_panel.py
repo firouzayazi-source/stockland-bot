@@ -642,64 +642,132 @@ async def database_page(request: Request, flash: str = ""):
 
     conn = _db()
     try:
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
-        ).fetchall()
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;").fetchall()
         table_info = []
         for t in tables:
             count = conn.execute(f"SELECT COUNT(*) FROM {t['name']};").fetchone()[0]
             table_info.append((t["name"], count))
+
+        counts = {name: cnt for name, cnt in table_info}
     finally:
         conn.close()
 
     table_rows = "".join(f"""
-        <tr class="border-b">
+        <tr class="border-b hover:bg-gray-50">
           <td class="px-4 py-2 text-sm font-mono">{e(name)}</td>
           <td class="px-4 py-2 text-sm text-gray-500">{count:,} ردیف</td>
         </tr>""" for name, count in table_info)
 
+    def section_card(icon, title, desc, count_key, export_url, import_url=None,
+                     import_note=None, color="indigo"):
+        cnt = counts.get(count_key, 0)
+        import_html = ""
+        if import_url:
+            import_html = f"""
+            <form method="post" action="{import_url}" enctype="multipart/form-data" class="mt-3 pt-3 border-t">
+              <p class="text-xs text-gray-400 mb-2">{import_note or "فایل JSON آپلود کنید"}</p>
+              <input type="file" name="file" accept=".json,.csv" required
+                class="w-full text-xs mb-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-{color}-50 file:text-{color}-700">
+              <button type="submit" onclick="return confirm('داده‌های موجود با این فایل ادغام/جایگزین می‌شوند. ادامه دهید؟')"
+                class="w-full py-1.5 bg-{color}-100 text-{color}-700 rounded text-xs font-medium hover:bg-{color}-200">
+                📥 بازیابی
+              </button>
+            </form>"""
+        return f"""
+        <div class="card p-5">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xl">{icon}</span>
+            <h3 class="font-bold text-gray-700">{title}</h3>
+          </div>
+          <p class="text-xs text-gray-400 mb-3">{desc}<br>
+            <span class="text-{color}-600 font-medium">{cnt:,} ردیف</span>
+          </p>
+          <div class="space-y-1">
+            <a href="{export_url}?fmt=json"
+               class="flex items-center justify-between px-3 py-2 bg-{color}-50 hover:bg-{color}-100 text-{color}-700 rounded text-xs font-medium transition">
+              <span>📤 دانلود JSON</span> <span>←</span>
+            </a>
+            <a href="{export_url}?fmt=csv"
+               class="flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded text-xs font-medium transition">
+              <span>📊 دانلود CSV</span> <span>←</span>
+            </a>
+          </div>
+          {import_html}
+        </div>"""
+
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-6">💾 مدیریت دیتابیس</h1>
 
-    <div class="grid md:grid-cols-3 gap-6 mb-6">
-      <!-- Backup -->
-      <div class="bg-white rounded-xl shadow p-6">
-        <h2 class="font-bold text-gray-700 mb-2">📤 بکاپ</h2>
-        <p class="text-sm text-gray-500 mb-4">حجم دیتابیس: <strong>{size_str}</strong></p>
-        <a href="/admin/database/backup" class="block w-full text-center py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition">دانلود بکاپ</a>
+    <!-- بکاپ کامل / بازیابی / ریست -->
+    <div class="grid md:grid-cols-3 gap-4 mb-8">
+      <div class="card p-5">
+        <h2 class="font-bold text-gray-700 mb-1">🗄 بکاپ کامل</h2>
+        <p class="text-xs text-gray-400 mb-3">حجم: <strong>{size_str}</strong> — همه جداول</p>
+        <a href="/admin/database/backup"
+           class="block w-full text-center py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition">
+          📤 دانلود SQLite
+        </a>
       </div>
 
-      <!-- Restore -->
-      <div class="bg-white rounded-xl shadow p-6">
-        <h2 class="font-bold text-gray-700 mb-2">📥 بازیابی</h2>
-        <p class="text-sm text-gray-500 mb-4">فایل SQLite بارگذاری کنید.</p>
+      <div class="card p-5">
+        <h2 class="font-bold text-gray-700 mb-1">📥 بازیابی کامل</h2>
+        <p class="text-xs text-gray-400 mb-3">فایل SQLite — کل دیتابیس جایگزین می‌شود</p>
         <form method="post" action="/admin/database/restore" enctype="multipart/form-data">
           <input type="file" name="backup_file" accept=".sqlite,.db" required
-            class="w-full text-sm mb-3 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-indigo-50 file:text-indigo-700">
-          <button type="submit" onclick="return confirm('آیا مطمئنید؟ دیتابیس فعلی جایگزین می‌شود.')"
+            class="w-full text-xs mb-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-orange-50 file:text-orange-700">
+          <button type="submit" onclick="return confirm('دیتابیس کاملاً جایگزین می‌شود!')"
             class="w-full py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium">
-            بازیابی بکاپ
+            بازیابی
           </button>
         </form>
       </div>
 
-      <!-- Reset -->
-      <div class="bg-white rounded-xl shadow p-6 border-2 border-red-100">
-        <h2 class="font-bold text-red-700 mb-2">⚠️ ریست کامل</h2>
-        <p class="text-sm text-gray-500 mb-4">همه داده‌ها پاک می‌شود. غیرقابل بازگشت!</p>
+      <div class="card p-5 border-2 border-red-100">
+        <h2 class="font-bold text-red-700 mb-1">⚠️ ریست کامل</h2>
+        <p class="text-xs text-gray-400 mb-3">همه داده‌ها پاک — غیرقابل بازگشت!</p>
         <form method="post" action="/admin/database/reset"
-          onsubmit="return confirm('تأیید اول: آیا مطمئنید؟')">
+          onsubmit="return confirm('آخرین تأیید: همه داده‌ها حذف می‌شوند!')">
           <input type="text" name="confirm_text" placeholder='بنویسید: RESET' required
-            class="w-full border border-red-300 rounded px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-red-300">
-          <button type="submit" class="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">
-            ریست کامل
+            class="w-full border border-red-300 rounded px-3 py-2 text-xs mb-2">
+          <button type="submit"
+            class="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">
+            ریست
           </button>
         </form>
       </div>
     </div>
 
-    <!-- Table Info -->
-    <div class="bg-white rounded-xl shadow p-6">
+    <!-- بکاپ بخش‌بندی‌شده -->
+    <h2 class="text-lg font-bold text-gray-700 mb-4">📦 بکاپ بخش‌بندی‌شده</h2>
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+
+      {section_card("👥", "کاربران", "همه کاربران ربات",
+        "users", "/admin/database/export/users", "/admin/database/import/users",
+        "JSON کاربران — ادغام با موجودین", "blue")}
+
+      {section_card("📦", "محصولات", "محصولات + دسته‌بندی‌ها",
+        "products", "/admin/database/export/products", "/admin/database/import/products",
+        "JSON محصولات — جایگزین می‌شوند", "teal")}
+
+      {section_card("🗂", "دسته‌بندی‌ها", "ساختار درختی دسته‌ها",
+        "categories", "/admin/database/export/categories", "/admin/database/import/categories",
+        "JSON دسته‌بندی‌ها", "purple")}
+
+      {section_card("🧾", "سفارش‌ها", "تاریخچه خریدها",
+        "orders", "/admin/database/export/orders", color="green")}
+
+      {section_card("💰", "کیف‌پول‌ها", "موجودی همه کاربران",
+        "wallets", "/admin/database/export/wallets", "/admin/database/import/wallets",
+        "JSON کیف‌پول — موجودی‌ها آپدیت می‌شوند", "yellow")}
+
+      {section_card("⚙️", "تنظیمات", "همه متن‌های ربات + تنظیمات",
+        "ui_texts", "/admin/database/export/settings", "/admin/database/import/settings",
+        "JSON تنظیمات — جایگزین می‌شوند", "indigo")}
+
+    </div>
+
+    <!-- اطلاعات جداول -->
+    <div class="card p-6">
       <h2 class="font-bold text-gray-700 mb-4">📊 جداول دیتابیس</h2>
       <table class="w-full text-right">
         <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
@@ -797,6 +865,265 @@ async def database_reset(request: Request, confirm_text: str = Form("")):
         conn.close()
 
     return _redir("/admin/database?flash=ریست+کامل+انجام+شد")
+
+
+# ─────────────────────────── Section Export ────────────────────────────────
+
+import csv
+import io
+
+_SECTION_MAP = {
+    "users":      ("users",      ["user_id", "username", "full_name", "first_seen", "last_seen"]),
+    "products":   ("products",   ["id", "category", "category_id", "product_key", "title", "price",
+                                  "partner_price", "daily_limit_customer", "daily_limit_partner",
+                                  "description", "is_active"]),
+    "categories": ("categories", ["id", "name", "slug", "parent_id", "emoji", "sort_order", "is_active"]),
+    "orders":     ("orders",     ["id", "user_id", "category", "product_id", "title", "price",
+                                  "created_at", "buyer_type"]),
+    "wallets":    ("wallets",    ["user_id", "balance", "updated_at"]),
+    "settings":   ("ui_texts",   ["key", "value", "updated_at"]),
+}
+
+
+@router.get("/database/export/{section}")
+async def section_export(request: Request, section: str, fmt: str = "json"):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+
+    if section not in _SECTION_MAP:
+        return _redir("/admin/database?flash=بخش+نامعتبر")
+
+    table, cols = _SECTION_MAP[section]
+    conn = _db()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(f"SELECT * FROM {table};").fetchall()
+        data = [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "csv":
+        output = io.StringIO()
+        if data:
+            writer = csv.DictWriter(output, fieldnames=data[0].keys())
+            writer.writeheader()
+            writer.writerows(data)
+        content = output.getvalue().encode("utf-8-sig")
+        from fastapi.responses import Response
+        return Response(
+            content=content,
+            media_type="text/csv; charset=utf-8-sig",
+            headers={"Content-Disposition": f'attachment; filename="stockland_{section}_{ts}.csv"'}
+        )
+    else:
+        from fastapi.responses import Response
+        content = json.dumps(data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="stockland_{section}_{ts}.json"'}
+        )
+
+
+# ─────────────────────────── Section Import ────────────────────────────────
+
+@router.post("/database/import/users")
+async def import_users(request: Request, file: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+
+    if not file:
+        return _redir("/admin/database?flash=فایل+انتخاب+نشده")
+
+    content = await file.read()
+    try:
+        data = json.loads(content)
+    except Exception:
+        return _redir("/admin/database?flash=فرمت+فایل+نامعتبر")
+
+    conn = _db()
+    try:
+        inserted = 0
+        for row in data:
+            try:
+                conn.execute(
+                    "INSERT INTO users (user_id, username, full_name, first_seen, last_seen) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
+                    "username=excluded.username, full_name=excluded.full_name, last_seen=excluded.last_seen;",
+                    (row.get("user_id"), row.get("username"), row.get("full_name"),
+                     row.get("first_seen"), row.get("last_seen"))
+                )
+                inserted += 1
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir(f"/admin/database?flash={inserted}+کاربر+بازیابی+شد")
+
+
+@router.post("/database/import/products")
+async def import_products(request: Request, file: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+
+    if not file:
+        return _redir("/admin/database?flash=فایل+انتخاب+نشده")
+
+    content = await file.read()
+    try:
+        data = json.loads(content)
+    except Exception:
+        return _redir("/admin/database?flash=فرمت+فایل+نامعتبر")
+
+    conn = _db()
+    try:
+        inserted = 0
+        for row in data:
+            try:
+                conn.execute(
+                    """INSERT OR REPLACE INTO products
+                       (id, category, category_id, product_key, title, price, partner_price,
+                        daily_limit_customer, daily_limit_partner, description, is_active)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?);""",
+                    (row.get("id"), row.get("category"), row.get("category_id"),
+                     row.get("product_key"), row.get("title"), row.get("price"),
+                     row.get("partner_price"), row.get("daily_limit_customer"),
+                     row.get("daily_limit_partner"), row.get("description"),
+                     row.get("is_active", 1))
+                )
+                inserted += 1
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir(f"/admin/database?flash={inserted}+محصول+بازیابی+شد")
+
+
+@router.post("/database/import/categories")
+async def import_categories(request: Request, file: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+
+    if not file:
+        return _redir("/admin/database?flash=فایل+انتخاب+نشده")
+
+    content = await file.read()
+    try:
+        data = json.loads(content)
+    except Exception:
+        return _redir("/admin/database?flash=فرمت+فایل+نامعتبر")
+
+    conn = _db()
+    try:
+        inserted = 0
+        # اول ریشه‌ها، بعد فرزندان
+        for parent_pass in [True, False]:
+            for row in data:
+                is_root = row.get("parent_id") is None
+                if is_root != parent_pass:
+                    continue
+                try:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO categories
+                           (id, name, slug, parent_id, emoji, sort_order, is_active)
+                           VALUES (?,?,?,?,?,?,?);""",
+                        (row.get("id"), row.get("name"), row.get("slug"),
+                         row.get("parent_id"), row.get("emoji", ""),
+                         row.get("sort_order", 0), row.get("is_active", 1))
+                    )
+                    inserted += 1
+                except Exception:
+                    pass
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir(f"/admin/database?flash={inserted}+دسته+بازیابی+شد")
+
+
+@router.post("/database/import/wallets")
+async def import_wallets(request: Request, file: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+
+    if not file:
+        return _redir("/admin/database?flash=فایل+انتخاب+نشده")
+
+    content = await file.read()
+    try:
+        data = json.loads(content)
+    except Exception:
+        return _redir("/admin/database?flash=فرمت+فایل+نامعتبر")
+
+    conn = _db()
+    try:
+        updated = 0
+        now = datetime.now().isoformat()
+        for row in data:
+            try:
+                conn.execute(
+                    "INSERT INTO wallets (user_id, balance, updated_at) VALUES (?,?,?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET balance=excluded.balance, updated_at=excluded.updated_at;",
+                    (row.get("user_id"), row.get("balance", 0), row.get("updated_at", now))
+                )
+                updated += 1
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir(f"/admin/database?flash={updated}+کیف‌پول+بازیابی+شد")
+
+
+@router.post("/database/import/settings")
+async def import_settings(request: Request, file: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+
+    if not file:
+        return _redir("/admin/database?flash=فایل+انتخاب+نشده")
+
+    content = await file.read()
+    try:
+        data = json.loads(content)
+    except Exception:
+        return _redir("/admin/database?flash=فرمت+فایل+نامعتبر")
+
+    conn = _db()
+    try:
+        imported = 0
+        now = datetime.now().isoformat()
+        for row in data:
+            try:
+                conn.execute(
+                    "INSERT INTO ui_texts (key, value, updated_at) VALUES (?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;",
+                    (row.get("key"), row.get("value"), row.get("updated_at", now))
+                )
+                imported += 1
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+
+    # پاک کردن cache متن‌ها
+    try:
+        from ui_texts import ui_cache_clear
+        ui_cache_clear()
+    except Exception:
+        pass
+
+    return _redir(f"/admin/database?flash={imported}+تنظیمات+بازیابی+شد")
 
 # ─────────────────────────── Admins ────────────────────────────────────────
 
