@@ -1773,3 +1773,4 @@ def update_ticket_status(ticket_id: int, status: str) -> None:
         conn.commit()
     finally:
         conn.close()
+        
