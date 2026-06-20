@@ -425,8 +425,8 @@ def maybe_start_bot_polling() -> None:
         bot_module.init_db(bot_module.DB_PATH)
         bot_module.ensure_pending_schema()
         bot_module._ensure_delivery_table()
-        bot_module._ensure_ticket_tables()
-        logger.info("Bot polling started inside payment service")
+        bot_module.ticket_ensure_schema()
+        logger.info("Bot polling started (ticket v2)")
         while True:
             try:
                 bot_module.bot.infinity_polling(timeout=60, long_polling_timeout=60)
