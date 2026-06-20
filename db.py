@@ -2010,3 +2010,4 @@ def ticket_toggle_product_chat(product_id: int) -> bool:
         return bool(row[0] if row else 0)
     finally:
         conn.close()
+
