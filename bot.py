@@ -71,6 +71,9 @@ from db import (
     get_category_products,
     get_category_by_button_text,
     get_category_path,
+    # کاربران و تیکت
+    upsert_user,
+    save_ticket_message,
 )
 from services.payments import start_wallet_charge_payment
 from config import (
@@ -879,15 +882,24 @@ def handle_start(message):
     ensure_pending_schema()
     _ensure_delivery_table()
     _ensure_ticket_tables()
-    full_name = (message.from_user.first_name or "") + " " + (
-        message.from_user.last_name or ""
-    )
+
+    uid = message.from_user.id
+    username = message.from_user.username
+    full_name = (message.from_user.first_name or "") + " " + (message.from_user.last_name or "")
+    full_name = full_name.strip()
+
+    # ثبت/به‌روزرسانی کاربر برای Broadcast
+    try:
+        upsert_user(uid, username, full_name)
+    except Exception:
+        pass
+
     text = (
-        f"سلام {full_name.strip() or 'دوست عزیز'} 👋\n\n"
+        f"سلام {full_name or 'دوست عزیز'} 👋\n\n"
         "به ربات فروش سرویس خوش آمدید.\n"
         "از منوی زیر، سرویس مورد نظر خود را انتخاب کنید."
     )
-    bot.send_message(message.chat.id, text, reply_markup=main_menu())
+    bot.send_message(message.chat.id, text, reply_markup=main_menu(user_id=uid))
 
 def safe_edit_message_text(*args, **kwargs):
     """
@@ -958,6 +970,13 @@ def handle_ticket_chat_user(message):
     ticket_id, user_id, product_id, order_no, status = tk
     header = f"💬 <b>پیام کاربر</b>\nTicket: <code>{ticket_id}</code>\nOrder: <b>#{order_no}</b>\nProduct ID: <code>{product_id}</code>\nUser ID: <code>{user_id}</code>\n\n"
     txt = (message.text or "").strip()
+
+    # ذخیره پیام در تاریخچه تیکت
+    try:
+        save_ticket_message(ticket_id, "user", txt or f"[{message.content_type}]",
+                            message.content_type if message.content_type != "text" else None)
+    except Exception:
+        pass
 
     if message.content_type == "text" and txt:
         bot.send_message(ADMIN_ID, header + html.escape(txt), reply_markup=_ticket_admin_keyboard(ticket_id, user_id), parse_mode="HTML")
@@ -2362,6 +2381,11 @@ def handle_admin_text(message):
         # send to user
         try:
             bot.send_message(target_uid, f"💬 پاسخ پشتیبانی (Order #{tk[3]}):\n{txt}", reply_markup=_ticket_user_keyboard(tid))
+        except Exception:
+            pass
+        # ذخیره پاسخ در تاریخچه تیکت
+        try:
+            save_ticket_message(tid, "admin", txt)
         except Exception:
             pass
         bot.reply_to(message, "✅ ارسال شد.")
