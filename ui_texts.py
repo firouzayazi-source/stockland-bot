@@ -35,6 +35,7 @@ DEFAULT_UI_TEXTS = {
         "✅ کیف پول شما با موفقیت شارژ شد.\n"
         "مبلغ: <b>{amount}</b> تومان\n"
         "کد پیگیری: <code>{ref_id}</code>",
+    "WALLET_QUICK_AMOUNTS": "10000,50000,100000,500000",
     "BTN_WALLET_CHARGE":  "➕ شارژ حساب",
     "BTN_WALLET_GATEWAY": "🌐 درگاه پرداخت",
     "BTN_WALLET_CARD":    "💳 کارت به کارت",
@@ -191,6 +192,7 @@ TEXT_GROUPS = {
         "MSG_WALLET_BALANCE", "MSG_WALLET_SELECT_METHOD",
         "MSG_WALLET_AMOUNT_REQUEST", "MSG_WALLET_AMOUNT_INVALID",
         "MSG_WALLET_MIN_AMOUNT", "MSG_WALLET_TOPUP_SUCCESS",
+        "WALLET_QUICK_AMOUNTS",
     ],
     "جریان خرید": [
         "MSG_PURCHASE_REDIRECT", "MSG_PURCHASE_CANCELLED",
@@ -241,6 +243,7 @@ TEXT_DESCRIPTIONS = {
     "MSG_WALLET_AMOUNT_INVALID": "پیام خطا | مبلغ وارد‌شده عدد نیست",
     "MSG_WALLET_MIN_AMOUNT":     "پیام خطا | مبلغ کمتر از حداقل — {min_amount} = حداقل",
     "MSG_WALLET_TOPUP_SUCCESS":  "پیام موفق | بعد از شارژ — {amount} = مبلغ، {ref_id} = کد پیگیری",
+    "WALLET_QUICK_AMOUNTS":      "فیلد تنظیمات | مبالغ سریع کیف‌پول، با کاما جدا کن — مثال: 10000,50000,100000,500000 (خالی=پنهان)",
     # جریان خرید
     "MSG_PURCHASE_REDIRECT":     "پیام | قبل از انتقال به درگاه پرداخت",
     "MSG_PURCHASE_CANCELLED":    "پیام | بعد از لغو خرید",
