@@ -47,7 +47,6 @@ from db import (
     set_feed_alert_threshold,
     reset_feed_alert_notification,
     set_feed_alert_last_notified,
-    
     list_other_services,
     add_other_service,
     delete_other_service,
@@ -61,11 +60,17 @@ from db import (
     get_partner_by_user_id,
     get_partner_by_phone,
     count_user_product_orders_today,
-
     get_ui_text,
     set_ui_text,
     delete_ui_text,
     list_ui_texts,
+    # دسته‌بندی داینامیک
+    get_root_categories,
+    get_subcategories,
+    get_category,
+    get_category_products,
+    get_category_by_button_text,
+    get_category_path,
 )
 from services.payments import start_wallet_charge_payment
 from config import (
@@ -115,6 +120,7 @@ from keyboards import (
     admin_settings_menu,
     admin_main_btn_manage_menu,
     admin_ui_list_menu,
+    category_inline_keyboard,
 )
 
 logging.basicConfig(
@@ -129,17 +135,50 @@ set_ui_cache_clear_callback(ui_cache_clear)
 
 
 
-def send_product_detail(chat_id, product, category, user_id=None, message=None):
-    pid, category, title, price, description, is_active = product[0:6]
-    partner_price = product[6] if len(product) > 6 else None
-    daily_lim_c = product[7] if len(product) > 7 else 0
-    daily_lim_p = product[8] if len(product) > 8 else 0
+def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, message=None, cat_id=None):
+    """نمایش جزئیات محصول.
+    
+    از هر دو روش قدیمی (category TEXT) و جدید (cat_id INT) پشتیبانی می‌کند.
+    """
+    # handle both chat_id (int) and message object
+    if hasattr(chat_id_or_msg, 'chat'):
+        msg_obj = chat_id_or_msg
+        chat_id = msg_obj.chat.id
+        if user_id is None and hasattr(msg_obj, 'from_user'):
+            user_id = msg_obj.from_user.id
+    else:
+        chat_id = chat_id_or_msg
+        msg_obj = message
+
+    # product می‌تونه tuple یا sqlite3.Row باشه
+    if hasattr(product, 'keys'):
+        pid = product["id"]
+        category = category or product.get("category") or str(product.get("category_id", ""))
+        title = product["title"]
+        price = product["price"]
+        description = product.get("description")
+        is_active = product.get("is_active", 1)
+        partner_price = product.get("partner_price")
+        daily_lim_c = product.get("daily_limit_customer") or 0
+        daily_lim_p = product.get("daily_limit_partner") or 0
+        if cat_id is None:
+            cat_id = product.get("category_id")
+    else:
+        pid, category, title, price, description, is_active = product[0:6]
+        partner_price = product[6] if len(product) > 6 else None
+        daily_lim_c = product[7] if len(product) > 7 else 0
+        daily_lim_p = product[8] if len(product) > 8 else 0
+
+    # تعیین back_cb
+    if cat_id:
+        back_cb = f"cat_{cat_id}"
+    else:
+        back_cb = f"back_list_{category}"
 
     partner_ok = (user_id is not None) and is_partner_approved(int(user_id))
     eff_price = partner_price if (partner_ok and partner_price) else price
 
-    # ---------- بررسی سقف خرید روزانه (قبل از نمایش دکمه‌های پرداخت) ----------
-    # اگر سقف روزانه پر شده باشد، اصلاً اجازه‌ی ورود به مرحله‌ی پرداخت داده نمی‌شود.
+    # بررسی سقف خرید روزانه
     if user_id is not None:
         buyer_type = "partner" if partner_ok else "customer"
         limit_val = int((daily_lim_p if buyer_type == "partner" else daily_lim_c) or 0)
@@ -147,9 +186,7 @@ def send_product_detail(chat_id, product, category, user_id=None, message=None):
             cnt = count_user_product_orders_today(int(user_id), int(pid), buyer_type=buyer_type)
             if cnt >= limit_val:
                 kb_limit = types.InlineKeyboardMarkup()
-                kb_limit.add(
-                    types.InlineKeyboardButton("🔙 بازگشت", callback_data=f"back_list_{category}")
-                )
+                kb_limit.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
                 bot.send_message(
                     chat_id,
                     f"نام سرویس: <b>{title}</b>\n\n"
@@ -161,7 +198,6 @@ def send_product_detail(chat_id, product, category, user_id=None, message=None):
                 return
 
     wallet_balance = get_wallet_balance(user_id) if user_id else 0
-
     text = (
         f"نام سرویس: <b>{title}</b>\n"
         f"قیمت: <b>{eff_price:,}</b> تومان\n\n"
@@ -171,41 +207,27 @@ def send_product_detail(chat_id, product, category, user_id=None, message=None):
     markup = types.InlineKeyboardMarkup()
 
     if wallet_balance >= eff_price:
-        markup.add(
-            types.InlineKeyboardButton(
-                "💳 پرداخت با کیف پول",
-                callback_data=f"confirm_wallet_{category}_{pid}"
-            )
-        )
-
+        markup.add(types.InlineKeyboardButton(
+            "💳 پرداخت با کیف پول",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
     elif 0 < wallet_balance < eff_price:
-        markup.add(
-            types.InlineKeyboardButton(
-                "💳 پرداخت ترکیبی (کیف پول + درگاه)",
-                callback_data=f"confirm_wallet_{category}_{pid}"
-            )
-        )
-        markup.add(
-            types.InlineKeyboardButton(
-                "🌐 پرداخت کامل از درگاه",
-                callback_data=f"confirm_full_{category}_{pid}"
-            )
-        )
-
+        markup.add(types.InlineKeyboardButton(
+            "💳 پرداخت ترکیبی (کیف پول + درگاه)",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
+        markup.add(types.InlineKeyboardButton(
+            "🌐 پرداخت کامل از درگاه",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
     else:
-        markup.add(
-            types.InlineKeyboardButton(
-                "🌐 پرداخت از درگاه",
-                callback_data=f"confirm_full_{category}_{pid}"
-            )
-        )
+        markup.add(types.InlineKeyboardButton(
+            "🌐 پرداخت از درگاه",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
 
-    markup.add(
-        types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase")
-    )
-    markup.add(
-        types.InlineKeyboardButton("🔙 بازگشت", callback_data=f"back_list_{category}")
-    )
+    markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase"))
+    markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
 
     bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
 
@@ -2051,26 +2073,50 @@ def handle_admin_cmd(message):
 # ========= TEXT HANDLERS (USER) =========
 
 
-@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_BUY_APPLE_ID"))
-def handle_buy_apple(message):
-    if not is_main_button_enabled("MAIN_BTN_BUY_APPLE_ID"):
-        bot.reply_to(message, "این بخش غیرفعال است.")
+def _show_category(chat_id: int, cat_id: int, user_id: int = None, msg_id: int = None):
+    """نمایش محتوای یک دسته — زیردسته‌ها یا محصولات"""
+    cat = get_category(cat_id)
+    if not cat:
+        bot.send_message(chat_id, "دسته‌بندی یافت نشد.")
         return
 
-    send_products_menu(message.chat.id, "apple", user_id=message.from_user.id)
+    emoji = (cat["emoji"] or "").strip()
+    title = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
 
-
-@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_OTHER_PRODUCTS"))
-def handle_other_products(message):
-    if not is_main_button_enabled("MAIN_BTN_OTHER_PRODUCTS"):
-        bot.reply_to(message, "این بخش غیرفعال است.")
-        return
-
-    bot.send_message(
-        message.chat.id,
-        "لطفاً یکی از دسته‌بندی‌های زیر را انتخاب کنید:",
-        reply_markup=other_products_menu(),
+    # breadcrumb
+    path = get_category_path(cat_id)
+    breadcrumb = " › ".join(
+        f"{(c['emoji'] or '').strip()} {c['name']}".strip() for c in path
     )
+
+    subcats = get_subcategories(cat_id, active_only=True)
+    if subcats:
+        text = f"📂 {breadcrumb}\n\nیکی از دسته‌بندی‌های زیر را انتخاب کنید:"
+    else:
+        prods = get_category_products(cat_id, active_only=True)
+        if not prods:
+            text = f"📂 {breadcrumb}\n\nدر حال حاضر محصولی در این دسته موجود نیست."
+        else:
+            text = f"📂 {breadcrumb}\n\nیکی از محصولات زیر را انتخاب کنید:"
+
+    kb = category_inline_keyboard(cat_id, user_id=user_id)
+
+    if msg_id:
+        try:
+            bot.edit_message_text(text, chat_id, msg_id, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
+# هندلر داینامیک دسته‌بندی‌ها (Reply Keyboard)
+@bot.message_handler(func=lambda m: bool(get_category_by_button_text(m.text or "")))
+def handle_category_button(message):
+    cat = get_category_by_button_text(message.text)
+    if not cat:
+        return
+    _show_category(message.chat.id, cat["id"], user_id=message.from_user.id)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_WALLET"))
@@ -2791,6 +2837,28 @@ def handle_callbacks(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         clear_user_state(uid)
         bot.send_message(call.message.chat.id, "خرید لغو شد.", reply_markup=main_menu())
+        return
+
+    # ─── ناوبری دسته‌بندی داینامیک ────────────────────────────────────────
+    if data.startswith("cat_"):
+        bot.answer_callback_query(call.id)
+        parts = data.split("_")
+        # cat_{id}
+        if len(parts) == 2:
+            cat_id = int(parts[1])
+            _show_category(call.message.chat.id, cat_id, user_id=uid, msg_id=call.message.message_id)
+            return
+        # cat_{cat_id}_p_{pid}  →  نمایش جزئیات محصول
+        if len(parts) == 4 and parts[2] == "p":
+            cat_id = int(parts[1])
+            pid = int(parts[3])
+            product = get_product_by_id(pid)
+            if not product:
+                bot.send_message(call.message.chat.id, "محصول یافت نشد.")
+                return
+            # نمایش جزئیات با استفاده از تابع موجود
+            send_product_detail(call.message, product, cat_id=cat_id)
+            return
         return
 
     if data.startswith("ticket_close_"):
