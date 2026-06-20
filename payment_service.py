@@ -421,18 +421,47 @@ def maybe_start_bot_polling() -> None:
 
     def runner() -> None:
         import bot as bot_module
+        import time
 
         bot_module.init_db(bot_module.DB_PATH)
         bot_module.ensure_pending_schema()
         bot_module._ensure_delivery_table()
         bot_module.ticket_ensure_schema()
+
+        # حذف webhook احتمالی و صبر برای رهاشدن polling قبلی
+        try:
+            bot_module.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook cleared")
+        except Exception as ex:
+            logger.warning("delete_webhook: %s", ex)
+
+        time.sleep(3)  # صبر تا instance قبلی متوقف بشه
+
         logger.info("Bot polling started (ticket v2)")
+        backoff = 5
         while True:
             try:
-                bot_module.bot.infinity_polling(timeout=60, long_polling_timeout=60)
-            except Exception:
-                logger.exception("Bot polling crashed; restarting in 5 seconds")
-                time.sleep(5)
+                bot_module.bot.infinity_polling(
+                    timeout=30,
+                    long_polling_timeout=20,
+                    allowed_updates=["message", "callback_query"],
+                    restart_on_change=False,
+                )
+                backoff = 5  # reset on clean exit
+            except Exception as ex:
+                err_str = str(ex)
+                if "409" in err_str or "Conflict" in err_str:
+                    logger.warning("409 Conflict — another instance running, waiting %ds", backoff)
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                    # تلاش برای clear کردن مجدد
+                    try:
+                        bot_module.bot.delete_webhook(drop_pending_updates=True)
+                    except Exception:
+                        pass
+                else:
+                    logger.exception("Bot polling crashed; restarting in 5s")
+                    time.sleep(5)
 
     threading.Thread(target=runner, name="telegram-bot-polling", daemon=True).start()
     _bot_thread_started = True
