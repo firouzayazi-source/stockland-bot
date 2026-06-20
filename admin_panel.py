@@ -1843,17 +1843,17 @@ async def products_list(request: Request, flash: str = ""):
             <span class="px-2 py-0.5 text-xs rounded-full bg-{ac}-100 text-{ac}-700">{avail}/{int(p["feed_total"] or 0)}</span>
           </td>
           <td class="px-4 py-3">
-            <div class="flex gap-1 flex-wrap">
-              {_btn("ویرایش", f"/admin/products/{p['id']}", "indigo", small=True)}
-              {_btn("موجودی", f"/admin/feed/{p['id']}", "teal", small=True)}
+            <div class="flex gap-1">
+              <a href="/admin/products/{p['id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">✏️</a>
+              <a href="/admin/feed/{p['id']}" class="btn-sm bg-teal-50 text-teal-700 border border-teal-200 rounded px-2 py-1 text-xs">📦</a>
               <form method="post" action="/admin/products/{p['id']}/toggle" class="inline">
-                <button class="btn-sm {"bg-red-50 text-red-600 border border-red-200" if p["is_active"] else "bg-green-50 text-green-600 border border-green-200"} rounded-lg px-2 py-1">
+                <button class="btn-sm {"bg-red-50 text-red-600 border border-red-200" if p["is_active"] else "bg-green-50 text-green-600 border border-green-200"} rounded px-2 py-1 text-xs">
                   {"⊘" if p["is_active"] else "✓"}
                 </button>
               </form>
               <form method="post" action="/admin/products/{p['id']}/delete" class="inline"
-                onsubmit="return confirm('محصول {e(p["title"])} حذف شود؟ موجودی باید قبلاً پاک شده باشد.')">
-                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded-lg px-2 py-1">🗑</button>
+                onsubmit="return confirm('حذف شود؟')">
+                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded px-2 py-1 text-xs">🗑</button>
               </form>
             </div>
           </td>
@@ -1864,15 +1864,17 @@ async def products_list(request: Request, flash: str = ""):
       <h1 class="text-2xl font-bold text-gray-800">📦 محصولات</h1>
       {_btn("➕ محصول جدید", "/admin/products/new", "green")}
     </div>
-    <div class="bg-white rounded-xl shadow overflow-hidden">
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">عنوان</th><th class="px-4 py-3">دسته</th>
-          <th class="px-4 py-3">قیمت</th><th class="px-4 py-3">وضعیت</th>
-          <th class="px-4 py-3">موجودی</th><th class="px-4 py-3">عملیات</th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
-      </table>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">عنوان</th><th class="px-4 py-3">دسته</th>
+            <th class="px-4 py-3">قیمت</th><th class="px-4 py-3">وضعیت</th>
+            <th class="px-4 py-3">موجودی</th><th class="px-4 py-3">عملیات</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
     </div>"""
 
     return _layout("محصولات", body, adm, flash=flash)
@@ -2513,21 +2515,29 @@ async def wallet_adjust(request: Request, uid: str=Form(""), amount: str=Form("0
 
 # ─────────────────────────── Telegram Helper ───────────────────────────────
 
+import logging as _logging
+_tg_logger = _logging.getLogger("admin_panel.tg")
+
+
 def _tg_send(chat_id: int, text: str, parse_mode: str = "HTML",
               reply_markup: dict | None = None) -> bool:
     token = _env("BOT_TOKEN")
     if not token:
+        _tg_logger.error("BOT_TOKEN not set — cannot send Telegram message")
         return False
     try:
-        data: dict = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        data: dict = {"chat_id": int(chat_id), "text": text, "parse_mode": parse_mode}
         if reply_markup:
             data["reply_markup"] = json.dumps(reply_markup)
         r = _requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json=data, timeout=15
         )
+        if not r.ok:
+            _tg_logger.error("Telegram sendMessage failed: %s %s", r.status_code, r.text[:200])
         return r.ok
-    except Exception:
+    except Exception as ex:
+        _tg_logger.exception("_tg_send error: %s", ex)
         return False
 
 
@@ -2902,33 +2912,41 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
 
     conn = _db()
     try:
-        ticket = conn.execute("SELECT user_id, order_no, status FROM tickets WHERE id=? LIMIT 1;", (tid,)).fetchone()
-        if not ticket or ticket["status"] == "closed":
+        ticket = conn.execute(
+            "SELECT user_id, order_no, status FROM tickets WHERE id=? LIMIT 1;", (tid,)
+        ).fetchone()
+        if not ticket:
+            return _redir("/admin/tickets?flash=تیکت+یافت+نشد")
+        if ticket["status"] == "closed":
             return _redir(f"/admin/tickets/{tid}?flash=تیکت+بسته+است")
-        user_id = ticket["user_id"]
-        order_no = ticket["order_no"]
+        user_id = int(ticket["user_id"])
+        order_no = ticket["order_no"] or 0
     finally:
         conn.close()
 
-    # ارسال به کاربر از طریق ربات
-    ok = _tg_send(user_id, f"💬 <b>پاسخ پشتیبانی</b> (Order #{order_no}):\n\n{html.escape(text)}")
+    # ارسال به کاربر از طریق Telegram API
+    order_part = f"(سفارش #{order_no})" if int(order_no) > 0 else "(پشتیبانی عمومی)"
+    msg_text = f"💬 <b>پاسخ پشتیبانی</b> {order_part}:\n\n{html.escape(text)}"
 
-    # ذخیره در تاریخچه
-    conn = _db()
+    ok = _tg_send(user_id, msg_text)
+
+    # ذخیره در تاریخچه صرف‌نظر از نتیجه ارسال
+    conn2 = _db()
     try:
         now = datetime.now().isoformat()
-        conn.execute(
+        conn2.execute(
             "INSERT INTO ticket_messages (ticket_id, sender, text, created_at) VALUES (?,?,?,?);",
             (tid, "admin", text, now)
         )
-        if not conn.execute("SELECT 1 FROM tickets WHERE id=? AND status='in_progress';", (tid,)).fetchone():
-            conn.execute("UPDATE tickets SET status='in_progress' WHERE id=?;", (tid,))
-        conn.commit()
+        conn2.execute("UPDATE tickets SET status='in_progress' WHERE id=? AND status!='closed';", (tid,))
+        conn2.commit()
     finally:
-        conn.close()
+        conn2.close()
 
-    msg = "پاسخ ارسال شد" if ok else "پاسخ ذخیره شد (ارسال به تلگرام ناموفق)"
-    return _redir(f"/admin/tickets/{tid}?flash={msg}")
+    if ok:
+        return _redir(f"/admin/tickets/{tid}?flash=پاسخ+ارسال+شد")
+    else:
+        return _redir(f"/admin/tickets/{tid}?flash=پاسخ+ذخیره+شد+اما+ارسال+تلگرام+ناموفق+بود")
 
 
 @router.post("/tickets/{tid}/direct")
