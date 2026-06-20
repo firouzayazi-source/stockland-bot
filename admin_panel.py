@@ -2660,241 +2660,129 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             "SELECT * FROM ticket_messages WHERE ticket_id=? ORDER BY id ASC;", (tid,)
         ).fetchall()
 
-        # mark as in_progress when admin views it
+        # وقتی ادمین تیکت رو باز می‌کنه → status به in_progress تغییر کنه (badge پاک بشه)
         if ticket["status"] == "open":
             conn.execute("UPDATE tickets SET status='in_progress' WHERE id=?;", (tid,))
             conn.commit()
+
     finally:
         conn.close()
 
-    is_general = (not ticket["product_id"] or int(ticket["product_id"]) == 0)
-    ticket_type = "پشتیبانی عمومی" if is_general else f"محصول: {e(ticket['product_title'] or '-')}"
+    is_general = (not ticket["product_id"] or int(ticket["product_id"] or 0) == 0)
+    is_closed = (ticket["status"] == "closed")
+    user_id_val = int(ticket["user_id"])
 
-    # نمایش مکالمه
+    # ── مکالمه ──────────────────────────────────────────────────────────────
     chat_html = ""
     for msg in messages:
-        is_admin_msg = msg["sender"] == "admin"
-        align = "justify-end" if is_admin_msg else "justify-start"
-        bubble = "bg-indigo-600 text-white rounded-t-2xl rounded-bl-2xl" if is_admin_msg else "bg-white border text-gray-800 rounded-t-2xl rounded-br-2xl"
-        sender_label = "👤 ادمین" if is_admin_msg else "👤 کاربر"
-        content = e(msg["text"] or "")
+        is_adm = msg["sender"] == "admin"
+        pos = "items-end" if is_adm else "items-start"
+        bubble = "bg-indigo-600 text-white" if is_adm else "bg-white border border-gray-200 text-gray-800"
+        lbl = "ادمین 👤" if is_adm else f"کاربر ({user_id_val})"
+        txt_safe = e(msg["text"] or "")
         if msg["media_type"]:
-            content += f' <span class="opacity-60 text-xs">[{e(msg["media_type"])}]</span>'
-
+            txt_safe += f' <em class="text-xs opacity-60">[{e(msg["media_type"])}]</em>'
         chat_html += f"""
-        <div class="flex {align} mb-3">
-          <div class="max-w-sm lg:max-w-md">
-            <div class="text-xs text-gray-400 mb-1 px-1 {"text-left" if is_admin_msg else ""}">{sender_label} · {(msg["created_at"] or "")[:16]}</div>
-            <div class="{bubble} px-4 py-2.5 text-sm shadow-sm" style="white-space:pre-wrap">{content}</div>
-          </div>
+        <div class="flex flex-col {pos} mb-3">
+          <div class="text-xs text-gray-400 mb-1">{lbl} · {(msg["created_at"] or "")[:16]}</div>
+          <div class="{bubble} rounded-2xl px-4 py-2 text-sm max-w-xs" style="white-space:pre-wrap">{txt_safe}</div>
         </div>"""
 
-    if not messages:
-        chat_html = """
-        <div class="text-center py-12 text-gray-400">
-          <div class="text-3xl mb-2">💬</div>
-          <p class="text-sm">پیامی هنوز ثبت نشده است</p>
-          <p class="text-xs mt-1 text-gray-300">پیام‌های ارسال‌شده از ربات اینجا نمایش داده می‌شوند</p>
+    if not chat_html:
+        chat_html = '<div class="text-center py-8 text-gray-400 text-sm">پیامی ثبت نشده</div>'
+
+    # ── فرم پاسخ ─────────────────────────────────────────────────────────────
+    reply_form = ""
+    if not is_closed:
+        reply_form = f"""
+        <div class="card p-4 mt-4">
+          <form method="post" action="/admin/tickets/{tid}/reply">
+            <div class="mb-3">
+              <label class="text-xs text-gray-500 block mb-1">
+                پاسخ به کاربر <code class="bg-gray-100 px-1 rounded">{user_id_val}</code>
+              </label>
+              <textarea name="text" rows="3" required
+                placeholder="متن پاسخ را بنویسید..."
+                class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-300"></textarea>
+            </div>
+            <div class="flex justify-end">
+              <button type="submit"
+                class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl text-sm font-medium">
+                📤 ارسال پاسخ
+              </button>
+            </div>
+          </form>
         </div>"""
 
-    # دکمه‌های تغییر وضعیت
-    status_actions = ""
-    if ticket["status"] != "open":
-        status_actions += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline">
-          <input type="hidden" name="status" value="open">
-          <button class="btn-sm bg-green-50 text-green-700 border border-green-200 rounded-lg px-3 py-1.5">🔓 بازکردن</button>
-        </form> """
-    if ticket["status"] == "open" or ticket["status"] == "in_progress":
-        status_actions += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline">
-          <input type="hidden" name="status" value="closed">
-          <button onclick="return confirm('تیکت بسته شود؟')" class="btn-sm bg-gray-100 text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5">🔒 بستن تیکت</button>
-        </form>"""
+    # ── وضعیت دکمه‌ها ────────────────────────────────────────────────────────
+    status_btns = ""
+    cur_status = ticket["status"]
+    for lbl2, val2, cls2 in [
+        ("🔓 بازکردن", "open", "bg-green-50 text-green-700 border-green-200"),
+        ("⏳ در بررسی", "in_progress", "bg-yellow-50 text-yellow-700 border-yellow-200"),
+        ("🔒 بستن", "closed", "bg-gray-100 text-gray-600 border-gray-200"),
+    ]:
+        if val2 != cur_status:
+            status_btns += f"""
+            <form method="post" action="/admin/tickets/{tid}/status" class="inline-block mr-1 mb-1">
+              <input type="hidden" name="status" value="{val2}">
+              <button class="btn-sm border rounded-lg px-3 py-1.5 text-xs {cls2}">{lbl2}</button>
+            </form>"""
 
-    is_closed = ticket["status"] == "closed"
+    # ── ساختار صفحه ─────────────────────────────────────────────────────────
+    ticket_type = "پشتیبانی عمومی" if is_general else e(ticket["product_title"] or "-")
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6 flex-wrap">
+    <div class="flex items-center gap-3 mb-4 flex-wrap">
       {_btn("← تیکت‌ها", "/admin/tickets", "slate", small=True)}
       <h1 class="text-xl font-bold text-gray-800">🎫 تیکت #{tid}</h1>
       {_ticket_status_badge(ticket["status"])}
       <span class="text-sm text-gray-400">{ticket_type}</span>
-      <div class="mr-auto flex gap-2">{status_actions}</div>
     </div>
 
-    <div class="grid lg:grid-cols-3 gap-6">
-      <!-- مکالمه -->
-      <div class="lg:col-span-2 space-y-4">
-        <!-- نمایش پیام‌ها -->
-        <div class="card p-4 overflow-y-auto" style="min-height:300px;max-height:480px;" id="chat-box">
-          <div class="bg-gray-50 rounded-lg p-3 mb-4 text-xs text-gray-500 text-center">
-            تیکت #{tid} · {(ticket["created_at"] or "")[:16]}
-          </div>
+    <div class="grid lg:grid-cols-3 gap-4">
+      <!-- مکالمه + فرم پاسخ -->
+      <div class="lg:col-span-2">
+        <div class="card p-4 overflow-y-auto" style="min-height:280px;max-height:450px;" id="chat-box">
           {chat_html}
         </div>
-
-        <!-- فرم پاسخ -->
+        {reply_form}
         {"" if is_closed else f'''
-        <div class="card p-4">
-          <form method="post" action="/admin/tickets/{tid}/reply" id="reply-form">
-            <div class="flex gap-3 items-end">
-              <div class="flex-1">
-                <label class="text-xs text-gray-500 block mb-1">پاسخ به کاربر <span class="text-gray-400">({ticket["user_id"]})</span></label>
-                <textarea name="text" rows="3" required placeholder="پاسخ خود را اینجا بنویسید..."
-                  class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 resize-none"
-                  onkeydown="if(event.ctrlKey&&event.key===\'Enter\')this.form.submit()"></textarea>
-                <div class="text-xs text-gray-300 mt-1">Ctrl+Enter برای ارسال سریع</div>
-              </div>
-              <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-4 py-2 text-sm font-medium transition self-end">
-                📤 ارسال
-              </button>
-            </div>
-          </form>
-        </div>
-        '''}
-
-        <!-- پیام مستقیم -->
-        {"" if is_closed else f'''
-        <div class="card p-4 border-dashed border-2 border-gray-200">
+        <div class="card p-4 mt-3 border-dashed border-2 border-gray-200 bg-gray-50">
           <p class="text-xs text-gray-400 mb-2">📩 پیام مستقیم (بدون ثبت در تاریخچه)</p>
-          <form method="post" action="/admin/tickets/{tid}/direct" class="flex gap-3 items-end">
-            <textarea name="direct_msg" rows="2" placeholder="پیام مستقیم..."
-              class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-gray-300 resize-none"></textarea>
-            <button type="submit" class="bg-gray-500 hover:bg-gray-600 text-white rounded-lg px-3 py-2 text-sm self-end">ارسال</button>
+          <form method="post" action="/admin/tickets/{tid}/direct" class="flex gap-2">
+            <textarea name="direct_msg" rows="2" placeholder="پیام آزاد..."
+              class="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm resize-none"></textarea>
+            <button type="submit" class="bg-gray-500 hover:bg-gray-600 text-white rounded-lg px-3 py-2 text-xs self-end">ارسال</button>
           </form>
-        </div>
-        '''}
+        </div>'''}
       </div>
 
-      <!-- اطلاعات تیکت -->
-      <div class="space-y-4">
-        <div class="card p-5">
+      <!-- اطلاعات -->
+      <div class="space-y-3">
+        <div class="card p-4">
           <h3 class="font-bold text-gray-700 mb-3 text-sm">اطلاعات تیکت</h3>
-          <div class="space-y-3 text-sm">
-            <div class="flex justify-between">
-              <span class="text-gray-500">User ID:</span>
-              <code class="text-xs bg-gray-100 px-2 py-0.5 rounded">{ticket["user_id"]}</code>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-gray-500">نوع:</span>
-              <span class="text-gray-700">{ticket_type}</span>
-            </div>
-            {"" if is_general else f'<div class="flex justify-between"><span class="text-gray-500">سفارش:</span><span class="text-gray-700">#{ticket["order_no"]}</span></div>'}
-            <div class="flex justify-between">
-              <span class="text-gray-500">وضعیت:</span>
-              {_ticket_status_badge(ticket["status"])}
-            </div>
-            <div class="flex justify-between">
-              <span class="text-gray-500">تاریخ:</span>
-              <span class="text-xs text-gray-400">{(ticket["created_at"] or "")[:16]}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-gray-500">پیام‌ها:</span>
-              <span class="font-medium text-indigo-600">{len(messages)}</span>
-            </div>
-          </div>
+          <dl class="space-y-2 text-sm">
+            <div class="flex justify-between"><dt class="text-gray-400">User ID</dt>
+              <dd><code class="text-xs bg-gray-100 px-1 rounded">{user_id_val}</code></dd></div>
+            <div class="flex justify-between"><dt class="text-gray-400">نوع</dt><dd class="text-gray-700 text-xs">{ticket_type}</dd></div>
+            <div class="flex justify-between"><dt class="text-gray-400">پیام‌ها</dt>
+              <dd class="font-bold text-indigo-600">{len(messages)}</dd></div>
+            <div class="flex justify-between"><dt class="text-gray-400">تاریخ</dt>
+              <dd class="text-xs text-gray-400">{(ticket["created_at"] or "")[:16]}</dd></div>
+          </dl>
         </div>
-
-        <div class="card p-4 bg-blue-50 border border-blue-100">
-          <p class="text-xs text-blue-600 font-medium mb-1">🔗 لینک مستقیم کاربر</p>
-          <code class="text-xs text-blue-700 break-all">{ticket["user_id"]}</code>
-          <p class="text-xs text-blue-400 mt-1">با ادمین تلگرام پاسخ می‌رسد</p>
-        </div>
-      </div>
-    </div>
-
-    <script>
-      var box = document.getElementById('chat-box');
-      if(box) {{ box.scrollTop = box.scrollHeight; }}
-    </script>"""
-
-    return _layout(f"تیکت #{tid}", body, adm, flash=flash)
-
-    # نمایش مکالمه
-    chat_html = ""
-    for msg in messages:
-        is_admin = msg["sender"] == "admin"
-        align = "justify-end" if is_admin else "justify-start"
-        bubble_color = "bg-indigo-600 text-white" if is_admin else "bg-gray-100 text-gray-800"
-        sender_label = "ادمین" if is_admin else "کاربر"
-        media_badge = ""
-        if msg["media_type"]:
-            media_badge = f' <span class="text-xs opacity-70">[{msg["media_type"]}]</span>'
-        chat_html += f"""
-        <div class="flex {align} mb-3">
-          <div class="max-w-xs lg:max-w-md">
-            <div class="text-xs text-gray-400 mb-1 {"text-right" if is_admin else "text-left"}">{sender_label} · {(msg["created_at"] or "")[:16]}</div>
-            <div class="{bubble_color} rounded-2xl px-4 py-2 text-sm">
-              {e(msg["text"] or "")}{media_badge}
-            </div>
-          </div>
-        </div>"""
-
-    if not messages:
-        chat_html = '<p class="text-center text-gray-400 text-sm py-8">پیامی در این تیکت ثبت نشده است.<br><span class="text-xs">پیام‌های قبل از این آپدیت در اینجا نمایش داده نمی‌شوند.</span></p>'
-
-    status_btns = ""
-    if ticket["status"] != "open":
-        status_btns += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline">
-          <input type="hidden" name="status" value="open">
-          <button class="btn-sm bg-green-100 text-green-700 rounded">بازکردن</button>
-        </form>"""
-    if ticket["status"] != "in_progress":
-        status_btns += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline mr-1">
-          <input type="hidden" name="status" value="in_progress">
-          <button class="btn-sm bg-yellow-100 text-yellow-700 rounded">در بررسی</button>
-        </form>"""
-    if ticket["status"] != "closed":
-        status_btns += f"""<form method="post" action="/admin/tickets/{tid}/status" class="inline mr-1">
-          <input type="hidden" name="status" value="closed">
-          <button class="btn-sm bg-gray-100 text-gray-600 rounded">بستن تیکت</button>
-        </form>"""
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← تیکت‌ها", "/admin/tickets", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">🎫 تیکت #{tid}</h1>
-      {_ticket_status_badge(ticket["status"])}
-    </div>
-
-    <div class="grid md:grid-cols-3 gap-6">
-      <div class="md:col-span-2">
-        <div class="card p-4 mb-4" style="min-height:300px;max-height:500px;overflow-y:auto;" id="chat-box">
-          {chat_html}
-        </div>
-        {f'''<form method="post" action="/admin/tickets/{tid}/reply" class="card p-4">
-          <div class="flex gap-3">
-            {_textarea("text", "پاسخ خود را بنویسید...", rows=3)}
-            {_btn("ارسال پاسخ ↑", color="indigo")}
-          </div>
-        </form>''' if ticket["status"] != "closed" else '<div class="card p-4 text-center text-gray-400 text-sm">این تیکت بسته است.</div>'}
-      </div>
-
-      <div class="space-y-4">
-        <div class="card p-5">
-          <h3 class="font-bold text-gray-700 mb-3">اطلاعات تیکت</h3>
-          <div class="text-sm space-y-2">
-            <div><span class="text-gray-500">User ID:</span> <code class="text-xs">{ticket["user_id"]}</code></div>
-            <div><span class="text-gray-500">محصول:</span> {e(ticket["product_title"] or "-")}</div>
-            <div><span class="text-gray-500">سفارش:</span> #{ticket["order_no"]}</div>
-            <div><span class="text-gray-500">تاریخ:</span> {(ticket["created_at"] or "")[:16]}</div>
-          </div>
-        </div>
-        <div class="card p-5">
-          <h3 class="font-bold text-gray-700 mb-3">وضعیت</h3>
-          <div class="space-y-2">{status_btns}</div>
-        </div>
-        <div class="card p-5">
-          <h3 class="font-bold text-gray-700 mb-2">ارسال پیام مستقیم به کاربر</h3>
-          <form method="post" action="/admin/tickets/{tid}/direct">
-            {_textarea("direct_msg", "پیام مستقیم (خارج از تیکت)...", rows=3)}
-            <div class="mt-2">{_btn("ارسال", color="green")}</div>
-          </form>
+        <div class="card p-4">
+          <h3 class="font-bold text-gray-700 mb-2 text-sm">تغییر وضعیت</h3>
+          <div>{status_btns}</div>
         </div>
       </div>
     </div>
     <script>
-      var box = document.getElementById('chat-box');
-      if(box) box.scrollTop = box.scrollHeight;
+      (function(){{
+        var b=document.getElementById('chat-box');
+        if(b) b.scrollTop=b.scrollHeight;
+      }})();
     </script>"""
 
     return _layout(f"تیکت #{tid}", body, adm, flash=flash)
