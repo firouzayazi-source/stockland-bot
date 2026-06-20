@@ -2052,14 +2052,23 @@ async def product_delete(request: Request, pid: int):
     adm = _get_admin(request)
     guard = _require(adm, "products")
     if guard: return guard
+
     conn = _db()
     try:
+        # چک feed — اگه موجودی داشت اجازه حذف نده
+        avail = conn.execute(
+            "SELECT COUNT(*) FROM product_feed WHERE product_id=? AND delivered=0;", (pid,)
+        ).fetchone()[0]
+        if avail > 0:
+            conn.close()
+            return _redir(f"/admin/products/{pid}?flash=⚠️+محصول+{avail}+موجودی+دارد.+ابتدا+موجودی+را+از+بخش+فید+پاک+کنید")
+
         conn.execute("DELETE FROM product_feed WHERE product_id=?;", (pid,))
         conn.execute("DELETE FROM products WHERE id=?;", (pid,))
         conn.commit()
     finally:
         conn.close()
-    return _redir("/admin/products?flash=حذف+شد")
+    return _redir("/admin/products?flash=محصول+حذف+شد")
 
 # ─────────────────────────── Feed ──────────────────────────────────────────
 
@@ -2151,9 +2160,10 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
           <td class="px-4 py-2 font-mono text-xs truncate max-w-xs">{e(preview)}</td>
           <td class="px-4 py-2">{badge}</td>
           <td class="px-4 py-2 text-gray-400 text-xs">{(item["created_at"] or "")[:10]}</td>
-          <td class="px-4 py-2">
-            <form method="post" action="/admin/feed/item/{item['id']}/delete" onsubmit="return confirm('حذف شود؟')">
-              <button class="text-red-400 hover:text-red-600 text-xs">حذف</button>
+          <td class="px-4 py-2 flex gap-1">
+            {_btn("ویرایش", f"/admin/feed/item/{item['id']}/edit", "indigo", small=True)}
+            <form method="post" action="/admin/feed/item/{item['id']}/delete" onsubmit="return confirm('حذف شود؟')" class="inline">
+              <button class="btn-sm bg-red-100 text-red-600 rounded">حذف</button>
             </form>
           </td>
         </tr>"""
@@ -2274,6 +2284,71 @@ async def feed_item_delete(request: Request, fid: int):
     finally:
         conn.close()
     return _redir(f"/admin/feed/{pid}?flash=آیتم+حذف+شد")
+
+
+@router.get("/feed/item/{fid}/edit", response_class=HTMLResponse)
+async def feed_item_edit_get(request: Request, fid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        item = conn.execute("SELECT * FROM product_feed WHERE id=? LIMIT 1;", (fid,)).fetchone()
+        if not item:
+            return _redir("/admin/feed")
+        product = conn.execute("SELECT title FROM products WHERE id=? LIMIT 1;", (item["product_id"],)).fetchone()
+        product_title = product["title"] if product else f"#{item['product_id']}"
+    finally:
+        conn.close()
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← بازگشت", f"/admin/feed/{item['product_id']}", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">✏️ ویرایش آیتم فید #{fid}</h1>
+      <span class="text-sm text-gray-400">{e(product_title)}</span>
+    </div>
+    <div class="card p-6 max-w-2xl">
+      <form method="post" action="/admin/feed/item/{fid}/edit" class="space-y-4">
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">محتوای آیتم</label>
+          <div class="text-xs text-gray-400 mb-2">برای چندخطی: هر خط محتوا است</div>
+          {_textarea("data", "", str(item["data"] or ""), rows=6)}
+        </div>
+        <div class="flex items-center gap-3">
+          <label class="text-sm font-medium text-gray-700">تحویل داده شده</label>
+          <input type="checkbox" name="delivered" value="1" {"checked" if item["delivered"] else ""}>
+        </div>
+        <div class="flex gap-3">
+          {_btn("ذخیره", color="green")}
+          {_btn("انصراف", f"/admin/feed/{item['product_id']}", "slate")}
+        </div>
+      </form>
+    </div>"""
+
+    return _layout(f"ویرایش فید #{fid}", body, adm, flash=flash)
+
+
+@router.post("/feed/item/{fid}/edit")
+async def feed_item_edit_post(request: Request, fid: int,
+                               data: str = Form(""), delivered: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        row = conn.execute("SELECT product_id FROM product_feed WHERE id=?;", (fid,)).fetchone()
+        pid = row["product_id"] if row else 0
+        delivered_val = 1 if delivered == "1" else 0
+        conn.execute(
+            "UPDATE product_feed SET data=?, delivered=? WHERE id=?;",
+            (data.strip(), delivered_val, fid)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir(f"/admin/feed/{pid}?flash=آیتم+ویرایش+شد")
 
 # ─────────────────────────── Orders ────────────────────────────────────────
 
