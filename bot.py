@@ -1167,23 +1167,46 @@ def start_wallet_charge(message):
 
 def process_wallet_charge_amount(message):
     uid = message.from_user.id
-    text = message.text.strip().replace(",", "")
-    amount = safe_int(text)
+    text = (message.text or "").strip()
+
+    # اگه کاربر دکمه منو یا /cancel زد، state رو پاک کن
+    if text.startswith("/") or get_category_by_button_text(text):
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "عملیات شارژ لغو شد.", reply_markup=main_menu(user_id=uid))
+        # اگه دسته بود، نمایشش بده
+        cat = get_category_by_button_text(text)
+        if cat:
+            _show_category(message.chat.id, cat["id"], user_id=uid)
+        return
+
+    # چک کن متن دکمه‌های سیستمی (کیف‌پول، سفارش و ...) بود
+    system_buttons = [
+        t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "")),
+        t("MAIN_BTN_WALLET", DEFAULT_UI_TEXTS.get("MAIN_BTN_WALLET", "")),
+        t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "")),
+        t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "")),
+        t("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "")),
+        t("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "")),
+    ]
+    if text in system_buttons:
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "عملیات شارژ لغو شد.", reply_markup=main_menu(user_id=uid))
+        return
+
+    text_clean = text.replace(",", "").replace("،", "")
+    amount = safe_int(text_clean)
 
     if amount is None:
-        bot.reply_to(message, "مبلغ فقط باید شامل عدد باشد. دوباره ارسال کنید.")
+        bot.reply_to(message, tf("MSG_WALLET_AMOUNT_INVALID"))
         bot.register_next_step_handler(message, process_wallet_charge_amount)
         return
 
     if amount < MIN_TOPUP_AMOUNT:
-        bot.reply_to(
-            message,
-            f"حداقل مبلغ شارژ <b>{MIN_TOPUP_AMOUNT:,}</b> تومان است. "
-            f"لطفا مبلغ بالاتری ارسال کنید.",
-        )
+        bot.reply_to(message, tf("MSG_WALLET_MIN_AMOUNT", min_amount=f"{MIN_TOPUP_AMOUNT:,}"))
         bot.register_next_step_handler(message, process_wallet_charge_amount)
         return
 
+    clear_user_state(uid)
     start_wallet_charge_payment(bot, message, uid, amount, clear_user_state)
 
 def start_product_payment(
