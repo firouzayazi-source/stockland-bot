@@ -474,6 +474,7 @@ def payment_finalize(payload: dict, request: Request):
         amount         = int(payload["amount"])
         payment_type   = str(payload.get("payment_type") or "wallet").lower()
         wallet_reserved= int(payload.get("wallet_reserved") or 0)
+        wallet_bonus   = int(payload.get("wallet_bonus") or 0)   # مازاد حداقل درگاه
         ref_id         = str(payload.get("ref_id") or "")
         authority      = str(payload.get("authority") or "")
     except (KeyError, TypeError, ValueError) as exc:
@@ -516,15 +517,19 @@ def payment_finalize(payload: dict, request: Request):
 
         # ─── شارژ کیف پول ─────────────────────────────────
         if payment_type == "wallet":
-            mark_wallet_charge(conn, user_id, amount)
+            # Issue 2: اضافه کردن wallet_bonus اگه حداقل درگاه اعمال شده بود
+            total_wallet = amount + wallet_bonus
+            mark_wallet_charge(conn, user_id, total_wallet)
             conn.commit()
-            send_telegram_message(
-                chat_id,
+            msg = (
                 f"✅ کیف پول شما با موفقیت شارژ شد.\n"
-                f"مبلغ: {amount:,} تومان\n"
-                f"کد پیگیری: {ref_id}",
+                f"مبلغ: <b>{total_wallet:,}</b> تومان\n"
+                f"کد پیگیری: {ref_id}"
             )
-            return {"ok": True, "type": "wallet", "amount": amount}
+            if wallet_bonus > 0:
+                msg += f"\n\n💡 {wallet_bonus:,} تومان بابت حداقل پرداخت درگاه به کیف‌پول اضافه شد."
+            send_telegram_message(chat_id, msg, parse_mode="HTML")
+            return {"ok": True, "type": "wallet", "amount": total_wallet}
 
         # ─── خرید محصول ───────────────────────────────────
         product_id = int(payload.get("product_id") or 0)
@@ -533,9 +538,20 @@ def payment_finalize(payload: dict, request: Request):
 
         product = get_product(conn, product_id)
         if not product:
+            # Issue 4: محصول پیدا نشد — پول رو به کیف‌پول برگردون
+            refund = amount + wallet_bonus
+            mark_wallet_charge(conn, user_id, refund)
             conn.commit()
-            send_telegram_message(chat_id, "⚠️ پرداخت موفق بود ولی محصول یافت نشد. با پشتیبانی تماس بگیرید.")
-            raise HTTPException(404, "Product not found")
+            send_telegram_message(
+                chat_id,
+                f"⚠️ پرداخت موفق بود ولی محصول یافت نشد.\n"
+                f"مبلغ <b>{refund:,}</b> تومان به کیف‌پول شما بازگردانده شد.\n"
+                f"کد پیگیری: {ref_id}",
+                parse_mode="HTML"
+            )
+            if ADMIN_ID:
+                send_telegram_message(ADMIN_ID, f"⚠️ محصول #{product_id} پیدا نشد — {refund:,}t به کیف‌پول User {user_id} بازگشت")
+            return {"ok": True, "type": "refund", "amount": refund}
 
         title    = str(product["title"])
         category = str(product["category"])
