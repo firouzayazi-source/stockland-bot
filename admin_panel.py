@@ -165,6 +165,7 @@ def _layout(title: str, body: str, admin_info=None,
       <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4 flex-wrap text-sm">
         <a href="/admin/" class="font-bold text-lg text-white">🛍 استوک لند</a>
         {nav_link("/admin/", "📊 داشبورد")}
+        {nav_link("/admin/categories", "🗂 دسته‌بندی‌ها", "products")}
         {nav_link("/admin/products", "📦 محصولات", "products")}
         {nav_link("/admin/feed", "🗃 موجودی", "feed")}
         {nav_link("/admin/orders", "🧾 سفارش‌ها", "orders")}
@@ -186,10 +187,20 @@ def _layout(title: str, body: str, admin_info=None,
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{e(title)} — پنل ادمین</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
-  <style>body{{font-family:Tahoma,sans-serif}}</style>
+  <style>
+    * {{ font-family: 'Vazirmatn', Tahoma, sans-serif !important; }}
+    body {{ background: #f1f5f9; }}
+    .card {{ background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
+    .btn-primary {{ background: #4f46e5; color: white; padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; border: none; cursor: pointer; transition: .15s; }}
+    .btn-primary:hover {{ background: #4338ca; }}
+    .btn-sm {{ padding: 4px 10px; font-size: 12px; border-radius: 6px; font-weight: 500; cursor: pointer; border: none; }}
+    input, textarea, select {{ font-family: 'Vazirmatn', Tahoma, sans-serif !important; }}
+  </style>
 </head>
-<body class="bg-slate-100 min-h-screen">
+<body class="min-h-screen">
 {nav}
 <main class="max-w-7xl mx-auto px-4 py-6">
   {flash_html}
@@ -1146,6 +1157,259 @@ async def admins_delete(request: Request, aid: int):
         conn.close()
     return _redir("/admin/admins?flash=ادمین+حذف+شد")
 
+# ─────────────────────────── Categories ────────────────────────────────────
+
+def _render_cat_tree(cats_all: list, parent_id=None, depth=0) -> str:
+    """رندر درختی دسته‌بندی‌ها"""
+    rows = ""
+    children = [c for c in cats_all if c["parent_id"] == parent_id]
+    for cat in children:
+        indent = "　" * depth
+        emoji = (cat["emoji"] or "").strip()
+        label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+        active_badge = '<span class="text-xs text-green-600">فعال</span>' if cat["is_active"] else '<span class="text-xs text-red-500">غیرفعال</span>'
+        rows += f"""
+        <tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-2 text-sm">{indent}{'└ ' if depth else ''}{e(label)}</td>
+          <td class="px-4 py-2">{active_badge}</td>
+          <td class="px-4 py-2 text-xs text-gray-400">{cat['sort_order']}</td>
+          <td class="px-4 py-2 flex gap-1 flex-wrap">
+            {_btn("ویرایش", f"/admin/categories/{cat['id']}/edit", "indigo", small=True)}
+            <form method="post" action="/admin/categories/{cat['id']}/toggle" class="inline">
+              <button class="btn-sm {"bg-red-100 text-red-700" if cat["is_active"] else "bg-green-100 text-green-700"} rounded">{"غیرفعال" if cat["is_active"] else "فعال"}</button>
+            </form>
+            <form method="post" action="/admin/categories/{cat['id']}/delete" onsubmit="return confirm('حذف شود؟ همه زیردسته‌ها و محصولات هم حذف می‌شوند.')" class="inline">
+              <button class="btn-sm bg-red-100 text-red-700 rounded">حذف</button>
+            </form>
+          </td>
+        </tr>"""
+        rows += _render_cat_tree(cats_all, parent_id=cat["id"], depth=depth + 1)
+    return rows
+
+
+def _cat_select_options(cats_all: list, selected_id=None, exclude_id=None, parent_id=None, depth=0) -> str:
+    opts = ""
+    children = [c for c in cats_all if c["parent_id"] == parent_id]
+    for cat in children:
+        if cat["id"] == exclude_id:
+            continue
+        indent = "── " * depth
+        sel = "selected" if cat["id"] == selected_id else ""
+        opts += f'<option value="{cat["id"]}" {sel}>{indent}{e(cat["name"])}</option>'
+        opts += _cat_select_options(cats_all, selected_id, exclude_id, parent_id=cat["id"], depth=depth + 1)
+    return opts
+
+
+@router.get("/categories", response_class=HTMLResponse)
+async def categories_list(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        cats = conn.execute("SELECT * FROM categories ORDER BY parent_id NULLS FIRST, sort_order, name;").fetchall()
+    finally:
+        conn.close()
+
+    tree_rows = _render_cat_tree(cats)
+    cat_opts = '<option value="">— بدون والد (دسته ریشه) —</option>' + _cat_select_options(cats)
+
+    body = f"""
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">🗂 دسته‌بندی‌ها</h1>
+    </div>
+
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن دسته جدید</h2>
+      <form method="post" action="/admin/categories/add" class="grid md:grid-cols-4 gap-4 items-end">
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">نام دسته *</label>
+          {_input("name", "مثلاً: هوش مصنوعی", required=True)}
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">ایموجی</label>
+          {_input("emoji", "🧩")}
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">والد (زیردسته‌ی چه چیزی؟)</label>
+          <select name="parent_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            {cat_opts}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">ترتیب نمایش</label>
+          {_input("sort_order", "0", "0", "number")}
+        </div>
+        <div class="md:col-span-4">{_btn("➕ افزودن دسته", color="green")}</div>
+      </form>
+    </div>
+
+    <div class="card overflow-hidden">
+      <div class="px-5 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">
+        ساختار دسته‌بندی‌ها ({len(cats)} دسته)
+        <span class="text-xs text-gray-400 mr-2">دسته‌های ریشه در منوی اصلی ربات نمایش داده می‌شوند</span>
+      </div>
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-4 py-2">نام</th><th class="px-4 py-2">وضعیت</th>
+          <th class="px-4 py-2">ترتیب</th><th class="px-4 py-2">عملیات</th>
+        </tr></thead>
+        <tbody>{tree_rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>هنوز دسته‌ای اضافه نشده</td></tr>"}</tbody>
+      </table>
+    </div>"""
+
+    return _layout("دسته‌بندی‌ها", body, adm, flash=flash)
+
+
+@router.post("/categories/add")
+async def categories_add(request: Request, name: str = Form(""), emoji: str = Form(""),
+                          parent_id: str = Form(""), sort_order: str = Form("0")):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+
+    name = name.strip()
+    if not name:
+        return _redir("/admin/categories?flash=نام+دسته+الزامی+است")
+
+    pid = int(parent_id) if parent_id.strip().isdigit() else None
+    slug = "".join(c if c.isalnum() else "_" for c in name).lower()[:40]
+    now = datetime.now().isoformat()
+
+    conn = _db()
+    try:
+        conn.execute(
+            "INSERT INTO categories (name, slug, parent_id, emoji, sort_order, is_active, created_at) VALUES (?,?,?,?,?,1,?);",
+            (name, slug, pid, emoji.strip() or "", int(sort_order or 0), now)
+        )
+        conn.commit()
+    except Exception as ex:
+        return _redir(f"/admin/categories?flash=خطا: {str(ex)[:50]}")
+    finally:
+        conn.close()
+    return _redir("/admin/categories?flash=دسته+اضافه+شد")
+
+
+@router.get("/categories/{cid}/edit", response_class=HTMLResponse)
+async def categories_edit_get(request: Request, cid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        cat = conn.execute("SELECT * FROM categories WHERE id=? LIMIT 1;", (cid,)).fetchone()
+        cats_all = conn.execute("SELECT * FROM categories ORDER BY parent_id NULLS FIRST, sort_order, name;").fetchall()
+    finally:
+        conn.close()
+
+    if not cat:
+        return _redir("/admin/categories")
+
+    cat_opts = '<option value="">— بدون والد (دسته ریشه) —</option>' + _cat_select_options(
+        cats_all, selected_id=cat["parent_id"], exclude_id=cid
+    )
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← بازگشت", "/admin/categories", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش: {e(cat["name"])}</h1>
+    </div>
+    <div class="card p-6 max-w-xl">
+      <form method="post" action="/admin/categories/{cid}/edit" class="space-y-4">
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">نام دسته</label>
+          {_input("name", "", str(cat["name"]), required=True)}
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-sm font-medium text-gray-700 block mb-1">ایموجی</label>
+            {_input("emoji", "🧩", str(cat["emoji"] or ""))}
+          </div>
+          <div>
+            <label class="text-sm font-medium text-gray-700 block mb-1">ترتیب نمایش</label>
+            {_input("sort_order", "0", str(cat["sort_order"] or 0), "number")}
+          </div>
+        </div>
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">والد</label>
+          <select name="parent_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">{cat_opts}</select>
+        </div>
+        <div class="flex items-center gap-3">
+          <label class="text-sm font-medium text-gray-700">فعال</label>
+          <input type="checkbox" name="is_active" value="1" {"checked" if cat["is_active"] else ""} class="rounded">
+        </div>
+        {_btn("ذخیره تغییرات", color="green")}
+      </form>
+    </div>"""
+
+    return _layout(f"ویرایش دسته #{cid}", body, adm, flash=flash)
+
+
+@router.post("/categories/{cid}/edit")
+async def categories_edit_post(request: Request, cid: int,
+    name: str = Form(""), emoji: str = Form(""), parent_id: str = Form(""),
+    sort_order: str = Form("0"), is_active: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+
+    pid = int(parent_id) if parent_id.strip().isdigit() else None
+    active = 1 if is_active == "1" else 0
+
+    conn = _db()
+    try:
+        conn.execute(
+            "UPDATE categories SET name=?, emoji=?, parent_id=?, sort_order=?, is_active=? WHERE id=?;",
+            (name.strip(), emoji.strip(), pid, int(sort_order or 0), active, cid)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir(f"/admin/categories/{cid}/edit?flash=ذخیره+شد")
+
+
+@router.post("/categories/{cid}/toggle")
+async def categories_toggle(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("UPDATE categories SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE id=?;", (cid,))
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir("/admin/categories?flash=وضعیت+تغییر+کرد")
+
+
+@router.post("/categories/{cid}/delete")
+async def categories_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+
+    def collect_ids(conn, cat_id):
+        ids = [cat_id]
+        children = conn.execute("SELECT id FROM categories WHERE parent_id=?;", (cat_id,)).fetchall()
+        for ch in children:
+            ids.extend(collect_ids(conn, ch[0]))
+        return ids
+
+    conn = _db()
+    try:
+        all_ids = collect_ids(conn, cid)
+        placeholders = ",".join("?" * len(all_ids))
+        conn.execute(f"DELETE FROM product_feed WHERE product_id IN (SELECT id FROM products WHERE category_id IN ({placeholders}));", all_ids)
+        conn.execute(f"DELETE FROM products WHERE category_id IN ({placeholders});", all_ids)
+        conn.execute(f"DELETE FROM categories WHERE id IN ({placeholders});", all_ids)
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir("/admin/categories?flash=دسته+و+زیردسته‌ها+حذف+شدند")
+
+
 # ─────────────────────────── Products ──────────────────────────────────────
 
 @router.get("/products", response_class=HTMLResponse)
@@ -1211,30 +1475,41 @@ async def product_new_get(request: Request):
 
     conn = _db()
     try:
-        services = conn.execute("SELECT service_key, title FROM other_services ORDER BY title;").fetchall()
+        cats_all = conn.execute("SELECT * FROM categories WHERE is_active=1 ORDER BY parent_id NULLS FIRST, sort_order, name;").fetchall()
     finally:
         conn.close()
 
-    cats = '<option value="apple">سرویس‌های اپل آیدی (apple)</option>'
-    for s in services:
-        cats += f'<option value="{e(s["service_key"])}">{e(s["title"])} ({e(s["service_key"])})</option>'
+    if not cats_all:
+        body = f"""
+        <div class="flex items-center gap-3 mb-6">
+          {_btn("← بازگشت", "/admin/products", "slate", small=True)}
+          <h1 class="text-2xl font-bold text-gray-800">➕ محصول جدید</h1>
+        </div>
+        <div class="card p-6">
+          <p class="text-amber-600">⚠️ ابتدا باید دسته‌بندی بسازید.</p>
+          <div class="mt-4">{_btn("← ساخت دسته‌بندی", "/admin/categories", "indigo")}</div>
+        </div>"""
+        return _layout("محصول جدید", body, adm)
+
+    cat_opts = _cat_select_options(cats_all)
 
     body = f"""
     <div class="flex items-center gap-3 mb-6">
       {_btn("← بازگشت", "/admin/products", "slate", small=True)}
       <h1 class="text-2xl font-bold text-gray-800">➕ محصول جدید</h1>
     </div>
-    <form method="post" action="/admin/products/new" class="bg-white rounded-xl shadow p-6 max-w-2xl space-y-4">
+    <form method="post" action="/admin/products/new" class="card p-6 max-w-2xl space-y-4">
       <div>
-        <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی</label>
-        <select name="category" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">
-          {cats}
+        <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی *</label>
+        <select name="category_id" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">
+          <option value="">انتخاب کنید...</option>
+          {cat_opts}
         </select>
       </div>
-      <div><label class="text-sm font-medium text-gray-700 block mb-1">عنوان محصول</label>
+      <div><label class="text-sm font-medium text-gray-700 block mb-1">عنوان محصول *</label>
         {_input("title", "عنوان محصول", required=True)}</div>
       <div class="grid grid-cols-2 gap-4">
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">قیمت (تومان)</label>
+        <div><label class="text-sm font-medium text-gray-700 block mb-1">قیمت (تومان) *</label>
           {_input("price", "250000", type_="number", required=True)}</div>
         <div><label class="text-sm font-medium text-gray-700 block mb-1">قیمت همکار (0=یکسان)</label>
           {_input("partner_price", "0", type_="number")}</div>
@@ -1254,22 +1529,29 @@ async def product_new_get(request: Request):
 
 @router.post("/products/new")
 async def product_new_post(request: Request,
-    category: str=Form(""), title: str=Form(""), price: str=Form("0"),
+    category_id: str=Form(""), title: str=Form(""), price: str=Form("0"),
     partner_price: str=Form("0"), limit_c: str=Form("0"), limit_p: str=Form("0"),
     description: str=Form("")):
     adm = _get_admin(request)
     guard = _require(adm, "products")
     if guard: return guard
 
-    slug = "".join(c if c.isalnum() else "_" for c in title).lower()[:40] or "product"
+    if not category_id.strip().isdigit():
+        return _redir("/admin/products/new?flash=دسته‌بندی+انتخاب+کنید")
+
+    cat_id = int(category_id)
     pp = int(partner_price or 0)
+    slug = "".join(c if c.isalnum() else "_" for c in title).lower()[:40] or "product"
+
     conn = _db()
     try:
+        cat = conn.execute("SELECT slug, name FROM categories WHERE id=?;", (cat_id,)).fetchone()
+        cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
-            INSERT INTO products (category,product_key,title,price,partner_price,
-                daily_limit_customer,daily_limit_partner,description,is_active)
-            VALUES (?,?,?,?,?,?,?,?,1);""",
-            (category, slug, title.strip(), int(price or 0), pp if pp>0 else None,
+            INSERT INTO products (category, category_id, product_key, title, price, partner_price,
+                daily_limit_customer, daily_limit_partner, description, is_active)
+            VALUES (?,?,?,?,?,?,?,?,?,1);""",
+            (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
              int(limit_c or 0), int(limit_p or 0), description.strip()))
         conn.commit()
     finally:
