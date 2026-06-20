@@ -1156,13 +1156,45 @@ def _make_service_key(title: str) -> str:
 
 def start_wallet_charge(message):
     uid = message.from_user.id
-    bot.send_message(
-        message.chat.id,
-        f"مقدار شارژ کیف پول را به تومان ارسال کنید.\n"
-        f"حداقل مبلغ: <b>{MIN_TOPUP_AMOUNT:,}</b> تومان",
-    )
-    user_states[uid] = {"mode": "wallet_charge_amount"}
-    bot.register_next_step_handler(message, process_wallet_charge_amount)
+
+    # مبالغ سریع از تنظیمات
+    quick_amounts = _get_quick_amounts()
+
+    if quick_amounts:
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        btns = [types.InlineKeyboardButton(
+            f"💵 {a:,} تومان", callback_data=f"quick_charge_{a}"
+        ) for a in quick_amounts]
+        kb.add(*btns)
+        kb.add(types.InlineKeyboardButton("✏️ مبلغ دلخواه", callback_data="wallet_charge_custom"))
+        bot.send_message(
+            message.chat.id,
+            tf("MSG_WALLET_AMOUNT_REQUEST", min_amount=f"{MIN_TOPUP_AMOUNT:,}"),
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    else:
+        bot.send_message(
+            message.chat.id,
+            tf("MSG_WALLET_AMOUNT_REQUEST", min_amount=f"{MIN_TOPUP_AMOUNT:,}"),
+            parse_mode="HTML"
+        )
+        user_states[uid] = {"mode": "wallet_charge_amount"}
+        bot.register_next_step_handler(message, process_wallet_charge_amount)
+
+
+def _get_quick_amounts() -> list[int]:
+    """خواندن مبالغ سریع از تنظیمات DB"""
+    try:
+        from db import get_ui_text
+        raw = get_ui_text("WALLET_QUICK_AMOUNTS")
+        if not raw:
+            return [10_000, 50_000, 100_000, 500_000]
+        parts = [p.strip() for p in raw.split(",")]
+        amounts = [int(p) for p in parts if p.isdigit() and int(p) > 0]
+        return amounts
+    except Exception:
+        return [10_000, 50_000, 100_000, 500_000]
 
 
 def process_wallet_charge_amount(message):
@@ -2168,7 +2200,6 @@ def handle_wallet(message):
     balance = get_wallet_balance(uid)
     text = tf("MSG_WALLET_BALANCE", balance=f"{balance:,}")
     bot.send_message(message.chat.id, text, reply_markup=wallet_inline_keyboard(), parse_mode="HTML")
-    bot.send_message(message.chat.id, text, reply_markup=wallet_inline_keyboard())
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_MY_ORDERS"))
@@ -2885,6 +2916,28 @@ def handle_callbacks(call: types.CallbackQuery):
         return
 
     # ─── ناوبری دسته‌بندی داینامیک ────────────────────────────────────────
+    if data == "wallet_charge_custom":
+        bot.answer_callback_query(call.id)
+        user_states[uid] = {"mode": "wallet_charge_amount"}
+        bot.send_message(
+            call.message.chat.id,
+            tf("MSG_WALLET_AMOUNT_REQUEST", min_amount=f"{MIN_TOPUP_AMOUNT:,}"),
+            parse_mode="HTML"
+        )
+        bot.register_next_step_handler(call.message, process_wallet_charge_amount)
+        return
+
+    if data.startswith("quick_charge_"):
+        bot.answer_callback_query(call.id)
+        try:
+            amount = int(data.replace("quick_charge_", ""))
+        except ValueError:
+            return
+        if amount < MIN_TOPUP_AMOUNT:
+            amount = MIN_TOPUP_AMOUNT
+        start_wallet_charge_payment(bot, call.message, uid, amount, clear_user_state)
+        return
+
     if data.startswith("cat_"):
         bot.answer_callback_query(call.id)
         parts = data.split("_")
