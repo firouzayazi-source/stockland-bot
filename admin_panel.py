@@ -311,41 +311,7 @@ def _layout(title: str, body: str, admin_info=None,
         <aside id="sidebar" class="sidebar">
           <div class="sidebar-header">
             <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند">
-              <span class="brand-mark">
-              <svg width="46" height="38" viewBox="0 0 92 76" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <defs>
-                  <linearGradient id="slG1" x1="5%" y1="0%" x2="95%" y2="100%">
-                    <stop offset="0%"   stop-color="#C8D2DA"/>
-                    <stop offset="28%"  stop-color="#FFFFFF"/>
-                    <stop offset="60%"  stop-color="#AAB4BE"/>
-                    <stop offset="100%" stop-color="#56646E"/>
-                  </linearGradient>
-                  <linearGradient id="slG2" x1="15%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%"   stop-color="#D4DDE6"/>
-                    <stop offset="45%"  stop-color="#F0F4F8"/>
-                    <stop offset="100%" stop-color="#4E5C6A"/>
-                  </linearGradient>
-                </defs>
-                <!-- S: top bar -->
-                <polygon points="4,4 46,4 42,15 4,15" fill="url(#slG1)"/>
-                <!-- S: upper-left connector -->
-                <polygon points="4,15 4,30 12,30 12,22 42,15" fill="url(#slG2)" opacity=".9"/>
-                <!-- S: mid bar -->
-                <polygon points="4,28 42,28 38,38 4,38" fill="url(#slG1)" opacity=".85"/>
-                <!-- S: lower-right connector -->
-                <polygon points="30,38 46,38 46,54 38,54 30,48" fill="url(#slG2)" opacity=".9"/>
-                <!-- S: bottom bar -->
-                <polygon points="4,54 46,54 42,64 4,64" fill="url(#slG1)"/>
-                <!-- L: vertical -->
-                <polygon points="54,4 66,4 66,64 54,64" fill="url(#slG2)"/>
-                <!-- L: foot -->
-                <polygon points="54,54 88,54 84,64 54,64" fill="url(#slG1)"/>
-              </svg>
-              </span>
-              <div class="brand-copy">
-                <div class="brand-name">STOCK<span>LAND</span></div>
-                <div class="brand-subtitle">مدیریت فروشگاه</div>
-              </div>
+              <div class="brand-text-only">STOCK<span>LAND</span><small>مدیریت فروشگاه</small></div>
             </a>
             <button class="icon-button sidebar-close" onclick="toggleSidebar()" aria-label="بستن منو"><i data-lucide="x"></i></button>
           </div>
@@ -386,18 +352,19 @@ def _layout(title: str, body: str, admin_info=None,
           </div>
           <div class="global-search-wrap">
             <i data-lucide="search"></i>
-            <input id="globalSearch" class="global-search" type="search" placeholder="جست‌وجو در پنل..." autocomplete="off" aria-label="جست‌وجوی سراسری">
+            <input id="globalSearch" class="global-search" type="search" placeholder="جست‌وجو در پنل..." autocomplete="off">
             <kbd>⌘ K</kbd>
-            <div id="searchResults" class="search-results"></div>
           </div>
           <div class="topbar-actions">
-            <button id="themeToggle" class="icon-button" aria-label="تغییر حالت نمایش"><i data-lucide="moon"></i></button>
-            <a class="icon-button notification-button" href="/admin/tickets" aria-label="اعلان‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
-            <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران" style="position:relative"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
-            <div class="profile-menu">
-              <button class="profile-trigger" onclick="toggleProfile()" aria-expanded="false"><span class="profile-avatar"><i data-lucide="user-round"></i></span><span class="profile-copy"><strong>{admin_label}</strong><small>مدیریت فروشگاه</small></span><i data-lucide="chevron-down" class="profile-chevron"></i></button>
-              <div id="profileDropdown" class="profile-dropdown"><a href="/admin/settings"><i data-lucide="settings"></i>تنظیمات حساب</a><a href="/admin/logout" class="danger-link"><i data-lucide="log-out"></i>خروج</a></div>
-            </div>
+            <button id="classicToggle" class="icon-button" aria-label="حالت کلاسیک" onclick="toggleClassic()" title="حالت کلاسیک / تیره"><i data-lucide="sun"></i></button>
+            <button id="darkToggle" class="icon-button" aria-label="حالت شب" onclick="toggleDark()" title="حالت شب"><i data-lucide="moon"></i></button>
+            <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
+            <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
+            <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
+              <span class="profile-avatar"><i data-lucide="user-round"></i></span>
+              <span class="profile-copy"><strong>{admin_label}</strong><small>مدیریت فروشگاه</small></span>
+              <i data-lucide="settings" class="profile-chevron" style="width:14px;height:14px;opacity:.5"></i>
+            </a>
           </div>
         </header>"""
 
@@ -436,17 +403,52 @@ def _layout(title: str, body: str, admin_info=None,
       -webkit-backdrop-filter:blur(calc(var(--glass-level)*28px));
     }}
     .sidebar::before {{ content:""; position:absolute; top:-100px; right:-90px; width:280px; height:280px; border-radius:50%; background:rgba(0,215,255,.08); filter:blur(70px); pointer-events:none; }}
-    .sidebar-header {{ min-height:104px; display:flex; align-items:center; padding:24px 22px 20px; border-bottom:1px solid rgba(255,255,255,.07); position:relative; }}
-    .brand-lockup {{ display:flex; align-items:center; gap:13px; text-decoration:none; position:relative; min-width:0; }}
-    .brand-mark {{ width:50px; height:50px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.10); border-radius:17px; background:rgba(255,255,255,.055); box-shadow:0 0 28px rgba(0,215,255,.16),inset 0 1px rgba(255,255,255,.1); }}
-    .brand-name {{ font:800 16px/1.1 Inter,Vazirmatn,sans-serif !important; color:#fff; letter-spacing:1.7px; }}
-    .brand-name span {{ color:var(--primary); }}
-    .brand-subtitle {{ color:#7f8b9e; font-size:11px; margin-top:5px; }}
+    .sidebar-header {{ min-height:88px; display:flex; align-items:center; padding:20px 22px 16px; border-bottom:1px solid rgba(255,255,255,.07); position:relative; }}
+    .brand-lockup {{ display:flex; align-items:center; text-decoration:none; min-width:0; flex:1; }}
+    .brand-text-only {{ font:900 22px/1.1 'Vazirmatn',sans-serif !important; color:#fff; letter-spacing:1.5px; }}
+    .brand-text-only span {{ color:#00D7FF; }}
+    .brand-text-only small {{ display:block; font-size:10px; font-weight:400; color:#536075; margin-top:4px; letter-spacing:.5px; }}
     .sidebar-close {{ display:none !important; margin-right:auto; color:#9aa7b8 !important; background:rgba(255,255,255,.06) !important; }}
     .nav-caption {{ color:#536075; font-size:10px; font-weight:700; letter-spacing:.08em; padding:20px 26px 8px; }}
     .nav-divider {{ display:flex; align-items:center; gap:8px; padding:14px 16px 5px; }}
     .nav-divider span {{ color:#2D3A4A; font-size:9.5px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; white-space:nowrap; }}
     .nav-divider::after {{ content:""; flex:1; height:1px; background:rgba(255,255,255,.05); }}
+
+    /* ── Classic Mode ─────────────────────────────────── */
+    body.sl-classic {{ background:#F1F5F9; }}
+    body.sl-classic .sidebar {{
+      background:#FFFFFF !important;
+      backdrop-filter:none !important;
+      border-left:1px solid #E5E7EB !important;
+      box-shadow:none !important;
+    }}
+    body.sl-classic .sidebar-header {{ border-bottom-color:#E5E7EB !important; }}
+    body.sl-classic .brand-text-only {{ color:#111827 !important; }}
+    body.sl-classic .brand-text-only small {{ color:#9CA3AF !important; }}
+    body.sl-classic .nav-caption {{ color:#D1D5DB !important; }}
+    body.sl-classic .nav-divider span {{ color:#CBD5E1 !important; }}
+    body.sl-classic .nav-divider::after {{ background:#E5E7EB !important; }}
+    body.sl-classic .nav-item {{ color:#374151 !important; border-right-color:transparent; }}
+    body.sl-classic .nav-item:hover {{ background:#F3F4F6 !important; color:#111827 !important; transform:none !important; }}
+    body.sl-classic .nav-item.active {{ background:#EFF6FF !important; color:#1D4ED8 !important; box-shadow:none !important; }}
+    body.sl-classic .nav-item.active::after {{ background:#3B82F6 !important; }}
+    body.sl-classic .nav-item.active .nav-icon {{ color:#1D4ED8 !important; filter:none !important; }}
+    body.sl-classic .nav-badge {{ background:#EFF6FF !important; color:#1D4ED8 !important; border-color:#BFDBFE !important; }}
+    body.sl-classic .sidebar-footer {{ border-top-color:#E5E7EB !important; }}
+    body.sl-classic .sidebar-status {{ color:#374151 !important; }}
+    body.sl-classic .sidebar-status small {{ color:#9CA3AF !important; }}
+    body.sl-classic .sidebar-logout {{ color:#6B7280 !important; }}
+    body.sl-classic .sidebar-logout:hover {{ color:#DC2626 !important; background:#FEF2F2 !important; }}
+    body.sl-classic .overlay {{ backdrop-filter:none !important; }}
+
+    /* ── Dark Mode ────────────────────────────────────── */
+    body.sl-dark {{ background:#0D1117; color:#E5E7EB; }}
+    body.sl-dark .card {{ background:#161B22; border:1px solid #30363D; }}
+    body.sl-dark .topbar {{ background:rgba(13,17,23,.95) !important; border-color:#30363D !important; }}
+    body.sl-dark .profile-trigger {{ border-color:#30363D !important; color:#E5E7EB !important; }}
+    body.sl-dark .global-search {{ background:#161B22 !important; border-color:#30363D !important; color:#E5E7EB !important; }}
+    body.sl-dark input:not([type=checkbox]):not([type=radio]):not([type=range]),
+    body.sl-dark textarea, body.sl-dark select {{ background:#161B22; border-color:#30363D; color:#E5E7EB; }}
     .sidebar-nav {{ flex:1; overflow-y:auto; padding:0 12px 18px; display:flex; flex-direction:column; gap:4px; scrollbar-width:thin; scrollbar-color:#263244 transparent; }}
     .nav-item {{
       position:relative; display:flex; align-items:center; gap:12px; min-height:44px; padding:0 14px;
@@ -522,8 +524,9 @@ def _layout(title: str, body: str, admin_info=None,
     .btn-sm {{ min-height:34px; padding:6px 12px; font-size:11.5px; border-radius:10px; }}
     .btn-slate {{ background:#f8fafc; color:#475569; border-color:var(--border); }} .btn-green {{ background:#ecfdf3; color:#15803d; border-color:#bbf7d0; }} .btn-red {{ background:#fff1f2; color:#be123c; border-color:#fecdd3; }} .btn-indigo {{ background:#ecfeff; color:#0e7490; border-color:#a5f3fc; }}
     input, textarea, select {{
-      width:100%; min-height:44px; border:1px solid var(--border); border-radius:14px; padding:10px 13px;
-      font-size:13px; background:var(--card-bg); color:var(--text-main); outline:none; transition:border 180ms,box-shadow 180ms,background 180ms;
+      width:100%; min-height:44px; border:1px solid var(--border); border-radius:14px; padding:10px 16px;
+      font-size:13px; background:var(--card-bg); color:var(--text-main); outline:none;
+      transition:border 180ms,box-shadow 180ms; direction:rtl; text-align:right;
     }}
     input[type=checkbox], input[type=radio] {{
       width:16px !important; height:16px !important; min-height:16px !important;
@@ -601,16 +604,29 @@ def _layout(title: str, body: str, admin_info=None,
     document.getElementById('overlay')?.classList.toggle('open');
   }};
 
-  window.toggleProfile = function(){{ document.getElementById('profileDropdown')?.classList.toggle('open'); }};
-  document.addEventListener('click',function(ev){{
-    if(!ev.target.closest('.profile-menu')) document.getElementById('profileDropdown')?.classList.remove('open');
-  }});
+  // ── Classic / Dark Mode ─────────────────────────────
+  function applyMode(){{
+    var isClassic = localStorage.getItem('sl-classic')==='1';
+    var isDark = localStorage.getItem('sl-dark')==='1';
+    document.body.classList.toggle('sl-classic', isClassic);
+    document.body.classList.toggle('sl-dark', isDark && !isClassic);
+    document.body.classList.toggle('dark-mode', isDark && !isClassic);
+  }}
+  window.toggleClassic = function(){{
+    var on = localStorage.getItem('sl-classic')==='1';
+    localStorage.setItem('sl-classic', on?'0':'1');
+    if(!on) localStorage.setItem('sl-dark','0');
+    applyMode(); renderIcons();
+  }};
+  window.toggleDark = function(){{
+    var on = localStorage.getItem('sl-dark')==='1';
+    localStorage.setItem('sl-dark', on?'0':'1');
+    if(!on) localStorage.setItem('sl-classic','0');
+    applyMode(); renderIcons();
+  }};
+  applyMode();
 
-  var themeToggle=document.getElementById('themeToggle');
-  function setTheme(dark){{ document.body.classList.toggle('dark-mode',dark); localStorage.setItem('sl-theme',dark?'dark':'light'); if(themeToggle) themeToggle.innerHTML='<i data-lucide="'+(dark?'sun':'moon')+'"></i>'; renderIcons(); }}
-  if(themeToggle){{ setTheme(localStorage.getItem('sl-theme')==='dark'); themeToggle.addEventListener('click',function(){{ setTheme(!document.body.classList.contains('dark-mode')); }}); }}
-
-  var search=document.getElementById('globalSearch'),results=document.getElementById('searchResults');
+  var search=document.getElementById('globalSearch');
   function searchPanel(){{
     if(!search||!results)return; var q=search.value.trim().toLowerCase(); results.innerHTML='';
     if(!q){{results.classList.remove('open');return;}}
@@ -1248,128 +1264,6 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
         <div class="card p-4 md:p-6">
           <h2 class="font-bold text-gray-700 text-lg mb-4">{e(active_group)}</h2>
           {content}
-        </div>
-
-        <!-- Super Admin Account Settings -->
-        {"" if not adm[1] else f'''
-        <div style="margin-top:20px;border-radius:20px;background:linear-gradient(135deg,rgba(15,10,5,.97),rgba(25,15,5,.99));border:1px solid rgba(255,165,0,.15);padding:24px">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
-            <div style="width:38px;height:38px;border-radius:12px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.25);display:flex;align-items:center;justify-content:center"><i data-lucide="shield-check" style="width:17px;color:#F59E0B"></i></div>
-            <div>
-              <div style="font-size:14px;font-weight:700;color:#fff">تنظیمات حساب مدیر ارشد</div>
-              <div style="font-size:11px;color:#5A4020;margin-top:2px">تنها مدیر ارشد به این بخش دسترسی دارد</div>
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-            <form method="post" action="/admin/admins/super/password" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px">
-              <label style="font-size:12px;font-weight:600;color:#C5A030;display:block;margin-bottom:10px">تغییر رمز پنل</label>
-              {_input("new_password", "رمز جدید", type_="password", required=True)}
-              <div style="margin-top:8px">{_input("confirm_password", "تکرار رمز", type_="password", required=True)}</div>
-              <div style="margin-top:10px"><button type="submit" style="padding:9px 18px;background:#B45309;color:#fff;border:none;border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer">ذخیره رمز</button></div>
-            </form>
-            <form method="post" action="/admin/admins/super/telegram_id" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px">
-              <label style="font-size:12px;font-weight:600;color:#C5A030;display:block;margin-bottom:10px">تغییر آیدی تلگرام سوپرادمین</label>
-              {_input("new_telegram_id", "آیدی عددی تلگرام", type_="number", required=True)}
-              <div style="margin-top:18px"><button type="submit" style="padding:9px 18px;background:#B45309;color:#fff;border:none;border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer">ذخیره آیدی</button></div>
-            </form>
-          </div>
-        </div>
-        '''}
-
-        <!-- Color & Glass System -->
-        <div style="margin-top:20px;border-radius:20px;background:linear-gradient(135deg,rgba(5,7,10,.97),rgba(11,19,32,.99));border:1px solid rgba(255,255,255,.08);padding:26px">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:22px">
-            <div style="width:38px;height:38px;border-radius:12px;background:rgba(0,215,255,.1);border:1px solid rgba(0,215,255,.2);display:flex;align-items:center;justify-content:center"><i data-lucide="sliders-horizontal" style="width:16px;color:#00D7FF"></i></div>
-            <div>
-              <div style="font-size:14px;font-weight:700;color:#fff">تنظیم رنگ و جلوه بصری</div>
-              <div style="font-size:11px;color:#3A4A5A;margin-top:2px">رنگ اصلی پنل و شدت جلوه شیشه‌ای را تنظیم کنید</div>
-            </div>
-          </div>
-          <style>
-            .ctrl-block {{ background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:18px;margin-bottom:14px; }}
-            .ctrl-title {{ font-size:12px;font-weight:700;color:#C5CDD8;margin-bottom:14px; }}
-            .rgb-row {{ display:flex;align-items:center;gap:10px;margin-bottom:10px; }}
-            .rgb-lbl {{ font-size:11px;font-weight:800;width:28px;text-align:center;padding:3px 0;border-radius:6px; }}
-            .rgb-lbl.r {{ color:#EF4444;background:rgba(239,68,68,.12); }}
-            .rgb-lbl.g {{ color:#22C55E;background:rgba(34,197,94,.12); }}
-            .rgb-lbl.b {{ color:#3B82F6;background:rgba(59,130,246,.12); }}
-            .s-track {{ flex:1;height:5px;border-radius:5px;-webkit-appearance:none;appearance:none;outline:none;cursor:pointer;border:none;background:rgba(255,255,255,.1);min-height:unset!important;padding:0!important; }}
-            .s-track.r::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#EF4444;cursor:pointer; }}
-            .s-track.g::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#22C55E;cursor:pointer; }}
-            .s-track.b::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#3B82F6;cursor:pointer; }}
-            .s-track.glass::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#00D7FF;cursor:pointer; }}
-            .s-val {{ font-size:9px;color:#3A4A5A;width:22px;text-align:left;font-family:monospace; }}
-            .color-preview-row {{ display:flex;align-items:center;gap:12px;margin-top:14px; }}
-            .color-dot {{ width:36px;height:36px;border-radius:10px;border:1px solid rgba(255,255,255,.12);transition:background .15s; }}
-          </style>
-
-          <form method="post" action="/admin/settings/theme" id="themeForm">
-            <!-- Primary Color -->
-            <div class="ctrl-block">
-              <div class="ctrl-title">رنگ اصلی پنل (Primary)</div>
-              {(lambda r,g,b: f"""
-              <div class="rgb-row"><span class="rgb-lbl r">R</span><input type="range" min="0" max="255" value="{r}" class="s-track r" oninput="syncPrimary()"><span class="s-val" id="pr">{r}</span></div>
-              <div class="rgb-row"><span class="rgb-lbl g">G</span><input type="range" min="0" max="255" value="{g}" class="s-track g" oninput="syncPrimary()"><span class="s-val" id="pg">{g}</span></div>
-              <div class="rgb-row"><span class="rgb-lbl b">B</span><input type="range" min="0" max="255" value="{b}" class="s-track b" oninput="syncPrimary()"><span class="s-val" id="pb">{b}</span></div>
-              <div class="color-preview-row">
-                <div class="color-dot" id="primaryDot" style="background:{theme.get('primary','#00D7FF')}"></div>
-                <code id="primaryHex" style="font-size:11px;color:#00D7FF">{theme.get('primary','#00D7FF')}</code>
-              </div>
-              <input type="hidden" name="primary" id="primaryInp" value="{theme.get('primary','#00D7FF')}">
-              """)(*((lambda h: (int(h[1:3],16),int(h[3:5],16),int(h[5:7],16)))(theme.get('primary','#00D7FF'))))}
-            </div>
-
-            <!-- Glass Effect -->
-            <div class="ctrl-block">
-              <div class="ctrl-title">شدت جلوه شیشه‌ای (Glass Effect)</div>
-              <div class="rgb-row">
-                <span class="rgb-lbl" style="color:#00D7FF;background:rgba(0,215,255,.1);width:42px;font-size:10px">Glass</span>
-                <input type="range" min="0" max="100" value="{int(float(theme.get('glass','0'))*100)}" class="s-track glass" id="glassSlider" oninput="syncGlass()">
-                <span class="s-val" id="glassVal">{int(float(theme.get('glass','0'))*100)}%</span>
-              </div>
-              <div style="margin-top:10px;font-size:11px;color:#3A4A5A">کمتر: پنل توپر — بیشتر: منو و کارت‌ها شیشه‌ای و بلور می‌شوند</div>
-              <input type="hidden" name="glass" id="glassInp" value="{theme.get('glass','0')}">
-            </div>
-
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
-              <button type="submit" style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:#00D7FF;color:#000;font-weight:700;font-size:13px;border:none;border-radius:11px;cursor:pointer">
-                <i data-lucide="save" style="width:15px"></i> ذخیره تنظیمات
-              </button>
-              <a href="/admin/settings/theme/reset" onclick="return confirm('بازگشت به حالت پیش‌فرض؟')"
-                 style="display:inline-flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,.06);color:#8896A8;font-size:13px;border-radius:11px;text-decoration:none;border:1px solid rgba(255,255,255,.08)">
-                <i data-lucide="rotate-ccw" style="width:14px"></i> پیش‌فرض
-              </a>
-            </div>
-          </form>
-
-          <script>
-          (function(){{
-            function toHex(n){{ return Math.max(0,Math.min(255,Math.round(n))).toString(16).padStart(2,'0'); }}
-            var rsl=document.querySelector('.s-track.r'), gsl=document.querySelector('.s-track.g'), bsl=document.querySelector('.s-track.b');
-            window.syncPrimary = function(){{
-              if(!rsl) return;
-              var r=parseInt(rsl.value), g=parseInt(gsl.value), b=parseInt(bsl.value);
-              document.getElementById('pr').textContent = r;
-              document.getElementById('pg').textContent = g;
-              document.getElementById('pb').textContent = b;
-              var hex = '#'+toHex(r)+toHex(g)+toHex(b);
-              document.getElementById('primaryDot').style.background = hex;
-              document.getElementById('primaryHex').textContent = hex;
-              document.getElementById('primaryHex').style.color = hex;
-              document.getElementById('primaryInp').value = hex;
-              document.documentElement.style.setProperty('--primary', hex);
-              document.documentElement.style.setProperty('--sidebar-active', hex);
-            }};
-            window.syncGlass = function(){{
-              var v = parseInt(document.getElementById('glassSlider').value);
-              document.getElementById('glassVal').textContent = v + '%';
-              var gl = (v / 100).toFixed(2);
-              document.getElementById('glassInp').value = gl;
-              document.documentElement.style.setProperty('--glass-level', gl);
-            }};
-            if(window.lucide) lucide.createIcons();
-          }})();
-          </script>
         </div>
       </div>
     </div>"""
@@ -2180,6 +2074,37 @@ async def admins_list(request: Request, flash: str = ""):
         "permissions": ALL_PERMISSIONS,
         "all_permissions": ALL_PERMISSIONS,
     }, flash=flash)
+
+
+@router.get("/account", response_class=HTMLResponse)
+async def account_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    if not adm or not adm[1]:
+        return _redir("/admin/")
+    body = f"""
+    <div style="max-width:560px">
+      <div class="page-header">
+        <h1>تنظیمات حساب</h1>
+        <p>اطلاعات امنیتی مدیر ارشد</p>
+      </div>
+      <div class="card card-p" style="margin-bottom:16px">
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px;color:var(--text-main)">تغییر رمز پنل</h2>
+        <form method="post" action="/admin/admins/super/password" style="display:flex;flex-direction:column;gap:12px">
+          {_input("new_password","رمز جدید",type_="password",required=True)}
+          {_input("confirm_password","تکرار رمز",type_="password",required=True)}
+          {_btn("ذخیره رمز","",color="green")}
+        </form>
+      </div>
+      <div class="card card-p">
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px;color:var(--text-main)">تغییر آیدی تلگرام</h2>
+        <form method="post" action="/admin/admins/super/telegram_id" style="display:flex;flex-direction:column;gap:12px">
+          {_input("new_telegram_id","آیدی عددی تلگرام",type_="number",required=True)}
+          {_btn("ذخیره آیدی","",color="green")}
+        </form>
+      </div>
+    </div>"""
+    return _layout("تنظیمات حساب", body, adm, flash=flash)
+
 
 @router.post("/admins/super/password")
 async def super_change_password(request: Request, new_password: str = Form(""), confirm_password: str = Form("")):
@@ -4464,4 +4389,3 @@ async def partner_reject(request: Request, uid: int):
     except Exception:
         pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
-    
