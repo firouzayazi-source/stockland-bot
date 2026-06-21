@@ -191,175 +191,370 @@ def _pending_partner_count() -> int:
         return 0
 
 
+# ─── Theme System ──────────────────────────────────────────────────────────
+
+DEFAULT_THEME = {
+    "sidebar_bg":     "#1e1b4b",
+    "sidebar_text":   "#c7d2fe",
+    "sidebar_active": "#4f46e5",
+    "primary":        "#4f46e5",
+    "primary_text":   "#ffffff",
+    "accent":         "#f59e0b",
+    "page_bg":        "#f1f5f9",
+    "card_bg":        "#ffffff",
+    "text_main":      "#1e293b",
+    "text_muted":     "#64748b",
+    "border":         "#e2e8f0",
+}
+
+def _get_theme() -> dict:
+    theme = dict(DEFAULT_THEME)
+    try:
+        conn = _db()
+        rows = conn.execute("SELECT key, value FROM panel_theme;").fetchall()
+        conn.close()
+        for r in rows:
+            if r["key"] in theme:
+                theme[r["key"]] = r["value"]
+    except Exception:
+        pass
+    return theme
+
+def _ensure_theme_table():
+    conn = _db()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS panel_theme (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _layout(title: str, body: str, admin_info=None,
             flash: str = "", flash_ok: bool = True) -> HTMLResponse:
+
+    theme = _get_theme()
 
     flash_html = ""
     if flash:
         color = "green" if flash_ok else "red"
         icon  = "✅" if flash_ok else "❌"
         flash_html = f"""
-        <div class="mb-4 px-4 py-3 rounded-lg bg-{color}-50 border border-{color}-200
-             text-{color}-800 text-sm flex items-center gap-2">
+        <div class="flash-msg flash-{'ok' if flash_ok else 'err'}">
           <span>{icon}</span> {e(flash)}
         </div>"""
 
     perms = admin_info[2] if admin_info else []
     is_super = admin_info[1] if admin_info else False
 
-    # نوتیف تیکت‌های باز
-    open_tickets = _open_ticket_count() if admin_info else 0
-    ticket_badge = (
-        f'<span id="ticket-badge" class="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{open_tickets}</span>'
-        if open_tickets > 0 else '<span id="ticket-badge" class="hidden bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold"></span>'
-    )
+    open_tickets    = _open_ticket_count()    if admin_info else 0
     pending_partners = _pending_partner_count() if admin_info else 0
-    partner_badge = (
-        f'<span id="partner-badge" class="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{pending_partners}</span>'
-        if pending_partners > 0 else '<span id="partner-badge" class="hidden bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold"></span>'
-    )
 
     def has_perm(perm):
         return is_super or perm in perms
 
-    def drop(label, items):
-        """dropdown منو — items: list of (href, label, perm, badge)"""
-        visible = [i for i in items if not i[2] or has_perm(i[2])]
+    def nav_item(href, icon, label, perm=None, badge=0):
+        if perm and not has_perm(perm):
+            return ""
+        badge_html = f'<span class="nav-badge">{badge}</span>' if badge > 0 else ""
+        return f'<a href="{href}" class="nav-item" data-href="{href}">{icon}<span class="nav-label">{label}</span>{badge_html}</a>'
+
+    def nav_group(icon, label, items):
+        visible = [(h, ic, l, p, b) for h, ic, l, p, b in items if not p or has_perm(p)]
         if not visible:
             return ""
-        links = "".join(
-            f'<a href="{h}" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700">{b}{l}</a>'
-            for h, l, _, b in visible
+        children = "".join(
+            f'<a href="{h}" class="nav-child" data-href="{h}">{ic} {l}</a>'
+            for h, ic, l, p, b in visible
         )
         return f"""
-        <div class="relative group">
-          <button class="flex items-center gap-1 text-indigo-200 hover:text-white text-sm py-1 transition">
-            {label} <span class="text-xs opacity-70">▾</span>
+        <div class="nav-group">
+          <button class="nav-item nav-toggle" onclick="toggleGroup(this)">
+            {icon}<span class="nav-label">{label}</span>
+            <span class="nav-arrow nav-label">›</span>
           </button>
-          <div class="absolute top-full right-0 mt-1 w-44 bg-white rounded-xl shadow-xl border border-gray-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-            {links}
-          </div>
+          <div class="nav-children">{children}</div>
         </div>"""
 
-    nav = f"""
-    <nav class="bg-indigo-900 text-white shadow-xl sticky top-0 z-50">
-      <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-5 text-sm">
-        <a href="/admin/" class="font-bold text-lg text-white ml-2">🛍 استوک لند</a>
+    sidebar = ""
+    if admin_info:
+        sidebar = f"""
+        <aside id="sidebar" class="sidebar">
+          <div class="sidebar-header">
+            <div class="sidebar-logo">🛍</div>
+            <div class="nav-label">
+              <div class="sidebar-brand">استوک لند</div>
+              <div class="sidebar-sub">پنل مدیریت</div>
+            </div>
+            <button class="sidebar-close" onclick="toggleSidebar()">✕</button>
+          </div>
+          <nav class="sidebar-nav">
+            {nav_item("/admin/", "📊", "داشبورد")}
+            {nav_group("🛒", "فروشگاه", [
+                ("/admin/categories", "🗂", "دسته‌بندی‌ها", "products", 0),
+                ("/admin/products",   "📦", "محصولات",       "products", 0),
+                ("/admin/feed",       "🗃", "موجودی",         "feed",     0),
+            ])}
+            {nav_group("💼", "فروش", [
+                ("/admin/orders",  "🧾", "سفارش‌ها", "orders",  0),
+                ("/admin/wallets", "💰", "کیف‌پول",  "wallets", 0),
+            ])}
+            {nav_group("👥", "کاربران", [
+                ("/admin/partners", "🤝", "همکاران",  "partners", pending_partners),
+                ("/admin/tickets",  "🎫", "تیکت‌ها",  "tickets",  open_tickets),
+            ])}
+            {nav_item("/admin/broadcast", "📢", "پیام‌رسانی", "broadcast")}
+            {nav_group("⚙️", "مدیریت", [
+                ("/admin/admins",   "👤", "ادمین‌ها",  "admins",   0),
+                ("/admin/settings", "⚙️", "تنظیمات",   "settings", 0),
+                ("/admin/database", "💾", "دیتابیس",   "database", 0),
+            ])}
+          </nav>
+          <a href="/admin/logout" class="sidebar-logout">↩ خروج</a>
+        </aside>
+        <div id="overlay" class="overlay" onclick="toggleSidebar()"></div>"""
 
-        {f'<a href="/admin/" class="text-indigo-200 hover:text-white transition">📊 داشبورد</a>' if admin_info else ""}
+    topbar = ""
+    if admin_info:
+        topbar = f"""
+        <header class="topbar">
+          <button class="topbar-menu" onclick="toggleSidebar()">☰</button>
+          <h1 class="topbar-title">{e(title)}</h1>
+          <div class="topbar-actions">
+            <span id="ticket-badge-top" class="{'topbar-badge' if open_tickets > 0 else 'hidden'}"
+                  onclick="location.href='/admin/tickets'" title="تیکت‌های باز">
+              🎫 {open_tickets}
+            </span>
+          </div>
+        </header>"""
 
-        {drop("🛒 فروشگاه", [
-            ("/admin/categories", "🗂 دسته‌بندی‌ها", "products", ""),
-            ("/admin/products",   "📦 محصولات",       "products", ""),
-            ("/admin/feed",       "🗃 موجودی",         "feed",     ""),
-        ])}
-
-        {drop("💼 فروش", [
-            ("/admin/orders",  "🧾 سفارش‌ها", "orders",  ""),
-            ("/admin/wallets", "💰 کیف‌پول",  "wallets", ""),
-        ])}
-
-        {drop(f"👥 کاربران", [
-            ("/admin/partners", f"🤝 همکاران",  "partners", partner_badge),
-            ("/admin/tickets",  f"🎫 تیکت‌ها",  "tickets",  ticket_badge),
-        ])}
-
-        {f'<a href="/admin/broadcast" class="text-indigo-200 hover:text-white transition">📢 پیام‌رسانی</a>' if has_perm("broadcast") and admin_info else ""}
-
-        {drop("⚙️ مدیریت", [
-            ("/admin/admins",    "👥 ادمین‌ها",  "admins",   ""),
-            ("/admin/settings",  "⚙️ تنظیمات",   "settings", ""),
-            ("/admin/database",  "💾 دیتابیس",   "database", ""),
-        ])}
-
-        <a href="/admin/logout" class="mr-auto text-red-300 hover:text-red-100 transition text-sm">↩ خروج</a>
-      </div>
-    </nav>"""
-
-    if not admin_info:
-        nav = ""
+    css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items())
 
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{e(title)} — پنل ادمین</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <title>{e(title)} — استوک لند</title>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    * {{ font-family: 'Vazirmatn', Tahoma, sans-serif !important; }}
-    body {{ background: #f1f5f9; }}
-    .card {{ background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
-    .btn-primary {{ background: #4f46e5; color: white; padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; border: none; cursor: pointer; transition: .15s; }}
-    .btn-primary:hover {{ background: #4338ca; }}
-    .btn-sm {{ padding: 4px 10px; font-size: 12px; border-radius: 6px; font-weight: 500; cursor: pointer; border: none; }}
-    input, textarea, select {{ font-family: 'Vazirmatn', Tahoma, sans-serif !important; }}
+    :root {{ {css_vars} }}
+    *, *::before, *::after {{ box-sizing: border-box; font-family: 'Vazirmatn', Tahoma, sans-serif !important; }}
+
+    body {{ margin:0; background:var(--page-bg); color:var(--text-main); display:flex; min-height:100vh; }}
+
+    /* ── Sidebar ── */
+    .sidebar {{
+      position: fixed; top:0; right:0; height:100vh; width:240px;
+      background:var(--sidebar-bg); color:var(--sidebar-text);
+      display:flex; flex-direction:column; z-index:200;
+      transition: transform .25s ease; overflow-y:auto;
+    }}
+    .sidebar-header {{
+      display:flex; align-items:center; gap:10px;
+      padding:20px 16px 16px; border-bottom:1px solid rgba(255,255,255,.1);
+    }}
+    .sidebar-logo {{ font-size:28px; }}
+    .sidebar-brand {{ font-size:15px; font-weight:700; color:#fff; }}
+    .sidebar-sub {{ font-size:11px; opacity:.5; }}
+    .sidebar-close {{ display:none; margin-right:auto; background:none; border:none; color:inherit; font-size:18px; cursor:pointer; }}
+    .sidebar-nav {{ flex:1; padding:12px 8px; display:flex; flex-direction:column; gap:2px; }}
+    .nav-item {{
+      display:flex; align-items:center; gap:10px; padding:10px 12px;
+      border-radius:10px; text-decoration:none; color:var(--sidebar-text);
+      font-size:13.5px; font-weight:500; transition:.15s; cursor:pointer;
+      background:none; border:none; width:100%; text-align:right;
+    }}
+    .nav-item:hover, .nav-item.active {{ background:var(--sidebar-active); color:#fff; }}
+    .nav-badge {{
+      margin-right:auto; background:var(--accent); color:#000;
+      font-size:10px; font-weight:700; padding:1px 6px; border-radius:20px;
+    }}
+    .nav-arrow {{ margin-right:auto; transition:transform .2s; font-size:16px; opacity:.6; }}
+    .nav-toggle.open .nav-arrow {{ transform:rotate(90deg); }}
+    .nav-children {{ display:none; padding-right:12px; margin-top:2px; }}
+    .nav-children.open {{ display:flex; flex-direction:column; gap:1px; }}
+    .nav-child {{
+      display:flex; align-items:center; gap:8px; padding:8px 10px;
+      border-radius:8px; text-decoration:none; color:var(--sidebar-text);
+      font-size:13px; transition:.15s;
+    }}
+    .nav-child:hover, .nav-child.active {{ background:rgba(255,255,255,.1); color:#fff; }}
+    .nav-group {{ display:flex; flex-direction:column; }}
+    .sidebar-logout {{
+      display:flex; align-items:center; gap:8px; padding:14px 20px;
+      color:#fca5a5; text-decoration:none; font-size:13px; font-weight:500;
+      border-top:1px solid rgba(255,255,255,.1); transition:.15s;
+    }}
+    .sidebar-logout:hover {{ color:#fff; background:rgba(239,68,68,.2); }}
+
+    /* ── Overlay ── */
+    .overlay {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:199; }}
+
+    /* ── Topbar ── */
+    .topbar {{
+      position:fixed; top:0; right:240px; left:0; height:60px; z-index:100;
+      background:var(--card-bg); border-bottom:1px solid var(--border);
+      display:flex; align-items:center; gap:12px; padding:0 20px;
+      box-shadow:0 1px 4px rgba(0,0,0,.06);
+    }}
+    .topbar-menu {{ display:none; background:none; border:none; font-size:20px; cursor:pointer; }}
+    .topbar-title {{ font-size:16px; font-weight:600; color:var(--text-main); }}
+    .topbar-actions {{ margin-right:auto; display:flex; align-items:center; gap:10px; }}
+    .topbar-badge {{
+      background:var(--accent); color:#000; font-size:12px; font-weight:700;
+      padding:3px 10px; border-radius:20px; cursor:pointer;
+    }}
+
+    /* ── Main ── */
+    .main-wrap {{ margin-right:240px; padding-top:60px; min-height:100vh; width:calc(100% - 240px); }}
+    .main-content {{ padding:24px 20px; max-width:1200px; }}
+
+    /* ── Cards ── */
+    .card {{ background:var(--card-bg); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.07); }}
+
+    /* ── Flash ── */
+    .flash-msg {{ padding:12px 16px; border-radius:10px; margin-bottom:16px; font-size:14px; display:flex; align-items:center; gap:8px; }}
+    .flash-ok  {{ background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; }}
+    .flash-err {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }}
+
+    /* ── Buttons ── */
+    .btn {{ display:inline-flex; align-items:center; gap:6px; padding:9px 18px; border-radius:10px;
+            font-size:13.5px; font-weight:600; border:none; cursor:pointer; transition:.15s; text-decoration:none; }}
+    .btn-primary {{ background:var(--primary); color:var(--primary-text); }}
+    .btn-primary:hover {{ opacity:.88; }}
+    .btn-sm {{ padding:5px 12px; font-size:12px; border-radius:8px; }}
+    .btn-slate {{ background:#f1f5f9; color:#475569; border:1px solid var(--border); }}
+    .btn-green {{ background:#dcfce7; color:#166534; border:1px solid #bbf7d0; }}
+    .btn-red   {{ background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }}
+    .btn-indigo {{ background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe; }}
+
+    /* ── Inputs ── */
+    input, textarea, select {{
+      width:100%; border:1px solid var(--border); border-radius:9px;
+      padding:9px 12px; font-size:13.5px; background:var(--card-bg);
+      color:var(--text-main); outline:none; transition:.15s;
+    }}
+    input:focus, textarea:focus, select:focus {{ border-color:var(--primary); box-shadow:0 0 0 3px rgba(79,70,229,.1); }}
+    label {{ font-size:12.5px; color:var(--text-muted); display:block; margin-bottom:5px; font-weight:500; }}
+
+    /* ── Table ── */
+    table {{ width:100%; border-collapse:collapse; }}
+    th {{ padding:10px 14px; font-size:12px; color:var(--text-muted); font-weight:600; border-bottom:2px solid var(--border); text-align:right; }}
+    td {{ padding:11px 14px; font-size:13.5px; border-bottom:1px solid var(--border); }}
+    tr:hover td {{ background:#f8fafc; }}
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {{
+      .sidebar {{ transform: translateX(100%); }}
+      .sidebar.open {{ transform: translateX(0); }}
+      .sidebar-close {{ display:block; }}
+      .overlay.open {{ display:block; }}
+      .topbar {{ right:0; }}
+      .topbar-menu {{ display:block; }}
+      .main-wrap {{ margin-right:0; width:100%; }}
+      .main-content {{ padding:16px 14px; }}
+    }}
   </style>
 </head>
-<body class="min-h-screen">
-{nav}
-<main class="max-w-7xl mx-auto px-4 py-6">
-  {flash_html}
-  {body}
-</main>
-{"" if not admin_info else '''<script>
-  (function(){
-    var IDLE_MS = 300000; // 5 دقیقه
-    var timer;
-    function reset(){
-      clearTimeout(timer);
-      timer = setTimeout(function(){
-        window.location.href = "/admin/login?flash=" + encodeURIComponent("به دلیل عدم فعالیت خارج شدید");
-      }, IDLE_MS);
-    }
-    ["mousemove","keydown","click","scroll","touchstart"].forEach(function(ev){
-      document.addEventListener(ev, reset, true);
-    });
-    reset();
+<body>
+{sidebar}
+{topbar}
+<div class="main-wrap">
+  <div class="main-content">
+    {flash_html}
+    {body}
+  </div>
+</div>
 
-    // به‌روزرسانی real-time شمارنده‌ها (تیکت + همکار)
-    function updateBadge(id, count){
-      var el = document.getElementById(id);
-      if(!el) return;
-      if(count > 0){ el.textContent = count; el.classList.remove("hidden"); }
-      else { el.classList.add("hidden"); }
-    }
-    function pollBadges(){
-      fetch("/admin/badges.json").then(function(r){ return r.json(); })
-        .then(function(d){
-          updateBadge("ticket-badge", d.tickets || 0);
-          updateBadge("partner-badge", d.partners || 0);
-        }).catch(function(){});
-    }
-    setInterval(pollBadges, 15000);
-  })();
-</script>'''}
+<script>
+(function(){{
+  // Active nav
+  var path = location.pathname;
+  document.querySelectorAll('.nav-item[data-href], .nav-child[data-href]').forEach(function(el){{
+    if(el.dataset.href === path || (path !== '/admin/' && el.dataset.href !== '/admin/' && path.startsWith(el.dataset.href))){{
+      el.classList.add('active');
+      var group = el.closest('.nav-group');
+      if(group){{
+        group.querySelector('.nav-toggle')?.classList.add('open');
+        group.querySelector('.nav-children')?.classList.add('open');
+      }}
+    }}
+  }});
+
+  // Toggle group
+  window.toggleGroup = function(btn){{
+    btn.classList.toggle('open');
+    btn.nextElementSibling?.classList.toggle('open');
+  }};
+
+  // Toggle sidebar
+  window.toggleSidebar = function(){{
+    document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('overlay').classList.toggle('open');
+  }};
+
+  {"" if not admin_info else """
+  // Idle logout
+  var IDLE = 300000;
+  var timer;
+  function reset(){ clearTimeout(timer); timer = setTimeout(function(){ location.href='/admin/login?flash='+encodeURIComponent('به دلیل عدم فعالیت خارج شدید'); }, IDLE); }
+  ['mousemove','keydown','click','scroll','touchstart'].forEach(function(ev){ document.addEventListener(ev,reset,true); });
+  reset();
+
+  // Badge polling
+  function updateBadge(id, count){
+    var el = document.getElementById(id);
+    if(!el) return;
+    if(count>0){ el.textContent=(id==='ticket-badge-top'?'🎫 ':'')+count; el.classList.remove('hidden'); }
+    else el.classList.add('hidden');
+  }
+  setInterval(function(){
+    fetch('/admin/badges.json').then(function(r){ return r.json(); }).then(function(d){
+      updateBadge('ticket-badge-top', d.tickets||0);
+    }).catch(function(){});
+  }, 15000);
+  """}
+}})();
+</script>
 </body>
 </html>""")
 
 def _card(title, value, sub="", color="indigo"):
-    return f"""
-    <div class="bg-white rounded-xl shadow p-5 border-r-4 border-{color}-500">
-      <div class="text-xs text-gray-500 mb-1">{e(title)}</div>
-      <div class="text-3xl font-bold text-{color}-700">{value}</div>
-      {f'<div class="text-xs text-gray-400 mt-1">{e(sub)}</div>' if sub else ""}
-    </div>"""
+    colors = {
+        "indigo": "#4f46e5","green":"#16a34a","red":"#dc2626",
+        "amber":"#d97706","blue":"#2563eb","slate":"#475569",
+    }
+    fg = colors.get(color, "#4f46e5")
+    return (
+        f'<div class="card p-5">'
+        f'<div class="text-xs font-semibold mb-1" style="color:{fg}">{e(title)}</div>'
+        f'<div class="text-2xl font-bold" style="color:var(--text-main)">{e(str(value))}</div>'
+        f'{"<div style=\"font-size:12px;color:var(--text-muted);margin-top:3px\">"+e(sub)+"</div>" if sub else ""}'
+        f'</div>'
+    )
 
 def _btn(text, href="", color="indigo", small=False, danger=False):
-    sz = "px-3 py-1.5 text-xs" if small else "px-4 py-2 text-sm"
-    c = "red" if danger else color
+    cls = "btn btn-sm " if small else "btn "
+    if danger or color == "red":   cls += "btn-red"
+    elif color == "green":         cls += "btn-green"
+    elif color == "slate":         cls += "btn-slate"
+    else:                          cls += "btn-indigo"
     if href:
-        return f'<a href="{e(href)}" class="{sz} bg-{c}-600 hover:bg-{c}-700 text-white rounded-lg font-medium transition inline-block">{text}</a>'
-    return f'<button type="submit" class="{sz} bg-{c}-600 hover:bg-{c}-700 text-white rounded-lg font-medium transition">{text}</button>'
+        return f'<a href="{e(href)}" class="{cls}">{e(text)}</a>'
+    return f'<button type="submit" class="{cls}">{e(text)}</button>'
 
 def _input(name, placeholder="", value="", type_="text", required=False):
     req = "required" if required else ""
-    return f'<input type="{type_}" name="{name}" value="{e(value)}" placeholder="{e(placeholder)}" {req} class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">'
+    return f'<input type="{type_}" name="{name}" value="{e(value)}" placeholder="{e(placeholder)}" {req}>'
 
 def _textarea(name, placeholder="", value="", rows=4):
-    return f'<textarea name="{name}" rows="{rows}" placeholder="{e(placeholder)}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">{e(value)}</textarea>'
+    return f'<textarea name="{name}" rows="{rows}" placeholder="{e(placeholder)}">{e(value)}</textarea>'
 
 # ─────────────────────────── Login / Logout ────────────────────────────────
 
@@ -722,10 +917,80 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
           <h2 class="font-bold text-gray-700 text-lg mb-4">{e(active_group)}</h2>
           {content}
         </div>
+
+        <!-- Color Theme -->
+        <div class="card p-6 mt-4">
+          <h2 class="font-bold mb-4" style="color:var(--text-main)">🎨 رنگ‌بندی پنل</h2>
+          <form method="post" action="/admin/settings/theme">
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
+              {_theme_color_input("sidebar_bg", "پس‌زمینه منو", theme)}
+              {_theme_color_input("sidebar_text", "متن منو", theme)}
+              {_theme_color_input("sidebar_active", "آیتم فعال منو", theme)}
+              {_theme_color_input("primary", "رنگ اصلی", theme)}
+              {_theme_color_input("accent", "رنگ badge", theme)}
+              {_theme_color_input("page_bg", "پس‌زمینه صفحه", theme)}
+              {_theme_color_input("card_bg", "رنگ کارت‌ها", theme)}
+              {_theme_color_input("text_main", "رنگ متن اصلی", theme)}
+            </div>
+            <div class="flex gap-3 flex-wrap">
+              {_btn("💾 ذخیره رنگ‌ها", color="green")}
+              <a href="/admin/settings/theme/reset" class="btn btn-slate btn-sm" onclick="return confirm('رنگ‌های پیش‌فرض بازگردانده شود؟')">↺ بازگشت به پیش‌فرض</a>
+            </div>
+          </form>
+        </div>
       </div>
     </div>"""
 
     return _layout("تنظیمات", body, adm, flash=flash)
+
+
+def _theme_color_input(key, label, theme):
+    val = theme.get(key, DEFAULT_THEME.get(key, "#000000"))
+    return f"""<div>
+      <label>{label}</label>
+      <div class="flex gap-2 items-center mt-1">
+        <input type="color" name="{key}" value="{val}" style="width:44px;height:36px;padding:2px;border-radius:8px;cursor:pointer">
+        <input type="text" name="{key}_hex" value="{val}" style="flex:1;font-family:monospace;font-size:12px"
+               oninput="document.querySelector('[name={key}]').value=this.value">
+      </div>
+    </div>"""
+
+
+@router.post("/settings/theme")
+async def settings_theme_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    _ensure_theme_table()
+    form = await request.form()
+    conn = _db()
+    try:
+        for key in DEFAULT_THEME:
+            # اول color picker رو چک کن، بعد hex input
+            val = str(form.get(key) or form.get(f"{key}_hex") or DEFAULT_THEME[key]).strip()
+            if val:
+                conn.execute(
+                    "INSERT INTO panel_theme (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+                    (key, val)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir("/admin/settings?flash=رنگ‌بندی+ذخیره+شد")
+
+
+@router.get("/settings/theme/reset")
+async def settings_theme_reset(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("DELETE FROM panel_theme;")
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir("/admin/settings?flash=رنگ‌های+پیش‌فرض+بازگردانده+شد")
 
 
 @router.post("/settings/save-field")
