@@ -269,20 +269,39 @@ def _layout(title: str, body: str, admin_info=None,
           <div class="sidebar-header">
             <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند">
               <span class="brand-mark">
-              <svg width="44" height="44" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <path d="M70 15 L85 30 L55 60 L70 75 L30 85 L20 45 L40 55 Z" fill="url(#sl_grad)" stroke="#00b8d4" stroke-width="1.5"/>
-                <path d="M30 15 L15 30 L45 55 L35 75" fill="none" stroke="url(#sl_grad2)" stroke-width="6" stroke-linecap="round"/>
+              <svg width="44" height="44" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <!-- گلو پس‌زمینه -->
+                <ellipse cx="60" cy="64" rx="42" ry="32" fill="rgba(0,215,255,0.13)" filter="url(#glow)"/>
                 <defs>
-                  <linearGradient id="sl_grad" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stop-color="#e2e8f0"/>
-                    <stop offset="50%" stop-color="#ffffff"/>
-                    <stop offset="100%" stop-color="#94a3b8"/>
+                  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur stdDeviation="8" result="blur"/>
+                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                  </filter>
+                  <!-- گرادیان نقره‌ای S -->
+                  <linearGradient id="sGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#F0F4F8"/>
+                    <stop offset="35%" stop-color="#FFFFFF"/>
+                    <stop offset="65%" stop-color="#B8C4D0"/>
+                    <stop offset="100%" stop-color="#7A8899"/>
                   </linearGradient>
-                  <linearGradient id="sl_grad2" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stop-color="#ffffff"/>
-                    <stop offset="100%" stop-color="#00b8d4"/>
+                  <!-- گرادیان نقره‌ای L -->
+                  <linearGradient id="lGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#D0D8E4"/>
+                    <stop offset="40%" stop-color="#F8FAFC"/>
+                    <stop offset="100%" stop-color="#8896A8"/>
+                  </linearGradient>
+                  <!-- گرادیان فیروزه‌ای -->
+                  <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#00D7FF" stop-opacity="0.6"/>
+                    <stop offset="100%" stop-color="#0066AA" stop-opacity="0.2"/>
                   </linearGradient>
                 </defs>
+                <!-- حرف S -->
+                <path d="M28 30 C28 24 34 20 42 20 L66 20 L60 29 L40 29 C37 29 35 31 35 33 C35 35 37 37 42 38 L54 41 C63 43 70 48 70 56 C70 64 63 70 54 70 L28 70 L34 61 L56 61 C60 61 63 59 63 57 C63 55 61 53 56 52 L44 49 C35 47 28 42 28 33 Z" fill="url(#sGrad)"/>
+                <!-- حرف L -->
+                <path d="M72 20 L82 20 L82 86 L100 86 L94 100 L72 100 Z" fill="url(#lGrad)"/>
+                <!-- خط تقاطع نورانی -->
+                <path d="M58 38 L78 68" stroke="url(#glowGrad)" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
               </svg>
               </span>
               <div class="brand-copy">
@@ -1177,24 +1196,75 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
         </div>
 
         <!-- Color Theme -->
-        <div class="card p-6 mt-4">
-          <h2 class="font-bold mb-4" style="color:var(--text-main)">🎨 رنگ‌بندی پنل</h2>
-          <form method="post" action="/admin/settings/theme">
-            <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
+        <div style="margin-top:20px;border-radius:20px;overflow:hidden;background:linear-gradient(135deg,rgba(5,7,10,.97),rgba(11,19,32,.99));border:1px solid rgba(255,255,255,.08);padding:28px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+            <div style="width:40px;height:40px;border-radius:12px;background:rgba(0,215,255,.1);border:1px solid rgba(0,215,255,.2);display:flex;align-items:center;justify-content:center"><i data-lucide="palette" style="width:18px;color:#00D7FF"></i></div>
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#fff">تنظیمات رنگ‌بندی پنل</div>
+              <div style="font-size:11px;color:#4A5568;margin-top:2px">هر رنگ را با اسلایدر R-G-B تنظیم کنید. تغییرات بلافاصله در پیش‌نمایش اعمال می‌شود.</div>
+            </div>
+          </div>
+          <style>
+            .color-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }}
+            .color-item {{ background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.07); border-radius:16px; padding:15px; transition:.2s; }}
+            .color-item:hover {{ background:rgba(0,215,255,.04); border-color:rgba(0,215,255,.12); }}
+            .color-header {{ display:flex; align-items:center; gap:11px; margin-bottom:12px; }}
+            .color-preview {{ width:42px; height:42px; border-radius:11px; border:1px solid rgba(255,255,255,.12); flex-shrink:0; transition:background .15s; }}
+            .color-label {{ font-size:12px; font-weight:600; color:#C5CDD8; }}
+            .color-hex {{ font-size:10.5px; color:#3D4D5E; font-family:monospace; margin-top:2px; display:block; }}
+            .slider-group {{ display:flex; flex-direction:column; gap:8px; }}
+            .slider-row {{ display:grid; grid-template-columns:12px 1fr 22px; align-items:center; gap:8px; }}
+            .slider-lbl {{ font-size:9px; font-weight:800; text-align:center; }}
+            input[type=range].rgb-slider {{ height:5px; border-radius:5px; outline:none; cursor:pointer; border:none; background:rgba(255,255,255,.08); -webkit-appearance:none; appearance:none; min-height:unset; padding:0; }}
+            input[type=range].rgb-slider::-webkit-slider-thumb {{ -webkit-appearance:none; width:13px; height:13px; border-radius:50%; box-shadow:0 2px 6px rgba(0,0,0,.5); cursor:pointer; }}
+            .r-slider::-webkit-slider-thumb {{ background:#ef4444; }}
+            .g-slider::-webkit-slider-thumb {{ background:#22c55e; }}
+            .b-slider::-webkit-slider-thumb {{ background:#3b82f6; }}
+            .slider-val {{ font-size:9px; color:#3D4D5E; font-family:monospace; text-align:left; }}
+          </style>
+
+          <form method="post" action="/admin/settings/theme" id="themeForm">
+            <div class="color-grid">
               {_theme_color_input("sidebar_bg", "پس‌زمینه منو", theme)}
               {_theme_color_input("sidebar_text", "متن منو", theme)}
-              {_theme_color_input("sidebar_active", "آیتم فعال منو", theme)}
-              {_theme_color_input("primary", "رنگ اصلی", theme)}
-              {_theme_color_input("accent", "رنگ badge", theme)}
+              {_theme_color_input("sidebar_active", "رنگ آیتم فعال", theme)}
+              {_theme_color_input("primary", "رنگ اصلی (Primary)", theme)}
+              {_theme_color_input("accent", "رنگ تأکیدی (Accent)", theme)}
               {_theme_color_input("page_bg", "پس‌زمینه صفحه", theme)}
               {_theme_color_input("card_bg", "رنگ کارت‌ها", theme)}
               {_theme_color_input("text_main", "رنگ متن اصلی", theme)}
             </div>
-            <div class="flex gap-3 flex-wrap">
-              {_btn("💾 ذخیره رنگ‌ها", color="green")}
-              <a href="/admin/settings/theme/reset" class="btn btn-slate btn-sm" onclick="return confirm('رنگ‌های پیش‌فرض بازگردانده شود؟')">↺ بازگشت به پیش‌فرض</a>
+            <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">
+              <button type="submit" style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;background:#00D7FF;color:#000;font-weight:700;font-size:13px;border:none;border-radius:12px;cursor:pointer;transition:.15s">
+                <i data-lucide="save" style="width:15px"></i> ذخیره رنگ‌ها
+              </button>
+              <a href="/admin/settings/theme/reset" onclick="return confirm('رنگ‌های پیش‌فرض بازگردانده شود؟')"
+                 style="display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:rgba(255,255,255,.06);color:#8896A8;font-size:13px;border-radius:12px;text-decoration:none;border:1px solid rgba(255,255,255,.08);transition:.15s">
+                <i data-lucide="rotate-ccw" style="width:14px"></i> پیش‌فرض
+              </a>
             </div>
           </form>
+
+          <script>
+          (function(){{
+            function toHex(n){{ return Math.max(0,Math.min(255,n)).toString(16).padStart(2,'0'); }}
+            window.updateColor = function(key){{
+              var r = parseInt(document.querySelector('.r-slider[data-key="'+key+'"]').value);
+              var g = parseInt(document.querySelector('.g-slider[data-key="'+key+'"]').value);
+              var b = parseInt(document.querySelector('.b-slider[data-key="'+key+'"]').value);
+              var hex = '#'+toHex(r)+toHex(g)+toHex(b);
+              document.getElementById('r_'+key).textContent = r;
+              document.getElementById('g_'+key).textContent = g;
+              document.getElementById('b_'+key).textContent = b;
+              document.getElementById('hex_'+key).textContent = hex;
+              document.getElementById('inp_'+key).value = hex;
+              document.getElementById('prev_'+key).style.background = hex;
+              // پیش‌نمایش فوری روی صفحه
+              document.documentElement.style.setProperty('--'+key.replace(/_/g,'-'), hex);
+            }};
+            if(window.lucide) lucide.createIcons();
+          }})();
+          </script>
         </div>
       </div>
     </div>"""
@@ -1204,13 +1274,42 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
 
 def _theme_color_input(key, label, theme):
     val = theme.get(key, DEFAULT_THEME.get(key, "#000000"))
-    return f"""<div>
-      <label>{label}</label>
-      <div class="flex gap-2 items-center mt-1">
-        <input type="color" name="{key}" value="{val}" style="width:44px;height:36px;padding:2px;border-radius:8px;cursor:pointer">
-        <input type="text" name="{key}_hex" value="{val}" style="flex:1;font-family:monospace;font-size:12px"
-               oninput="document.querySelector('[name={key}]').value=this.value">
+    # تبدیل hex به RGB
+    def hex_to_rgb(h):
+        h = h.lstrip('#')
+        if len(h) == 3: h = h[0]*2 + h[1]*2 + h[2]*2
+        try:
+            return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        except:
+            return 100, 100, 100
+    r, g, b = hex_to_rgb(val)
+    return f"""
+    <div class="color-item" data-key="{key}">
+      <div class="color-header">
+        <div class="color-preview" id="prev_{key}" style="background:{val}"></div>
+        <div>
+          <div class="color-label">{label}</div>
+          <code class="color-hex" id="hex_{key}">{val}</code>
+        </div>
       </div>
+      <div class="slider-group">
+        <div class="slider-row">
+          <span class="slider-lbl" style="color:#ef4444">R</span>
+          <input type="range" min="0" max="255" value="{r}" class="rgb-slider r-slider" data-key="{key}" oninput="updateColor('{key}')">
+          <span class="slider-val" id="r_{key}">{r}</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-lbl" style="color:#22c55e">G</span>
+          <input type="range" min="0" max="255" value="{g}" class="rgb-slider g-slider" data-key="{key}" oninput="updateColor('{key}')">
+          <span class="slider-val" id="g_{key}">{g}</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-lbl" style="color:#3b82f6">B</span>
+          <input type="range" min="0" max="255" value="{b}" class="rgb-slider b-slider" data-key="{key}" oninput="updateColor('{key}')">
+          <span class="slider-val" id="b_{key}">{b}</span>
+        </div>
+      </div>
+      <input type="hidden" name="{key}" id="inp_{key}" value="{val}">
     </div>"""
 
 
@@ -3546,123 +3645,67 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
             ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
                      t.updated_at DESC LIMIT ?;
         """, params).fetchall()
-        stats = {s: conn.execute(f"SELECT COUNT(*) FROM tickets WHERE status='{s}';").fetchone()[0]
+        stats = {s: conn.execute(f"SELECT COUNT(*) FROM tickets WHERE status=?;", (s,)).fetchone()[0]
                  for s in ("waiting_admin", "waiting_user", "closed")}
     finally:
         conn.close()
 
     def status_badge(s):
         cfg = {
-            "waiting_admin": ("🔴 منتظر پاسخ ادمین", "red"),
-            "waiting_user":  ("🟡 منتظر کاربر", "yellow"),
-            "closed":        ("⚫ بسته", "gray"),
+            "waiting_admin": ("منتظر پاسخ ادمین", "danger"),
+            "waiting_user":  ("منتظر کاربر", "warning"),
+            "closed":        ("بسته", "neutral"),
         }
-        lbl, color = cfg.get(s, (s, "slate"))
-        return f'<span class="px-2 py-0.5 text-xs rounded-full bg-{color}-100 text-{color}-700">{lbl}</span>'
+        lbl, tone = cfg.get(s, (s, "neutral"))
+        return f'<span class="status-badge status-{tone}"><span></span>{lbl}</span>'
 
-    tabs = [
-        ("همه", "", sum(stats.values())),
-        ("منتظر ادمین 🔴", "waiting_admin", stats["waiting_admin"]),
-        ("منتظر کاربر 🟡", "waiting_user",  stats["waiting_user"]),
-        ("بسته", "closed", stats["closed"]),
-    ]
-    tab_nav = '<div class="flex gap-2 mb-4 flex-wrap">'
-    for lbl, val, cnt in tabs:
-        active = "bg-indigo-600 text-white" if status_filter == val else "bg-white text-gray-600"
-        tab_nav += f'<a href="/admin/tickets?status_filter={val}" class="px-3 py-1.5 rounded-lg border text-sm {active}">{lbl} ({cnt})</a>'
-    tab_nav += "</div>"
+    total = sum(stats.values())
+    tabs_html = '<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">'
+    for lbl, val, cnt in [("همه", "", total), ("منتظر ادمین", "waiting_admin", stats["waiting_admin"]),
+                           ("منتظر کاربر", "waiting_user", stats["waiting_user"]), ("بسته", "closed", stats["closed"])]:
+        is_active = status_filter == val
+        style = "background:var(--primary);color:#000;font-weight:700;border-color:var(--primary)" if is_active else "background:#fff;color:var(--text-muted);border-color:var(--border)"
+        badge_style = "background:rgba(0,0,0,.15)" if is_active else "background:var(--page-bg)"
+        tabs_html += f'<a href="/admin/tickets?status_filter={val}" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:12px;border:1.5px solid;text-decoration:none;font-size:13px;transition:.15s;{style}">{lbl}<span style="padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;{badge_style}">{cnt}</span></a>'
+    tabs_html += '</div>'
 
     rows = ""
     for t in tickets:
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50 text-sm cursor-pointer" onclick="location.href='/admin/tickets/{t['id']}'">
-          <td class="px-4 py-3 text-gray-400">#{t["id"]}</td>
-          <td class="px-4 py-3 font-mono text-xs"><code>{t["user_id"]}</code></td>
-          <td class="px-4 py-3"><span class="text-xs bg-gray-100 px-1.5 rounded">{t["type"]}</span></td>
-          <td class="px-4 py-3">{status_badge(t["status"])}</td>
-          <td class="px-4 py-3 text-gray-400 text-xs">{int(t["msg_count"] or 0)} پیام</td>
-          <td class="px-4 py-3 text-gray-400 text-xs">{(t["updated_at"] or "")[:16]}</td>
-          <td class="px-4 py-3">{_btn("مشاهده", f"/admin/tickets/{t['id']}", "indigo", small=True)}</td>
+        rows += f"""<tr>
+          <td><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
+          <td><code style="background:var(--page-bg);padding:2px 8px;border-radius:7px;font-size:11px">{e(str(t['user_id']))}</code></td>
+          <td><span style="background:var(--page-bg);padding:2px 8px;border-radius:7px;font-size:11.5px">{e(t['type'] or 'support')}</span></td>
+          <td>{status_badge(t['status'])}</td>
+          <td style="color:var(--text-muted);font-size:12px">{int(t['msg_count'] or 0)} پیام</td>
+          <td style="color:var(--text-muted);font-size:11px">{(t['updated_at'] or '')[:16]}</td>
+          <td>{_btn("مشاهده", f"/admin/tickets/{t['id']}", "indigo", small=True)}</td>
         </tr>"""
 
     body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-4">🎫 تیکت‌های پشتیبانی</h1>
-    {tab_nav}
-    <div class="card overflow-hidden">
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
-          <th class="px-4 py-3">نوع</th><th class="px-4 py-3">وضعیت</th>
-          <th class="px-4 py-3">پیام‌ها</th><th class="px-4 py-3">آپدیت</th><th class="px-4 py-3"></th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>تیکتی یافت نشد</td></tr>"}</tbody>
-      </table>
-    </div>"""
-
-    return _layout("تیکت‌ها", body, adm, flash=flash)
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    conn = _db()
-    try:
-        where = "WHERE t.status=?" if status_filter else ""
-        params = (status_filter, 100) if status_filter else (100,)
-        tickets = conn.execute(f"""
-            SELECT t.*, p.title as product_title,
-                   (SELECT COUNT(*) FROM ticket_messages tm WHERE tm.ticket_id=t.id) as msg_count
-            FROM tickets t
-            LEFT JOIN products p ON t.product_id=p.id
-            {where} ORDER BY
-              CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
-              t.id DESC LIMIT ?;
-        """, params).fetchall()
-        stats = {
-            "open": conn.execute("SELECT COUNT(*) FROM tickets WHERE status='open';").fetchone()[0],
-            "in_progress": conn.execute("SELECT COUNT(*) FROM tickets WHERE status='in_progress';").fetchone()[0],
-            "closed": conn.execute("SELECT COUNT(*) FROM tickets WHERE status='closed';").fetchone()[0],
-        }
-    finally:
-        conn.close()
-
-    tab_nav = '<div class="flex gap-2 mb-4">'
-    for lbl, val, count in [
-        ("همه", "", stats["open"] + stats["in_progress"] + stats["closed"]),
-        (f"باز ({stats['open']})", "open", stats["open"]),
-        (f"در بررسی ({stats['in_progress']})", "in_progress", stats["in_progress"]),
-        (f"بسته ({stats['closed']})", "closed", stats["closed"]),
-    ]:
-        active = "bg-indigo-600 text-white" if status_filter == val else "bg-white text-gray-600 hover:bg-gray-50"
-        tab_nav += f'<a href="/admin/tickets?status_filter={val}" class="px-4 py-2 rounded-lg border text-sm {active}">{lbl}</a>'
-    tab_nav += "</div>"
-
-    rows = ""
-    for t in tickets:
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50 text-sm">
-          <td class="px-4 py-3 text-gray-400">#{t["id"]}</td>
-          <td class="px-4 py-3 font-mono text-xs"><code>{t["user_id"]}</code></td>
-          <td class="px-4 py-3">{e(t["product_title"] or "-")}</td>
-          <td class="px-4 py-3 text-gray-400">#{t["order_no"]}</td>
-          <td class="px-4 py-3">{_ticket_status_badge(t["status"])}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{int(t["msg_count"] or 0)} پیام</td>
-          <td class="px-4 py-3">{(t["created_at"] or "")[:10]}</td>
-          <td class="px-4 py-3">{_btn("مشاهده", f"/admin/tickets/{t['id']}", "indigo", small=True)}</td>
-        </tr>"""
-
-    body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-4">🎫 تیکت‌های پشتیبانی</h1>
-    {tab_nav}
-    <div class="card overflow-hidden">
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
-          <th class="px-4 py-3">محصول</th><th class="px-4 py-3">سفارش</th>
-          <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پیام‌ها</th>
-          <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3"></th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>تیکتی یافت نشد</td></tr>"}</tbody>
-      </table>
+    <div class="page-header">
+      <h1>تیکت‌های پشتیبانی</h1>
+      <p>مدیریت و پاسخ به درخواست‌های کاربران</p>
+    </div>
+    {tabs_html}
+    <div class="card" style="overflow:hidden">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:#F9FAFB;border-bottom:2px solid var(--border)">
+              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
+              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">User ID</th>
+              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نوع</th>
+              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
+              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">پیام‌ها</th>
+              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
+              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows or "<tr><td colspan='7' style='text-align:center;padding:40px;color:var(--text-muted);font-size:13px'>تیکتی یافت نشد</td></tr>"}
+          </tbody>
+        </table>
+      </div>
     </div>"""
 
     return _layout("تیکت‌ها", body, adm, flash=flash)
