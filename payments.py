@@ -1,23 +1,42 @@
+"""Client-side payment helper (runs inside the Telegram bot)."""
+
+import os
 import logging
+
 import requests
-
 from telebot import types
-
-from config import (
-    PHP_PAYMENT_URL,
-    PHP_SECRET,
-    PAYMENT_API_BASE_URL,
-    PAYMENT_API_TIMEOUT,
-    MIN_TOPUP_AMOUNT,
-)
 
 logger = logging.getLogger("inox_bot")
 
+MIN_TOPUP_AMOUNT = int(os.getenv("MIN_TOPUP_AMOUNT", "10000"))
 
-def _enforce_min_gateway(amount: int, min_amount: int, payment_type: str):
-    if payment_type == "wallet":
-        return min_amount, (min_amount - amount)
-    return amount, 0
+
+def _default_payment_base_url() -> str:
+    explicit = os.getenv("PAYMENT_API_BASE_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    port = os.getenv("PORT") or "8000"
+    return f"http://127.0.0.1:{port}"
+
+
+PAYMENT_API_BASE_URL = _default_payment_base_url()
+PHP_PAYMENT_URL = (os.getenv("PHP_PAYMENT_URL") or "").rstrip("/")
+PHP_SECRET      = os.getenv("PHP_SECRET") or ""
+PAYMENT_API_TIMEOUT = int(os.getenv("PAYMENT_API_TIMEOUT", "20"))
+
+
+def _enforce_min_gateway(amount: int, min_amount: int, payment_type: str) -> tuple[int, int]:
+    """اعمال حداقل مبلغ درگاه.
+
+    اگه مبلغ درگاه کمتر از MIN_TOPUP_AMOUNT بود:
+    - برای wallet: مبلغ به min_amount تبدیل می‌شه (کاربر مطلع می‌شه)
+    - برای product: مبلغ کمبود به صورت اضافه دریافت می‌شه و مازاد به کیف‌پول اضافه می‌شه
+    Returns: (final_gateway_amount, wallet_bonus)  — wallet_bonus = مازادی که به کیف‌پول می‌ره
+    """
+    if amount >= min_amount:
+        return amount, 0
+    bonus = min_amount - amount  # مازاد که به کیف‌پول می‌ره
+    return min_amount, bonus
 
 
 def start_wallet_charge_payment(
@@ -44,6 +63,7 @@ def start_wallet_charge_payment(
         clear_user_state(uid)
         return
 
+    # ─── Issue 2: اعمال حداقل مبلغ درگاه ──────────────────────────
     wallet_bonus = 0
     if amount < MIN_TOPUP_AMOUNT:
         final_amount, wallet_bonus = _enforce_min_gateway(amount, MIN_TOPUP_AMOUNT, payment_type)
@@ -70,10 +90,10 @@ def start_wallet_charge_payment(
 
     if PHP_PAYMENT_URL and PHP_SECRET:
         _call_url = PHP_PAYMENT_URL
-        _headers = {"Content-Type": "application/json", "X-Stockland-Secret": PHP_SECRET}
+        _headers  = {"Content-Type": "application/json", "X-Stockland-Secret": PHP_SECRET}
     else:
         _call_url = f"{PAYMENT_API_BASE_URL}/payment/create"
-        _headers = {"Content-Type": "application/json"}
+        _headers  = {"Content-Type": "application/json"}
 
     try:
         resp = requests.post(_call_url, json=payload, headers=_headers, timeout=PAYMENT_API_TIMEOUT)
@@ -102,22 +122,21 @@ def start_wallet_charge_payment(
     pay_url = data["payment_url"]
 
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("ورود به درگاه پرداخت 💳", url=pay_url))
+    kb.add(types.InlineKeyboardButton(
+        "ورود به درگاه پرداخت 💳", url=pay_url
+    ))
 
-    if wallet_reserved > 0:
-        pay_lines = (
-            f"💰 موجودی کیف‌پول: <b>{wallet_reserved:,}</b> تومان\n"
-            f"💳 مبلغ قابل پرداخت: <b>{amount:,}</b> تومان\n\n"
-        )
-    else:
-        pay_lines = f"💳 مبلغ قابل پرداخت: <b>{amount:,}</b> تومان\n\n"
-
+    # پیام #10 - هشدار VPN قبل از درگاه
     warning_text = (
-        "🔴 لطفاً VPN یا فیلترشکن خود را خاموش کنید.\n\n"
-        + pay_lines +
+        "⚠️ <b>قبل از پرداخت توجه کنید:</b>\n"
+        "🔴 برای انجام پرداخت، لطفاً VPN یا فیلترشکن خود را <b>خاموش</b> کنید.\n\n"
         "برای تکمیل پرداخت روی دکمه زیر بزنید.\n"
         "پس از پرداخت موفق، نتیجه به‌صورت خودکار برای شما ارسال می‌شود."
     )
-
-    bot.send_message(message.chat.id, warning_text, reply_markup=kb, parse_mode="HTML")
+    bot.send_message(
+        message.chat.id,
+        warning_text,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
     clear_user_state(uid)
