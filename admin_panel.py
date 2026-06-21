@@ -219,28 +219,60 @@ def _layout(title: str, body: str, admin_info=None,
         if pending_partners > 0 else '<span id="partner-badge" class="hidden bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold"></span>'
     )
 
-    def nav_link(href, label, perm=None, badge=""):
-        if perm and not is_super and perm not in perms:
+    def has_perm(perm):
+        return is_super or perm in perms
+
+    def drop(label, items):
+        """dropdown منو — items: list of (href, label, perm, badge)"""
+        visible = [i for i in items if not i[2] or has_perm(i[2])]
+        if not visible:
             return ""
-        return f'<a href="{href}" class="text-indigo-200 hover:text-white text-sm transition flex items-center gap-1">{badge}{label}</a>'
+        links = "".join(
+            f'<a href="{h}" class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700">{b}{l}</a>'
+            for h, l, _, b in visible
+        )
+        return f"""
+        <div class="relative group">
+          <button class="flex items-center gap-1 text-indigo-200 hover:text-white text-sm py-1 transition">
+            {label} <span class="text-xs opacity-70">▾</span>
+          </button>
+          <div class="absolute top-full right-0 mt-1 w-44 bg-white rounded-xl shadow-xl border border-gray-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+            {links}
+          </div>
+        </div>"""
 
     nav = f"""
     <nav class="bg-indigo-900 text-white shadow-xl sticky top-0 z-50">
-      <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4 flex-wrap text-sm">
-        <a href="/admin/" class="font-bold text-lg text-white">🛍 استوک لند</a>
-        {nav_link("/admin/", "📊 داشبورد")}
-        {nav_link("/admin/categories", "🗂 دسته‌بندی‌ها", "products")}
-        {nav_link("/admin/products", "📦 محصولات", "products")}
-        {nav_link("/admin/feed", "🗃 موجودی", "feed")}
-        {nav_link("/admin/orders", "🧾 سفارش‌ها", "orders")}
-        {nav_link("/admin/wallets", "💰 کیف‌پول", "wallets")}
-        {nav_link("/admin/partners", "🤝 همکاران", "partners", badge=partner_badge)}
-        {nav_link("/admin/tickets", "🎫 تیکت‌ها", "tickets", badge=ticket_badge)}
-        {nav_link("/admin/broadcast", "📢 پیام‌رسانی", "broadcast")}
-        {nav_link("/admin/settings", "⚙️ تنظیمات", "settings")}
-        {nav_link("/admin/database", "💾 دیتابیس", "database")}
-        {nav_link("/admin/admins", "👥 ادمین‌ها", "admins")}
-        <a href="/admin/logout" class="mr-auto text-red-300 hover:text-red-100 transition">خروج ↩</a>
+      <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-5 text-sm">
+        <a href="/admin/" class="font-bold text-lg text-white ml-2">🛍 استوک لند</a>
+
+        {f'<a href="/admin/" class="text-indigo-200 hover:text-white transition">📊 داشبورد</a>' if admin_info else ""}
+
+        {drop("🛒 فروشگاه", [
+            ("/admin/categories", "🗂 دسته‌بندی‌ها", "products", ""),
+            ("/admin/products",   "📦 محصولات",       "products", ""),
+            ("/admin/feed",       "🗃 موجودی",         "feed",     ""),
+        ])}
+
+        {drop("💼 فروش", [
+            ("/admin/orders",  "🧾 سفارش‌ها", "orders",  ""),
+            ("/admin/wallets", "💰 کیف‌پول",  "wallets", ""),
+        ])}
+
+        {drop(f"👥 کاربران", [
+            ("/admin/partners", f"🤝 همکاران",  "partners", partner_badge),
+            ("/admin/tickets",  f"🎫 تیکت‌ها",  "tickets",  ticket_badge),
+        ])}
+
+        {f'<a href="/admin/broadcast" class="text-indigo-200 hover:text-white transition">📢 پیام‌رسانی</a>' if has_perm("broadcast") and admin_info else ""}
+
+        {drop("⚙️ مدیریت", [
+            ("/admin/admins",    "👥 ادمین‌ها",  "admins",   ""),
+            ("/admin/settings",  "⚙️ تنظیمات",   "settings", ""),
+            ("/admin/database",  "💾 دیتابیس",   "database", ""),
+        ])}
+
+        <a href="/admin/logout" class="mr-auto text-red-300 hover:text-red-100 transition text-sm">↩ خروج</a>
       </div>
     </nav>"""
 
