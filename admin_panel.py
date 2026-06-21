@@ -17,7 +17,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests as _requests
 from fastapi import APIRouter, BackgroundTasks, Form, Request, UploadFile
@@ -292,18 +292,22 @@ def _layout(title: str, body: str, admin_info=None,
             </a>
             <button class="icon-button sidebar-close" onclick="toggleSidebar()" aria-label="بستن منو"><i data-lucide="x"></i></button>
           </div>
-          <div class="nav-caption">فضای کاری</div>
+          <div class="nav-caption">منو اصلی</div>
           <nav class="sidebar-nav">
             {nav_item("/admin/", "layout-dashboard", "داشبورد")}
-            {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
+            <div class="nav-divider"><span>فروشگاه</span></div>
+            {nav_item("/admin/categories", "tag", "دسته‌بندی‌ها", "products")}
             {nav_item("/admin/products", "package", "محصولات", "products")}
-            {nav_item("/admin/feed", "boxes", "موجودی", "feed")}
+            {nav_item("/admin/feed", "layers", "موجودی", "feed")}
+            <div class="nav-divider"><span>فروش</span></div>
+            {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
+            {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
+            <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/partners", "handshake", "همکاران", "partners", pending_partners)}
-            {nav_item("/admin/tickets", "messages-square", "تیکت‌ها", "tickets", open_tickets)}
-            {nav_item("/admin/wallets", "wallet-cards", "مالی", "wallets")}
-            {nav_item("/admin/database?view=reports", "chart-no-axes-combined", "گزارش‌ها", "database")}
-            {nav_item("/admin/settings", "settings-2", "تنظیمات", "settings")}
-            {nav_item("/admin/broadcast", "bot", "ربات", "broadcast")}
+            {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
+            {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
+            <div class="nav-divider"><span>سیستم</span></div>
+            {nav_item("/admin/settings", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "دیتابیس", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
           </nav>
@@ -332,6 +336,7 @@ def _layout(title: str, body: str, admin_info=None,
           <div class="topbar-actions">
             <button id="themeToggle" class="icon-button" aria-label="تغییر حالت نمایش"><i data-lucide="moon"></i></button>
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="اعلان‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
+            <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران" style="position:relative"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
             <div class="profile-menu">
               <button class="profile-trigger" onclick="toggleProfile()" aria-expanded="false"><span class="profile-avatar"><i data-lucide="user-round"></i></span><span class="profile-copy"><strong>{admin_label}</strong><small>مدیریت فروشگاه</small></span><i data-lucide="chevron-down" class="profile-chevron"></i></button>
               <div id="profileDropdown" class="profile-dropdown"><a href="/admin/settings"><i data-lucide="settings"></i>تنظیمات حساب</a><a href="/admin/logout" class="danger-link"><i data-lucide="log-out"></i>خروج</a></div>
@@ -377,6 +382,9 @@ def _layout(title: str, body: str, admin_info=None,
     .brand-subtitle {{ color:#7f8b9e; font-size:11px; margin-top:5px; }}
     .sidebar-close {{ display:none !important; margin-right:auto; color:#9aa7b8 !important; background:rgba(255,255,255,.06) !important; }}
     .nav-caption {{ color:#536075; font-size:10px; font-weight:700; letter-spacing:.08em; padding:20px 26px 8px; }}
+    .nav-divider {{ display:flex; align-items:center; gap:8px; padding:14px 16px 5px; }}
+    .nav-divider span {{ color:#2D3A4A; font-size:9.5px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; white-space:nowrap; }}
+    .nav-divider::after {{ content:""; flex:1; height:1px; background:rgba(255,255,255,.05); }}
     .sidebar-nav {{ flex:1; overflow-y:auto; padding:0 12px 18px; display:flex; flex-direction:column; gap:4px; scrollbar-width:thin; scrollbar-color:#263244 transparent; }}
     .nav-item {{
       position:relative; display:flex; align-items:center; gap:12px; min-height:44px; padding:0 14px;
@@ -542,7 +550,7 @@ def _layout(title: str, body: str, admin_info=None,
   document.addEventListener('keydown',function(ev){{if((ev.metaKey||ev.ctrlKey)&&ev.key.toLowerCase()==='k'){{ev.preventDefault();search?.focus();}}if(ev.key==='Escape')results?.classList.remove('open');}});
 
   // Convert legacy decorative emoji in rendered UI to Lucide without touching form data or scripts.
-  var emojiIcons={{'✅':'circle-check','❌':'circle-x','⚠️':'triangle-alert','⚠':'triangle-alert','📊':'chart-no-axes-combined','🛒':'shopping-bag','🛍':'shopping-bag','📦':'package','🗂':'folders','🗃':'archive','💼':'briefcase-business','🧾':'receipt-text','💰':'wallet-cards','💳':'credit-card','👥':'users','🤝':'handshake','🎫':'ticket','📢':'megaphone','⚙️':'settings','⚙':'settings','👤':'user-round','💾':'database-backup','📈':'chart-spline','📱':'smartphone','🔑':'key-round','🔴':'circle-alert','🟡':'circle-dot','🟢':'circle-check','🔄':'refresh-cw','👨‍💻':'user-cog','🧩':'blocks','←':'arrow-left','↩':'log-out','☰':'menu','✕':'x','▲':'trending-up','▼':'trending-down'}};
+  var emojiIcons={{'✅':'circle-check','❌':'circle-x','⚠️':'triangle-alert','⚠':'triangle-alert','📊':'bar-chart-2','🛒':'shopping-bag','🛍':'shopping-bag','📦':'package','🗂':'folders','🗃':'archive','💼':'briefcase','🧾':'receipt-text','💰':'wallet','💳':'credit-card','👥':'users','🤝':'handshake','🎫':'ticket','📢':'megaphone','⚙️':'settings','⚙':'settings','👤':'user-round','💾':'hard-drive-download','📈':'trending-up','📱':'smartphone','🔑':'key-round','🔴':'circle-alert','🟡':'circle-dot','🟢':'circle-check','🔄':'refresh-cw','👨‍💻':'user-round','🧩':'blocks','←':'arrow-left','↩':'log-out','☰':'menu','✕':'x','▲':'trending-up','▼':'trending-down'}};
   var emojiRe=/(✅|❌|⚠️|⚠|📊|🛒|🛍|📦|🗂|🗃|💼|🧾|💰|💳|👥|🤝|🎫|📢|⚙️|⚙|👤|💾|📈|📱|🔑|🔴|🟡|🟢|🔄|👨‍💻|🧩|←|↩|☰|✕|▲|▼)/g;
   var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT); var nodes=[]; while(walker.nextNode()) nodes.push(walker.currentNode);
   nodes.forEach(function(node){{ var parent=node.parentElement;if(!parent||parent.closest('script,style,input,textarea,select,option,[data-no-icon]')||!emojiRe.test(node.nodeValue)){{emojiRe.lastIndex=0;return;}} emojiRe.lastIndex=0; var frag=document.createDocumentFragment(),last=0,m;while((m=emojiRe.exec(node.nodeValue))){{frag.append(document.createTextNode(node.nodeValue.slice(last,m.index)));var i=document.createElement('i');i.setAttribute('data-lucide',emojiIcons[m[0]]);i.className='legacy-lucide';frag.append(i);last=m.index+m[0].length;}}frag.append(document.createTextNode(node.nodeValue.slice(last)));node.replaceWith(frag);}});
@@ -565,6 +573,7 @@ def _layout(title: str, body: str, admin_info=None,
   setInterval(function(){
     fetch('/admin/badges.json').then(function(r){ return r.json(); }).then(function(d){
       updateBadge('ticket-badge-top', d.tickets||0);
+      updateBadge('partner-badge-top', d.partners||0);
     }).catch(function(){});
   }, 15000);
   """}
@@ -691,7 +700,7 @@ async def dashboard(request: Request, err: str = ""):
     conn = _db()
     try:
         today = datetime.utcnow().date().isoformat()
-        yesterday = (datetime.utcnow().date() - __import__('datetime').timedelta(days=1)).isoformat()
+        yesterday = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
 
         today_o   = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE created_at LIKE ?;", (today+"%",)).fetchone()
         yest_o    = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE created_at LIKE ?;", (yesterday+"%",)).fetchone()
@@ -801,7 +810,7 @@ async def dashboard(request: Request, err: str = ""):
     command_items = "".join([
         command_item("clock-3", "سفارش‌های معلق", pending, "نیازمند پیگیری", "warning" if pending else "success", "/admin/orders"),
         command_item("package-search", "کمبود موجودی", len(low_stock), "محصول در آستانه اتمام", "danger" if low_stock else "success", "/admin/feed"),
-        command_item("messages-square", "تیکت‌های باز", open_tix, "در انتظار پاسخ مدیر", "danger" if open_tix else "success", "/admin/tickets"),
+        command_item("message-square", "تیکت‌های باز", open_tix, "در انتظار پاسخ مدیر", "danger" if open_tix else "success", "/admin/tickets"),
         command_item("handshake", "همکاران معلق", partners_pend, "درخواست بررسی‌نشده", "warning" if partners_pend else "success", "/admin/partners"),
         command_item("database-backup", "آخرین بکاپ", "ثبت شده" if last_backup else "ناموجود", last_backup or "هنوز بکاپی ثبت نشده", "success" if last_backup else "warning", "/admin/database"),
         command_item("activity", "سلامت سیستم", "پایدار", "سرویس پنل در دسترس است", "success", "/admin/database"),
@@ -810,10 +819,14 @@ async def dashboard(request: Request, err: str = ""):
 
     tasks = "".join([
         f'<a href="/admin/feed" class="task-row"><span class="task-status danger"><i data-lucide="package-minus"></i></span><span><strong>تأمین موجودی محصولات</strong><small>{len(low_stock)} محصول نیازمند بررسی</small></span><i data-lucide="chevron-left"></i></a>',
-        f'<a href="/admin/tickets" class="task-row"><span class="task-status warning"><i data-lucide="message-circle-more"></i></span><span><strong>پاسخ به تیکت‌ها</strong><small>{open_tix} تیکت منتظر پاسخ</small></span><i data-lucide="chevron-left"></i></a>',
+        f'<a href="/admin/tickets" class="task-row"><span class="task-status warning"><i data-lucide="message-circle"></i></span><span><strong>پاسخ به تیکت‌ها</strong><small>{open_tix} تیکت منتظر پاسخ</small></span><i data-lucide="chevron-left"></i></a>',
         f'<a href="/admin/orders" class="task-row"><span class="task-status cyan"><i data-lucide="truck"></i></span><span><strong>تحویل‌های معلق</strong><small>{pending} سفارش در صف ارسال</small></span><i data-lucide="chevron-left"></i></a>',
-        '<a href="/admin/database" class="task-row"><span class="task-status success"><i data-lucide="server-cog"></i></span><span><strong>وضعیت سرور</strong><small>سرویس در دسترس است</small></span><i data-lucide="chevron-left"></i></a>',
-        f'<a href="/admin/database" class="task-row"><span class="task-status {"success" if last_backup else "warning"}"><i data-lucide="database-backup"></i></span><span><strong>نسخه پشتیبان</strong><small>{e(last_backup or "هنوز ثبت نشده")}</small></span><i data-lucide="chevron-left"></i></a>',
+        '<a href="/admin/database" class="task-row"><span class="task-status success"><i data-lucide="server"></i></span><span><strong>وضعیت سرور</strong><small>سرویس در دسترس است</small></span><i data-lucide="chevron-left"></i></a>',
+        ('<a href="/admin/database" class="task-row">'
+         f'<span class="task-status {"success" if last_backup else "warning"}">'
+         '<i data-lucide="hard-drive-download"></i></span>'
+         f'<span><strong>نسخه پشتیبان</strong><small>{e(last_backup or "هنوز ثبت نشده")}</small></span>'
+         '<i data-lucide="chevron-left"></i></a>'),
         '<a href="/admin/broadcast" class="task-row"><span class="task-status success"><i data-lucide="bot"></i></span><span><strong>ربات استوک‌لند</strong><small>فعال و آماده پاسخ‌گویی</small></span><i data-lucide="chevron-left"></i></a>',
     ])
 
@@ -884,10 +897,10 @@ async def dashboard(request: Request, err: str = ""):
       <section aria-labelledby="kpi-title">
         <div class="section-heading"><div><h3 id="kpi-title">شاخص‌های کلیدی</h3><p>خلاصه عملکرد امروز و وضعیت فروشگاه</p></div></div>
         <div class="kpi-grid">
-          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="badge-dollar-sign"></i></span>{pct_badge(rev_change)}</div><div class="kpi-value">{int(today_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">درآمد امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00d7ff" stop-opacity=".24"/><stop offset="1" stop-color="#00d7ff" stop-opacity="0"/></linearGradient></defs><path class="area" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10 L240,45 L0,45Z"/><path class="line" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10"/></svg></article>
-          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="shopping-basket"></i></span>{pct_badge(cnt_change, "")}</div><div class="kpi-value">{today_o[0]:,}<span class="kpi-unit">سفارش</span></div><div class="kpi-label">سفارش‌های امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7 L240,45 L0,45Z"/><path class="line" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7"/></svg></article>
+          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="banknote"></i></span>{pct_badge(rev_change)}</div><div class="kpi-value">{int(today_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">درآمد امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00d7ff" stop-opacity=".24"/><stop offset="1" stop-color="#00d7ff" stop-opacity="0"/></linearGradient></defs><path class="area" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10 L240,45 L0,45Z"/><path class="line" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10"/></svg></article>
+          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="shopping-cart"></i></span>{pct_badge(cnt_change, "")}</div><div class="kpi-value">{today_o[0]:,}<span class="kpi-unit">سفارش</span></div><div class="kpi-label">سفارش‌های امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7 L240,45 L0,45Z"/><path class="line" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7"/></svg></article>
           <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="boxes"></i></span><span class="trend trend-flat"><i data-lucide="package-check"></i>{products_cnt} محصول فعال</span></div><div class="kpi-value">{feed_avail:,}<span class="kpi-unit">آیتم</span></div><div class="kpi-label">موجودی قابل تحویل</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,28 C22,24 42,27 65,19 S105,30 129,21 S162,12 187,17 S218,10 240,14 L240,45 L0,45Z"/><path class="line" d="M0,28 C22,24 42,27 65,19 S105,30 129,21 S162,12 187,17 S218,10 240,14"/></svg></article>
-          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="chart-column-increasing"></i></span><span class="trend trend-flat"><i data-lucide="receipt-text"></i>{total_o[0]:,} سفارش</span></div><div class="kpi-value">{int(total_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">کل درآمد</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9 L240,45 L0,45Z"/><path class="line" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9"/></svg></article>
+          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="trending-up"></i></span><span class="trend trend-flat"><i data-lucide="receipt-text"></i>{total_o[0]:,} سفارش</span></div><div class="kpi-value">{int(total_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">کل درآمد</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9 L240,45 L0,45Z"/><path class="line" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9"/></svg></article>
         </div>
       </section>
 
