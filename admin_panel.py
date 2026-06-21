@@ -194,16 +194,16 @@ def _pending_partner_count() -> int:
 # ─── Theme System ──────────────────────────────────────────────────────────
 
 DEFAULT_THEME = {
-    "sidebar_bg":     "#1e1b4b",
-    "sidebar_text":   "#c7d2fe",
-    "sidebar_active": "#4f46e5",
-    "primary":        "#4f46e5",
+    "sidebar_bg":     "#0d1117",
+    "sidebar_text":   "#8b9ab8",
+    "sidebar_active": "#00b8d4",
+    "primary":        "#00b8d4",
     "primary_text":   "#ffffff",
     "accent":         "#f59e0b",
-    "page_bg":        "#f1f5f9",
+    "page_bg":        "#f0f4f8",
     "card_bg":        "#ffffff",
-    "text_main":      "#1e293b",
-    "text_muted":     "#64748b",
+    "text_main":      "#1a202c",
+    "text_muted":     "#718096",
     "border":         "#e2e8f0",
 }
 
@@ -285,11 +285,27 @@ def _layout(title: str, body: str, admin_info=None,
         sidebar = f"""
         <aside id="sidebar" class="sidebar">
           <div class="sidebar-header">
-            <div class="sidebar-logo">🛍</div>
-            <div class="nav-label">
-              <div class="sidebar-brand">استوک لند</div>
-              <div class="sidebar-sub">پنل مدیریت</div>
-            </div>
+            <a href="/admin/" style="display:flex;align-items:center;gap:10px;text-decoration:none">
+              <svg width="36" height="36" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M70 15 L85 30 L55 60 L70 75 L30 85 L20 45 L40 55 Z" fill="url(#sl_grad)" stroke="#00b8d4" stroke-width="1.5"/>
+                <path d="M30 15 L15 30 L45 55 L35 75" fill="none" stroke="url(#sl_grad2)" stroke-width="6" stroke-linecap="round"/>
+                <defs>
+                  <linearGradient id="sl_grad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="#e2e8f0"/>
+                    <stop offset="50%" stop-color="#ffffff"/>
+                    <stop offset="100%" stop-color="#94a3b8"/>
+                  </linearGradient>
+                  <linearGradient id="sl_grad2" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="#ffffff"/>
+                    <stop offset="100%" stop-color="#00b8d4"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div>
+                <div style="font-size:15px;font-weight:800;color:#fff;letter-spacing:.5px">STOCK<span style="color:#00b8d4">LAND</span></div>
+                <div style="font-size:10px;color:#8b9ab8;margin-top:1px">پنل مدیریت</div>
+              </div>
+            </a>
             <button class="sidebar-close" onclick="toggleSidebar()">✕</button>
           </div>
           <nav class="sidebar-nav">
@@ -314,7 +330,7 @@ def _layout(title: str, body: str, admin_info=None,
                 ("/admin/database", "💾", "دیتابیس",   "database", 0),
             ])}
           </nav>
-          <a href="/admin/logout" class="sidebar-logout">↩ خروج</a>
+          <a href="/admin/logout" class="sidebar-logout">↩ خروج از پنل</a>
         </aside>
         <div id="overlay" class="overlay" onclick="toggleSidebar()"></div>"""
 
@@ -641,77 +657,223 @@ async def dashboard(request: Request, err: str = ""):
 
     conn = _db()
     try:
-        wallets  = conn.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM wallets;").fetchone()
-        orders   = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders;").fetchone()
-        products = conn.execute("SELECT COUNT(*) FROM products WHERE is_active=1;").fetchone()[0]
+        today = datetime.utcnow().date().isoformat()
+        yesterday = (datetime.utcnow().date() - __import__('datetime').timedelta(days=1)).isoformat()
+
+        today_o   = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE created_at LIKE ?;", (today+"%",)).fetchone()
+        yest_o    = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE created_at LIKE ?;", (yesterday+"%",)).fetchone()
+        total_o   = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders;").fetchone()
         feed_avail = conn.execute("SELECT COUNT(*) FROM product_feed WHERE delivered=0;").fetchone()[0]
-        pending  = conn.execute("SELECT COUNT(*) FROM pending_deliveries WHERE status='pending';").fetchone()[0]
-        today    = datetime.utcnow().date().isoformat()
-        today_o  = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE created_at LIKE ?;", (today+"%",)).fetchone()
+        pending   = conn.execute("SELECT COUNT(*) FROM pending_deliveries WHERE status='pending';").fetchone()[0]
         partners_pend = conn.execute("SELECT COUNT(*) FROM partners WHERE status='pending';").fetchone()[0]
+        open_tix  = _open_ticket_count()
+        wallets   = conn.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM wallets;").fetchone()
+        products_cnt = conn.execute("SELECT COUNT(*) FROM products WHERE is_active=1;").fetchone()[0]
 
+        # نمودار ۳۰ روز اخیر
+        chart_data = conn.execute("""
+            SELECT substr(created_at,1,10) as day, COALESCE(SUM(price),0) as total
+            FROM orders WHERE created_at >= date('now','-30 days')
+            GROUP BY day ORDER BY day ASC;
+        """).fetchall()
+
+        # محصولات کم موجودی
         low_stock = conn.execute("""
-            SELECT p.id, p.title, COUNT(CASE WHEN pf.delivered=0 THEN 1 END) as avail,
-                   COALESCE(fas.threshold, 5) as threshold
-            FROM products p
-            LEFT JOIN product_feed pf ON pf.product_id=p.id
-            LEFT JOIN feed_alert_settings fas ON fas.product_id=p.id
-            WHERE p.is_active=1 GROUP BY p.id HAVING avail<=threshold ORDER BY avail ASC LIMIT 8;
+            SELECT p.id, p.title, COUNT(CASE WHEN pf.delivered=0 THEN 1 END) as avail
+            FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id
+            WHERE p.is_active=1 GROUP BY p.id HAVING avail<=5 ORDER BY avail ASC LIMIT 5;
         """).fetchall()
 
+        # سفارش‌های اخیر
         recent = conn.execute("""
-            SELECT id, user_id, title, price, created_at FROM orders ORDER BY id DESC LIMIT 8;
+            SELECT id, user_id, title, price, created_at, COALESCE(status,'active') as status
+            FROM orders ORDER BY id DESC LIMIT 8;
         """).fetchall()
+
+        # آخرین بکاپ خودکار
+        import glob as _g, os as _o
+        auto_backups = sorted(_g.glob("/tmp/stockland_backups/auto_*.sqlite"), reverse=True)
+        last_backup = _o.path.basename(auto_backups[0]).replace("auto_","").replace(".sqlite","") if auto_backups else None
+
     finally:
         conn.close()
 
+    # محاسبه درصد تغییر نسبت به دیروز
+    rev_change = 0
+    if yest_o[1] > 0:
+        rev_change = round(((today_o[1] - yest_o[1]) / yest_o[1]) * 100, 1)
+    cnt_change = today_o[0] - yest_o[0]
+
+    def pct_badge(v):
+        if v > 0: return f'<span style="color:#16a34a;font-size:12px">▲ {v}%</span>'
+        if v < 0: return f'<span style="color:#dc2626;font-size:12px">▼ {abs(v)}%</span>'
+        return ""
+
+    def status_badge(st):
+        styles = {
+            "active":   ("background:#dcfce7;color:#166534","ارسال شد"),
+            "returned": ("background:#fee2e2;color:#991b1b","برگشتی"),
+            "pending":  ("background:#fef9c3;color:#854d0e","در انتظار"),
+        }
+        s, l = styles.get(st, ("background:#f1f5f9;color:#475569", st))
+        return f'<span style="{s};padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{l}</span>'
+
+    # داده نمودار
+    chart_labels = [r["day"][5:] for r in chart_data]  # فقط ماه-روز
+    chart_values = [int(r["total"]) for r in chart_data]
+
     low_rows = "".join(f"""
-        <tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-2 text-sm">{e(r["title"])}</td>
-          <td class="px-4 py-2">
-            <span class="px-2 py-0.5 text-xs rounded-full bg-{"red" if r["avail"]==0 else "yellow"}-100 text-{"red" if r["avail"]==0 else "yellow"}-700">{r["avail"]} عدد</span>
-          </td>
-          <td class="px-4 py-2">{_btn("افزودن موجودی", f"/admin/feed/{r['id']}", "indigo", small=True)}</td>
-        </tr>""" for r in low_stock)
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:13px;color:var(--text-main)">{e(r["title"])}</span>
+      <span style="font-size:12px;font-weight:700;color:{'#dc2626' if r['avail']==0 else '#d97706'};background:{'#fee2e2' if r['avail']==0 else '#fef9c3'};padding:2px 10px;border-radius:20px">{r["avail"]} عدد</span>
+    </div>""" for r in low_stock)
 
     recent_rows = "".join(f"""
-        <tr class="border-b hover:bg-gray-50 text-sm">
-          <td class="px-4 py-2 text-gray-400">#{o["id"]}</td>
-          <td class="px-4 py-2">{e(o["title"])}</td>
-          <td class="px-4 py-2 font-mono text-xs">{o["user_id"]}</td>
-          <td class="px-4 py-2 text-green-700 font-medium">{int(o["price"]):,} ت</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(o["created_at"] or "")[:16]}</td>
-        </tr>""" for o in recent)
+    <tr>
+      <td style="padding:10px 12px;font-weight:700;color:var(--primary)">#{o["id"]}</td>
+      <td style="padding:10px 12px;font-size:13px">{e(o["title"][:25])}</td>
+      <td style="padding:10px 12px;font-size:12px;color:var(--text-muted)">{o["user_id"]}</td>
+      <td style="padding:10px 12px;font-weight:600;color:#16a34a">{int(o["price"]):,}</td>
+      <td style="padding:10px 12px">{status_badge(o["status"] or "active")}</td>
+    </tr>""" for o in recent)
 
     body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">📊 داشبورد</h1>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {_card("فروش امروز", f'{int(today_o[0]):,}', f'{int(today_o[1]):,} تومان', "green")}
-      {_card("کل فروش", f'{int(orders[1]):,}', f'{int(orders[0]):,} سفارش', "indigo")}
-      {_card("موجودی فید", str(feed_avail), "در صف تحویل", "blue")}
-      {_card("کیف‌پول‌ها", str(int(wallets[0])), f'{int(wallets[1]):,} تومان کل', "purple")}
+    <div style="margin-bottom:20px">
+      <h1 style="font-size:22px;font-weight:800;color:var(--text-main);margin:0">داشبورد</h1>
+      <p style="color:var(--text-muted);font-size:13px;margin:4px 0 0">{today} — خوش آمدید به پنل مدیریت استوک لند</p>
     </div>
-    <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-      {_card("محصولات فعال", str(products), "", "teal")}
-      {_card("در صف تحویل", str(pending), "منتظر ارسال", "orange")}
-      {_card("همکار در انتظار", str(partners_pend), "نیاز به بررسی", "yellow")}
+
+    <!-- Alert Cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px">
+      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid #16a34a">
+        <div style="width:42px;height:42px;background:#dcfce7;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">✅</div>
+        <div>
+          <div style="font-size:12px;color:var(--text-muted)">بکاپ خودکار</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{last_backup or "هنوز انجام نشده"}</div>
+        </div>
+      </div>
+      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid {'#d97706' if low_stock else '#16a34a'}">
+        <div style="width:42px;height:42px;background:{'#fef9c3' if low_stock else '#dcfce7'};border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">{'⚠️' if low_stock else '📦'}</div>
+        <div>
+          <div style="font-size:12px;color:var(--text-muted)">کم‌موجودی</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{len(low_stock)} محصول — نیاز به بررسی</div>
+        </div>
+        <a href="/admin/feed" style="margin-right:auto;font-size:11px;color:var(--primary)">مشاهده</a>
+      </div>
+      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid {'#d97706' if pending>0 else '#16a34a'}">
+        <div style="width:42px;height:42px;background:{'#fef9c3' if pending>0 else '#dcfce7'};border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">🛒</div>
+        <div>
+          <div style="font-size:12px;color:var(--text-muted)">در انتظار ارسال</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{pending} سفارش</div>
+        </div>
+        <a href="/admin/orders" style="margin-right:auto;font-size:11px;color:var(--primary)">اقدام</a>
+      </div>
+      {"" if not partners_pend else f'''
+      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid #d97706">
+        <div style="width:42px;height:42px;background:#fef9c3;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">🤝</div>
+        <div>
+          <div style="font-size:12px;color:var(--text-muted)">درخواست نمایندگی</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{partners_pend} درخواست جدید</div>
+        </div>
+        <a href="/admin/partners" style="margin-right:auto;font-size:11px;color:var(--primary)">بررسی</a>
+      </div>'''}
     </div>
-    <div class="grid md:grid-cols-2 gap-6">
-      <div class="bg-white rounded-xl shadow p-5">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="font-bold text-gray-700">⚠️ کم‌موجودی</h2>
-          {_btn("همه موجودی‌ها", "/admin/feed", "indigo", small=True)}
-        </div>
-        {"<p class='text-sm text-green-600'>✅ همه محصولات موجودی کافی دارند.</p>" if not low_stock else f"<table class='w-full'><tbody>{low_rows}</tbody></table>"}
+
+    <!-- KPI Cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px">
+      <div class="card" style="padding:20px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">💰 فروش امروز</div>
+        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{int(today_o[1]):,}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">تومان {pct_badge(rev_change)}</div>
       </div>
-      <div class="bg-white rounded-xl shadow p-5">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="font-bold text-gray-700">🧾 سفارش‌های اخیر</h2>
-          {_btn("همه", "/admin/orders", "indigo", small=True)}
-        </div>
-        <table class="w-full"><tbody>{recent_rows or "<tr><td class='text-center py-4 text-gray-400 text-sm'>سفارشی ثبت نشده</td></tr>"}</tbody></table>
+      <div class="card" style="padding:20px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">🧾 سفارش امروز</div>
+        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{today_o[0]}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">سفارش {'▲ +'+str(cnt_change) if cnt_change>0 else ''}</div>
       </div>
-    </div>"""
+      <div class="card" style="padding:20px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">📦 موجودی انبار</div>
+        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{feed_avail:,}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">آیتم قابل تحویل</div>
+      </div>
+      <div class="card" style="padding:20px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">💳 کل فروش</div>
+        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{int(total_o[1]):,}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">{total_o[0]:,} سفارش کل</div>
+      </div>
+    </div>
+
+    <!-- Chart + Low Stock -->
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:20px">
+      <div class="card" style="padding:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin:0">📈 نمودار فروش ۳۰ روز اخیر</h2>
+        </div>
+        <canvas id="salesChart" height="120"></canvas>
+      </div>
+      <div class="card" style="padding:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin:0">⚠️ کم‌موجودی</h2>
+          <a href="/admin/feed" style="font-size:11px;color:var(--primary)">مشاهده همه</a>
+        </div>
+        {low_rows or '<p style="font-size:13px;color:#16a34a;text-align:center;padding:20px 0">✅ همه محصولات موجودی کافی دارند</p>'}
+      </div>
+    </div>
+
+    <!-- Recent Orders -->
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">
+        <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin:0">🧾 آخرین سفارش‌ها</h2>
+        <a href="/admin/orders" class="btn btn-sm btn-indigo">مشاهده همه</a>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:var(--page-bg)">
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">#</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">محصول</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">کاربر</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">مبلغ</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">وضعیت</th>
+            </tr>
+          </thead>
+          <tbody>{recent_rows or "<tr><td colspan='5' style='text-align:center;padding:24px;color:var(--text-muted);font-size:13px'>سفارشی ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <script>
+    (function(){{
+      var ctx = document.getElementById('salesChart');
+      if(!ctx) return;
+      new Chart(ctx, {{
+        type: 'line',
+        data: {{
+          labels: {chart_labels},
+          datasets: [{{
+            label: 'فروش (تومان)',
+            data: {chart_values},
+            borderColor: '#00b8d4',
+            backgroundColor: 'rgba(0,184,212,0.08)',
+            borderWidth: 2.5,
+            pointRadius: 3,
+            pointBackgroundColor: '#00b8d4',
+            fill: true,
+            tension: 0.4
+          }}]
+        }},
+        options: {{
+          responsive: true,
+          plugins: {{ legend: {{ display: false }} }},
+          scales: {{
+            y: {{ ticks: {{ callback: function(v){{ return (v/1000000).toFixed(1)+'M'; }} }}, grid: {{ color: 'rgba(0,0,0,.04)' }} }},
+            x: {{ ticks: {{ font: {{ size: 10 }} }}, grid: {{ display: false }} }}
+          }}
+        }}
+      }});
+    }})();
+    </script>"""
 
     return _layout("داشبورد", body, adm, flash=flash, flash_ok=False)
 
@@ -762,6 +924,9 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
+
+    _ensure_theme_table()
+    theme = _get_theme()
 
     try:
         from ui_texts import (DEFAULT_UI_TEXTS as _DEFAULTS, TEXT_GROUPS as _GROUPS,
