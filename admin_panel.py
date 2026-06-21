@@ -194,17 +194,17 @@ def _pending_partner_count() -> int:
 # ─── Theme System ──────────────────────────────────────────────────────────
 
 DEFAULT_THEME = {
-    "sidebar_bg":     "#0d1117",
-    "sidebar_text":   "#8b9ab8",
-    "sidebar_active": "#00b8d4",
-    "primary":        "#00b8d4",
+    "sidebar_bg":     "#05070A",
+    "sidebar_text":   "#9AA7B8",
+    "sidebar_active": "#00D7FF",
+    "primary":        "#00D7FF",
     "primary_text":   "#ffffff",
-    "accent":         "#f59e0b",
-    "page_bg":        "#f0f4f8",
-    "card_bg":        "#ffffff",
-    "text_main":      "#1a202c",
-    "text_muted":     "#718096",
-    "border":         "#e2e8f0",
+    "accent":         "#F59E0B",
+    "page_bg":        "#F7F8FA",
+    "card_bg":        "#FFFFFF",
+    "text_main":      "#111827",
+    "text_muted":     "#6B7280",
+    "border":         "#E5E7EB",
 }
 
 def _get_theme() -> dict:
@@ -241,11 +241,10 @@ def _layout(title: str, body: str, admin_info=None,
 
     flash_html = ""
     if flash:
-        color = "green" if flash_ok else "red"
-        icon  = "✅" if flash_ok else "❌"
+        icon = "circle-check" if flash_ok else "circle-alert"
         flash_html = f"""
         <div class="flash-msg flash-{'ok' if flash_ok else 'err'}">
-          <span>{icon}</span> {e(flash)}
+          <i data-lucide="{icon}"></i><span>{e(flash)}</span>
         </div>"""
 
     perms = admin_info[2] if admin_info else []
@@ -261,32 +260,16 @@ def _layout(title: str, body: str, admin_info=None,
         if perm and not has_perm(perm):
             return ""
         badge_html = f'<span class="nav-badge">{badge}</span>' if badge > 0 else ""
-        return f'<a href="{href}" class="nav-item" data-href="{href}">{icon}<span class="nav-label">{label}</span>{badge_html}</a>'
-
-    def nav_group(icon, label, items):
-        visible = [(h, ic, l, p, b) for h, ic, l, p, b in items if not p or has_perm(p)]
-        if not visible:
-            return ""
-        children = "".join(
-            f'<a href="{h}" class="nav-child" data-href="{h}">{ic} {l}</a>'
-            for h, ic, l, p, b in visible
-        )
-        return f"""
-        <div class="nav-group">
-          <button class="nav-item nav-toggle" onclick="toggleGroup(this)">
-            {icon}<span class="nav-label">{label}</span>
-            <span class="nav-arrow nav-label">›</span>
-          </button>
-          <div class="nav-children">{children}</div>
-        </div>"""
+        return f'<a href="{href}" class="nav-item" data-href="{href}"><i data-lucide="{icon}" class="nav-icon"></i><span class="nav-label">{label}</span>{badge_html}</a>'
 
     sidebar = ""
     if admin_info:
         sidebar = f"""
         <aside id="sidebar" class="sidebar">
           <div class="sidebar-header">
-            <a href="/admin/" style="display:flex;align-items:center;gap:10px;text-decoration:none">
-              <svg width="36" height="36" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند">
+              <span class="brand-mark">
+              <svg width="44" height="44" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <path d="M70 15 L85 30 L55 60 L70 75 L30 85 L20 45 L40 55 Z" fill="url(#sl_grad)" stroke="#00b8d4" stroke-width="1.5"/>
                 <path d="M30 15 L15 30 L45 55 L35 75" fill="none" stroke="url(#sl_grad2)" stroke-width="6" stroke-linecap="round"/>
                 <defs>
@@ -301,50 +284,58 @@ def _layout(title: str, body: str, admin_info=None,
                   </linearGradient>
                 </defs>
               </svg>
-              <div>
-                <div style="font-size:15px;font-weight:800;color:#fff;letter-spacing:.5px">STOCK<span style="color:#00b8d4">LAND</span></div>
-                <div style="font-size:10px;color:#8b9ab8;margin-top:1px">پنل مدیریت</div>
+              </span>
+              <div class="brand-copy">
+                <div class="brand-name">STOCK<span>LAND</span></div>
+                <div class="brand-subtitle">مدیریت فروشگاه</div>
               </div>
             </a>
-            <button class="sidebar-close" onclick="toggleSidebar()">✕</button>
+            <button class="icon-button sidebar-close" onclick="toggleSidebar()" aria-label="بستن منو"><i data-lucide="x"></i></button>
           </div>
+          <div class="nav-caption">فضای کاری</div>
           <nav class="sidebar-nav">
-            {nav_item("/admin/", "📊", "داشبورد")}
-            {nav_group("🛒", "فروشگاه", [
-                ("/admin/categories", "🗂", "دسته‌بندی‌ها", "products", 0),
-                ("/admin/products",   "📦", "محصولات",       "products", 0),
-                ("/admin/feed",       "🗃", "موجودی",         "feed",     0),
-            ])}
-            {nav_group("💼", "فروش", [
-                ("/admin/orders",  "🧾", "سفارش‌ها", "orders",  0),
-                ("/admin/wallets", "💰", "کیف‌پول",  "wallets", 0),
-            ])}
-            {nav_group("👥", "کاربران", [
-                ("/admin/partners", "🤝", "همکاران",  "partners", pending_partners),
-                ("/admin/tickets",  "🎫", "تیکت‌ها",  "tickets",  open_tickets),
-            ])}
-            {nav_item("/admin/broadcast", "📢", "پیام‌رسانی", "broadcast")}
-            {nav_group("⚙️", "مدیریت", [
-                ("/admin/admins",   "👤", "ادمین‌ها",  "admins",   0),
-                ("/admin/settings", "⚙️", "تنظیمات",   "settings", 0),
-                ("/admin/database", "💾", "دیتابیس",   "database", 0),
-            ])}
+            {nav_item("/admin/", "layout-dashboard", "داشبورد")}
+            {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
+            {nav_item("/admin/products", "package", "محصولات", "products")}
+            {nav_item("/admin/feed", "boxes", "موجودی", "feed")}
+            {nav_item("/admin/partners", "handshake", "همکاران", "partners", pending_partners)}
+            {nav_item("/admin/tickets", "messages-square", "تیکت‌ها", "tickets", open_tickets)}
+            {nav_item("/admin/wallets", "wallet-cards", "مالی", "wallets")}
+            {nav_item("/admin/database?view=reports", "chart-no-axes-combined", "گزارش‌ها", "database")}
+            {nav_item("/admin/settings", "settings-2", "تنظیمات", "settings")}
+            {nav_item("/admin/broadcast", "bot", "ربات", "broadcast")}
+            {nav_item("/admin/database", "database", "دیتابیس", "database")}
+            {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
           </nav>
-          <a href="/admin/logout" class="sidebar-logout">↩ خروج از پنل</a>
+          <div class="sidebar-footer">
+            <div class="sidebar-status"><span class="status-dot"></span><div><strong>سامانه فعال</strong><small>همه سرویس‌ها پایدارند</small></div></div>
+            <a href="/admin/logout" class="sidebar-logout"><i data-lucide="log-out"></i><span>خروج از پنل</span></a>
+          </div>
         </aside>
         <div id="overlay" class="overlay" onclick="toggleSidebar()"></div>"""
 
     topbar = ""
     if admin_info:
+        admin_label = "مدیر ارشد" if is_super else f"مدیر #{e(admin_info[0])}"
         topbar = f"""
         <header class="topbar">
-          <button class="topbar-menu" onclick="toggleSidebar()">☰</button>
-          <h1 class="topbar-title">{e(title)}</h1>
+          <div class="topbar-context">
+            <button class="icon-button topbar-menu" onclick="toggleSidebar()" aria-label="بازکردن منو"><i data-lucide="menu"></i></button>
+            <div><span class="topbar-eyebrow">STOCKLAND ADMIN</span><h1 class="topbar-title">{e(title)}</h1></div>
+          </div>
+          <div class="global-search-wrap">
+            <i data-lucide="search"></i>
+            <input id="globalSearch" class="global-search" type="search" placeholder="جست‌وجو در پنل..." autocomplete="off" aria-label="جست‌وجوی سراسری">
+            <kbd>⌘ K</kbd>
+            <div id="searchResults" class="search-results"></div>
+          </div>
           <div class="topbar-actions">
-            <span id="ticket-badge-top" class="{'topbar-badge' if open_tickets > 0 else 'hidden'}"
-                  onclick="location.href='/admin/tickets'" title="تیکت‌های باز">
-              🎫 {open_tickets}
-            </span>
+            <button id="themeToggle" class="icon-button" aria-label="تغییر حالت نمایش"><i data-lucide="moon"></i></button>
+            <a class="icon-button notification-button" href="/admin/tickets" aria-label="اعلان‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
+            <div class="profile-menu">
+              <button class="profile-trigger" onclick="toggleProfile()" aria-expanded="false"><span class="profile-avatar"><i data-lucide="user-round"></i></span><span class="profile-copy"><strong>{admin_label}</strong><small>مدیریت فروشگاه</small></span><i data-lucide="chevron-down" class="profile-chevron"></i></button>
+              <div id="profileDropdown" class="profile-dropdown"><a href="/admin/settings"><i data-lucide="settings"></i>تنظیمات حساب</a><a href="/admin/logout" class="danger-link"><i data-lucide="log-out"></i>خروج</a></div>
+            </div>
           </div>
         </header>"""
 
@@ -358,130 +349,152 @@ def _layout(title: str, body: str, admin_info=None,
   <title>{e(title)} — استوک لند</title>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <style>
     :root {{ {css_vars} }}
-    *, *::before, *::after {{ box-sizing: border-box; font-family: 'Vazirmatn', Tahoma, sans-serif !important; }}
+    :root {{ --success:#22C55E; --warning:#F59E0B; --danger:#EF4444; --sidebar-secondary:#0B1320; --card-shadow:0 12px 40px rgba(15,23,42,.06); }}
+    *, *::before, *::after {{ box-sizing:border-box; font-family:'Vazirmatn',Tahoma,sans-serif !important; }}
+    html {{ background:var(--page-bg); scroll-behavior:smooth; }}
+    body {{ margin:0; background:var(--page-bg); color:var(--text-main); min-height:100vh; -webkit-font-smoothing:antialiased; }}
+    button, input, select, textarea {{ font:inherit; }}
+    a {{ color:inherit; }}
+    svg {{ flex:0 0 auto; }}
+    .hidden {{ display:none !important; }}
 
-    body {{ margin:0; background:var(--page-bg); color:var(--text-main); display:flex; min-height:100vh; }}
-
-    /* ── Sidebar ── */
     .sidebar {{
-      position: fixed; top:0; right:0; height:100vh; width:240px;
-      background:var(--sidebar-bg); color:var(--sidebar-text);
-      display:flex; flex-direction:column; z-index:200;
-      transition: transform .25s ease; overflow-y:auto;
+      position:fixed; inset:0 0 0 auto; width:280px; height:100vh; z-index:200;
+      display:flex; flex-direction:column; color:var(--sidebar-text); overflow:hidden;
+      background:linear-gradient(180deg,rgba(11,19,32,.94),rgba(5,7,10,.98) 40%),var(--sidebar-bg);
+      border-left:1px solid rgba(255,255,255,.06); box-shadow:-18px 0 50px rgba(2,6,23,.12);
+      transition:transform 220ms cubic-bezier(.2,.8,.2,1); backdrop-filter:blur(24px);
     }}
-    .sidebar-header {{
-      display:flex; align-items:center; gap:10px;
-      padding:20px 16px 16px; border-bottom:1px solid rgba(255,255,255,.1);
-    }}
-    .sidebar-logo {{ font-size:28px; }}
-    .sidebar-brand {{ font-size:15px; font-weight:700; color:#fff; }}
-    .sidebar-sub {{ font-size:11px; opacity:.5; }}
-    .sidebar-close {{ display:none; margin-right:auto; background:none; border:none; color:inherit; font-size:18px; cursor:pointer; }}
-    .sidebar-nav {{ flex:1; padding:12px 8px; display:flex; flex-direction:column; gap:2px; }}
+    .sidebar::before {{ content:""; position:absolute; top:-100px; right:-90px; width:280px; height:280px; border-radius:50%; background:rgba(0,215,255,.08); filter:blur(70px); pointer-events:none; }}
+    .sidebar-header {{ min-height:104px; display:flex; align-items:center; padding:24px 22px 20px; border-bottom:1px solid rgba(255,255,255,.07); position:relative; }}
+    .brand-lockup {{ display:flex; align-items:center; gap:13px; text-decoration:none; position:relative; min-width:0; }}
+    .brand-mark {{ width:50px; height:50px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.10); border-radius:17px; background:rgba(255,255,255,.055); box-shadow:0 0 28px rgba(0,215,255,.16),inset 0 1px rgba(255,255,255,.1); }}
+    .brand-name {{ font:800 16px/1.1 Inter,Vazirmatn,sans-serif !important; color:#fff; letter-spacing:1.7px; }}
+    .brand-name span {{ color:var(--primary); }}
+    .brand-subtitle {{ color:#7f8b9e; font-size:11px; margin-top:5px; }}
+    .sidebar-close {{ display:none !important; margin-right:auto; color:#9aa7b8 !important; background:rgba(255,255,255,.06) !important; }}
+    .nav-caption {{ color:#536075; font-size:10px; font-weight:700; letter-spacing:.08em; padding:20px 26px 8px; }}
+    .sidebar-nav {{ flex:1; overflow-y:auto; padding:0 12px 18px; display:flex; flex-direction:column; gap:4px; scrollbar-width:thin; scrollbar-color:#263244 transparent; }}
     .nav-item {{
-      display:flex; align-items:center; gap:10px; padding:10px 12px;
-      border-radius:10px; text-decoration:none; color:var(--sidebar-text);
-      font-size:13.5px; font-weight:500; transition:.15s; cursor:pointer;
-      background:none; border:none; width:100%; text-align:right;
+      position:relative; display:flex; align-items:center; gap:12px; min-height:44px; padding:0 14px;
+      border-radius:13px; text-decoration:none; color:var(--sidebar-text); font-size:13px; font-weight:500;
+      transition:background 200ms,color 200ms,transform 200ms,box-shadow 200ms; overflow:hidden;
     }}
-    .nav-item:hover, .nav-item.active {{ background:var(--sidebar-active); color:#fff; }}
-    .nav-badge {{
-      margin-right:auto; background:var(--accent); color:#000;
-      font-size:10px; font-weight:700; padding:1px 6px; border-radius:20px;
-    }}
-    .nav-arrow {{ margin-right:auto; transition:transform .2s; font-size:16px; opacity:.6; }}
-    .nav-toggle.open .nav-arrow {{ transform:rotate(90deg); }}
-    .nav-children {{ display:none; padding-right:12px; margin-top:2px; }}
-    .nav-children.open {{ display:flex; flex-direction:column; gap:1px; }}
-    .nav-child {{
-      display:flex; align-items:center; gap:8px; padding:8px 10px;
-      border-radius:8px; text-decoration:none; color:var(--sidebar-text);
-      font-size:13px; transition:.15s;
-    }}
-    .nav-child:hover, .nav-child.active {{ background:rgba(255,255,255,.1); color:#fff; }}
-    .nav-group {{ display:flex; flex-direction:column; }}
-    .sidebar-logout {{
-      display:flex; align-items:center; gap:8px; padding:14px 20px;
-      color:#fca5a5; text-decoration:none; font-size:13px; font-weight:500;
-      border-top:1px solid rgba(255,255,255,.1); transition:.15s;
-    }}
-    .sidebar-logout:hover {{ color:#fff; background:rgba(239,68,68,.2); }}
+    .nav-item::after {{ content:""; position:absolute; right:0; top:8px; bottom:8px; width:4px; border-radius:4px 0 0 4px; background:var(--primary); transform:scaleY(0); transition:transform 200ms; }}
+    .nav-item:hover {{ background:rgba(255,255,255,.05); color:#fff; transform:translateX(-2px); }}
+    .nav-item.active {{ background:rgba(0,215,255,.08); color:#eafbff; box-shadow:inset 0 0 0 1px rgba(0,215,255,.06),0 8px 28px rgba(0,215,255,.06); }}
+    .nav-item.active::after {{ transform:scaleY(1); }}
+    .nav-item.active .nav-icon {{ color:var(--primary); filter:drop-shadow(0 0 7px rgba(0,215,255,.45)); }}
+    .nav-icon {{ width:19px; height:19px; stroke-width:1.8; }}
+    .nav-badge {{ margin-right:auto; min-width:21px; height:21px; padding:0 6px; display:grid; place-items:center; border-radius:999px; background:rgba(0,215,255,.13); color:#66e7ff; border:1px solid rgba(0,215,255,.16); font-size:10px; font-weight:700; }}
+    .sidebar-footer {{ border-top:1px solid rgba(255,255,255,.07); padding:14px 16px 16px; }}
+    .sidebar-status {{ display:flex; align-items:center; gap:10px; color:#d6dde8; padding:5px 6px 14px; }}
+    .sidebar-status strong,.sidebar-status small {{ display:block; }}
+    .sidebar-status strong {{ font-size:11px; font-weight:600; }}
+    .sidebar-status small {{ font-size:9px; color:#667286; margin-top:2px; }}
+    .status-dot {{ width:8px; height:8px; border-radius:50%; background:var(--success); box-shadow:0 0 0 4px rgba(34,197,94,.09),0 0 12px rgba(34,197,94,.55); }}
+    .sidebar-logout {{ display:flex; align-items:center; gap:10px; min-height:42px; padding:0 12px; border-radius:12px; color:#f29a9a; text-decoration:none; font-size:12px; transition:200ms; }}
+    .sidebar-logout svg {{ width:17px; }} .sidebar-logout:hover {{ color:#fff; background:rgba(239,68,68,.1); }}
+    .overlay {{ display:none; position:fixed; inset:0; background:rgba(2,6,23,.54); backdrop-filter:blur(4px); z-index:199; }}
 
-    /* ── Overlay ── */
-    .overlay {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:199; }}
-
-    /* ── Topbar ── */
     .topbar {{
-      position:fixed; top:0; right:240px; left:0; height:60px; z-index:100;
-      background:var(--card-bg); border-bottom:1px solid var(--border);
-      display:flex; align-items:center; gap:12px; padding:0 20px;
-      box-shadow:0 1px 4px rgba(0,0,0,.06);
+      position:fixed; top:0; right:280px; left:0; height:72px; z-index:100; padding:0 28px;
+      display:grid; grid-template-columns:1fr minmax(300px,520px) 1fr; align-items:center; gap:24px;
+      background:rgba(255,255,255,.88); border-bottom:1px solid rgba(229,231,235,.86); backdrop-filter:blur(20px) saturate(150%);
     }}
-    .topbar-menu {{ display:none; background:none; border:none; font-size:20px; cursor:pointer; }}
-    .topbar-title {{ font-size:16px; font-weight:600; color:var(--text-main); }}
-    .topbar-actions {{ margin-right:auto; display:flex; align-items:center; gap:10px; }}
-    .topbar-badge {{
-      background:var(--accent); color:#000; font-size:12px; font-weight:700;
-      padding:3px 10px; border-radius:20px; cursor:pointer;
-    }}
+    .topbar-context {{ display:flex; align-items:center; gap:12px; min-width:0; }}
+    .topbar-eyebrow {{ display:block; color:#9ca3af; font-size:8px; font-weight:800; letter-spacing:.16em; direction:ltr; text-align:right; }}
+    .topbar-title {{ margin:2px 0 0; font-size:16px; line-height:1.2; font-weight:750; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+    .topbar-menu {{ display:none !important; }}
+    .global-search-wrap {{ position:relative; display:flex; align-items:center; direction:rtl; }}
+    .global-search-wrap>svg {{ position:absolute; right:15px; width:18px; color:#9ca3af; pointer-events:none; }}
+    .global-search {{ width:100%; height:42px; padding:0 45px 0 54px !important; border-radius:14px !important; border:1px solid #e6e8ec !important; background:#f8f9fb !important; box-shadow:inset 0 1px 2px rgba(15,23,42,.02); }}
+    .global-search:focus {{ background:#fff !important; }}
+    .global-search-wrap kbd {{ position:absolute; left:10px; direction:ltr; padding:3px 7px; border:1px solid #e5e7eb; border-bottom-color:#d1d5db; border-radius:7px; background:#fff; color:#9ca3af; font:500 10px/1.3 Inter,sans-serif !important; }}
+    .search-results {{ display:none; position:absolute; top:50px; inset-inline:0; padding:7px; border-radius:16px; border:1px solid var(--border); background:var(--card-bg); box-shadow:0 22px 60px rgba(15,23,42,.14); }}
+    .search-results.open {{ display:block; }}
+    .search-results a {{ display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-radius:10px; text-decoration:none; font-size:12px; }}
+    .search-results a:hover {{ background:var(--page-bg); color:#0891b2; }}
+    .search-results small {{ color:var(--text-muted); direction:ltr; }}
+    .topbar-actions {{ display:flex; align-items:center; justify-content:flex-end; gap:8px; min-width:0; }}
+    .icon-button {{ width:38px; height:38px; display:grid; place-items:center; border:1px solid var(--border); border-radius:12px; background:var(--card-bg); color:#64748b; cursor:pointer; transition:200ms; text-decoration:none; }}
+    .icon-button:hover {{ color:var(--text-main); border-color:#cad0d9; transform:translateY(-1px); box-shadow:0 7px 18px rgba(15,23,42,.06); }}
+    .icon-button svg {{ width:18px; height:18px; stroke-width:1.8; }}
+    .notification-button {{ position:relative; }}
+    .notification-count {{ position:absolute; top:-5px; left:-5px; min-width:18px; height:18px; padding:0 4px; display:grid; place-items:center; border:2px solid #fff; border-radius:999px; background:var(--danger); color:#fff; font:700 9px/1 Inter,sans-serif !important; }}
+    .profile-menu {{ position:relative; }}
+    .profile-trigger {{ height:44px; display:flex; align-items:center; gap:10px; padding:3px 5px 3px 10px; border:0; border-radius:14px; background:transparent; cursor:pointer; color:var(--text-main); transition:200ms; }}
+    .profile-trigger:hover {{ background:#f5f6f8; }}
+    .profile-avatar {{ width:36px; height:36px; display:grid; place-items:center; border-radius:11px; background:linear-gradient(145deg,#101827,#0b3040); color:#55e5ff; box-shadow:inset 0 0 0 1px rgba(255,255,255,.09); }}
+    .profile-avatar svg {{ width:18px; }}
+    .profile-copy {{ text-align:right; line-height:1.2; }} .profile-copy strong,.profile-copy small {{ display:block; white-space:nowrap; }}
+    .profile-copy strong {{ font-size:11px; }} .profile-copy small {{ font-size:9px; color:var(--text-muted); margin-top:3px; }}
+    .profile-chevron {{ width:14px; color:#9ca3af; }}
+    .profile-dropdown {{ display:none; position:absolute; left:0; top:52px; min-width:190px; padding:7px; border:1px solid var(--border); border-radius:15px; background:var(--card-bg); box-shadow:0 20px 60px rgba(15,23,42,.14); }}
+    .profile-dropdown.open {{ display:block; }}
+    .profile-dropdown a {{ display:flex; align-items:center; gap:9px; padding:10px; border-radius:9px; font-size:12px; text-decoration:none; }}
+    .profile-dropdown a:hover {{ background:var(--page-bg); }} .profile-dropdown svg {{ width:16px; }} .profile-dropdown .danger-link {{ color:var(--danger); }}
 
-    /* ── Main ── */
-    .main-wrap {{ margin-right:240px; padding-top:60px; min-height:100vh; width:calc(100% - 240px); }}
-    .main-content {{ padding:24px 20px; max-width:1200px; }}
-
-    /* ── Cards ── */
-    .card {{ background:var(--card-bg); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.07); }}
-
-    /* ── Flash ── */
-    .flash-msg {{ padding:12px 16px; border-radius:10px; margin-bottom:16px; font-size:14px; display:flex; align-items:center; gap:8px; }}
-    .flash-ok  {{ background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; }}
-    .flash-err {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }}
-
-    /* ── Buttons ── */
-    .btn {{ display:inline-flex; align-items:center; gap:6px; padding:9px 18px; border-radius:10px;
-            font-size:13.5px; font-weight:600; border:none; cursor:pointer; transition:.15s; text-decoration:none; }}
-    .btn-primary {{ background:var(--primary); color:var(--primary-text); }}
-    .btn-primary:hover {{ opacity:.88; }}
-    .btn-sm {{ padding:5px 12px; font-size:12px; border-radius:8px; }}
-    .btn-slate {{ background:#f1f5f9; color:#475569; border:1px solid var(--border); }}
-    .btn-green {{ background:#dcfce7; color:#166534; border:1px solid #bbf7d0; }}
-    .btn-red   {{ background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }}
-    .btn-indigo {{ background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe; }}
-
-    /* ── Inputs ── */
+    .main-wrap.with-sidebar {{ margin-right:280px; padding-top:72px; min-height:100vh; width:calc(100% - 280px); }}
+    .main-wrap.auth-layout {{ min-height:100vh; width:100%; }}
+    .main-content {{ width:100%; max-width:1600px; margin:0 auto; padding:30px 32px 48px; }}
+    .auth-layout .main-content {{ max-width:none; padding:0; }}
+    .card {{ background:var(--card-bg); border:1px solid rgba(229,231,235,.82); border-radius:24px; box-shadow:var(--card-shadow); transition:transform 200ms ease,box-shadow 200ms ease,border-color 200ms ease; }}
+    .card:hover {{ transform:translateY(-2px); box-shadow:0 18px 48px rgba(15,23,42,.085); border-color:rgba(203,213,225,.9); }}
+    .flash-msg {{ padding:13px 16px; border-radius:14px; margin-bottom:20px; font-size:13px; display:flex; align-items:center; gap:9px; box-shadow:0 8px 25px rgba(15,23,42,.04); }}
+    .flash-msg svg {{ width:18px; }} .flash-ok {{ background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; }} .flash-err {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }}
+    .btn {{ display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:40px; padding:9px 18px; border-radius:12px; font-size:12.5px; font-weight:650; border:1px solid transparent; cursor:pointer; transition:200ms; text-decoration:none; }}
+    .btn:hover {{ transform:translateY(-1px); filter:saturate(1.08); }} .btn svg {{ width:16px; height:16px; }}
+    .btn-primary {{ background:#07131c; color:#fff; box-shadow:0 8px 18px rgba(2,132,199,.1); }}
+    .btn-sm {{ min-height:34px; padding:6px 12px; font-size:11.5px; border-radius:10px; }}
+    .btn-slate {{ background:#f8fafc; color:#475569; border-color:var(--border); }} .btn-green {{ background:#ecfdf3; color:#15803d; border-color:#bbf7d0; }} .btn-red {{ background:#fff1f2; color:#be123c; border-color:#fecdd3; }} .btn-indigo {{ background:#ecfeff; color:#0e7490; border-color:#a5f3fc; }}
     input, textarea, select {{
-      width:100%; border:1px solid var(--border); border-radius:9px;
-      padding:9px 12px; font-size:13.5px; background:var(--card-bg);
-      color:var(--text-main); outline:none; transition:.15s;
+      width:100%; min-height:44px; border:1px solid var(--border); border-radius:14px; padding:10px 13px;
+      font-size:13px; background:var(--card-bg); color:var(--text-main); outline:none; transition:border 180ms,box-shadow 180ms,background 180ms;
     }}
-    input:focus, textarea:focus, select:focus {{ border-color:var(--primary); box-shadow:0 0 0 3px rgba(79,70,229,.1); }}
-    label {{ font-size:12.5px; color:var(--text-muted); display:block; margin-bottom:5px; font-weight:500; }}
+    textarea {{ min-height:110px; resize:vertical; }}
+    input::placeholder,textarea::placeholder {{ color:#a6adba; }}
+    input:focus, textarea:focus, select:focus {{ border-color:var(--primary); box-shadow:0 0 0 4px rgba(0,215,255,.11); }}
+    label {{ font-size:12px; color:#4b5563; display:block; margin-bottom:7px; font-weight:600; }}
+    table {{ width:100%; border-collapse:separate; border-spacing:0; }}
+    thead {{ position:sticky; top:72px; z-index:2; }}
+    th {{ padding:13px 16px; font-size:11px; color:var(--text-muted); font-weight:700; border-bottom:1px solid var(--border); text-align:right; background:#fafbfc; white-space:nowrap; }}
+    td {{ padding:14px 16px; font-size:13px; border-bottom:1px solid #eef0f3; transition:background 160ms; }}
+    tbody tr:last-child td {{ border-bottom:0; }} tbody tr:hover td {{ background:#f8fbfc; }}
+    .legacy-lucide {{ width:1em; height:1em; display:inline-block; vertical-align:-.16em; margin:0 .12em; stroke-width:1.9; }}
 
-    /* ── Table ── */
-    table {{ width:100%; border-collapse:collapse; }}
-    th {{ padding:10px 14px; font-size:12px; color:var(--text-muted); font-weight:600; border-bottom:2px solid var(--border); text-align:right; }}
-    td {{ padding:11px 14px; font-size:13.5px; border-bottom:1px solid var(--border); }}
-    tr:hover td {{ background:#f8fafc; }}
+    body.dark-mode {{ --page-bg:#080C12; --card-bg:#101720; --text-main:#F1F5F9; --text-muted:#94A3B8; --border:#273244; --card-shadow:0 12px 40px rgba(0,0,0,.22); background:#080c12; }}
+    body.dark-mode .topbar {{ background:rgba(10,15,22,.88); border-bottom-color:#202b39; }}
+    body.dark-mode .global-search,body.dark-mode .global-search-wrap kbd {{ background:#111923 !important; border-color:#273244 !important; color:#dbe4ef; }}
+    body.dark-mode .profile-trigger:hover,body.dark-mode .profile-dropdown a:hover,body.dark-mode .search-results a:hover {{ background:#18212d; }}
+    body.dark-mode th {{ background:#111923; }} body.dark-mode tbody tr:hover td {{ background:#121c27; }} body.dark-mode .notification-count {{ border-color:#101720; }}
 
-    /* ── Responsive ── */
-    @media (max-width: 768px) {{
+    @media (max-width:1100px) {{ .topbar {{ grid-template-columns:auto minmax(240px,1fr) auto; padding:0 20px; gap:16px; }} .profile-copy,.profile-chevron {{ display:none; }} }}
+    @media (max-width:820px) {{
       .sidebar {{ transform: translateX(100%); }}
       .sidebar.open {{ transform: translateX(0); }}
-      .sidebar-close {{ display:block; }}
+      .sidebar-close {{ display:grid !important; }}
       .overlay.open {{ display:block; }}
       .topbar {{ right:0; }}
-      .topbar-menu {{ display:block; }}
-      .main-wrap {{ margin-right:0; width:100%; }}
-      .main-content {{ padding:16px 14px; }}
+      .topbar-menu {{ display:grid !important; }}
+      .main-wrap.with-sidebar {{ margin-right:0; width:100%; }}
+      .main-content {{ padding:24px 18px 36px; }}
+    }}
+    @media (max-width:640px) {{
+      .topbar {{ grid-template-columns:1fr auto; height:64px; padding:0 14px; }}
+      .global-search-wrap {{ display:none; }} .topbar-eyebrow {{ display:none; }} .topbar-actions {{ gap:5px; }} .profile-trigger {{ padding:3px; }}
+      .main-wrap.with-sidebar {{ padding-top:64px; }} .main-content {{ padding:20px 12px 30px; }} .sidebar {{ width:min(88vw,280px); }}
+      .card {{ border-radius:20px; }} thead {{ top:64px; }} th,td {{ padding-inline:12px; }}
     }}
   </style>
 </head>
 <body>
 {sidebar}
 {topbar}
-<div class="main-wrap">
+<div class="main-wrap {'with-sidebar' if admin_info else 'auth-layout'}">
   <div class="main-content">
     {flash_html}
     {body}
@@ -490,30 +503,49 @@ def _layout(title: str, body: str, admin_info=None,
 
 <script>
 (function(){{
+  function renderIcons(){{ if(window.lucide) lucide.createIcons({{attrs:{{'aria-hidden':'true'}}}}); }}
+
   // Active nav
   var path = location.pathname;
-  document.querySelectorAll('.nav-item[data-href], .nav-child[data-href]').forEach(function(el){{
+  document.querySelectorAll('.nav-item[data-href]').forEach(function(el){{
     if(el.dataset.href === path || (path !== '/admin/' && el.dataset.href !== '/admin/' && path.startsWith(el.dataset.href))){{
       el.classList.add('active');
-      var group = el.closest('.nav-group');
-      if(group){{
-        group.querySelector('.nav-toggle')?.classList.add('open');
-        group.querySelector('.nav-children')?.classList.add('open');
-      }}
     }}
   }});
 
-  // Toggle group
-  window.toggleGroup = function(btn){{
-    btn.classList.toggle('open');
-    btn.nextElementSibling?.classList.toggle('open');
-  }};
-
   // Toggle sidebar
   window.toggleSidebar = function(){{
-    document.getElementById('sidebar').classList.toggle('open');
-    document.getElementById('overlay').classList.toggle('open');
+    document.getElementById('sidebar')?.classList.toggle('open');
+    document.getElementById('overlay')?.classList.toggle('open');
   }};
+
+  window.toggleProfile = function(){{ document.getElementById('profileDropdown')?.classList.toggle('open'); }};
+  document.addEventListener('click',function(ev){{
+    if(!ev.target.closest('.profile-menu')) document.getElementById('profileDropdown')?.classList.remove('open');
+  }});
+
+  var themeToggle=document.getElementById('themeToggle');
+  function setTheme(dark){{ document.body.classList.toggle('dark-mode',dark); localStorage.setItem('sl-theme',dark?'dark':'light'); if(themeToggle) themeToggle.innerHTML='<i data-lucide="'+(dark?'sun':'moon')+'"></i>'; renderIcons(); }}
+  if(themeToggle){{ setTheme(localStorage.getItem('sl-theme')==='dark'); themeToggle.addEventListener('click',function(){{ setTheme(!document.body.classList.contains('dark-mode')); }}); }}
+
+  var search=document.getElementById('globalSearch'),results=document.getElementById('searchResults');
+  function searchPanel(){{
+    if(!search||!results)return; var q=search.value.trim().toLowerCase(); results.innerHTML='';
+    if(!q){{results.classList.remove('open');return;}}
+    Array.from(document.querySelectorAll('.sidebar-nav .nav-item')).filter(function(a){{return a.textContent.trim().toLowerCase().includes(q);}}).slice(0,7).forEach(function(a){{
+      var item=document.createElement('a'); item.href=a.href; item.innerHTML='<span>'+a.textContent.trim()+'</span><small>'+new URL(a.href).pathname+'</small>'; results.appendChild(item);
+    }});
+    if(!results.children.length) results.innerHTML='<span style="display:block;padding:12px;color:var(--text-muted);font-size:12px">نتیجه‌ای پیدا نشد</span>';
+    results.classList.add('open');
+  }}
+  search?.addEventListener('input',searchPanel);
+  document.addEventListener('keydown',function(ev){{if((ev.metaKey||ev.ctrlKey)&&ev.key.toLowerCase()==='k'){{ev.preventDefault();search?.focus();}}if(ev.key==='Escape')results?.classList.remove('open');}});
+
+  // Convert legacy decorative emoji in rendered UI to Lucide without touching form data or scripts.
+  var emojiIcons={{'✅':'circle-check','❌':'circle-x','⚠️':'triangle-alert','⚠':'triangle-alert','📊':'chart-no-axes-combined','🛒':'shopping-bag','🛍':'shopping-bag','📦':'package','🗂':'folders','🗃':'archive','💼':'briefcase-business','🧾':'receipt-text','💰':'wallet-cards','💳':'credit-card','👥':'users','🤝':'handshake','🎫':'ticket','📢':'megaphone','⚙️':'settings','⚙':'settings','👤':'user-round','💾':'database-backup','📈':'chart-spline','📱':'smartphone','🔑':'key-round','🔴':'circle-alert','🟡':'circle-dot','🟢':'circle-check','🔄':'refresh-cw','👨‍💻':'user-cog','🧩':'blocks','←':'arrow-left','↩':'log-out','☰':'menu','✕':'x','▲':'trending-up','▼':'trending-down'}};
+  var emojiRe=/(✅|❌|⚠️|⚠|📊|🛒|🛍|📦|🗂|🗃|💼|🧾|💰|💳|👥|🤝|🎫|📢|⚙️|⚙|👤|💾|📈|📱|🔑|🔴|🟡|🟢|🔄|👨‍💻|🧩|←|↩|☰|✕|▲|▼)/g;
+  var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT); var nodes=[]; while(walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(function(node){{ var parent=node.parentElement;if(!parent||parent.closest('script,style,input,textarea,select,option,[data-no-icon]')||!emojiRe.test(node.nodeValue)){{emojiRe.lastIndex=0;return;}} emojiRe.lastIndex=0; var frag=document.createDocumentFragment(),last=0,m;while((m=emojiRe.exec(node.nodeValue))){{frag.append(document.createTextNode(node.nodeValue.slice(last,m.index)));var i=document.createElement('i');i.setAttribute('data-lucide',emojiIcons[m[0]]);i.className='legacy-lucide';frag.append(i);last=m.index+m[0].length;}}frag.append(document.createTextNode(node.nodeValue.slice(last)));node.replaceWith(frag);}});
 
   {"" if not admin_info else """
   // Idle logout
@@ -527,7 +559,7 @@ def _layout(title: str, body: str, admin_info=None,
   function updateBadge(id, count){
     var el = document.getElementById(id);
     if(!el) return;
-    if(count>0){ el.textContent=(id==='ticket-badge-top'?'🎫 ':'')+count; el.classList.remove('hidden'); }
+    if(count>0){ el.textContent=count; el.classList.remove('hidden'); }
     else el.classList.add('hidden');
   }
   setInterval(function(){
@@ -536,6 +568,7 @@ def _layout(title: str, body: str, admin_info=None,
     }).catch(function(){});
   }, 15000);
   """}
+  renderIcons();
 }})();
 </script>
 </body>
@@ -698,177 +731,224 @@ async def dashboard(request: Request, err: str = ""):
     finally:
         conn.close()
 
-    # محاسبه درصد تغییر نسبت به دیروز
+    # محاسبه درصد تغییر نسبت به دیروز (فقط برای نمایش KPI)
     rev_change = 0
     if yest_o[1] > 0:
         rev_change = round(((today_o[1] - yest_o[1]) / yest_o[1]) * 100, 1)
     cnt_change = today_o[0] - yest_o[0]
 
-    def pct_badge(v):
-        if v > 0: return f'<span style="color:#16a34a;font-size:12px">▲ {v}%</span>'
-        if v < 0: return f'<span style="color:#dc2626;font-size:12px">▼ {abs(v)}%</span>'
-        return ""
+    def pct_badge(value, suffix="%"):
+        if value > 0:
+            return f'<span class="trend trend-up"><i data-lucide="trending-up"></i>{value}{suffix}</span>'
+        if value < 0:
+            return f'<span class="trend trend-down"><i data-lucide="trending-down"></i>{abs(value)}{suffix}</span>'
+        return '<span class="trend trend-flat"><i data-lucide="minus"></i>بدون تغییر</span>'
 
-    def status_badge(st):
+    def status_badge(status):
         styles = {
-            "active":   ("background:#dcfce7;color:#166534","ارسال شد"),
-            "returned": ("background:#fee2e2;color:#991b1b","برگشتی"),
-            "pending":  ("background:#fef9c3;color:#854d0e","در انتظار"),
+            "active":   ("success", "ارسال شد"),
+            "returned": ("danger", "برگشتی"),
+            "pending":  ("warning", "در انتظار"),
         }
-        s, l = styles.get(st, ("background:#f1f5f9;color:#475569", st))
-        return f'<span style="{s};padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{l}</span>'
+        tone, label = styles.get(status, ("neutral", status))
+        return f'<span class="status-badge status-{tone}"><span></span>{e(label)}</span>'
 
-    # داده نمودار
-    chart_labels = [r["day"][5:] for r in chart_data]  # فقط ماه-روز
-    chart_values = [int(r["total"]) for r in chart_data]
+    chart_labels = json.dumps([r["day"][5:] for r in chart_data], ensure_ascii=False)
+    chart_values = json.dumps([int(r["total"]) for r in chart_data])
 
     low_rows = "".join(f"""
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
-      <span style="font-size:13px;color:var(--text-main)">{e(r["title"])}</span>
-      <span style="font-size:12px;font-weight:700;color:{'#dc2626' if r['avail']==0 else '#d97706'};background:{'#fee2e2' if r['avail']==0 else '#fef9c3'};padding:2px 10px;border-radius:20px">{r["avail"]} عدد</span>
-    </div>""" for r in low_stock)
+    <a href="/admin/feed/{r['id']}" class="compact-row">
+      <span class="row-icon {'danger' if r['avail'] == 0 else 'warning'}"><i data-lucide="package-minus"></i></span>
+      <span class="row-copy"><strong>{e(r['title'])}</strong><small>نیازمند تأمین موجودی</small></span>
+      <span class="stock-count {'out' if r['avail'] == 0 else ''}">{r['avail']} عدد</span>
+    </a>""" for r in low_stock)
 
     recent_rows = "".join(f"""
     <tr>
-      <td style="padding:10px 12px;font-weight:700;color:var(--primary)">#{o["id"]}</td>
-      <td style="padding:10px 12px;font-size:13px">{e(o["title"][:25])}</td>
-      <td style="padding:10px 12px;font-size:12px;color:var(--text-muted)">{o["user_id"]}</td>
-      <td style="padding:10px 12px;font-weight:600;color:#16a34a">{int(o["price"]):,}</td>
-      <td style="padding:10px 12px">{status_badge(o["status"] or "active")}</td>
+      <td><a class="order-id" href="/admin/orders/{o['id']}/edit">#{o['id']}</a></td>
+      <td><div class="table-product"><span><i data-lucide="package"></i></span><strong>{e(o['title'][:34])}</strong></div></td>
+      <td><span class="muted-cell">{o['user_id']}</span></td>
+      <td><strong class="money-cell">{int(o['price']):,}</strong><small class="currency">تومان</small></td>
+      <td>{status_badge(o['status'] or 'active')}</td>
+      <td><a class="table-action" href="/admin/orders/{o['id']}/edit" aria-label="مشاهده سفارش"><i data-lucide="arrow-up-left"></i></a></td>
     </tr>""" for o in recent)
 
+    # مشتق‌شده از همان سفارش‌های اخیر؛ بدون query یا تغییر منطق داده.
+    product_summary = {}
+    for order in recent:
+        product_title = str(order["title"] or "بدون عنوان")
+        if product_title not in product_summary:
+            product_summary[product_title] = {"count": 0, "revenue": 0}
+        product_summary[product_title]["count"] += 1
+        product_summary[product_title]["revenue"] += int(order["price"] or 0)
+
+    top_product_rows = "".join(f"""
+      <div class="rank-row"><span class="rank-number">{index}</span><span class="rank-copy"><strong>{e(name[:30])}</strong><small>{data['count']} سفارش اخیر</small></span><strong class="rank-value">{data['revenue']:,}</strong></div>
+    """ for index, (name, data) in enumerate(sorted(product_summary.items(), key=lambda item: (item[1]["count"], item[1]["revenue"]), reverse=True)[:5], 1))
+
+    activity_rows = "".join(f"""
+      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {e(str(o['created_at'])[:16])}</small></span></div>
+    """ for o in recent[:5])
+
+    def command_item(icon, label, value, meta, tone="cyan", href="#"):
+        return f"""
+        <a href="{href}" class="command-item command-{tone}">
+          <span class="command-icon"><i data-lucide="{icon}"></i></span>
+          <span class="command-copy"><small>{label}</small><strong>{value}</strong><em>{meta}</em></span>
+          <i data-lucide="arrow-up-left" class="command-arrow"></i>
+        </a>"""
+
+    command_items = "".join([
+        command_item("clock-3", "سفارش‌های معلق", pending, "نیازمند پیگیری", "warning" if pending else "success", "/admin/orders"),
+        command_item("package-search", "کمبود موجودی", len(low_stock), "محصول در آستانه اتمام", "danger" if low_stock else "success", "/admin/feed"),
+        command_item("messages-square", "تیکت‌های باز", open_tix, "در انتظار پاسخ مدیر", "danger" if open_tix else "success", "/admin/tickets"),
+        command_item("handshake", "همکاران معلق", partners_pend, "درخواست بررسی‌نشده", "warning" if partners_pend else "success", "/admin/partners"),
+        command_item("database-backup", "آخرین بکاپ", "ثبت شده" if last_backup else "ناموجود", last_backup or "هنوز بکاپی ثبت نشده", "success" if last_backup else "warning", "/admin/database"),
+        command_item("activity", "سلامت سیستم", "پایدار", "سرویس پنل در دسترس است", "success", "/admin/database"),
+        command_item("bot", "وضعیت ربات", "فعال", "آماده پاسخ‌گویی", "cyan", "/admin/broadcast"),
+    ])
+
+    tasks = "".join([
+        f'<a href="/admin/feed" class="task-row"><span class="task-status danger"><i data-lucide="package-minus"></i></span><span><strong>تأمین موجودی محصولات</strong><small>{len(low_stock)} محصول نیازمند بررسی</small></span><i data-lucide="chevron-left"></i></a>',
+        f'<a href="/admin/tickets" class="task-row"><span class="task-status warning"><i data-lucide="message-circle-more"></i></span><span><strong>پاسخ به تیکت‌ها</strong><small>{open_tix} تیکت منتظر پاسخ</small></span><i data-lucide="chevron-left"></i></a>',
+        f'<a href="/admin/orders" class="task-row"><span class="task-status cyan"><i data-lucide="truck"></i></span><span><strong>تحویل‌های معلق</strong><small>{pending} سفارش در صف ارسال</small></span><i data-lucide="chevron-left"></i></a>',
+        '<a href="/admin/database" class="task-row"><span class="task-status success"><i data-lucide="server-cog"></i></span><span><strong>وضعیت سرور</strong><small>سرویس در دسترس است</small></span><i data-lucide="chevron-left"></i></a>',
+        f'<a href="/admin/database" class="task-row"><span class="task-status {"success" if last_backup else "warning"}"><i data-lucide="database-backup"></i></span><span><strong>نسخه پشتیبان</strong><small>{e(last_backup or "هنوز ثبت نشده")}</small></span><i data-lucide="chevron-left"></i></a>',
+        '<a href="/admin/broadcast" class="task-row"><span class="task-status success"><i data-lucide="bot"></i></span><span><strong>ربات استوک‌لند</strong><small>فعال و آماده پاسخ‌گویی</small></span><i data-lucide="chevron-left"></i></a>',
+    ])
+
     body = f"""
-    <div style="margin-bottom:20px">
-      <h1 style="font-size:22px;font-weight:800;color:var(--text-main);margin:0">داشبورد</h1>
-      <p style="color:var(--text-muted);font-size:13px;margin:4px 0 0">{today} — خوش آمدید به پنل مدیریت استوک لند</p>
-    </div>
+    <style>
+      .dashboard {{ display:flex; flex-direction:column; gap:28px; }}
+      .dashboard-head {{ display:flex; align-items:flex-end; justify-content:space-between; gap:20px; }}
+      .dashboard-head h2 {{ margin:0; color:var(--text-main); font-size:25px; font-weight:800; letter-spacing:-.02em; }}
+      .dashboard-head p {{ margin:6px 0 0; color:var(--text-muted); font-size:12px; }}
+      .date-chip {{ display:flex; align-items:center; gap:8px; padding:9px 13px; border:1px solid var(--border); border-radius:12px; background:var(--card-bg); color:var(--text-muted); font-size:11px; }}
+      .date-chip svg {{ width:16px; color:#0891b2; }}
+      .section-heading {{ display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:14px; }}
+      .section-heading h3 {{ margin:0; color:var(--text-main); font-size:16px; font-weight:750; }}
+      .section-heading p {{ margin:4px 0 0; color:var(--text-muted); font-size:10.5px; }}
+      .section-link {{ display:inline-flex; align-items:center; gap:5px; color:#0891b2; font-size:11px; font-weight:650; text-decoration:none; }} .section-link svg {{ width:14px; }}
 
-    <!-- Alert Cards -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px">
-      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid #16a34a">
-        <div style="width:42px;height:42px;background:#dcfce7;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">✅</div>
-        <div>
-          <div style="font-size:12px;color:var(--text-muted)">بکاپ خودکار</div>
-          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{last_backup or "هنوز انجام نشده"}</div>
-        </div>
-      </div>
-      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid {'#d97706' if low_stock else '#16a34a'}">
-        <div style="width:42px;height:42px;background:{'#fef9c3' if low_stock else '#dcfce7'};border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">{'⚠️' if low_stock else '📦'}</div>
-        <div>
-          <div style="font-size:12px;color:var(--text-muted)">کم‌موجودی</div>
-          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{len(low_stock)} محصول — نیاز به بررسی</div>
-        </div>
-        <a href="/admin/feed" style="margin-right:auto;font-size:11px;color:var(--primary)">مشاهده</a>
-      </div>
-      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid {'#d97706' if pending>0 else '#16a34a'}">
-        <div style="width:42px;height:42px;background:{'#fef9c3' if pending>0 else '#dcfce7'};border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">🛒</div>
-        <div>
-          <div style="font-size:12px;color:var(--text-muted)">در انتظار ارسال</div>
-          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{pending} سفارش</div>
-        </div>
-        <a href="/admin/orders" style="margin-right:auto;font-size:11px;color:var(--primary)">اقدام</a>
-      </div>
-      {"" if not partners_pend else f'''
-      <div class="card" style="padding:16px;display:flex;align-items:center;gap:14px;border-right:4px solid #d97706">
-        <div style="width:42px;height:42px;background:#fef9c3;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px">🤝</div>
-        <div>
-          <div style="font-size:12px;color:var(--text-muted)">درخواست نمایندگی</div>
-          <div style="font-size:13px;font-weight:700;color:var(--text-main)">{partners_pend} درخواست جدید</div>
-        </div>
-        <a href="/admin/partners" style="margin-right:auto;font-size:11px;color:var(--primary)">بررسی</a>
-      </div>'''}
-    </div>
+      .command-center {{ position:relative; overflow:hidden; padding:22px; border-radius:26px; background:linear-gradient(130deg,#07111b 0%,#091827 58%,#0a2631 100%); box-shadow:0 24px 65px rgba(4,12,23,.18); }}
+      .command-center::before {{ content:""; position:absolute; top:-130px; left:15%; width:380px; height:280px; border-radius:50%; background:rgba(0,215,255,.10); filter:blur(70px); }}
+      .command-head {{ position:relative; display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; color:#fff; }}
+      .command-title {{ display:flex; align-items:center; gap:11px; }} .command-title>span {{ width:36px; height:36px; display:grid; place-items:center; border-radius:12px; background:rgba(0,215,255,.1); color:#42e2ff; border:1px solid rgba(0,215,255,.12); }}
+      .command-title svg {{ width:18px; }} .command-title h3 {{ margin:0; font-size:15px; }} .command-title p {{ margin:3px 0 0; color:#74849a; font-size:9.5px; }}
+      .live-pill {{ display:flex; align-items:center; gap:7px; padding:7px 10px; border-radius:999px; color:#9de9bd; background:rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.12); font-size:9px; }}
+      .live-pill span {{ width:6px; height:6px; border-radius:50%; background:#22c55e; box-shadow:0 0 10px #22c55e; }}
+      .command-grid {{ position:relative; display:grid; grid-template-columns:repeat(7,minmax(145px,1fr)); gap:9px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin; }}
+      .command-item {{ min-width:145px; min-height:142px; display:flex; flex-direction:column; position:relative; padding:15px; border:1px solid rgba(255,255,255,.07); border-radius:18px; background:rgba(255,255,255,.035); text-decoration:none; transition:200ms; }}
+      .command-item:hover {{ background:rgba(255,255,255,.065); border-color:rgba(0,215,255,.18); transform:translateY(-2px); }}
+      .command-icon {{ width:33px; height:33px; display:grid; place-items:center; border-radius:11px; background:rgba(0,215,255,.08); color:#42e2ff; }} .command-icon svg {{ width:17px; }}
+      .command-warning .command-icon {{ background:rgba(245,158,11,.09); color:#fbbf24; }} .command-danger .command-icon {{ background:rgba(239,68,68,.09); color:#fb7185; }} .command-success .command-icon {{ background:rgba(34,197,94,.09); color:#4ade80; }}
+      .command-copy {{ margin-top:auto; }} .command-copy small,.command-copy strong,.command-copy em {{ display:block; font-style:normal; }} .command-copy small {{ color:#8290a3; font-size:9.5px; }} .command-copy strong {{ color:#f8fafc; font-size:17px; margin-top:3px; }} .command-copy em {{ color:#65758a; font-size:8.5px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      .command-arrow {{ position:absolute; top:16px; left:14px; width:13px; color:#465568; }}
 
-    <!-- KPI Cards -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px">
-      <div class="card" style="padding:20px">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">💰 فروش امروز</div>
-        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{int(today_o[1]):,}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">تومان {pct_badge(rev_change)}</div>
-      </div>
-      <div class="card" style="padding:20px">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">🧾 سفارش امروز</div>
-        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{today_o[0]}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">سفارش {'▲ +'+str(cnt_change) if cnt_change>0 else ''}</div>
-      </div>
-      <div class="card" style="padding:20px">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">📦 موجودی انبار</div>
-        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{feed_avail:,}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">آیتم قابل تحویل</div>
-      </div>
-      <div class="card" style="padding:20px">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">💳 کل فروش</div>
-        <div style="font-size:24px;font-weight:800;color:var(--text-main)">{int(total_o[1]):,}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">{total_o[0]:,} سفارش کل</div>
-      </div>
-    </div>
+      .kpi-grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }}
+      .kpi-card {{ min-height:188px; padding:20px; overflow:hidden; position:relative; }} .kpi-card::after {{ content:""; position:absolute; top:-55px; left:-45px; width:130px; height:130px; border-radius:50%; background:rgba(0,215,255,.035); }}
+      .kpi-top {{ display:flex; align-items:center; justify-content:space-between; }} .kpi-icon {{ width:40px; height:40px; display:grid; place-items:center; border-radius:13px; color:#0891b2; background:#ecfeff; }} .kpi-icon svg {{ width:19px; }}
+      .kpi-label {{ color:var(--text-muted); font-size:10.5px; font-weight:600; }} .kpi-value {{ margin:15px 0 3px; color:var(--text-main); font-size:25px; font-weight:800; letter-spacing:-.025em; direction:ltr; text-align:right; }} .kpi-unit {{ color:var(--text-muted); font-size:9px; font-weight:500; margin-right:3px; }}
+      .trend {{ display:inline-flex; align-items:center; gap:3px; font-size:9px; font-weight:700; direction:ltr; }} .trend svg {{ width:12px; }} .trend-up {{ color:#16a34a; }} .trend-down {{ color:#e11d48; }} .trend-flat {{ color:#94a3b8; }}
+      .sparkline {{ position:absolute; right:15px; left:15px; bottom:11px; height:43px; opacity:.9; }} .sparkline path.line {{ fill:none; stroke:#06b6d4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }} .sparkline path.area {{ fill:url(#sparkFill); opacity:.55; }}
 
-    <!-- Chart + Low Stock -->
-    <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:20px">
-      <div class="card" style="padding:20px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-          <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin:0">📈 نمودار فروش ۳۰ روز اخیر</h2>
-        </div>
-        <canvas id="salesChart" height="120"></canvas>
-      </div>
-      <div class="card" style="padding:20px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin:0">⚠️ کم‌موجودی</h2>
-          <a href="/admin/feed" style="font-size:11px;color:var(--primary)">مشاهده همه</a>
-        </div>
-        {low_rows or '<p style="font-size:13px;color:#16a34a;text-align:center;padding:20px 0">✅ همه محصولات موجودی کافی دارند</p>'}
-      </div>
-    </div>
+      .chart-card {{ padding:22px 24px 18px; }} .chart-toolbar {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }} .chart-legend {{ display:flex; align-items:center; gap:7px; color:var(--text-muted); font-size:10px; }} .chart-legend span {{ width:7px; height:7px; border-radius:50%; background:#00d7ff; box-shadow:0 0 0 4px rgba(0,215,255,.08); }} .chart-period {{ padding:7px 10px; border:1px solid var(--border); border-radius:10px; color:var(--text-muted); font-size:9px; background:var(--card-bg); }}
+      .chart-shell {{ position:relative; height:400px; }}
+      .two-column {{ display:grid; grid-template-columns:minmax(0,3fr) minmax(320px,2fr); gap:18px; }} .panel-card {{ overflow:hidden; }} .panel-header {{ min-height:68px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid var(--border); }} .panel-header h3 {{ margin:0; font-size:14px; }} .panel-header p {{ margin:3px 0 0; color:var(--text-muted); font-size:9.5px; }} .table-wrap {{ overflow:auto; max-height:500px; }}
+      .order-id {{ color:#0891b2; font:700 11px/1 Inter,sans-serif !important; text-decoration:none; }} .table-product {{ display:flex; align-items:center; gap:9px; min-width:180px; }} .table-product>span {{ width:31px; height:31px; display:grid; place-items:center; border-radius:10px; background:#f1f5f9; color:#64748b; }} .table-product svg {{ width:15px; }} .table-product strong {{ font-size:11px; font-weight:600; }} .muted-cell {{ color:var(--text-muted); font-size:10px; }} .money-cell {{ display:block; font-size:11px; direction:ltr; text-align:right; }} .currency {{ color:var(--text-muted); font-size:8px; }}
+      .status-badge {{ display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border-radius:999px; font-size:9px; font-weight:650; white-space:nowrap; }} .status-badge>span {{ width:5px; height:5px; border-radius:50%; }} .status-success {{ color:#15803d; background:#ecfdf3; }} .status-success>span {{ background:#22c55e; }} .status-warning {{ color:#a16207; background:#fffbeb; }} .status-warning>span {{ background:#f59e0b; }} .status-danger {{ color:#be123c; background:#fff1f2; }} .status-danger>span {{ background:#ef4444; }} .status-neutral {{ color:#475569; background:#f1f5f9; }} .status-neutral>span {{ background:#94a3b8; }}
+      .table-action {{ width:30px; height:30px; display:grid; place-items:center; border:1px solid var(--border); border-radius:9px; color:#64748b; }} .table-action svg {{ width:14px; }}
+      .tasks-list {{ padding:8px 12px 12px; }} .task-row {{ min-height:67px; display:grid; grid-template-columns:38px 1fr 16px; align-items:center; gap:10px; padding:7px 8px; border-bottom:1px solid #eef0f3; text-decoration:none; transition:160ms; }} .task-row:last-child {{ border:0; }} .task-row:hover {{ background:var(--page-bg); border-radius:12px; }} .task-row>svg {{ width:14px; color:#b1b7c2; }} .task-row strong,.task-row small {{ display:block; }} .task-row strong {{ color:var(--text-main); font-size:10.5px; }} .task-row small {{ color:var(--text-muted); font-size:8.5px; margin-top:3px; }}
+      .task-status {{ width:36px; height:36px; display:grid; place-items:center; border-radius:11px; }} .task-status svg {{ width:16px; }} .task-status.danger {{ color:#e11d48; background:#fff1f2; }} .task-status.warning {{ color:#d97706; background:#fffbeb; }} .task-status.cyan {{ color:#0891b2; background:#ecfeff; }} .task-status.success {{ color:#16a34a; background:#f0fdf4; }}
 
-    <!-- Recent Orders -->
-    <div class="card" style="padding:0;overflow:hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">
-        <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin:0">🧾 آخرین سفارش‌ها</h2>
-        <a href="/admin/orders" class="btn btn-sm btn-indigo">مشاهده همه</a>
+      .three-column {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; }} .mini-panel {{ padding-bottom:12px; overflow:hidden; }} .mini-panel .panel-header {{ min-height:64px; }} .rank-row {{ min-height:56px; display:grid; grid-template-columns:28px 1fr auto; align-items:center; gap:9px; padding:7px 18px; }} .rank-number {{ width:25px; height:25px; display:grid; place-items:center; border-radius:8px; background:#f1f5f9; color:#64748b; font:700 9px/1 Inter,sans-serif !important; }} .rank-copy strong,.rank-copy small {{ display:block; }} .rank-copy strong {{ font-size:10px; }} .rank-copy small {{ color:var(--text-muted); font-size:8px; margin-top:3px; }} .rank-value {{ color:#0891b2; font-size:9px; direction:ltr; }}
+      .compact-row {{ min-height:58px; display:grid; grid-template-columns:36px 1fr auto; align-items:center; gap:9px; padding:7px 16px; text-decoration:none; }} .row-icon {{ width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }} .row-icon svg {{ width:15px; }} .row-icon.warning {{ color:#d97706; background:#fffbeb; }} .row-icon.danger {{ color:#e11d48; background:#fff1f2; }} .row-copy strong,.row-copy small {{ display:block; }} .row-copy strong {{ font-size:9.5px; }} .row-copy small {{ color:var(--text-muted); font-size:8px; margin-top:3px; }} .stock-count {{ padding:4px 7px; border-radius:999px; color:#a16207; background:#fffbeb; font-size:8px; font-weight:700; }} .stock-count.out {{ color:#be123c; background:#fff1f2; }}
+      .activity-row {{ min-height:58px; display:grid; grid-template-columns:35px 1fr; align-items:center; gap:9px; padding:7px 16px; }} .activity-icon {{ width:34px; height:34px; display:grid; place-items:center; border-radius:50%; color:#0891b2; background:#ecfeff; position:relative; }} .activity-icon svg {{ width:15px; }} .activity-row strong,.activity-row small {{ display:block; }} .activity-row strong {{ font-size:9.5px; }} .activity-row small {{ color:var(--text-muted); font-size:8px; margin-top:3px; }} .empty-state {{ padding:38px 18px; color:var(--text-muted); text-align:center; font-size:10px; }}
+      body.dark-mode .kpi-icon,body.dark-mode .table-product>span,body.dark-mode .rank-number {{ background:#172330; }} body.dark-mode .task-row,body.dark-mode .panel-header {{ border-color:#273244; }} body.dark-mode .status-success {{ background:rgba(34,197,94,.1); }} body.dark-mode .status-warning {{ background:rgba(245,158,11,.1); }} body.dark-mode .status-danger {{ background:rgba(239,68,68,.1); }}
+      @media(max-width:1200px) {{ .kpi-grid {{ grid-template-columns:repeat(2,1fr); }} .three-column {{ grid-template-columns:1fr 1fr; }} .three-column>*:last-child {{ grid-column:1/-1; }} }}
+      @media(max-width:940px) {{ .two-column {{ grid-template-columns:1fr; }} .command-grid {{ grid-template-columns:repeat(7,155px); }} }}
+      @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
+    </style>
+
+    <main class="dashboard">
+      <div class="dashboard-head">
+        <div><h2>مرکز مدیریت استوک‌لند</h2><p>نمای یکپارچه فروش، عملیات و سلامت سرویس‌های فروشگاه</p></div>
+        <div class="date-chip"><i data-lucide="calendar-days"></i><span>{today}</span></div>
       </div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead>
-            <tr style="background:var(--page-bg)">
-              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">#</th>
-              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">محصول</th>
-              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">کاربر</th>
-              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">مبلغ</th>
-              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:600;text-align:right">وضعیت</th>
-            </tr>
-          </thead>
-          <tbody>{recent_rows or "<tr><td colspan='5' style='text-align:center;padding:24px;color:var(--text-muted);font-size:13px'>سفارشی ثبت نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>
+
+      <section class="command-center" aria-labelledby="command-title">
+        <div class="command-head"><div class="command-title"><span><i data-lucide="command"></i></span><div><h3 id="command-title">مرکز فرمان</h3><p>مواردی که همین حالا به توجه شما نیاز دارند</p></div></div><div class="live-pill"><span></span>به‌روزرسانی زنده</div></div>
+        <div class="command-grid">{command_items}</div>
+      </section>
+
+      <section aria-labelledby="kpi-title">
+        <div class="section-heading"><div><h3 id="kpi-title">شاخص‌های کلیدی</h3><p>خلاصه عملکرد امروز و وضعیت فروشگاه</p></div></div>
+        <div class="kpi-grid">
+          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="badge-dollar-sign"></i></span>{pct_badge(rev_change)}</div><div class="kpi-value">{int(today_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">درآمد امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00d7ff" stop-opacity=".24"/><stop offset="1" stop-color="#00d7ff" stop-opacity="0"/></linearGradient></defs><path class="area" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10 L240,45 L0,45Z"/><path class="line" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10"/></svg></article>
+          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="shopping-basket"></i></span>{pct_badge(cnt_change, "")}</div><div class="kpi-value">{today_o[0]:,}<span class="kpi-unit">سفارش</span></div><div class="kpi-label">سفارش‌های امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7 L240,45 L0,45Z"/><path class="line" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7"/></svg></article>
+          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="boxes"></i></span><span class="trend trend-flat"><i data-lucide="package-check"></i>{products_cnt} محصول فعال</span></div><div class="kpi-value">{feed_avail:,}<span class="kpi-unit">آیتم</span></div><div class="kpi-label">موجودی قابل تحویل</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,28 C22,24 42,27 65,19 S105,30 129,21 S162,12 187,17 S218,10 240,14 L240,45 L0,45Z"/><path class="line" d="M0,28 C22,24 42,27 65,19 S105,30 129,21 S162,12 187,17 S218,10 240,14"/></svg></article>
+          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="chart-column-increasing"></i></span><span class="trend trend-flat"><i data-lucide="receipt-text"></i>{total_o[0]:,} سفارش</span></div><div class="kpi-value">{int(total_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">کل درآمد</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9 L240,45 L0,45Z"/><path class="line" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9"/></svg></article>
+        </div>
+      </section>
+
+      <section class="card chart-card" aria-labelledby="sales-title">
+        <div class="chart-toolbar"><div class="section-heading" style="margin:0"><div><h3 id="sales-title">تحلیل فروش</h3><p>روند درآمد در ۳۰ روز اخیر</p></div></div><div style="display:flex;align-items:center;gap:14px"><span class="chart-legend"><span></span>فروش روزانه</span><span class="chart-period">۳۰ روز اخیر</span></div></div>
+        <div class="chart-shell"><canvas id="salesChart"></canvas></div>
+      </section>
+
+      <section class="two-column">
+        <article class="card panel-card"><div class="panel-header"><div><h3>سفارش‌های اخیر</h3><p>آخرین تراکنش‌های ثبت‌شده در فروشگاه</p></div><a href="/admin/orders" class="section-link">مشاهده همه<i data-lucide="arrow-left"></i></a></div><div class="table-wrap"><table><thead><tr><th>شناسه</th><th>محصول</th><th>کاربر</th><th>مبلغ</th><th>وضعیت</th><th></th></tr></thead><tbody>{recent_rows or '<tr><td colspan="6" class="empty-state">هنوز سفارشی ثبت نشده است</td></tr>'}</tbody></table></div></article>
+        <article class="card panel-card"><div class="panel-header"><div><h3>وظایف مرکز فرمان</h3><p>اولویت‌های عملیاتی امروز</p></div><span class="status-badge status-warning"><span></span>نیازمند توجه</span></div><div class="tasks-list">{tasks}</div></article>
+      </section>
+
+      <section class="three-column">
+        <article class="card mini-panel"><div class="panel-header"><div><h3>محصولات برتر</h3><p>بر اساس سفارش‌های اخیر</p></div><i data-lucide="trophy" style="width:18px;color:#f59e0b"></i></div>{top_product_rows or '<div class="empty-state">داده‌ای برای نمایش وجود ندارد</div>'}</article>
+        <article class="card mini-panel"><div class="panel-header"><div><h3>موجودی رو به اتمام</h3><p>محصولات نیازمند تأمین</p></div><a href="/admin/feed" class="section-link">مدیریت<i data-lucide="arrow-left"></i></a></div>{low_rows or '<div class="empty-state">موجودی همه محصولات کافی است</div>'}</article>
+        <article class="card mini-panel"><div class="panel-header"><div><h3>فعالیت‌های اخیر</h3><p>رویدادهای تازه فروشگاه</p></div><i data-lucide="history" style="width:18px;color:#0891b2"></i></div>{activity_rows or '<div class="empty-state">فعالیت تازه‌ای ثبت نشده است</div>'}</article>
+      </section>
+    </main>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
     <script>
     (function(){{
-      var ctx = document.getElementById('salesChart');
-      if(!ctx) return;
-      new Chart(ctx, {{
+      var canvas=document.getElementById('salesChart'); if(!canvas||!window.Chart)return;
+      var context=canvas.getContext('2d'); var gradient=context.createLinearGradient(0,0,0,400); gradient.addColorStop(0,'rgba(0,215,255,.22)'); gradient.addColorStop(1,'rgba(0,215,255,0)');
+      new Chart(context, {{
         type: 'line',
         data: {{
           labels: {chart_labels},
           datasets: [{{
-            label: 'فروش (تومان)',
-            data: {chart_values},
-            borderColor: '#00b8d4',
-            backgroundColor: 'rgba(0,184,212,0.08)',
-            borderWidth: 2.5,
-            pointRadius: 3,
-            pointBackgroundColor: '#00b8d4',
-            fill: true,
-            tension: 0.4
+            label: 'فروش روزانه', data: {chart_values}, borderColor: '#00D7FF',
+            backgroundColor: gradient, borderWidth: 2.5, fill: true, tension: .42,
+            pointRadius: 0, pointHoverRadius: 5, pointHoverBackgroundColor: '#00D7FF',
+            pointHoverBorderColor: '#fff', pointHoverBorderWidth: 3
           }}]
         }},
         options: {{
-          responsive: true,
-          plugins: {{ legend: {{ display: false }} }},
+          responsive: true, maintainAspectRatio: false,
+          interaction: {{ intersect: false, mode: 'index' }},
+          plugins: {{
+            legend: {{ display: false }},
+            tooltip: {{
+              rtl: true, titleFont: {{ family: 'Vazirmatn', size: 11 }},
+              bodyFont: {{ family: 'Vazirmatn', size: 11 }}, backgroundColor: 'rgba(5,7,10,.94)',
+              padding: 12, cornerRadius: 12, displayColors: false,
+              callbacks: {{ label: function(ctx) {{ return Number(ctx.raw || 0).toLocaleString('fa-IR') + ' تومان'; }} }}
+            }}
+          }},
           scales: {{
-            y: {{ ticks: {{ callback: function(v){{ return (v/1000000).toFixed(1)+'M'; }} }}, grid: {{ color: 'rgba(0,0,0,.04)' }} }},
-            x: {{ ticks: {{ font: {{ size: 10 }} }}, grid: {{ display: false }} }}
+            y: {{
+              beginAtZero: true, border: {{ display: false }},
+              grid: {{ color: 'rgba(148,163,184,.12)', drawTicks: false }},
+              ticks: {{
+                padding: 12, color: '#94A3B8', font: {{ family: 'Vazirmatn', size: 9 }},
+                callback: function(v) {{ return v >= 1000000 ? (v / 1000000).toLocaleString('fa-IR') + ' م' : v.toLocaleString('fa-IR'); }}
+              }}
+            }},
+            x: {{
+              border: {{ display: false }}, grid: {{ display: false }},
+              ticks: {{ color: '#94A3B8', font: {{ family: 'Vazirmatn', size: 9 }}, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 }}
+            }}
           }}
         }}
       }});
