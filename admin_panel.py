@@ -1457,6 +1457,25 @@ async def admins_list(request: Request, flash: str = ""):
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-6">👥 مدیریت ادمین‌ها</h1>
 
+    {"" if not adm[1] else f'''
+    <!-- Super Admin Settings -->
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-6">
+      <h2 class="font-bold text-amber-800 mb-4">🔐 تنظیمات سوپرادمین</h2>
+      <div class="grid md:grid-cols-2 gap-6">
+        <form method="post" action="/admin/admins/super/password" class="space-y-3">
+          <label class="text-xs text-gray-600 block">تغییر رمز پنل</label>
+          {_input("new_password", "رمز جدید", type_="password", required=True)}
+          {_input("confirm_password", "تکرار رمز", type_="password", required=True)}
+          <button class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700">ذخیره رمز</button>
+        </form>
+        <form method="post" action="/admin/admins/super/telegram_id" class="space-y-3">
+          <label class="text-xs text-gray-600 block">تغییر آیدی تلگرام سوپرادمین</label>
+          {_input("new_telegram_id", "آیدی عددی تلگرام", type_="number", required=True)}
+          <button class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700">ذخیره آیدی</button>
+        </form>
+      </div>
+    </div>'''}
+
     <!-- Add Form -->
     <div class="bg-white rounded-xl shadow p-6 mb-6">
       <h2 class="font-bold text-gray-700 mb-4">➕ افزودن ادمین جدید</h2>
@@ -1509,6 +1528,63 @@ async def admins_list(request: Request, flash: str = ""):
     </div>"""
 
     return _layout("ادمین‌ها", body, adm, flash=flash)
+
+@router.post("/admins/super/password")
+async def super_change_password(request: Request, new_password: str = Form(""), confirm_password: str = Form("")):
+    adm = _get_admin(request)
+    if not adm or not adm[1]:  # فقط سوپرادمین
+        return _redir("/admin/login")
+    if not new_password or new_password != confirm_password:
+        return _redir("/admin/admins?flash=رمزها+یکسان+نیستند+یا+خالی+است")
+    # آپدیت .env
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    try:
+        lines = open(env_path, encoding="utf-8").readlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.startswith("ADMIN_WEB_PASSWORD="):
+                new_lines.append(f"ADMIN_WEB_PASSWORD={new_password}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"ADMIN_WEB_PASSWORD={new_password}\n")
+        open(env_path, "w", encoding="utf-8").writelines(new_lines)
+        os.environ["ADMIN_WEB_PASSWORD"] = new_password
+    except Exception as ex:
+        return _redir(f"/admin/admins?flash=خطا:+{str(ex)[:40]}")
+    return _redir("/admin/admins?flash=رمز+سوپرادمین+تغییر+کرد")
+
+
+@router.post("/admins/super/telegram_id")
+async def super_change_telegram_id(request: Request, new_telegram_id: str = Form("")):
+    adm = _get_admin(request)
+    if not adm or not adm[1]:
+        return _redir("/admin/login")
+    try:
+        int(new_telegram_id)
+    except ValueError:
+        return _redir("/admin/admins?flash=آیدی+نامعتبر")
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    try:
+        lines = open(env_path, encoding="utf-8").readlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.startswith("ADMIN_ID="):
+                new_lines.append(f"ADMIN_ID={new_telegram_id}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"ADMIN_ID={new_telegram_id}\n")
+        open(env_path, "w", encoding="utf-8").writelines(new_lines)
+        os.environ["ADMIN_ID"] = new_telegram_id
+    except Exception as ex:
+        return _redir(f"/admin/admins?flash=خطا:+{str(ex)[:40]}")
+    return _redir("/admin/admins?flash=آیدی+تلگرام+تغییر+کرد+—+ربات+را+ریستارت+کنید")
+
 
 @router.post("/admins/add")
 async def admins_add(request: Request):
