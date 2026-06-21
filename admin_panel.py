@@ -269,39 +269,34 @@ def _layout(title: str, body: str, admin_info=None,
           <div class="sidebar-header">
             <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند">
               <span class="brand-mark">
-              <svg width="44" height="44" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <!-- گلو پس‌زمینه -->
-                <ellipse cx="60" cy="64" rx="42" ry="32" fill="rgba(0,215,255,0.13)" filter="url(#glow)"/>
+              <svg width="46" height="38" viewBox="0 0 92 76" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <defs>
-                  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-                    <feGaussianBlur stdDeviation="8" result="blur"/>
-                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-                  </filter>
-                  <!-- گرادیان نقره‌ای S -->
-                  <linearGradient id="sGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stop-color="#F0F4F8"/>
-                    <stop offset="35%" stop-color="#FFFFFF"/>
-                    <stop offset="65%" stop-color="#B8C4D0"/>
-                    <stop offset="100%" stop-color="#7A8899"/>
+                  <linearGradient id="slG1" x1="5%" y1="0%" x2="95%" y2="100%">
+                    <stop offset="0%"   stop-color="#C8D2DA"/>
+                    <stop offset="28%"  stop-color="#FFFFFF"/>
+                    <stop offset="60%"  stop-color="#AAB4BE"/>
+                    <stop offset="100%" stop-color="#56646E"/>
                   </linearGradient>
-                  <!-- گرادیان نقره‌ای L -->
-                  <linearGradient id="lGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stop-color="#D0D8E4"/>
-                    <stop offset="40%" stop-color="#F8FAFC"/>
-                    <stop offset="100%" stop-color="#8896A8"/>
-                  </linearGradient>
-                  <!-- گرادیان فیروزه‌ای -->
-                  <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stop-color="#00D7FF" stop-opacity="0.6"/>
-                    <stop offset="100%" stop-color="#0066AA" stop-opacity="0.2"/>
+                  <linearGradient id="slG2" x1="15%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%"   stop-color="#D4DDE6"/>
+                    <stop offset="45%"  stop-color="#F0F4F8"/>
+                    <stop offset="100%" stop-color="#4E5C6A"/>
                   </linearGradient>
                 </defs>
-                <!-- حرف S -->
-                <path d="M28 30 C28 24 34 20 42 20 L66 20 L60 29 L40 29 C37 29 35 31 35 33 C35 35 37 37 42 38 L54 41 C63 43 70 48 70 56 C70 64 63 70 54 70 L28 70 L34 61 L56 61 C60 61 63 59 63 57 C63 55 61 53 56 52 L44 49 C35 47 28 42 28 33 Z" fill="url(#sGrad)"/>
-                <!-- حرف L -->
-                <path d="M72 20 L82 20 L82 86 L100 86 L94 100 L72 100 Z" fill="url(#lGrad)"/>
-                <!-- خط تقاطع نورانی -->
-                <path d="M58 38 L78 68" stroke="url(#glowGrad)" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+                <!-- S: top bar -->
+                <polygon points="4,4 46,4 42,15 4,15" fill="url(#slG1)"/>
+                <!-- S: upper-left connector -->
+                <polygon points="4,15 4,30 12,30 12,22 42,15" fill="url(#slG2)" opacity=".9"/>
+                <!-- S: mid bar -->
+                <polygon points="4,28 42,28 38,38 4,38" fill="url(#slG1)" opacity=".85"/>
+                <!-- S: lower-right connector -->
+                <polygon points="30,38 46,38 46,54 38,54 30,48" fill="url(#slG2)" opacity=".9"/>
+                <!-- S: bottom bar -->
+                <polygon points="4,54 46,54 42,64 4,64" fill="url(#slG1)"/>
+                <!-- L: vertical -->
+                <polygon points="54,4 66,4 66,64 54,64" fill="url(#slG2)"/>
+                <!-- L: foot -->
+                <polygon points="54,54 88,54 84,64 54,64" fill="url(#slG1)"/>
               </svg>
               </span>
               <div class="brand-copy">
@@ -375,7 +370,7 @@ def _layout(title: str, body: str, admin_info=None,
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <style>
-    :root {{ {css_vars} }}
+    :root {{ {css_vars}; --glass-level:0; }}
     :root {{ --success:#22C55E; --warning:#F59E0B; --danger:#EF4444; --sidebar-secondary:#0B1320; --card-shadow:0 12px 40px rgba(15,23,42,.06); }}
     *, *::before, *::after {{ box-sizing:border-box; font-family:'Vazirmatn',Tahoma,sans-serif !important; }}
     html {{ background:var(--page-bg); scroll-behavior:smooth; }}
@@ -388,9 +383,14 @@ def _layout(title: str, body: str, admin_info=None,
     .sidebar {{
       position:fixed; inset:0 0 0 auto; width:280px; height:100vh; z-index:200;
       display:flex; flex-direction:column; color:var(--sidebar-text); overflow:hidden;
-      background:linear-gradient(180deg,rgba(11,19,32,.94),rgba(5,7,10,.98) 40%),var(--sidebar-bg);
+      background:linear-gradient(180deg,
+        rgba(11,19,32, calc(0.94 - var(--glass-level)*0.36)),
+        rgba(5,7,10, calc(0.98 - var(--glass-level)*0.28))
+      ),var(--sidebar-bg);
       border-left:1px solid rgba(255,255,255,.06); box-shadow:-18px 0 50px rgba(2,6,23,.12);
-      transition:transform 220ms cubic-bezier(.2,.8,.2,1); backdrop-filter:blur(24px);
+      transition:transform 220ms cubic-bezier(.2,.8,.2,1);
+      backdrop-filter:blur(calc(var(--glass-level)*28px)) saturate(calc(100% + var(--glass-level)*80%));
+      -webkit-backdrop-filter:blur(calc(var(--glass-level)*28px));
     }}
     .sidebar::before {{ content:""; position:absolute; top:-100px; right:-90px; width:280px; height:280px; border-radius:50%; background:rgba(0,215,255,.08); filter:blur(70px); pointer-events:none; }}
     .sidebar-header {{ min-height:104px; display:flex; align-items:center; padding:24px 22px 20px; border-bottom:1px solid rgba(255,255,255,.07); position:relative; }}
@@ -482,12 +482,18 @@ def _layout(title: str, body: str, admin_info=None,
       width:100%; min-height:44px; border:1px solid var(--border); border-radius:14px; padding:10px 13px;
       font-size:13px; background:var(--card-bg); color:var(--text-main); outline:none; transition:border 180ms,box-shadow 180ms,background 180ms;
     }}
+    input[type=checkbox], input[type=radio] {{
+      width:16px !important; height:16px !important; min-height:16px !important;
+      padding:0 !important; border-radius:5px !important; cursor:pointer; flex-shrink:0;
+    }}
+    input[type=range] {{ min-height:unset !important; padding:0 !important; border:none !important; background:none !important; border-radius:0 !important; }}
     textarea {{ min-height:110px; resize:vertical; }}
     input::placeholder,textarea::placeholder {{ color:#a6adba; }}
     input:focus, textarea:focus, select:focus {{ border-color:var(--primary); box-shadow:0 0 0 4px rgba(0,215,255,.11); }}
     label {{ font-size:12px; color:#4b5563; display:block; margin-bottom:7px; font-weight:600; }}
-    table {{ width:100%; border-collapse:separate; border-spacing:0; }}
-    thead {{ position:sticky; top:72px; z-index:2; }}
+    table {{ width:100%; border-collapse:collapse; }}
+    thead {{ position:static; }}
+    .perm-label {{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; font-size:12px; color:var(--text-main); font-weight:500; white-space:nowrap; padding:5px 0; }}
     th {{ padding:13px 16px; font-size:11px; color:var(--text-muted); font-weight:700; border-bottom:1px solid var(--border); text-align:right; background:#fafbfc; white-space:nowrap; }}
     td {{ padding:14px 16px; font-size:13px; border-bottom:1px solid #eef0f3; transition:background 160ms; }}
     tbody tr:last-child td {{ border-bottom:0; }} tbody tr:hover td {{ background:#f8fbfc; }}
@@ -531,6 +537,12 @@ def _layout(title: str, body: str, admin_info=None,
 <script>
 (function(){{
   function renderIcons(){{ if(window.lucide) lucide.createIcons({{attrs:{{'aria-hidden':'true'}}}}); }}
+
+  // اعمال glass level از DB هنگام load
+  (function(){{
+    var gl = parseFloat('{theme.get("glass", "0") if admin_info else "0"}') || 0;
+    if(gl > 0) document.documentElement.style.setProperty('--glass-level', gl);
+  }})();
 
   // Active nav
   var path = location.pathname;
@@ -1195,51 +1207,93 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
           {content}
         </div>
 
-        <!-- Color Theme -->
-        <div style="margin-top:20px;border-radius:20px;overflow:hidden;background:linear-gradient(135deg,rgba(5,7,10,.97),rgba(11,19,32,.99));border:1px solid rgba(255,255,255,.08);padding:28px">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
-            <div style="width:40px;height:40px;border-radius:12px;background:rgba(0,215,255,.1);border:1px solid rgba(0,215,255,.2);display:flex;align-items:center;justify-content:center"><i data-lucide="palette" style="width:18px;color:#00D7FF"></i></div>
+        <!-- Super Admin Account Settings -->
+        {"" if not adm[1] else f'''
+        <div style="margin-top:20px;border-radius:20px;background:linear-gradient(135deg,rgba(15,10,5,.97),rgba(25,15,5,.99));border:1px solid rgba(255,165,0,.15);padding:24px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+            <div style="width:38px;height:38px;border-radius:12px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.25);display:flex;align-items:center;justify-content:center"><i data-lucide="shield-check" style="width:17px;color:#F59E0B"></i></div>
             <div>
-              <div style="font-size:15px;font-weight:700;color:#fff">تنظیمات رنگ‌بندی پنل</div>
-              <div style="font-size:11px;color:#4A5568;margin-top:2px">هر رنگ را با اسلایدر R-G-B تنظیم کنید. تغییرات بلافاصله در پیش‌نمایش اعمال می‌شود.</div>
+              <div style="font-size:14px;font-weight:700;color:#fff">تنظیمات حساب مدیر ارشد</div>
+              <div style="font-size:11px;color:#5A4020;margin-top:2px">تنها مدیر ارشد به این بخش دسترسی دارد</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <form method="post" action="/admin/admins/super/password" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px">
+              <label style="font-size:12px;font-weight:600;color:#C5A030;display:block;margin-bottom:10px">تغییر رمز پنل</label>
+              {_input("new_password", "رمز جدید", type_="password", required=True)}
+              <div style="margin-top:8px">{_input("confirm_password", "تکرار رمز", type_="password", required=True)}</div>
+              <div style="margin-top:10px"><button type="submit" style="padding:9px 18px;background:#B45309;color:#fff;border:none;border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer">ذخیره رمز</button></div>
+            </form>
+            <form method="post" action="/admin/admins/super/telegram_id" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px">
+              <label style="font-size:12px;font-weight:600;color:#C5A030;display:block;margin-bottom:10px">تغییر آیدی تلگرام سوپرادمین</label>
+              {_input("new_telegram_id", "آیدی عددی تلگرام", type_="number", required=True)}
+              <div style="margin-top:18px"><button type="submit" style="padding:9px 18px;background:#B45309;color:#fff;border:none;border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer">ذخیره آیدی</button></div>
+            </form>
+          </div>
+        </div>
+        '''}
+
+        <!-- Color & Glass System -->
+        <div style="margin-top:20px;border-radius:20px;background:linear-gradient(135deg,rgba(5,7,10,.97),rgba(11,19,32,.99));border:1px solid rgba(255,255,255,.08);padding:26px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:22px">
+            <div style="width:38px;height:38px;border-radius:12px;background:rgba(0,215,255,.1);border:1px solid rgba(0,215,255,.2);display:flex;align-items:center;justify-content:center"><i data-lucide="sliders-horizontal" style="width:16px;color:#00D7FF"></i></div>
+            <div>
+              <div style="font-size:14px;font-weight:700;color:#fff">تنظیم رنگ و جلوه بصری</div>
+              <div style="font-size:11px;color:#3A4A5A;margin-top:2px">رنگ اصلی پنل و شدت جلوه شیشه‌ای را تنظیم کنید</div>
             </div>
           </div>
           <style>
-            .color-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }}
-            .color-item {{ background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.07); border-radius:16px; padding:15px; transition:.2s; }}
-            .color-item:hover {{ background:rgba(0,215,255,.04); border-color:rgba(0,215,255,.12); }}
-            .color-header {{ display:flex; align-items:center; gap:11px; margin-bottom:12px; }}
-            .color-preview {{ width:42px; height:42px; border-radius:11px; border:1px solid rgba(255,255,255,.12); flex-shrink:0; transition:background .15s; }}
-            .color-label {{ font-size:12px; font-weight:600; color:#C5CDD8; }}
-            .color-hex {{ font-size:10.5px; color:#3D4D5E; font-family:monospace; margin-top:2px; display:block; }}
-            .slider-group {{ display:flex; flex-direction:column; gap:8px; }}
-            .slider-row {{ display:grid; grid-template-columns:12px 1fr 22px; align-items:center; gap:8px; }}
-            .slider-lbl {{ font-size:9px; font-weight:800; text-align:center; }}
-            input[type=range].rgb-slider {{ height:5px; border-radius:5px; outline:none; cursor:pointer; border:none; background:rgba(255,255,255,.08); -webkit-appearance:none; appearance:none; min-height:unset; padding:0; }}
-            input[type=range].rgb-slider::-webkit-slider-thumb {{ -webkit-appearance:none; width:13px; height:13px; border-radius:50%; box-shadow:0 2px 6px rgba(0,0,0,.5); cursor:pointer; }}
-            .r-slider::-webkit-slider-thumb {{ background:#ef4444; }}
-            .g-slider::-webkit-slider-thumb {{ background:#22c55e; }}
-            .b-slider::-webkit-slider-thumb {{ background:#3b82f6; }}
-            .slider-val {{ font-size:9px; color:#3D4D5E; font-family:monospace; text-align:left; }}
+            .ctrl-block {{ background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:18px;margin-bottom:14px; }}
+            .ctrl-title {{ font-size:12px;font-weight:700;color:#C5CDD8;margin-bottom:14px; }}
+            .rgb-row {{ display:flex;align-items:center;gap:10px;margin-bottom:10px; }}
+            .rgb-lbl {{ font-size:11px;font-weight:800;width:28px;text-align:center;padding:3px 0;border-radius:6px; }}
+            .rgb-lbl.r {{ color:#EF4444;background:rgba(239,68,68,.12); }}
+            .rgb-lbl.g {{ color:#22C55E;background:rgba(34,197,94,.12); }}
+            .rgb-lbl.b {{ color:#3B82F6;background:rgba(59,130,246,.12); }}
+            .s-track {{ flex:1;height:5px;border-radius:5px;-webkit-appearance:none;appearance:none;outline:none;cursor:pointer;border:none;background:rgba(255,255,255,.1);min-height:unset!important;padding:0!important; }}
+            .s-track.r::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#EF4444;cursor:pointer; }}
+            .s-track.g::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#22C55E;cursor:pointer; }}
+            .s-track.b::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#3B82F6;cursor:pointer; }}
+            .s-track.glass::-webkit-slider-thumb {{ -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#00D7FF;cursor:pointer; }}
+            .s-val {{ font-size:9px;color:#3A4A5A;width:22px;text-align:left;font-family:monospace; }}
+            .color-preview-row {{ display:flex;align-items:center;gap:12px;margin-top:14px; }}
+            .color-dot {{ width:36px;height:36px;border-radius:10px;border:1px solid rgba(255,255,255,.12);transition:background .15s; }}
           </style>
 
           <form method="post" action="/admin/settings/theme" id="themeForm">
-            <div class="color-grid">
-              {_theme_color_input("sidebar_bg", "پس‌زمینه منو", theme)}
-              {_theme_color_input("sidebar_text", "متن منو", theme)}
-              {_theme_color_input("sidebar_active", "رنگ آیتم فعال", theme)}
-              {_theme_color_input("primary", "رنگ اصلی (Primary)", theme)}
-              {_theme_color_input("accent", "رنگ تأکیدی (Accent)", theme)}
-              {_theme_color_input("page_bg", "پس‌زمینه صفحه", theme)}
-              {_theme_color_input("card_bg", "رنگ کارت‌ها", theme)}
-              {_theme_color_input("text_main", "رنگ متن اصلی", theme)}
+            <!-- Primary Color -->
+            <div class="ctrl-block">
+              <div class="ctrl-title">رنگ اصلی پنل (Primary)</div>
+              {(lambda r,g,b: f"""
+              <div class="rgb-row"><span class="rgb-lbl r">R</span><input type="range" min="0" max="255" value="{r}" class="s-track r" oninput="syncPrimary()"><span class="s-val" id="pr">{r}</span></div>
+              <div class="rgb-row"><span class="rgb-lbl g">G</span><input type="range" min="0" max="255" value="{g}" class="s-track g" oninput="syncPrimary()"><span class="s-val" id="pg">{g}</span></div>
+              <div class="rgb-row"><span class="rgb-lbl b">B</span><input type="range" min="0" max="255" value="{b}" class="s-track b" oninput="syncPrimary()"><span class="s-val" id="pb">{b}</span></div>
+              <div class="color-preview-row">
+                <div class="color-dot" id="primaryDot" style="background:{theme.get('primary','#00D7FF')}"></div>
+                <code id="primaryHex" style="font-size:11px;color:#00D7FF">{theme.get('primary','#00D7FF')}</code>
+              </div>
+              <input type="hidden" name="primary" id="primaryInp" value="{theme.get('primary','#00D7FF')}">
+              """)(*((lambda h: (int(h[1:3],16),int(h[3:5],16),int(h[5:7],16)))(theme.get('primary','#00D7FF'))))}
             </div>
-            <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">
-              <button type="submit" style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;background:#00D7FF;color:#000;font-weight:700;font-size:13px;border:none;border-radius:12px;cursor:pointer;transition:.15s">
-                <i data-lucide="save" style="width:15px"></i> ذخیره رنگ‌ها
+
+            <!-- Glass Effect -->
+            <div class="ctrl-block">
+              <div class="ctrl-title">شدت جلوه شیشه‌ای (Glass Effect)</div>
+              <div class="rgb-row">
+                <span class="rgb-lbl" style="color:#00D7FF;background:rgba(0,215,255,.1);width:42px;font-size:10px">Glass</span>
+                <input type="range" min="0" max="100" value="{int(float(theme.get('glass','0'))*100)}" class="s-track glass" id="glassSlider" oninput="syncGlass()">
+                <span class="s-val" id="glassVal">{int(float(theme.get('glass','0'))*100)}%</span>
+              </div>
+              <div style="margin-top:10px;font-size:11px;color:#3A4A5A">کمتر: پنل توپر — بیشتر: منو و کارت‌ها شیشه‌ای و بلور می‌شوند</div>
+              <input type="hidden" name="glass" id="glassInp" value="{theme.get('glass','0')}">
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button type="submit" style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:#00D7FF;color:#000;font-weight:700;font-size:13px;border:none;border-radius:11px;cursor:pointer">
+                <i data-lucide="save" style="width:15px"></i> ذخیره تنظیمات
               </button>
-              <a href="/admin/settings/theme/reset" onclick="return confirm('رنگ‌های پیش‌فرض بازگردانده شود؟')"
-                 style="display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:rgba(255,255,255,.06);color:#8896A8;font-size:13px;border-radius:12px;text-decoration:none;border:1px solid rgba(255,255,255,.08);transition:.15s">
+              <a href="/admin/settings/theme/reset" onclick="return confirm('بازگشت به حالت پیش‌فرض؟')"
+                 style="display:inline-flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,.06);color:#8896A8;font-size:13px;border-radius:11px;text-decoration:none;border:1px solid rgba(255,255,255,.08)">
                 <i data-lucide="rotate-ccw" style="width:14px"></i> پیش‌فرض
               </a>
             </div>
@@ -1247,20 +1301,28 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
 
           <script>
           (function(){{
-            function toHex(n){{ return Math.max(0,Math.min(255,n)).toString(16).padStart(2,'0'); }}
-            window.updateColor = function(key){{
-              var r = parseInt(document.querySelector('.r-slider[data-key="'+key+'"]').value);
-              var g = parseInt(document.querySelector('.g-slider[data-key="'+key+'"]').value);
-              var b = parseInt(document.querySelector('.b-slider[data-key="'+key+'"]').value);
+            function toHex(n){{ return Math.max(0,Math.min(255,Math.round(n))).toString(16).padStart(2,'0'); }}
+            var rsl=document.querySelector('.s-track.r'), gsl=document.querySelector('.s-track.g'), bsl=document.querySelector('.s-track.b');
+            window.syncPrimary = function(){{
+              if(!rsl) return;
+              var r=parseInt(rsl.value), g=parseInt(gsl.value), b=parseInt(bsl.value);
+              document.getElementById('pr').textContent = r;
+              document.getElementById('pg').textContent = g;
+              document.getElementById('pb').textContent = b;
               var hex = '#'+toHex(r)+toHex(g)+toHex(b);
-              document.getElementById('r_'+key).textContent = r;
-              document.getElementById('g_'+key).textContent = g;
-              document.getElementById('b_'+key).textContent = b;
-              document.getElementById('hex_'+key).textContent = hex;
-              document.getElementById('inp_'+key).value = hex;
-              document.getElementById('prev_'+key).style.background = hex;
-              // پیش‌نمایش فوری روی صفحه
-              document.documentElement.style.setProperty('--'+key.replace(/_/g,'-'), hex);
+              document.getElementById('primaryDot').style.background = hex;
+              document.getElementById('primaryHex').textContent = hex;
+              document.getElementById('primaryHex').style.color = hex;
+              document.getElementById('primaryInp').value = hex;
+              document.documentElement.style.setProperty('--primary', hex);
+              document.documentElement.style.setProperty('--sidebar-active', hex);
+            }};
+            window.syncGlass = function(){{
+              var v = parseInt(document.getElementById('glassSlider').value);
+              document.getElementById('glassVal').textContent = v + '%';
+              var gl = (v / 100).toFixed(2);
+              document.getElementById('glassInp').value = gl;
+              document.documentElement.style.setProperty('--glass-level', gl);
             }};
             if(window.lucide) lucide.createIcons();
           }})();
@@ -1322,9 +1384,8 @@ async def settings_theme_save(request: Request):
     form = await request.form()
     conn = _db()
     try:
-        for key in DEFAULT_THEME:
-            # اول color picker رو چک کن، بعد hex input
-            val = str(form.get(key) or form.get(f"{key}_hex") or DEFAULT_THEME[key]).strip()
+        for key in ("primary", "glass"):
+            val = str(form.get(key) or "").strip()
             if val:
                 conn.execute(
                     "INSERT INTO panel_theme (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
@@ -1333,7 +1394,7 @@ async def settings_theme_save(request: Request):
         conn.commit()
     finally:
         conn.close()
-    return _redir("/admin/settings?flash=رنگ‌بندی+ذخیره+شد")
+    return _redir("/admin/settings?flash=تنظیمات+رنگ+ذخیره+شد")
 
 
 @router.get("/settings/theme/reset")
@@ -2098,87 +2159,54 @@ async def admins_list(request: Request, flash: str = ""):
           </td>
         </tr>"""
 
-    # Permission checkboxes for add form
-    perm_checks = ""
+    # Permission checkboxes - inline compact
+    perm_checks = '<div style="display:flex;flex-wrap:wrap;gap:6px 16px;padding:14px;background:var(--page-bg);border-radius:12px">'
     for perm_key, perm_label in ALL_PERMISSIONS.items():
-        perm_checks += f"""
-        <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" name="perm_{perm_key}" value="1"
-            class="rounded border-gray-300 text-indigo-600">
-          {e(perm_label)}
-        </label>"""
+        perm_checks += f'<label class="perm-label"><input type="checkbox" name="perm_{perm_key}" value="1">{e(perm_label)}</label>'
+    perm_checks += '</div>'
 
     body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">👥 مدیریت ادمین‌ها</h1>
-
-    {"" if not adm[1] else f'''
-    <!-- Super Admin Settings -->
-    <div class="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-6">
-      <h2 class="font-bold text-amber-800 mb-4">🔐 تنظیمات سوپرادمین</h2>
-      <div class="grid md:grid-cols-2 gap-6">
-        <form method="post" action="/admin/admins/super/password" class="space-y-3">
-          <label class="text-xs text-gray-600 block">تغییر رمز پنل</label>
-          {_input("new_password", "رمز جدید", type_="password", required=True)}
-          {_input("confirm_password", "تکرار رمز", type_="password", required=True)}
-          <button class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700">ذخیره رمز</button>
-        </form>
-        <form method="post" action="/admin/admins/super/telegram_id" class="space-y-3">
-          <label class="text-xs text-gray-600 block">تغییر آیدی تلگرام سوپرادمین</label>
-          {_input("new_telegram_id", "آیدی عددی تلگرام", type_="number", required=True)}
-          <button class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700">ذخیره آیدی</button>
-        </form>
-      </div>
-    </div>'''}
+    <div class="page-header">
+      <h1>مدیریت ادمین‌ها</h1>
+      <p>کنترل دسترسی مدیران پنل</p>
+    </div>
 
     <!-- Add Form -->
-    <div class="bg-white rounded-xl shadow p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن ادمین جدید</h2>
-      <form method="post" action="/admin/admins/add" class="space-y-4">
-        <div class="grid md:grid-cols-2 gap-4">
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">نام نمایشی *</label>
-            {_input("name", "مثلاً: پشتیبانی اول", required=True)}
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">آیدی تلگرام (برای دسترسی در ربات)</label>
-            {_input("telegram_id", "مثلاً: 123456789", type_="number")}
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">یوزرنیم پنل وب *</label>
-            {_input("web_username", "مثلاً: support1", required=True)}
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">رمز پنل وب *</label>
-            {_input("web_password", "رمز قوی انتخاب کنید", type_="password", required=True)}
-          </div>
+    <div class="card card-p mb-5">
+      <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin-bottom:16px">افزودن ادمین جدید</h2>
+      <form method="post" action="/admin/admins/add">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+          <div><label>نام نمایشی *</label>{_input("name", "مثلاً: پشتیبانی اول", required=True)}</div>
+          <div><label>آیدی تلگرام</label>{_input("telegram_id", "مثلاً: 123456789", type_="number")}</div>
+          <div><label>یوزرنیم پنل *</label>{_input("web_username", "مثلاً: support1", required=True)}</div>
+          <div><label>رمز پنل *</label>{_input("web_password", "رمز قوی", type_="password", required=True)}</div>
         </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-2">اختیارات</label>
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-2 p-4 bg-gray-50 rounded-lg">
-            {perm_checks}
-          </div>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">یادداشت (اختیاری)</label>
-          {_input("notes", "توضیح نقش یا مسئولیت")}
-        </div>
-        {_btn("➕ افزودن ادمین", color="green")}
+        <div style="margin-bottom:14px"><label>اختیارات دسترسی</label>{perm_checks}</div>
+        <div><label>یادداشت (اختیاری)</label>{_input("notes", "توضیح نقش یا مسئولیت")}</div>
+        <div style="margin-top:14px">{_btn("افزودن ادمین", color="green")}</div>
       </form>
     </div>
 
     <!-- Admins Table -->
-    <div class="bg-white rounded-xl shadow overflow-hidden">
-      <div class="px-5 py-3 border-b bg-gray-50">
-        <span class="font-medium text-gray-700 text-sm">ادمین‌های فعلی ({len(admins)})</span>
+    <div class="card" style="overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:14px;font-weight:700;color:var(--text-main)">ادمین‌های فعلی ({len(admins)})</span>
       </div>
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b">
-          <th class="px-4 py-3">نام</th><th class="px-4 py-3">تلگرام</th>
-          <th class="px-4 py-3">یوزرنیم</th><th class="px-4 py-3">اختیارات</th>
-          <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400 text-sm'>هنوز ادمینی اضافه نشده</td></tr>"}</tbody>
-      </table>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
+              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نام</th>
+              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تلگرام</th>
+              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">یوزرنیم</th>
+              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">اختیارات</th>
+              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
+              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
+            </tr>
+          </thead>
+          <tbody>{rows or "<tr><td colspan='6' style='text-align:center;padding:32px;color:var(--text-muted);font-size:13px'>هنوز ادمینی اضافه نشده</td></tr>"}</tbody>
+        </table>
+      </div>
     </div>"""
 
     return _layout("ادمین‌ها", body, adm, flash=flash)
