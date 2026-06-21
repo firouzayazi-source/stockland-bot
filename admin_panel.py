@@ -83,27 +83,50 @@ def _hash_pw(password: str) -> str:
     secret = _env("SESSION_SECRET", "stockland")
     return hashlib.sha256((secret + password).encode()).hexdigest()
 
+IDLE_TIMEOUT_SECONDS = 300  # ۵ دقیقه عدم فعالیت → logout
+
 def _make_session(admin_id: str) -> str:
+    """session شامل admin_id و timestamp، امضاشده با HMAC."""
+    import time as _t
+    ts = str(int(_t.time()))
     secret = _env("SESSION_SECRET", "stockland-panel")
-    token = _hmac.new(secret.encode(), admin_id.encode(), hashlib.sha256).hexdigest()
-    return f"{token}:{admin_id}"
+    payload = f"{admin_id}|{ts}"
+    token = _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{token}:{admin_id}|{ts}"
 
 def _get_admin(request: Request):
-    """Returns (admin_id, is_super, permissions_list) or None."""
+    """Returns (admin_id, is_super, permissions_list) or None. اعتبارسنجی + بررسی idle timeout."""
+    import time as _t
     ensure_admins_table()
     cookie = request.cookies.get("adm", "")
     if not cookie or ":" not in cookie:
         return None
 
-    token, admin_id = cookie.rsplit(":", 1)
+    token, payload = cookie.rsplit(":", 1)
+
+    # payload قالب جدید: admin_id|timestamp — سازگاری با قالب قدیمی (فقط admin_id)
+    if "|" in payload:
+        admin_id, ts_str = payload.rsplit("|", 1)
+    else:
+        admin_id, ts_str = payload, None
+
     expected_token = _hmac.new(
         _env("SESSION_SECRET", "stockland-panel").encode(),
-        admin_id.encode(),
+        payload.encode(),
         hashlib.sha256,
     ).hexdigest()
 
     if not _hmac.compare_digest(token, expected_token):
         return None
+
+    # بررسی idle timeout (۵ دقیقه)
+    if ts_str:
+        try:
+            age = int(_t.time()) - int(ts_str)
+            if age > IDLE_TIMEOUT_SECONDS:
+                return None  # منقضی شده → نیاز به ورود مجدد
+        except Exception:
+            return None
 
     if admin_id == "super":
         return ("super", True, list(ALL_PERMISSIONS.keys()))
@@ -121,6 +144,10 @@ def _get_admin(request: Request):
         return (str(row["id"]), False, perms)
     except Exception:
         return None
+
+
+def _admin_id_of(admin_info) -> str:
+    return admin_info[0] if admin_info else ""
 
 def _has(admin_info, perm: str) -> bool:
     if not admin_info:
@@ -183,13 +210,13 @@ def _layout(title: str, body: str, admin_info=None,
     # نوتیف تیکت‌های باز
     open_tickets = _open_ticket_count() if admin_info else 0
     ticket_badge = (
-        f'<span class="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{open_tickets}</span>'
-        if open_tickets > 0 else ""
+        f'<span id="ticket-badge" class="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{open_tickets}</span>'
+        if open_tickets > 0 else '<span id="ticket-badge" class="hidden bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold"></span>'
     )
     pending_partners = _pending_partner_count() if admin_info else 0
     partner_badge = (
-        f'<span class="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{pending_partners}</span>'
-        if pending_partners > 0 else ""
+        f'<span id="partner-badge" class="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold">{pending_partners}</span>'
+        if pending_partners > 0 else '<span id="partner-badge" class="hidden bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 mr-0.5 font-bold"></span>'
     )
 
     def nav_link(href, label, perm=None, badge=""):
@@ -208,7 +235,7 @@ def _layout(title: str, body: str, admin_info=None,
         {nav_link("/admin/orders", "🧾 سفارش‌ها", "orders")}
         {nav_link("/admin/wallets", "💰 کیف‌پول", "wallets")}
         {nav_link("/admin/partners", "🤝 همکاران", "partners", badge=partner_badge)}
-        {nav_link("/admin/tickets", "🎫 تیکت‌ها", "orders", badge=ticket_badge)}
+        {nav_link("/admin/tickets", "🎫 تیکت‌ها", "tickets", badge=ticket_badge)}
         {nav_link("/admin/broadcast", "📢 پیام‌رسانی", "broadcast")}
         {nav_link("/admin/settings", "⚙️ تنظیمات", "settings")}
         {nav_link("/admin/database", "💾 دیتابیس", "database")}
@@ -245,6 +272,38 @@ def _layout(title: str, body: str, admin_info=None,
   {flash_html}
   {body}
 </main>
+{"" if not admin_info else '''<script>
+  (function(){
+    var IDLE_MS = 300000; // 5 دقیقه
+    var timer;
+    function reset(){
+      clearTimeout(timer);
+      timer = setTimeout(function(){
+        window.location.href = "/admin/login?flash=" + encodeURIComponent("به دلیل عدم فعالیت خارج شدید");
+      }, IDLE_MS);
+    }
+    ["mousemove","keydown","click","scroll","touchstart"].forEach(function(ev){
+      document.addEventListener(ev, reset, true);
+    });
+    reset();
+
+    // به‌روزرسانی real-time شمارنده‌ها (تیکت + همکار)
+    function updateBadge(id, count){
+      var el = document.getElementById(id);
+      if(!el) return;
+      if(count > 0){ el.textContent = count; el.classList.remove("hidden"); }
+      else { el.classList.add("hidden"); }
+    }
+    function pollBadges(){
+      fetch("/admin/badges.json").then(function(r){ return r.json(); })
+        .then(function(d){
+          updateBadge("ticket-badge", d.tickets || 0);
+          updateBadge("partner-badge", d.partners || 0);
+        }).catch(function(){});
+    }
+    setInterval(pollBadges, 15000);
+  })();
+</script>'''}
 </body>
 </html>""")
 
@@ -273,7 +332,7 @@ def _textarea(name, placeholder="", value="", rows=4):
 # ─────────────────────────── Login / Logout ────────────────────────────────
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_get(request: Request, err: str = ""):
+async def login_get(request: Request, err: str = "", flash: str = ""):
     adm = _get_admin(request)
     if adm:
         return _redir("/admin/")
@@ -281,6 +340,8 @@ async def login_get(request: Request, err: str = ""):
     err_html = ""
     if err == "1":
         err_html = '<div class="mb-4 text-red-600 text-sm text-center bg-red-50 p-2 rounded-lg">❌ نام کاربری یا رمز اشتباه است</div>'
+    if flash:
+        err_html += f'<div class="mb-4 text-amber-700 text-sm text-center bg-amber-50 p-2 rounded-lg">⏱ {e(flash)}</div>'
 
     body = f"""
     <div class="min-h-screen flex items-center justify-center -mt-16">
@@ -315,7 +376,7 @@ async def login_post(username: str = Form(""), password: str = Form("")):
     super_pw = _env("ADMIN_WEB_PASSWORD")
     if username.lower() in ("admin", "super") and super_pw and _hmac.compare_digest(password, super_pw):
         resp = _redir("/admin/")
-        resp.set_cookie("adm", _make_session("super"), max_age=86400 * 7, httponly=True, samesite="lax")
+        resp.set_cookie("adm", _make_session("super"), max_age=300, httponly=True, samesite="lax")
         return resp
 
     # ادمین از دیتابیس
@@ -328,7 +389,7 @@ async def login_post(username: str = Form(""), password: str = Form("")):
         conn.close()
         if row and row["is_active"] and row["web_password_hash"] == _hash_pw(password):
             resp = _redir("/admin/")
-            resp.set_cookie("adm", _make_session(str(row["id"])), max_age=86400 * 7, httponly=True, samesite="lax")
+            resp.set_cookie("adm", _make_session(str(row["id"])), max_age=300, httponly=True, samesite="lax")
             return resp
     except Exception:
         pass
@@ -2243,6 +2304,13 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
             SELECT id, data, delivered, created_at FROM product_feed
             WHERE product_id=? ORDER BY id DESC LIMIT ? OFFSET ?;
         """, (pid, PAGE, page*PAGE)).fetchall()
+        # تعداد برگشتی این محصول
+        try:
+            returned_cnt = conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE product_id=? AND status='returned';", (str(pid),)
+            ).fetchone()[0]
+        except Exception:
+            returned_cnt = 0
     finally:
         conn.close()
 
@@ -2275,10 +2343,11 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
       {_btn("← بازگشت", "/admin/feed", "slate", small=True)}
       <h1 class="text-2xl font-bold text-gray-800">🗃 موجودی: {e(product["title"])}</h1>
     </div>
-    <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="grid grid-cols-4 gap-4 mb-6">
       {_card("کل آیتم‌ها", str(total), "", "slate")}
       {_card("موجود", str(avail), "", "green")}
       {_card("تحویل‌شده", str(total-avail), "", "indigo")}
+      {_card("برگشتی ↩️", str(returned_cnt), "بازگردانده‌شده", "red")}
     </div>
     <div class="bg-white rounded-xl shadow p-6 mb-6">
       <h2 class="font-bold text-gray-700 mb-3">➕ افزودن موجودی</h2>
@@ -2450,7 +2519,7 @@ async def feed_item_edit_post(request: Request, fid: int,
 # ─────────────────────────── Orders ────────────────────────────────────────
 
 @router.get("/orders", response_class=HTMLResponse)
-async def orders_list(request: Request, page: int=0, q: str=""):
+async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
     adm = _get_admin(request)
     guard = _require(adm, "orders")
     if guard: return guard
@@ -2458,23 +2527,53 @@ async def orders_list(request: Request, page: int=0, q: str=""):
     PAGE = 30
     conn = _db()
     try:
+        # migration امن
+        for col, typedef in [("status", "TEXT DEFAULT 'active'"), ("feed_id", "INTEGER"), ("returned_at", "TEXT")]:
+            try:
+                conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {typedef};")
+            except Exception:
+                pass
         where = "WHERE user_id LIKE ?" if q else ""
         params_q = (f"%{q}%",) if q else ()
         total = conn.execute(f"SELECT COUNT(*) FROM orders {where};", params_q).fetchone()[0]
         orders = conn.execute(f"SELECT * FROM orders {where} ORDER BY id DESC LIMIT ? OFFSET ?;",
                               params_q+(PAGE, page*PAGE)).fetchall()
+        # آمار برگشتی
+        returned_total = conn.execute("SELECT COUNT(*) FROM orders WHERE status='returned';").fetchone()[0]
     finally:
         conn.close()
 
     pages = max((total+PAGE-1)//PAGE, 1)
-    rows = "".join(f"""
-        <tr class="border-b hover:bg-gray-50 text-sm">
+
+    def order_status_badge(st):
+        if st == "returned":
+            return '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">برگشتی</span>'
+        return '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">فعال</span>'
+
+    rows = ""
+    for o in orders:
+        st = o["status"] if "status" in o.keys() and o["status"] else "active"
+        is_returned = st == "returned"
+        action_btns = ""
+        if not is_returned:
+            action_btns = f"""
+            <a href="/admin/orders/{o['id']}/edit" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">✏️ ویرایش</a>
+            <form method="post" action="/admin/orders/{o['id']}/return" class="inline" onsubmit="return confirm('محصول برگشت داده شود؟ پیام از چت کاربر حذف و موجودی بازگردانده می‌شود.')">
+              <button class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">↩️ برگشت</button>
+            </form>"""
+        else:
+            action_btns = '<span class="text-xs text-gray-400">برگشت خورده</span>'
+
+        rows += f"""
+        <tr class="border-b hover:bg-gray-50 text-sm {'bg-red-50/30' if is_returned else ''}">
           <td class="px-4 py-2 text-gray-400">#{o["id"]}</td>
           <td class="px-4 py-2 font-mono text-xs"><code>{e(o["user_id"])}</code></td>
           <td class="px-4 py-2">{e(o["title"])}</td>
           <td class="px-4 py-2 text-green-700 font-medium">{int(o["price"]):,} ت</td>
+          <td class="px-4 py-2">{order_status_badge(st)}</td>
           <td class="px-4 py-2 text-gray-400 text-xs">{(o["created_at"] or "")[:16]}</td>
-        </tr>""" for o in orders)
+          <td class="px-4 py-2 flex gap-1 items-center">{action_btns}</td>
+        </tr>"""
 
     pager = '<div class="flex gap-2 mt-4 justify-center">' + "".join(
         f'<a href="/admin/orders?page={i}" class="px-3 py-1 rounded border text-sm {"bg-indigo-600 text-white" if i==page else "bg-white"}">{i+1}</a>'
@@ -2482,23 +2581,115 @@ async def orders_list(request: Request, page: int=0, q: str=""):
     ) + "</div>" if pages > 1 else ""
 
     body = f"""
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
       <h1 class="text-2xl font-bold text-gray-800">🧾 سفارش‌ها ({total:,})</h1>
-      <form method="get" class="flex gap-2">
-        {_input("q","جستجو User ID...",q)} {_btn("جستجو","","slate",True)}
-      </form>
+      <div class="flex items-center gap-3">
+        <span class="px-3 py-1.5 bg-red-50 text-red-700 rounded-lg text-sm">↩️ برگشتی: {returned_total}</span>
+        <form method="get" class="flex gap-2">
+          {_input("q","جستجو User ID...",q)} {_btn("جستجو","","slate",True)}
+        </form>
+      </div>
     </div>
-    <div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="card overflow-hidden">
       <table class="w-full text-right">
         <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
           <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
-          <th class="px-4 py-3">محصول</th><th class="px-4 py-3">مبلغ</th><th class="px-4 py-3">تاریخ</th>
+          <th class="px-4 py-3">محصول</th><th class="px-4 py-3">مبلغ</th>
+          <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">عملیات</th>
         </tr></thead>
-        <tbody>{rows or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>سفارشی ثبت نشده</td></tr>"}</tbody>
+        <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>سفارشی ثبت نشده</td></tr>"}</tbody>
       </table>{pager}
     </div>"""
 
-    return _layout("سفارش‌ها", body, adm)
+    return _layout("سفارش‌ها", body, adm, flash=flash)
+
+
+@router.get("/orders/{oid}/edit", response_class=HTMLResponse)
+async def order_edit_get(request: Request, oid: int, flash: str=""):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        o = conn.execute("SELECT * FROM orders WHERE id=? LIMIT 1;", (oid,)).fetchone()
+    finally:
+        conn.close()
+    if not o:
+        return _redir("/admin/orders?flash=سفارش+یافت+نشد")
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← بازگشت", "/admin/orders", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش سفارش #{oid}</h1>
+    </div>
+    <div class="card p-6 max-w-xl">
+      <form method="post" action="/admin/orders/{oid}/edit" class="space-y-4">
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">کاربر</label>
+          <code class="bg-gray-100 px-2 py-1 rounded text-sm">{e(o["user_id"])}</code>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">عنوان محصول</label>
+          {_input("title", "", str(o["title"] or ""), required=True)}
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">مبلغ (تومان)</label>
+          {_input("price", "", str(o["price"] or 0), type_="number", required=True)}
+        </div>
+        <div class="flex gap-3">
+          {_btn("ذخیره تغییرات", color="green")}
+          {_btn("انصراف", "/admin/orders", "slate")}
+        </div>
+      </form>
+    </div>"""
+    return _layout(f"ویرایش سفارش #{oid}", body, adm, flash=flash)
+
+
+@router.post("/orders/{oid}/edit")
+async def order_edit_post(request: Request, oid: int, title: str=Form(""), price: str=Form("0")):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    try:
+        from db import order_update
+        order_update(oid, title=title.strip(), price=int(price or 0))
+    except Exception as ex:
+        _tg_logger.error("order_edit error: %s", ex)
+        return _redir(f"/admin/orders/{oid}/edit?flash=خطا+در+ذخیره")
+    return _redir("/admin/orders?flash=سفارش+ویرایش+شد")
+
+
+@router.post("/orders/{oid}/return")
+async def order_return(request: Request, oid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+
+    try:
+        from db import order_mark_returned
+        result = order_mark_returned(oid)
+    except Exception as ex:
+        _tg_logger.error("order_return error: %s", ex)
+        return _redir(f"/admin/orders?flash=خطا+در+برگشت:+{str(ex)[:40]}")
+
+    if not result.get("ok"):
+        return _redir(f"/admin/orders?flash={result.get('error', 'خطا')}")
+
+    # حذف پیام تحویل از چت کاربر
+    if result.get("chat_id") and result.get("message_id"):
+        _tg_delete_message(result["chat_id"], result["message_id"])
+
+    # اطلاع به کاربر
+    if result.get("user_id"):
+        _tg_send(
+            int(result["user_id"]),
+            f"⚠️ سفارش #{oid} (<b>{html.escape(str(result.get('title') or ''))}</b>) "
+            "توسط پشتیبانی برگشت داده شد.\nدر صورت سوال با پشتیبانی در تماس باشید."
+        )
+
+    return _redir("/admin/orders?flash=محصول+برگشت+داده+شد+و+موجودی+بازگردانده+شد")
+
 
 # ─────────────────────────── Wallets ───────────────────────────────────────
 
@@ -2522,6 +2713,21 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
           <td class="px-4 py-2 font-mono text-xs"><code>{w["user_id"]}</code></td>
           <td class="px-4 py-2 font-bold text-{"green" if int(w["balance"])>0 else "gray"}-700">{int(w["balance"]):,} ت</td>
           <td class="px-4 py-2 text-gray-400 text-xs">{(w["updated_at"] or "")[:16]}</td>
+          <td class="px-4 py-2">
+            <details class="inline-block">
+              <summary class="cursor-pointer px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 list-none">✏️ ویرایش موجودی</summary>
+              <form method="post" action="/admin/wallets/adjust" class="flex gap-2 items-end mt-2 p-2 bg-gray-50 rounded-lg">
+                <input type="hidden" name="uid" value="{w["user_id"]}">
+                <input type="number" name="amount" placeholder="مبلغ" required class="w-24 border border-gray-300 rounded px-2 py-1 text-xs">
+                <select name="op" class="border border-gray-300 rounded px-2 py-1 text-xs">
+                  <option value="add">➕ افزودن</option>
+                  <option value="sub">➖ کاهش</option>
+                  <option value="set">✏️ تنظیم</option>
+                </select>
+                <button class="px-3 py-1 bg-indigo-600 text-white rounded text-xs">ثبت</button>
+              </form>
+            </details>
+          </td>
         </tr>""" for w in wallets)
 
     body = f"""
@@ -2550,9 +2756,9 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
       </div>
       <table class="w-full text-right">
         <thead><tr class="text-xs text-gray-500 border-b">
-          <th class="px-4 py-2">User ID</th><th class="px-4 py-2">موجودی</th><th class="px-4 py-2">آپدیت</th>
+          <th class="px-4 py-2">User ID</th><th class="px-4 py-2">موجودی</th><th class="px-4 py-2">آپدیت</th><th class="px-4 py-2">عملیات</th>
         </tr></thead>
-        <tbody>{rows or "<tr><td colspan='3' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
+        <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
       </table>
     </div>"""
 
@@ -2570,15 +2776,43 @@ async def wallet_adjust(request: Request, uid: str=Form(""), amount: str=Form("0
     now = datetime.utcnow().isoformat()
     conn = _db()
     try:
+        # جدول لاگ تراکنش‌های دستی
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wallet_admin_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER, op TEXT, amount INTEGER,
+                old_balance INTEGER, new_balance INTEGER,
+                admin_id TEXT, created_at TEXT
+            );
+        """)
         row = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (user_id,)).fetchone()
         cur = int(row["balance"] if row else 0)
         new_bal = cur+amt if op=="add" else max(0,cur-amt) if op=="sub" else amt
         conn.execute("INSERT INTO wallets (user_id,balance,updated_at) VALUES (?,?,?) "
                      "ON CONFLICT(user_id) DO UPDATE SET balance=excluded.balance, updated_at=excluded.updated_at;",
                      (user_id, new_bal, now))
+        # ثبت تراکنش در سوابق
+        admin_id = adm[0] if adm else "?"
+        conn.execute(
+            "INSERT INTO wallet_admin_log (user_id, op, amount, old_balance, new_balance, admin_id, created_at) "
+            "VALUES (?,?,?,?,?,?,?);",
+            (user_id, op, amt, cur, new_bal, str(admin_id), now)
+        )
         conn.commit()
     finally:
         conn.close()
+
+    # اطلاع به کاربر
+    op_label = {"add": "افزایش", "sub": "کاهش", "set": "تنظیم"}.get(op, op)
+    try:
+        _tg_send(
+            user_id,
+            f"💰 موجودی کیف‌پول شما توسط پشتیبانی {op_label} یافت.\n"
+            f"موجودی فعلی: <b>{new_bal:,}</b> تومان"
+        )
+    except Exception:
+        pass
+
     return _redir(f"/admin/wallets?flash=موجودی+{user_id}+به+{new_bal:,}+تومان+تنظیم+شد")
 
 # ─────────────────────────── Telegram Helper ───────────────────────────────
@@ -2624,6 +2858,22 @@ def _tg_send_photo(chat_id: int, photo_url: str, caption: str = "",
         )
         return r.ok
     except Exception:
+        return False
+
+
+def _tg_delete_message(chat_id: int, message_id: int) -> bool:
+    """حذف یک پیام از چت کاربر (برای برگشت محصول)."""
+    token = _env("BOT_TOKEN")
+    if not token or not chat_id or not message_id:
+        return False
+    try:
+        r = _requests.post(
+            f"https://api.telegram.org/bot{token}/deleteMessage",
+            json={"chat_id": int(chat_id), "message_id": int(message_id)}, timeout=15
+        )
+        return r.ok
+    except Exception as ex:
+        _tg_logger.error("_tg_delete_message error: %s", ex)
         return False
 
 
@@ -3086,6 +3336,19 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
     return _redir(f"/admin/tickets/{tid}?flash=پیام+مستقیم+ارسال+شد")
 
 
+@router.get("/badges.json")
+async def badges_json(request: Request):
+    """شمارنده‌های real-time برای navbar (تیکت + همکار)."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    if not adm:
+        return JSONResponse({"tickets": 0, "partners": 0}, status_code=401)
+    return JSONResponse({
+        "tickets": _open_ticket_count(),
+        "partners": _pending_partner_count(),
+    })
+
+
 @router.get("/tickets/{tid}/messages.json")
 async def ticket_messages_json(request: Request, tid: int, after: int = 0):
     from fastapi.responses import JSONResponse
@@ -3225,11 +3488,24 @@ async def broadcast_page(request: Request, flash: str = ""):
 
     conn = _db()
     try:
-        total_users = conn.execute("SELECT COUNT(*) FROM users;").fetchone()[0]
-        total_buyers = conn.execute("SELECT COUNT(DISTINCT user_id) FROM orders;").fetchone()[0]
-        non_buyers = total_users - total_buyers
-        products = conn.execute("SELECT id, title FROM products WHERE is_active=1 ORDER BY title;").fetchall()
-        categories = conn.execute("SELECT id, name FROM categories WHERE is_active=1 ORDER BY name;").fetchall()
+        # محافظت در برابر جداول ناموجود (علت صفحه سفید)
+        try:
+            total_users = conn.execute("SELECT COUNT(*) FROM users;").fetchone()[0]
+        except Exception:
+            total_users = 0
+        try:
+            total_buyers = conn.execute("SELECT COUNT(DISTINCT user_id) FROM orders;").fetchone()[0]
+        except Exception:
+            total_buyers = 0
+        non_buyers = max(total_users - total_buyers, 0)
+        try:
+            products = conn.execute("SELECT id, title FROM products WHERE is_active=1 ORDER BY title;").fetchall()
+        except Exception:
+            products = []
+        try:
+            categories = conn.execute("SELECT id, name FROM categories WHERE is_active=1 ORDER BY name;").fetchall()
+        except Exception:
+            categories = []
     finally:
         conn.close()
 
@@ -3255,7 +3531,7 @@ async def broadcast_page(request: Request, flash: str = ""):
         </div>"""
 
     body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">📢 پیام‌رسانی و Broadcast</h1>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">📢 پیام‌رسان</h1>
 
     {status_html}
 
@@ -3402,17 +3678,6 @@ async def broadcast_status(request: Request):
     return JSONResponse(st)
 
 
-@router.get("/broadcast/status")
-async def broadcast_status(request: Request):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-    with _broadcast_lock:
-        st = dict(_broadcast_state)
-    from fastapi.responses import JSONResponse
-    return JSONResponse(st)
-
-
 # ─────────────────────────── Auto Daily Backup ────────────────────────────
 
 _BACKUP_DIR = "/tmp/stockland_backups"
@@ -3539,6 +3804,16 @@ async def partner_approve(request: Request, uid: int):
         conn.commit()
     finally:
         conn.close()
+    # اطلاع به کاربر
+    try:
+        _tg_send(
+            int(uid),
+            "✅ <b>درخواست نمایندگی شما تایید شد!</b>\n\n"
+            "از این پس قیمت‌های ویژه همکار برای شما فعال است.\n"
+            "منوی «پنل همکار» در دسترس شماست. 🤝"
+        )
+    except Exception:
+        pass
     return _redir("/admin/partners?flash=همکار+تایید+شد")
 
 @router.post("/partners/{uid}/reject")
@@ -3552,4 +3827,13 @@ async def partner_reject(request: Request, uid: int):
         conn.commit()
     finally:
         conn.close()
+    # اطلاع به کاربر
+    try:
+        _tg_send(
+            int(uid),
+            "❌ متأسفانه درخواست نمایندگی شما در این مرحله تأیید نشد.\n"
+            "در صورت سوال با پشتیبانی در تماس باشید."
+        )
+    except Exception:
+        pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
