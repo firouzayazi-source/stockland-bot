@@ -356,6 +356,28 @@ def _send_delivery_to_user(chat_id: int, order_id: int, pid: int, title: str, ef
     _delivery_msg = bot.send_message(chat_id, delivery_text, parse_mode="HTML")
     _remember_delivery(_delivery_msg)
 
+    # ذخیره دائمی پیام تحویل برای امکان «برگشت» از پنل
+    try:
+        import sqlite3 as _sq3
+        from datetime import datetime as _dt2
+        _c = _sq3.connect(DB_FULL_PATH)
+        _c.execute(
+            "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+            "VALUES (?,?,?,?,?);",
+            (int(feed_id), int(order_id), int(chat_id), int(_delivery_msg.message_id), _dt2.utcnow().isoformat())
+        )
+        _c.commit()
+        _c.close()
+    except Exception as _ex:
+        logger.error("delivery_messages insert failed: %s", _ex)
+
+    # ذخیره feed_id در orders برای برگشت
+    try:
+        from db import order_set_feed_id
+        order_set_feed_id(int(order_id), int(feed_id))
+    except Exception:
+        pass
+
 def try_dispatch_pending_for_product(product_id: int, limit: int = 50) -> int:
     """
     Try to dispatch pending orders for a product using available feed items.
@@ -579,11 +601,48 @@ def _support_ticket_start(chat_id: int, user_id: int) -> None:
         )
 
 
+def _is_menu_or_system_button(text: str) -> bool:
+    """آیا متن یک دکمه منوی اصلی یا دسته‌بندی است؟"""
+    if not text:
+        return False
+    text = text.strip()
+    # دکمه‌های سیستمی
+    try:
+        for key in ("MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET", "MAIN_BTN_PARTNER_REQUEST",
+                    "MAIN_BTN_PARTNER_PANEL", "MAIN_BTN_GUIDE", "MAIN_BTN_SUPPORT",
+                    "MAIN_BTN_OTHER_PRODUCTS", "MAIN_BTN_BUY_APPLE_ID"):
+            if text == t(key, DEFAULT_UI_TEXTS.get(key, "")):
+                return True
+    except Exception:
+        pass
+    # دکمه‌های دسته‌بندی (داینامیک)
+    try:
+        from db import get_root_categories
+        for cat in get_root_categories(active_only=True):
+            emoji = (cat["emoji"] or "").strip()
+            label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+            if text == label:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _ticket_v2_handle_user_message(message) -> None:
     """handler اصلی پیام کاربر به تیکت."""
     uid = message.from_user.id
     st = user_states.get(uid, {})
     ticket_id = st.get("ticket_id")
+
+    # مورد ۷: اگر کاربر وسط تیکت دکمه منو زد → لغو خودکار تیکت
+    if message.content_type == "text" and _is_menu_or_system_button(message.text):
+        clear_user_state(uid)
+        # پیام را به handler اصلی منو منتقل کن
+        try:
+            bot.process_new_messages([message])
+        except Exception:
+            pass
+        return
 
     if not ticket_id:
         clear_user_state(uid)
@@ -2115,27 +2174,21 @@ def process_reseller_shop(message):
 
     bot.send_message(
         message.chat.id,
-        "درخواست شما ثبت شد ✅\nپس از بررسی، در صورت تایید، قیمت همکار برای شما فعال می‌شود.",
+        "درخواست شما ثبت شد. نتیجه بررسی از طریق پنل مدیریت اعلام خواهد شد.",
         reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None),
     )
 
+    # نوتیف ساده به ادمین — مدیریت کامل در پنل
     try:
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            types.InlineKeyboardButton("✅ تایید", callback_data=f"admin_partner_approve_{uid}"),
-            types.InlineKeyboardButton("❌ رد", callback_data=f"admin_partner_reject_{uid}"),
+        panel_url = "https://stockland-bot-production.up.railway.app/admin/partners"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🌐 بررسی در پنل", url=panel_url))
+        bot.send_message(
+            ADMIN_ID,
+            f"🔔 درخواست نمایندگی جدید از کاربر <code>{uid}</code>\n"
+            "برای بررسی به پنل مدیریت مراجعه کنید.",
+            reply_markup=kb, parse_mode="HTML"
         )
-        h = html.escape
-        admin_text = (
-            "📥 <b>درخواست نمایندگی جدید</b>\n\n"
-            f"User ID: <code>{uid}</code>\n"
-            f"Username: @{h(username) if username else '-'}\n"
-            f"Name: {h(full_name) if full_name else '-'}\n"
-            f"Phone: {h(phone)}\n"
-            f"City: <b>{h(city) if city else '-'}</b>\n"
-            f"Shop: <b>{h(shop_name) if shop_name else '-'}</b>"
-        )
-        bot.send_message(ADMIN_ID, admin_text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         pass
 
@@ -2797,8 +2850,8 @@ def handle_callbacks(call: types.CallbackQuery):
             if not product:
                 bot.send_message(call.message.chat.id, "محصول یافت نشد.")
                 return
-            # نمایش جزئیات با استفاده از تابع موجود
-            send_product_detail(call.message, product, cat_id=cat_id)
+            # نمایش جزئیات با استفاده از تابع موجود — user_id برای قیمت همکار
+            send_product_detail(call.message, product, user_id=uid, cat_id=cat_id)
             return
         return
 
