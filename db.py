@@ -157,6 +157,19 @@ def init_db(db_path=None):
         cur.execute("ALTER TABLE orders ADD COLUMN buyer_type TEXT;")
     except sqlite3.OperationalError:
         pass
+    # وضعیت سفارش: active | returned (برای مورد برگشت محصول)
+    try:
+        cur.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'active';")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE orders ADD COLUMN feed_id INTEGER;")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE orders ADD COLUMN returned_at TEXT;")
+    except sqlite3.OperationalError:
+        pass
 
     # جدول تراکنش‌های زرین‌پال
     cur.execute(
@@ -2014,5 +2027,143 @@ def ticket_toggle_product_chat(product_id: int) -> bool:
         conn.commit()
         row = conn.execute("SELECT chat_enabled FROM products WHERE id=?;", (product_id,)).fetchone()
         return bool(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ORDER MANAGEMENT — برگشت محصول (مورد ۴)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def order_get(order_id: int):
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM orders WHERE id=? LIMIT 1;", (order_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def order_set_feed_id(order_id: int, feed_id: int) -> None:
+    """ذخیره feed_id مربوط به سفارش (برای برگشت)."""
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE orders SET feed_id=? WHERE id=?;", (int(feed_id), int(order_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def order_mark_returned(order_id: int) -> dict:
+    """
+    برگشت محصول:
+      - وضعیت سفارش → 'returned'
+      - اگر feed_id موجود باشد، آیتم فید به delivered=0 برمی‌گردد (موجودی +1)
+    return: {ok, feed_id, product_id, chat_id, message_id, user_id, title}
+    """
+    from datetime import datetime as _dt
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id=? LIMIT 1;", (order_id,)).fetchone()
+        if not order:
+            return {"ok": False, "error": "سفارش یافت نشد"}
+        if (order["status"] or "active") == "returned":
+            return {"ok": False, "error": "این سفارش قبلاً برگشت خورده"}
+
+        feed_id = order["feed_id"] if "feed_id" in order.keys() else None
+
+        # اطمینان از وجود جدول delivery_messages
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_messages (
+                feed_id INTEGER PRIMARY KEY,
+                order_id INTEGER,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        """)
+
+        # اگر feed_id در orders نبود، از delivery_messages بگیر
+        if not feed_id:
+            dm = conn.execute(
+                "SELECT feed_id FROM delivery_messages WHERE order_id=? LIMIT 1;", (order_id,)
+            ).fetchone()
+            if dm:
+                feed_id = dm["feed_id"]
+
+        # پیام تحویل در چت کاربر
+        chat_id = message_id = None
+        if feed_id:
+            dmsg = conn.execute(
+                "SELECT chat_id, message_id FROM delivery_messages WHERE feed_id=? LIMIT 1;", (feed_id,)
+            ).fetchone()
+            if dmsg:
+                chat_id = dmsg["chat_id"]
+                message_id = dmsg["message_id"]
+
+        # بازگرداندن موجودی: feed item → delivered=0
+        if feed_id:
+            conn.execute("UPDATE product_feed SET delivered=0 WHERE id=?;", (int(feed_id),))
+
+        # علامت‌گذاری سفارش به‌عنوان برگشتی
+        now = _dt.utcnow().isoformat()
+        conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;", (now, order_id))
+        conn.commit()
+
+        return {
+            "ok": True,
+            "feed_id": feed_id,
+            "product_id": order["product_id"],
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "user_id": order["user_id"],
+            "title": order["title"],
+        }
+    finally:
+        conn.close()
+
+
+def order_update(order_id: int, title: str = None, price: int = None) -> bool:
+    """ویرایش عنوان/قیمت سفارش."""
+    conn = _get_connection()
+    try:
+        sets, params = [], []
+        if title is not None:
+            sets.append("title=?"); params.append(title)
+        if price is not None:
+            sets.append("price=?"); params.append(int(price))
+        if not sets:
+            return False
+        params.append(int(order_id))
+        conn.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=?;", params)
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def order_stats_returned() -> dict:
+    """آمار سفارش‌های برگشتی."""
+    conn = _get_connection()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM orders;").fetchone()[0]
+        returned = conn.execute("SELECT COUNT(*) FROM orders WHERE status='returned';").fetchone()[0]
+        returned_sum = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='returned';"
+        ).fetchone()[0]
+        return {"total": int(total), "returned": int(returned), "returned_sum": int(returned_sum)}
+    finally:
+        conn.close()
+
+
+def feed_returned_count(product_id: int) -> int:
+    """تعداد آیتم‌های برگشتی یک محصول (سفارش‌های returned با این product_id)."""
+    conn = _get_connection()
+    try:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE product_id=? AND status='returned';",
+            (str(product_id),)
+        ).fetchone()[0])
     finally:
         conn.close()
