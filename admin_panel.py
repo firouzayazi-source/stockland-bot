@@ -25,6 +25,49 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 router = APIRouter(prefix="/admin")
 
+# ─── Jinja2 Templates ──────────────────────────────────────────────────────
+from fastapi.templating import Jinja2Templates as _Jinja2Templates
+import os as _os
+
+_TEMPLATE_DIR = _os.path.join(_os.path.dirname(__file__), "templates", "admin")
+_templates = _Jinja2Templates(directory=_TEMPLATE_DIR)
+_templates.env.filters["from_json"] = lambda s: json.loads(s or "[]")
+
+
+def _tpl(template_name: str, request, ctx: dict, flash: str = "", flash_ok: bool = True):
+    """Render یک template با context استاندارد."""
+    admin_info = _get_admin(request)
+    perms = admin_info[2] if admin_info else []
+    is_super = admin_info[1] if admin_info else False
+
+    # nav_item helper برای Jinja2
+    def _nav_item(href, icon, label, perm=None, badge=0):
+        if perm and not (is_super or perm in perms):
+            return ""
+        path = request.url.path
+        is_active = (path == href) if href == "/admin/" else path.startswith(href)
+        badge_html = f'<span class="nav-badge">{badge}</span>' if badge > 0 else ""
+        active_cls = " active" if is_active else ""
+        return (
+            f'<a href="{href}" class="nav-item{active_cls}" data-href="{href}">'
+            f'<i data-lucide="{icon}"></i><span>{label}</span>{badge_html}</a>'
+        )
+
+    base_ctx = {
+        "request": request,
+        "admin_info": admin_info,
+        "is_super": is_super,
+        "perms": perms,
+        "flash": flash,
+        "flash_ok": flash_ok,
+        "open_tickets": _open_ticket_count() if admin_info else 0,
+        "pending_partners": _pending_partner_count() if admin_info else 0,
+        "nav_item": _nav_item,
+        "e": e,
+    }
+    base_ctx.update(ctx)
+    return _templates.TemplateResponse(template_name, base_ctx)
+
 # ─────────────────────────── Config ────────────────────────────────────────
 
 def _env(k: str, default: str = "") -> str:
@@ -2131,85 +2174,12 @@ async def admins_list(request: Request, flash: str = ""):
     finally:
         conn.close()
 
-    rows = ""
-    for a in admins:
-        perms = json.loads(a["permissions"] or "[]")
-        perm_badges = " ".join(
-            f'<span class="px-1.5 py-0.5 text-xs bg-blue-100 text-blue-700 rounded">{ALL_PERMISSIONS.get(p, p)}</span>'
-            for p in perms
-        ) or '<span class="text-gray-400 text-xs">بدون اختیار</span>'
-
-        status = '<span class="text-xs text-green-600">فعال</span>' if a["is_active"] else '<span class="text-xs text-red-500">غیرفعال</span>'
-
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 font-medium text-sm">{e(a["name"])}</td>
-          <td class="px-4 py-3 text-xs font-mono text-gray-500">{e(a["telegram_id"] or "-")}</td>
-          <td class="px-4 py-3 text-xs text-gray-500">{e(a["web_username"] or "-")}</td>
-          <td class="px-4 py-3">{perm_badges}</td>
-          <td class="px-4 py-3">{status}</td>
-          <td class="px-4 py-3 flex gap-2">
-            {_btn("ویرایش", f"/admin/admins/{a['id']}/edit", "indigo", small=True)}
-            <form method="post" action="/admin/admins/{a['id']}/toggle">
-              <button class="px-2 py-1 text-xs border rounded hover:bg-gray-50">{"غیرفعال" if a["is_active"] else "فعال"}</button>
-            </form>
-            <form method="post" action="/admin/admins/{a['id']}/delete" onsubmit="return confirm('حذف شود؟')">
-              <button class="px-2 py-1 text-xs border border-red-200 text-red-500 rounded hover:bg-red-50">حذف</button>
-            </form>
-          </td>
-        </tr>"""
-
-    # Permission checkboxes - inline compact
-    perm_checks = '<div style="display:flex;flex-wrap:wrap;gap:6px 16px;padding:14px;background:var(--page-bg);border-radius:12px">'
-    for perm_key, perm_label in ALL_PERMISSIONS.items():
-        perm_checks += f'<label class="perm-label"><input type="checkbox" name="perm_{perm_key}" value="1">{e(perm_label)}</label>'
-    perm_checks += '</div>'
-
-    body = f"""
-    <div class="page-header">
-      <h1>مدیریت ادمین‌ها</h1>
-      <p>کنترل دسترسی مدیران پنل</p>
-    </div>
-
-    <!-- Add Form -->
-    <div class="card card-p mb-5">
-      <h2 style="font-size:15px;font-weight:700;color:var(--text-main);margin-bottom:16px">افزودن ادمین جدید</h2>
-      <form method="post" action="/admin/admins/add">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-          <div><label>نام نمایشی *</label>{_input("name", "مثلاً: پشتیبانی اول", required=True)}</div>
-          <div><label>آیدی تلگرام</label>{_input("telegram_id", "مثلاً: 123456789", type_="number")}</div>
-          <div><label>یوزرنیم پنل *</label>{_input("web_username", "مثلاً: support1", required=True)}</div>
-          <div><label>رمز پنل *</label>{_input("web_password", "رمز قوی", type_="password", required=True)}</div>
-        </div>
-        <div style="margin-bottom:14px"><label>اختیارات دسترسی</label>{perm_checks}</div>
-        <div><label>یادداشت (اختیاری)</label>{_input("notes", "توضیح نقش یا مسئولیت")}</div>
-        <div style="margin-top:14px">{_btn("افزودن ادمین", color="green")}</div>
-      </form>
-    </div>
-
-    <!-- Admins Table -->
-    <div class="card" style="overflow:hidden">
-      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:14px;font-weight:700;color:var(--text-main)">ادمین‌های فعلی ({len(admins)})</span>
-      </div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead>
-            <tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نام</th>
-              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تلگرام</th>
-              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">یوزرنیم</th>
-              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">اختیارات</th>
-              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
-              <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
-            </tr>
-          </thead>
-          <tbody>{rows or "<tr><td colspan='6' style='text-align:center;padding:32px;color:var(--text-muted);font-size:13px'>هنوز ادمینی اضافه نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-
-    return _layout("ادمین‌ها", body, adm, flash=flash)
+    return _tpl("admins.html", request, {
+        "title": "ادمین‌ها",
+        "admins": admins,
+        "permissions": ALL_PERMISSIONS,
+        "all_permissions": ALL_PERMISSIONS,
+    }, flash=flash)
 
 @router.post("/admins/super/password")
 async def super_change_password(request: Request, new_password: str = Form(""), confirm_password: str = Form("")):
@@ -3673,70 +3643,25 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
             ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
                      t.updated_at DESC LIMIT ?;
         """, params).fetchall()
-        stats = {s: conn.execute(f"SELECT COUNT(*) FROM tickets WHERE status=?;", (s,)).fetchone()[0]
+        stats = {s: conn.execute("SELECT COUNT(*) FROM tickets WHERE status=?;", (s,)).fetchone()[0]
                  for s in ("waiting_admin", "waiting_user", "closed")}
     finally:
         conn.close()
 
-    def status_badge(s):
-        cfg = {
-            "waiting_admin": ("منتظر پاسخ ادمین", "danger"),
-            "waiting_user":  ("منتظر کاربر", "warning"),
-            "closed":        ("بسته", "neutral"),
-        }
-        lbl, tone = cfg.get(s, (s, "neutral"))
-        return f'<span class="status-badge status-{tone}"><span></span>{lbl}</span>'
-
     total = sum(stats.values())
-    tabs_html = '<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">'
-    for lbl, val, cnt in [("همه", "", total), ("منتظر ادمین", "waiting_admin", stats["waiting_admin"]),
-                           ("منتظر کاربر", "waiting_user", stats["waiting_user"]), ("بسته", "closed", stats["closed"])]:
-        is_active = status_filter == val
-        style = "background:var(--primary);color:#000;font-weight:700;border-color:var(--primary)" if is_active else "background:#fff;color:var(--text-muted);border-color:var(--border)"
-        badge_style = "background:rgba(0,0,0,.15)" if is_active else "background:var(--page-bg)"
-        tabs_html += f'<a href="/admin/tickets?status_filter={val}" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:12px;border:1.5px solid;text-decoration:none;font-size:13px;transition:.15s;{style}">{lbl}<span style="padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;{badge_style}">{cnt}</span></a>'
-    tabs_html += '</div>'
+    tabs = [
+        ("همه", "", total),
+        ("منتظر ادمین", "waiting_admin", stats["waiting_admin"]),
+        ("منتظر کاربر", "waiting_user", stats["waiting_user"]),
+        ("بسته", "closed", stats["closed"]),
+    ]
 
-    rows = ""
-    for t in tickets:
-        rows += f"""<tr>
-          <td><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
-          <td><code style="background:var(--page-bg);padding:2px 8px;border-radius:7px;font-size:11px">{e(str(t['user_id']))}</code></td>
-          <td><span style="background:var(--page-bg);padding:2px 8px;border-radius:7px;font-size:11.5px">{e(t['type'] or 'support')}</span></td>
-          <td>{status_badge(t['status'])}</td>
-          <td style="color:var(--text-muted);font-size:12px">{int(t['msg_count'] or 0)} پیام</td>
-          <td style="color:var(--text-muted);font-size:11px">{(t['updated_at'] or '')[:16]}</td>
-          <td>{_btn("مشاهده", f"/admin/tickets/{t['id']}", "indigo", small=True)}</td>
-        </tr>"""
-
-    body = f"""
-    <div class="page-header">
-      <h1>تیکت‌های پشتیبانی</h1>
-      <p>مدیریت و پاسخ به درخواست‌های کاربران</p>
-    </div>
-    {tabs_html}
-    <div class="card" style="overflow:hidden">
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead>
-            <tr style="background:#F9FAFB;border-bottom:2px solid var(--border)">
-              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
-              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">User ID</th>
-              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نوع</th>
-              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
-              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">پیام‌ها</th>
-              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
-              <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows or "<tr><td colspan='7' style='text-align:center;padding:40px;color:var(--text-muted);font-size:13px'>تیکتی یافت نشد</td></tr>"}
-          </tbody>
-        </table>
-      </div>
-    </div>"""
-
-    return _layout("تیکت‌ها", body, adm, flash=flash)
+    return _tpl("tickets.html", request, {
+        "title": "تیکت‌ها",
+        "tickets": tickets,
+        "tabs": tabs,
+        "status_filter": status_filter,
+    }, flash=flash)
 
 
 @router.get("/tickets/{tid}", response_class=HTMLResponse)
