@@ -70,8 +70,25 @@ app = FastAPI(title="Stockland Payment Service")
 _bot_thread_started = False
 
 # ── Admin Panel ────────────────────────────────────────────────────────────
-from admin_panel import router as _admin_router
+from admin_panel import router as _admin_router, _get_admin as _panel_get_admin, _make_session as _panel_make_session
 app.include_router(_admin_router)
+
+
+@app.middleware("http")
+async def _refresh_admin_session(request, call_next):
+    """با هر فعالیت ادمین، تایمر idle (۵ دقیقه) را ریست می‌کند."""
+    response = await call_next(request)
+    try:
+        path = request.url.path
+        if path.startswith("/admin") and not path.endswith("/logout") and not path.endswith("/login"):
+            adm = _panel_get_admin(request)
+            if adm:
+                # cookie تازه با timestamp جدید
+                fresh = _panel_make_session(adm[0])
+                response.set_cookie("adm", fresh, max_age=300, httponly=True, samesite="lax")
+    except Exception:
+        pass
+    return response
 
 
 # ---------------------------------------------------------------------------
