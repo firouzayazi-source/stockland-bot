@@ -2826,7 +2826,7 @@ async def categories_list(request: Request, flash: str = ""):
         </div>
         <div>
           <label class="text-xs text-gray-500 block mb-1">والد (زیردسته‌ی چه چیزی؟)</label>
-          <select name="parent_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <select name="parent_id">
             {cat_opts}
           </select>
         </div>
@@ -2843,13 +2843,15 @@ async def categories_list(request: Request, flash: str = ""):
         ساختار دسته‌بندی‌ها ({len(cats)} دسته)
         <span class="text-xs text-gray-400 mr-2">دسته‌های ریشه در منوی اصلی ربات نمایش داده می‌شوند</span>
       </div>
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-2">نام</th><th class="px-4 py-2">وضعیت</th>
-          <th class="px-4 py-2">ترتیب</th><th class="px-4 py-2">عملیات</th>
-        </tr></thead>
-        <tbody>{tree_rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>هنوز دسته‌ای اضافه نشده</td></tr>"}</tbody>
-      </table>
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">نام</th><th class="px-4 py-3">وضعیت</th>
+            <th class="px-4 py-3">ترتیب</th><th class="px-4 py-3">عملیات</th>
+          </tr></thead>
+          <tbody>{tree_rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>هنوز دسته‌ای اضافه نشده</td></tr>"}</tbody>
+        </table>
+      </div>
     </div>"""
 
     return _layout("دسته‌بندی‌ها", body, adm, flash=flash)
@@ -3350,15 +3352,19 @@ async def feed_overview(request: Request):
         </tr>"""
 
     body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">🗃 مدیریت موجودی</h1>
-    <div class="bg-white rounded-xl shadow overflow-hidden">
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">محصول</th><th class="px-4 py-3">دسته</th>
-          <th class="px-4 py-3">موجودی</th><th class="px-4 py-3"></th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
-      </table>
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">🗃 مدیریت موجودی</h1>
+    </div>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">محصول</th><th class="px-4 py-3">دسته</th>
+            <th class="px-4 py-3">موجودی</th><th class="px-4 py-3"></th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
     </div>"""
 
     return _layout("موجودی", body, adm)
@@ -4014,27 +4020,28 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
     ) + "</div>" if pages > 1 else ""
 
     body = f"""
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
-      <div class="page-header" style="margin:0"><h1>سفارش‌ها ({total:,})</h1></div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <a href="/admin/orders/export.xlsx?q={e(q)}" class="btn btn-green btn-sm">
-          <i data-lucide="download" style="width:14px"></i> خروجی Excel
-        </a>
-        <span style="font-size:12px;color:#EF4444;background:#FEE2E2;padding:4px 10px;border-radius:8px">↩️ برگشتی: {returned_total}</span>
-        <form method="get" style="display:flex;gap:8px">
+    <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <h1 class="text-2xl font-bold text-gray-800">🧾 سفارش‌ها ({total:,})</h1>
+      <div class="flex items-center gap-2 flex-wrap">
+        <a href="/admin/orders/export.xlsx?q={e(q)}" class="btn-sm bg-green-50 text-green-700 border border-green-200 rounded px-3 py-1.5 text-xs">⬇ Excel</a>
+        <span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">↩️ برگشتی: {returned_total}</span>
+        <form method="get" class="flex gap-2">
           {_input("q","جستجو User ID...",q)} {_btn("جستجو","","slate",True)}
         </form>
       </div>
     </div>
     <div class="card overflow-hidden">
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
-          <th class="px-4 py-3">محصول</th><th class="px-4 py-3">مبلغ</th>
-          <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">عملیات</th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>سفارشی ثبت نشده</td></tr>"}</tbody>
-      </table>{pager}
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
+            <th class="px-4 py-3">محصول</th><th class="px-4 py-3">مبلغ</th>
+            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">عملیات</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>سفارشی ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
+      {pager}
     </div>"""
 
     return _layout("سفارش‌ها", body, adm, flash=flash)
@@ -4410,34 +4417,39 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
 
     body = f"""
     <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">💰 کیف‌پول ({int(totals[0])} کاربر | {int(totals[1]):,} ت)</h1>
+      <h1 class="text-2xl font-bold text-gray-800">💰 کیف‌پول‌ها</h1>
+      <span class="text-sm text-gray-500">{int(totals[0])} کاربر — جمع: {int(totals[1]):,} تومان</span>
     </div>
-    <div class="bg-white rounded-xl shadow p-5 mb-6">
-      <h2 class="font-bold text-gray-700 mb-3">تنظیم موجودی</h2>
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-4">تنظیم موجودی</h2>
       <form method="post" action="/admin/wallets/adjust" class="flex gap-3 flex-wrap items-end">
         <div><label class="text-xs text-gray-500 block mb-1">User ID</label>{_input("uid","",type_="number",required=True)}</div>
         <div><label class="text-xs text-gray-500 block mb-1">مبلغ</label>{_input("amount","",type_="number",required=True)}</div>
         <div><label class="text-xs text-gray-500 block mb-1">عملیات</label>
-          <select name="op" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <select name="op">
             <option value="add">➕ افزودن</option>
             <option value="sub">➖ کاهش</option>
             <option value="set">✏️ تنظیم مستقیم</option>
-          </select></div>
+          </select>
+        </div>
         {_btn("اعمال")}
       </form>
     </div>
-    <div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="card overflow-hidden">
       <div class="px-5 py-3 border-b bg-gray-50 flex gap-2">
         <form method="get" class="flex gap-2">
           {_input("q","جستجو User ID...",q)} {_btn("جستجو","","slate",True)}
         </form>
       </div>
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b">
-          <th class="px-4 py-2">User ID</th><th class="px-4 py-2">موجودی</th><th class="px-4 py-2">آپدیت</th><th class="px-4 py-2">عملیات</th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
-      </table>
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">User ID</th><th class="px-4 py-3">موجودی</th>
+            <th class="px-4 py-3">آپدیت</th><th class="px-4 py-3">عملیات</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
+        </table>
+      </div>
     </div>"""
 
     return _layout("کیف‌پول‌ها", body, adm, flash=flash)
