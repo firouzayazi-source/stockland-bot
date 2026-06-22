@@ -2387,56 +2387,61 @@ async def admins_list(request: Request, flash: str = ""):
     rows = ""
     for a in admins:
         perms_list = json.loads(a["permissions"] or "[]")
-        badges = " ".join(f'<span class="badge badge-info">{ALL_PERMISSIONS.get(p,p)}</span>' for p in perms_list) or '<span style="color:var(--text-muted);font-size:12px">بدون اختیار</span>'
-        status_badge = '<span class="badge badge-success">فعال</span>' if a["is_active"] else '<span class="badge badge-danger">غیرفعال</span>'
-        rows += f"""<tr>
-          <td style="font-weight:600">{e(a["name"])}</td>
-          <td style="font-size:11px;color:var(--text-muted)">{e(a["telegram_id"] or "—")}</td>
-          <td style="font-size:11px;color:var(--text-muted)">{e(a["web_username"] or "—")}</td>
-          <td>{badges}</td>
-          <td>{status_badge}</td>
-          <td><div style="display:flex;gap:6px">
-            <a href="/admin/admins/{a["id"]}/edit" class="btn btn-indigo btn-sm">ویرایش</a>
-            <form method="post" action="/admin/admins/{a["id"]}/toggle"><button class="btn btn-slate btn-sm">{"غیرفعال" if a["is_active"] else "فعال"}</button></form>
-            <form method="post" action="/admin/admins/{a["id"]}/delete" onsubmit="return confirm('حذف شود؟')"><button class="btn btn-red btn-sm">حذف</button></form>
-          </div></td>
+        badges = " ".join(f'<span class="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">{ALL_PERMISSIONS.get(p,p)}</span>' for p in perms_list) or '<span class="text-xs text-gray-400">بدون اختیار</span>'
+        status_b = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if a["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
+        rows += f"""<tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(a["name"])}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{e(a["telegram_id"] or "—")}</td>
+          <td class="px-4 py-3 text-xs text-gray-500">{e(a["web_username"] or "—")}</td>
+          <td class="px-4 py-3"><div class="flex flex-wrap gap-1">{badges}</div></td>
+          <td class="px-4 py-3">{status_b}</td>
+          <td class="px-4 py-3">
+            <div class="flex gap-1">
+              <a href="/admin/admins/{a['id']}/edit" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">ویرایش</a>
+              <form method="post" action="/admin/admins/{a['id']}/toggle" class="inline">
+                <button class="btn-sm {"bg-red-50 text-red-600 border border-red-200" if a["is_active"] else "bg-green-50 text-green-600 border border-green-200"} rounded px-2 py-1 text-xs">{"غیرفعال" if a["is_active"] else "فعال"}</button>
+              </form>
+              <form method="post" action="/admin/admins/{a['id']}/delete" class="inline" onsubmit="return confirm('حذف شود؟')">
+                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded px-2 py-1 text-xs">حذف</button>
+              </form>
+            </div>
+          </td>
         </tr>"""
 
-    perm_checks = '<div class="perm-grid">' + "".join(
-        f'<label class="perm-label"><input type="checkbox" name="perm_{k}" value="1" style="width:15px;height:15px;min-height:15px;cursor:pointer">{v}</label>'
+    perm_checks = '<div class="flex flex-wrap gap-3 p-4 bg-gray-50 rounded-lg">' + "".join(
+        f'<label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" name="perm_{k}" value="1" class="rounded">{v}</label>'
         for k, v in ALL_PERMISSIONS.items()
     ) + '</div>'
 
     body = f"""
-    <div class="page-header"><h1>مدیریت ادمین‌ها</h1><p>کنترل دسترسی مدیران پنل</p></div>
-    <div class="card card-p" style="margin-bottom:20px">
-      <h2 style="font-size:15px;font-weight:700;margin-bottom:16px">افزودن ادمین جدید</h2>
-      <form method="post" action="/admin/admins/add">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-          <div><label>نام نمایشی *</label>{_input("name","مثلاً: پشتیبانی",required=True)}</div>
-          <div><label>آیدی تلگرام</label>{_input("telegram_id","مثلاً: 123456789",type_="number")}</div>
-          <div><label>یوزرنیم *</label>{_input("web_username","مثلاً: support1",required=True)}</div>
-          <div><label>رمز *</label>{_input("web_password","رمز قوی",type_="password",required=True)}</div>
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">👥 مدیریت ادمین‌ها</h1>
+    </div>
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن ادمین جدید</h2>
+      <form method="post" action="/admin/admins/add" class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">نام نمایشی *</label>{_input("name","مثلاً: پشتیبانی",required=True)}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">آیدی تلگرام</label>{_input("telegram_id","مثلاً: 123456789",type_="number")}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">یوزرنیم *</label>{_input("web_username","مثلاً: support1",required=True)}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">رمز *</label>{_input("web_password","رمز قوی",type_="password",required=True)}</div>
         </div>
-        <div style="margin-bottom:14px"><label>اختیارات دسترسی</label>{perm_checks}</div>
+        <div><label class="text-sm font-medium text-gray-700 block mb-1">اختیارات دسترسی</label>{perm_checks}</div>
         {_btn("افزودن ادمین","",color="green")}
       </form>
     </div>
-    <div class="card" style="overflow:hidden">
-      <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
-        <span style="font-size:14px;font-weight:700">ادمین‌های فعلی ({len(admins)})</span>
+    <div class="card overflow-hidden">
+      <div class="px-5 py-3 border-b bg-gray-50 flex items-center justify-between">
+        <span class="font-medium text-gray-700">ادمین‌های فعلی ({len(admins)})</span>
       </div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نام</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تلگرام</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">یوزرنیم</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">اختیارات</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">نام</th><th class="px-4 py-3">تلگرام</th>
+            <th class="px-4 py-3">یوزرنیم</th><th class="px-4 py-3">اختیارات</th>
+            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='6' style='text-align:center;padding:32px;color:var(--text-muted)'>ادمینی اضافه نشده</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400 text-sm'>ادمینی اضافه نشده</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
@@ -3745,28 +3750,32 @@ async def discounts_list(request: Request, flash: str = ""):
         try: pid_val = str(c["product_id"]) if c["product_id"] else "همه"
         except: pid_val = "همه"
         type_fa = "درصد" if c["type"] == "percent" else "ثابت (تومان)"
-        status_badge = '<span class="badge badge-success">فعال</span>' if c["is_active"] else '<span class="badge badge-danger">غیرفعال</span>'
-        rows += f"""<tr>
-          <td style="padding:11px 16px;font-weight:700;font-family:monospace">{e(c['code'])}</td>
-          <td style="padding:11px 16px">{c['value']} {type_fa}</td>
-          <td style="padding:11px 16px;color:var(--text-muted)">{pid_val}</td>
-          <td style="padding:11px 16px">{c['used_count']} / {c['max_uses'] or '∞'}</td>
-          <td style="padding:11px 16px">{(c['expires_at'] or '—')[:10]}</td>
-          <td style="padding:11px 16px">{status_badge}</td>
-          <td style="padding:11px 16px;display:flex;gap:6px">
-            <form method="post" action="/admin/discounts/{c['id']}/toggle">
-              <button class="btn btn-slate btn-sm">{'غیرفعال' if c['is_active'] else 'فعال'}</button>
-            </form>
-            <form method="post" action="/admin/discounts/{c['id']}/delete" onsubmit="return confirm('حذف شود؟')">
-              <button class="btn btn-red btn-sm">حذف</button>
-            </form>
+        status_badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if c["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
+        rows += f"""<tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-3"><code class="text-sm font-bold text-indigo-700">{e(c['code'])}</code></td>
+          <td class="px-4 py-3 text-sm text-gray-700">{c['value']} {type_fa}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{pid_val}</td>
+          <td class="px-4 py-3 text-sm text-gray-600">{c['used_count']} / {c['max_uses'] or '∞'}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{(c['expires_at'] or '—')[:10]}</td>
+          <td class="px-4 py-3">{status_badge}</td>
+          <td class="px-4 py-3">
+            <div class="flex gap-1">
+              <form method="post" action="/admin/discounts/{c['id']}/toggle" class="inline">
+                <button class="btn-sm {'bg-red-50 text-red-600 border border-red-200' if c['is_active'] else 'bg-green-50 text-green-600 border border-green-200'} rounded px-2 py-1 text-xs">{'غیرفعال' if c['is_active'] else 'فعال'}</button>
+              </form>
+              <form method="post" action="/admin/discounts/{c['id']}/delete" class="inline" onsubmit="return confirm('حذف شود؟')">
+                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded px-2 py-1 text-xs">حذف</button>
+              </form>
+            </div>
           </td>
         </tr>"""
 
     body = f"""
-    <div class="page-header"><h1>کدهای تخفیف</h1><p>مدیریت کوپن‌های تخفیف فروشگاه</p></div>
-    <div class="card card-p" style="margin-bottom:20px">
-      <h2 class="section-title">افزودن کد جدید</h2>
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">🏷 کدهای تخفیف</h1>
+    </div>
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن کد جدید</h2>
       <form method="post" action="/admin/discounts/add">
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
           <div><label>کد تخفیف *</label>{_input("code","مثلاً: SALE20",required=True)}</div>
@@ -3781,19 +3790,16 @@ async def discounts_list(request: Request, flash: str = ""):
         {_btn("افزودن کد","",color="green")}
       </form>
     </div>
-    <div class="card" style="overflow:hidden">
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">کد</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تخفیف</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">محصول</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">استفاده</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">انقضا</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">کد</th><th class="px-4 py-3">تخفیف</th>
+            <th class="px-4 py-3">محصول</th><th class="px-4 py-3">استفاده</th>
+            <th class="px-4 py-3">انقضا</th><th class="px-4 py-3">وضعیت</th>
+            <th class="px-4 py-3">عملیات</th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='7' style='text-align:center;padding:32px;color:var(--text-muted)'>هنوز کدی اضافه نشده</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>هنوز کدی اضافه نشده</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
@@ -4277,47 +4283,43 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
 
     rows = ""
     for u in users:
-        rows += f"""<tr>
-          <td style="padding:10px 14px;font-family:monospace;font-size:12px">{u["user_id"]}</td>
-          <td style="padding:10px 14px;font-size:13px">{e(u["full_name"] or "—")}</td>
-          <td style="padding:10px 14px;font-size:12px;color:var(--text-muted)">{"@"+e(u["username"]) if u["username"] else "—"}</td>
-          <td style="padding:10px 14px;font-size:12px;color:var(--text-muted)">{(u["first_seen"] or "")[:10]}</td>
-          <td style="padding:10px 14px;font-size:12px;color:var(--text-muted)">{(u["last_seen"] or "")[:10]}</td>
-          <td style="padding:10px 14px;font-size:13px;font-weight:600">{u["orders"] or 0}</td>
-          <td style="padding:10px 14px;font-size:13px;color:#22C55E;font-weight:600">{int(u["balance"] or 0):,}</td>
-          <td style="padding:10px 14px">
-            <a href="/admin/wallets?q={u['user_id']}" class="btn btn-indigo btn-sm">کیف‌پول</a>
-          </td>
+        rows += f"""<tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-3"><code class="text-xs bg-gray-100 px-1.5 rounded">{u["user_id"]}</code></td>
+          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(u["full_name"] or "—")}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{"@"+e(u["username"]) if u["username"] else "—"}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{(u["first_seen"] or "")[:10]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{(u["last_seen"] or "")[:10]}</td>
+          <td class="px-4 py-3 text-sm font-bold text-gray-700">{u["orders"] or 0}</td>
+          <td class="px-4 py-3 text-sm font-bold text-green-600">{int(u["balance"] or 0):,}</td>
+          <td class="px-4 py-3"><a href="/admin/wallets?q={u['user_id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">کیف‌پول</a></td>
         </tr>"""
 
     body = f"""
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
-      <div class="page-header" style="margin:0"><h1>کاربران ({total:,})</h1><p>همه کاربرانی که با ربات تعامل داشتند</p></div>
-      <div style="display:flex;gap:10px">
-        <a href="/admin/users/export.xlsx" class="btn btn-green btn-sm"><i data-lucide="download" style="width:14px"></i> Excel</a>
-      </div>
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">👤 کاربران ({total:,})</h1>
+      <a href="/admin/users/export.xlsx" class="btn-sm bg-green-50 text-green-700 border border-green-200 rounded px-3 py-1.5 text-xs">⬇ Excel</a>
     </div>
-    <div class="card card-p" style="margin-bottom:16px;padding:14px 20px">
-      <form method="get" style="display:flex;gap:10px">
-        <div style="flex:1">{_input("q","جستجو User ID یا نام...",value=q)}</div>
-        <button type="submit" class="btn btn-primary">جستجو</button>
-        {"<a href='/admin/users' class='btn btn-slate'>پاک</a>" if q else ""}
+    <div class="card p-4 mb-4">
+      <form method="get" class="flex gap-3">
+        {_input("q","جستجو User ID یا نام...",value=q)}
+        <button type="submit" class="btn-sm bg-indigo-600 text-white rounded px-4 py-2 text-sm shrink-0">جستجو</button>
+        {"<a href='/admin/users' class='btn-sm bg-gray-100 text-gray-600 border border-gray-200 rounded px-3 py-2 text-sm'>پاک</a>" if q else ""}
       </form>
     </div>
-    <div class="card" style="overflow:hidden">
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-            <th style="padding:10px 14px;text-align:right">{sort_link("user_id","ID")}</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نام</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">یوزرنیم</th>
-            <th style="padding:10px 14px;text-align:right">{sort_link("first_seen","اولین ورود")}</th>
-            <th style="padding:10px 14px;text-align:right">{sort_link("last_seen","آخرین فعالیت")}</th>
-            <th style="padding:10px 14px;text-align:right">{sort_link("orders","خریدها")}</th>
-            <th style="padding:10px 14px;text-align:right">{sort_link("balance","کیف‌پول")}</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">{sort_link("user_id","ID")}</th>
+            <th class="px-4 py-3">نام</th>
+            <th class="px-4 py-3">یوزرنیم</th>
+            <th class="px-4 py-3">{sort_link("first_seen","اولین ورود")}</th>
+            <th class="px-4 py-3">{sort_link("last_seen","آخرین فعالیت")}</th>
+            <th class="px-4 py-3">{sort_link("orders","خریدها")}</th>
+            <th class="px-4 py-3">{sort_link("balance","کیف‌پول")}</th>
+            <th class="px-4 py-3"></th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='8' style='text-align:center;padding:40px;color:var(--text-muted)'>کاربری یافت نشد</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
@@ -4614,14 +4616,18 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
         if any(w in a for w in warn_words): return "badge badge-warning"
         return "badge badge-success"
 
-    rows = "".join(f"""<tr>
-      <td style="color:var(--text-muted);font-size:11px">#{l["id"]}</td>
-      <td style="font-weight:600;font-size:13px">{e(l["admin_name"] or "—")}</td>
-      <td><span class="{action_badge(l["action"])}">{e(l["action"])}</span></td>
-      <td style="color:var(--text-muted);font-size:12px">{e(l["section"] or "—")}</td>
-      <td style="font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{e(l['details'] or '')}">{e((l["details"] or "")[:80])}</td>
-      <td style="color:var(--text-muted);font-size:11px;font-family:monospace">{e(l["ip"] or "—")}</td>
-      <td style="color:var(--text-muted);font-size:11px">{e((l["created_at"] or "")[:16])}</td>
+    def log_badge(a):
+        if any(w in a for w in ("حذف","ناموفق","ریست")): return f'<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">{e(a)}</span>'
+        if any(w in a for w in ("تغییر","ویرایش","غیرفعال")): return f'<span class="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-700 rounded-full">{e(a)}</span>'
+        return f'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">{e(a)}</span>'
+    rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-3 text-xs text-gray-400">#{l["id"]}</td>
+      <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(l["admin_name"] or "—")}</td>
+      <td class="px-4 py-3">{log_badge(l["action"])}</td>
+      <td class="px-4 py-3 text-xs text-gray-500">{e(l["section"] or "—")}</td>
+      <td class="px-4 py-3 text-xs text-gray-500 max-w-xs truncate" title="{e(l['details'] or '')}">{e((l["details"] or "")[:60])}</td>
+      <td class="px-4 py-3 text-xs font-mono text-gray-400">{e(l["ip"] or "—")}</td>
+      <td class="px-4 py-3 text-xs text-gray-400">{e((l["created_at"] or "")[:16])}</td>
     </tr>""" for l in logs)
 
     section_opts = "<option value=''>همه بخش‌ها</option>" + "".join(
@@ -4640,38 +4646,31 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
         pagination += "</div>"
 
     body = f"""
-    <div class="page-header"><h1>گزارش فعالیت ادمین‌ها</h1><p>{total:,} رویداد ثبت‌شده</p></div>
-    <div class="card card-p" style="margin-bottom:16px">
-      <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-        <div style="flex:1;min-width:180px">
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">جستجو</label>
-          {_input("q","عملیات، جزئیات...",value=q)}
-        </div>
-        <div style="min-width:140px">
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">ادمین</label>
-          <select name="admin_name">{admin_opts}</select>
-        </div>
-        <div style="min-width:140px">
-          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">بخش</label>
-          <select name="section">{section_opts}</select>
-        </div>
-        <button type="submit" class="btn btn-primary" style="min-width:80px;min-height:44px">فیلتر</button>
-        <a href="/admin/logs" class="btn btn-slate" style="min-height:44px">پاک</a>
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-800">📋 گزارش فعالیت</h1>
+        <p class="text-xs text-gray-400 mt-1">{total:,} رویداد ثبت‌شده</p>
+      </div>
+    </div>
+    <div class="card p-4 mb-4">
+      <form method="get" class="flex flex-wrap gap-3 items-end">
+        <div class="flex-1 min-w-40"><label class="text-xs text-gray-500 block mb-1">جستجو</label>{_input("q","عملیات، جزئیات...",value=q)}</div>
+        <div class="min-w-36"><label class="text-xs text-gray-500 block mb-1">ادمین</label><select name="admin_name">{admin_opts}</select></div>
+        <div class="min-w-36"><label class="text-xs text-gray-500 block mb-1">بخش</label><select name="section">{section_opts}</select></div>
+        <button type="submit" class="btn-sm bg-indigo-600 text-white rounded px-4 py-2 text-sm">فیلتر</button>
+        <a href="/admin/logs" class="btn-sm bg-gray-100 text-gray-600 border border-gray-200 rounded px-3 py-2 text-sm">پاک</a>
       </form>
     </div>
-    <div class="card" style="overflow:hidden">
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
-            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">ادمین</th>
-            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
-            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">بخش</th>
-            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">جزئیات</th>
-            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">IP</th>
-            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">زمان</th>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">#</th><th class="px-4 py-3">ادمین</th>
+            <th class="px-4 py-3">عملیات</th><th class="px-4 py-3">بخش</th>
+            <th class="px-4 py-3">جزئیات</th><th class="px-4 py-3">IP</th>
+            <th class="px-4 py-3">زمان</th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='7' style='text-align:center;padding:40px;color:var(--text-muted)'>رویدادی ثبت نشده</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>رویدادی ثبت نشده</td></tr>"}</tbody>
         </table>
       </div>
     </div>
@@ -4771,39 +4770,52 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
     for t in tickets:
         try: ls = t["last_sender"]
         except: ls = None
-        try: ptitle = e((t["product_title"] or "")[:30])
+        try: ptitle = e((t["product_title"] or "")[:24])
         except: ptitle = ""
         try: tid_type = t["type"] or "support"
         except: tid_type = "support"
-        rows += f"""<tr style="cursor:pointer" onclick="location.href='/admin/tickets/{t['id']}'">
-          <td style="padding:10px 14px"><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
-          <td style="padding:10px 14px">{tbadge(tid_type)}</td>
-          <td style="padding:10px 14px"><code style="font-size:11px;background:var(--page-bg);padding:2px 6px;border-radius:5px">{e(str(t['user_id']))}</code></td>
-          <td style="padding:10px 14px">{sbadge(t['status'])}</td>
-          <td style="padding:10px 14px;font-size:11.5px;color:var(--text-muted)">{ptitle or ("↗ کاربر" if ls=="user" else ("↙ ادمین" if ls=="admin" else ""))}</td>
-          <td style="padding:10px 14px;font-size:11px;color:var(--text-muted)">{int(t['msg_count'] or 0)} پیام</td>
-          <td style="padding:10px 14px;font-size:11px;color:var(--text-muted)">{(t['updated_at'] or '')[:16]}</td>
-          <td style="padding:10px 14px"><a href="/admin/tickets/{t['id']}" class="btn btn-indigo btn-sm">مشاهده</a></td>
+
+        # type badge
+        type_colors = {"product_setup":("green","راه‌اندازی"),"partner":("yellow","همکاری"),"support":("blue","پشتیبانی")}
+        tc, tl = type_colors.get(tid_type,("blue","پشتیبانی"))
+        type_b = f'<span class="px-2 py-0.5 text-xs bg-{tc}-100 text-{tc}-700 rounded-full">{tl}</span>'
+
+        # status badge
+        status_colors = {"waiting_info":("red","منتظر اطلاعات"),"waiting_admin":("red","نیاز به پاسخ"),
+                         "reviewing":("yellow","در بررسی"),"waiting_user":("green","پاسخ داده شد"),
+                         "ready_delivery":("green","آماده تحویل"),"closed":("gray","بسته")}
+        sc, sl = status_colors.get(t["status"],("gray",t["status"]))
+        status_b = f'<span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span>'
+
+        last_col = ptitle or ("↗ کاربر" if ls=="user" else ("↙ ادمین" if ls=="admin" else ""))
+
+        rows += f"""<tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="location.href='/admin/tickets/{t['id']}'">
+          <td class="px-4 py-3"><a href="/admin/tickets/{t['id']}" class="text-xs font-bold text-indigo-600">#{t['id']}</a></td>
+          <td class="px-4 py-3">{type_b}</td>
+          <td class="px-4 py-3"><code class="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{e(str(t['user_id']))}</code></td>
+          <td class="px-4 py-3">{status_b}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{last_col}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{int(t['msg_count'] or 0)} پیام</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{(t['updated_at'] or '')[:16]}</td>
+          <td class="px-4 py-3"><a href="/admin/tickets/{t['id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">مشاهده</a></td>
         </tr>"""
 
     body = f"""
-    <div class="page-header"><h1>تیکت‌ها</h1><p>مدیریت گفتگوها و پشتیبانی</p></div>
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-2xl font-bold text-gray-800">🎫 تیکت‌های پشتیبانی</h1>
+    </div>
     {type_tabs}
     {status_tabs}
-    <div class="card" style="overflow:hidden">
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نوع</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">کاربر</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">محصول / پیام</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">پیام‌ها</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
-            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">#</th><th class="px-4 py-3">نوع</th>
+            <th class="px-4 py-3">کاربر</th><th class="px-4 py-3">وضعیت</th>
+            <th class="px-4 py-3">محصول/پیام</th><th class="px-4 py-3">تعداد</th>
+            <th class="px-4 py-3">آپدیت</th><th class="px-4 py-3"></th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='8' style='text-align:center;padding:40px;color:var(--text-muted)'>تیکتی یافت نشد</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>تیکتی یافت نشد</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
