@@ -265,6 +265,78 @@ def _log(request: Request, action: str, section: str = "", details: str = "", ad
         pass
 
 
+# ─── Rate Limiting ─────────────────────────────────────────────────────────
+import time as _time
+_login_attempts: dict = {}  # ip → [timestamps]
+_LOGIN_MAX = 5
+_LOGIN_WINDOW = 900  # 15 دقیقه
+
+def _is_rate_limited(ip: str) -> tuple:
+    """(is_blocked, remaining_seconds)"""
+    now = _time.time()
+    _login_attempts.setdefault(ip, [])
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOGIN_WINDOW]
+    if len(_login_attempts[ip]) >= _LOGIN_MAX:
+        return True, int(_LOGIN_WINDOW - (now - _login_attempts[ip][0]))
+    return False, 0
+
+def _record_fail(ip: str):
+    _login_attempts.setdefault(ip, []).append(_time.time())
+
+def _clear_attempts(ip: str):
+    _login_attempts.pop(ip, None)
+
+
+# ─── Low Stock Notification ────────────────────────────────────────────────
+_notified_low: set = set()  # کلیدهایی که قبلاً نوتیف گرفتن
+
+def _notify_low_stock():
+    """بررسی و ارسال اطلاع‌رسانی موجودی کم — توسط scheduler صدا زده می‌شه."""
+    try:
+        bot_token = _env("BOT_TOKEN")
+        admin_id  = _env("ADMIN_ID")
+        if not bot_token or not admin_id:
+            return
+        threshold = int(_env("LOW_STOCK_THRESHOLD", "5"))
+        conn = _db()
+        rows = conn.execute("""
+            SELECT p.id, p.title,
+                   COUNT(CASE WHEN pf.delivered=0 THEN 1 END) AS avail
+            FROM products p
+            LEFT JOIN product_feed pf ON pf.product_id = p.id
+            WHERE p.is_active = 1
+            GROUP BY p.id
+            HAVING avail <= ?
+            ORDER BY avail ASC LIMIT 20;
+        """, (threshold,)).fetchall()
+        conn.close()
+
+        for r in rows:
+            pid, title, avail = r["id"], r["title"], int(r["avail"] or 0)
+            key = f"{pid}:{avail}"
+            if key in _notified_low:
+                continue
+            # پاک کردن کلیدهای قدیمی همین محصول
+            _notified_low.discard(next((k for k in list(_notified_low) if k.startswith(f"{pid}:")), None))
+            icon = "🔴" if avail == 0 else "⚠️"
+            status = "موجودی صفر شد" if avail == 0 else f"موجودی کم ({avail} عدد)"
+            msg = (f"{icon} <b>هشدار موجودی</b>\n"
+                   f"📦 محصول: {title}\n"
+                   f"📉 وضعیت: {status}\n"
+                   f"🔗 /admin/feed/{pid}")
+            try:
+                _requests.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": int(admin_id), "text": msg, "parse_mode": "HTML"},
+                    timeout=10
+                )
+                _notified_low.add(key)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _layout(title: str, body: str, admin_info=None,
             flash: str = "", flash_ok: bool = True) -> HTMLResponse:
 
@@ -708,9 +780,12 @@ async def login_get(request: Request, err: str = "", flash: str = ""):
 
     err_html = ""
     if err == "1":
-        err_html = '<div class="mb-4 text-red-600 text-sm text-center bg-red-50 p-2 rounded-lg">❌ نام کاربری یا رمز اشتباه است</div>'
+        err_html = '<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">❌ نام کاربری یا رمز اشتباه است</div>'
+    elif err == "rate":
+        mins = request.query_params.get("mins", "15")
+        err_html = f'<div style="background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">🔒 دسترسی موقتاً مسدود شد. {mins} دقیقه دیگر تلاش کنید.</div>'
     if flash:
-        err_html += f'<div class="mb-4 text-amber-700 text-sm text-center bg-amber-50 p-2 rounded-lg">⏱ {e(flash)}</div>'
+        err_html += f'<div style="background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">⏱ {e(flash)}</div>'
 
     body = f"""
     <div style="min-height:80vh;display:flex;align-items:center;justify-content:center">
@@ -741,19 +816,24 @@ async def login_get(request: Request, err: str = "", flash: str = ""):
 async def login_post(request: Request, username: str = Form(""), password: str = Form("")):
     ensure_admins_table()
     _ensure_theme_table()
+    ip = request.client.host if request.client else "unknown"
+
+    blocked, remaining = _is_rate_limited(ip)
+    if blocked:
+        return _redir(f"/admin/login?err=rate&mins={remaining // 60 + 1}")
+
     username = username.strip()
     password = password.strip()
 
-    # سوپرادمین
     super_un = _env("ADMIN_WEB_USERNAME", "admin")
     super_pw = _env("ADMIN_WEB_PASSWORD")
     if username.lower() in (super_un.lower(), "admin", "super") and super_pw and _hmac.compare_digest(password, super_pw):
+        _clear_attempts(ip)
         resp = _redir("/admin/")
         resp.set_cookie("adm", _make_session("super"), max_age=300, httponly=True, samesite="lax")
-        _log(request, "ورود", "احراز هویت", f"سوپرادمین از {request.client.host if request.client else '-'}")
+        _log(request, "ورود", "احراز هویت", f"سوپرادمین از {ip}")
         return resp
 
-    # ادمین از دیتابیس
     try:
         conn = _db()
         row = conn.execute(
@@ -762,6 +842,7 @@ async def login_post(request: Request, username: str = Form(""), password: str =
         ).fetchone()
         conn.close()
         if row and row["is_active"] and row["web_password_hash"] == _hash_pw(password):
+            _clear_attempts(ip)
             resp = _redir("/admin/")
             resp.set_cookie("adm", _make_session(str(row["id"])), max_age=300, httponly=True, samesite="lax")
             _log(request, "ورود", "احراز هویت", f"ادمین #{row['id']}")
@@ -769,7 +850,9 @@ async def login_post(request: Request, username: str = Form(""), password: str =
     except Exception:
         pass
 
-    _log(request, "ورود ناموفق", "احراز هویت", f"یوزرنیم: {username[:30]}")
+    _record_fail(ip)
+    _, remaining2 = _is_rate_limited(ip)
+    _log(request, "ورود ناموفق", "احراز هویت", f"یوزرنیم: {username[:30]} از {ip}")
     return _redir("/admin/login?err=1")
 
 @router.get("/logout")
@@ -3055,11 +3138,22 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
     </div>
     <div class="bg-white rounded-xl shadow p-6 mb-6">
       <h2 class="font-bold text-gray-700 mb-3">➕ افزودن موجودی</h2>
-      <form method="post" action="/admin/feed/{pid}/upload" class="space-y-3">
-        <div class="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg">هر خط = یک آیتم | برای چندخطی: <code class="bg-gray-200 px-1 rounded">***</code> بین آیتم‌ها</div>
-        {_textarea("items", "آیتم‌ها را اینجا paste کنید...", rows=6)}
-        {_btn("افزودن موجودی", color="green")}
-      </form>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start">
+        <form method="post" action="/admin/feed/{pid}/upload" class="space-y-3">
+          <div class="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg">هر خط = یک آیتم | برای چندخطی: <code class="bg-gray-200 px-1 rounded">***</code> بین آیتم‌ها</div>
+          {_textarea("items", "آیتم‌ها را اینجا paste کنید...", rows=6)}
+          {_btn("افزودن متنی", color="green")}
+        </form>
+        <form method="post" action="/admin/feed/{pid}/bulk-upload" enctype="multipart/form-data"
+              style="background:var(--page-bg);border:2px dashed var(--border);border-radius:14px;padding:20px;text-align:center;min-width:200px">
+          <div style="font-size:28px;margin-bottom:8px">📁</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text-main);margin-bottom:4px">آپلود فایل (CSV / TXT)</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px">هر خط یک آیتم</div>
+          <input type="file" name="file" accept=".txt,.csv" required
+                 style="margin-bottom:12px;font-size:12px;min-height:unset;padding:6px">
+          <button type="submit" class="btn btn-primary" style="width:100%">آپلود</button>
+        </form>
+      </div>
     </div>
     <div class="bg-white rounded-xl shadow overflow-hidden">
       <div class="px-5 py-3 border-b bg-gray-50 flex justify-between items-center">
@@ -3107,6 +3201,47 @@ async def feed_upload(request: Request, pid: int, items: str=Form("")):
     finally:
         conn.close()
     return _redir(f"/admin/feed/{pid}?flash={len(blocks)}+آیتم+اضافه+شد")
+
+@router.post("/feed/{pid}/bulk-upload")
+async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+    if not file or not file.filename:
+        return _redir(f"/admin/feed/{pid}?flash=فایلی+انتخاب+نشد")
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return _redir(f"/admin/feed/{pid}?flash=خطا+در+خواندن+فایل")
+
+    # پشتیبانی از CSV و TXT — هر خط یک آیتم، کاما جداکننده ستون‌ها
+    items = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # اگر CSV بود، ستون اول رو بگیر
+        item = line.split(",")[0].strip()
+        if item:
+            items.append(item)
+
+    if not items:
+        return _redir(f"/admin/feed/{pid}?flash=فایل+خالی+است")
+
+    conn = _db()
+    try:
+        conn.executemany(
+            "INSERT INTO product_feed (product_id, data, delivered, created_at) VALUES (?,?,0,datetime('now'));",
+            [(pid, item) for item in items]
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _log(request, "آپلود موجودی", "موجودی", f"محصول #{pid} — {len(items)} آیتم", admin_info=adm)
+    return _redir(f"/admin/feed/{pid}?flash=✅+{len(items)}+آیتم+اضافه+شد")
+
 
 @router.post("/feed/{pid}/clear-delivered")
 async def feed_clear(request: Request, pid: int, background_tasks: BackgroundTasks):
@@ -4456,16 +4591,26 @@ def _start_auto_backup_thread() -> None:
     _auto_backup_started = True
 
     def _runner():
+        check_counter = 0
         while True:
-            _time.sleep(86400)  # هر ۲۴ ساعت
-            try:
-                _do_auto_backup()
-            except Exception as ex:
-                _tg_logger.error("auto-backup thread error: %s", ex)
+            _time.sleep(3600)  # هر ساعت
+            check_counter += 1
+            # بکاپ هر ۲۴ ساعت
+            if check_counter % 24 == 0:
+                try:
+                    _do_auto_backup()
+                except Exception as ex:
+                    _tg_logger.error("auto-backup error: %s", ex)
+            # بررسی موجودی هر ۲ ساعت
+            if check_counter % 2 == 0:
+                try:
+                    _notify_low_stock()
+                except Exception as ex:
+                    _tg_logger.error("low-stock check error: %s", ex)
 
     t = _threading.Thread(target=_runner, daemon=True, name="auto-backup")
     t.start()
-    _tg_logger.info("Auto-backup scheduler started (every 24h, max %d files)", _MAX_BACKUPS)
+    _tg_logger.info("Scheduler started (backup:24h, low-stock:2h)")
 
 
 # ─────────────────────────── Partners ──────────────────────────────────────
