@@ -602,7 +602,11 @@ def _layout(title: str, body: str, admin_info=None,
     textarea {{ min-height:110px; resize:vertical; }}
     input::placeholder,textarea::placeholder {{ color:#a6adba; }}
     input:focus, textarea:focus, select:focus {{ border-color:var(--primary); box-shadow:0 0 0 4px rgba(0,215,255,.11); }}
-    label {{ font-size:12px; color:#4b5563; display:block; margin-bottom:7px; font-weight:600; }}
+    label {{ font-size:12.5px; color:#4b5563; display:block; margin-bottom:8px; font-weight:600; padding-right:3px; }}
+    .card-p {{ padding:26px 30px !important; }}
+    .card-p h2, .card-p h3 {{ padding-right:2px; margin-bottom:18px; }}
+    .form-group {{ margin-bottom:16px; }}
+    .form-group:last-child {{ margin-bottom:0; }}
     table {{ width:100%; border-collapse:collapse; }}
     thead {{ position:static; }}
     .perm-label {{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; font-size:12px; color:var(--text-main); font-weight:500; white-space:nowrap; padding:5px 0; }}
@@ -2184,27 +2188,27 @@ async def account_page(request: Request, flash: str = ""):
     <div style="max-width:560px">
       <div class="page-header"><h1>تنظیمات حساب</h1><p>اطلاعات امنیتی مدیر ارشد</p></div>
       <div class="card card-p" style="margin-bottom:16px">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px">تغییر نام کاربری</h2>
-        <form method="post" action="/admin/account/username" style="display:flex;flex-direction:column;gap:12px">
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر نام کاربری</h2>
+        <form method="post" action="/admin/account/username" style="display:flex;flex-direction:column;gap:14px">
           <div><label>نام کاربری فعلی</label>
-            <input type="text" value="{e(current_username)}" disabled style="background:var(--page-bg);color:var(--text-muted)">
+            <input type="text" value="{e(current_username)}" disabled style="background:var(--page-bg);color:var(--text-muted);cursor:not-allowed">
           </div>
-          {_input("new_username","نام کاربری جدید (فقط a-z, 0-9)",required=True)}
+          <div><label>نام کاربری جدید</label>{_input("new_username","فقط a-z, 0-9, _ (حداقل ۳ کاراکتر)",required=True)}</div>
           {_btn("ذخیره نام کاربری","",color="indigo")}
         </form>
       </div>
       <div class="card card-p" style="margin-bottom:16px">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px">تغییر رمز پنل</h2>
-        <form method="post" action="/admin/admins/super/password" style="display:flex;flex-direction:column;gap:12px">
-          {_input("new_password","رمز جدید",type_="password",required=True)}
-          {_input("confirm_password","تکرار رمز",type_="password",required=True)}
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر رمز پنل</h2>
+        <form method="post" action="/admin/admins/super/password" style="display:flex;flex-direction:column;gap:14px">
+          <div><label>رمز جدید</label>{_input("new_password","رمز قوی",type_="password",required=True)}</div>
+          <div><label>تکرار رمز</label>{_input("confirm_password","تکرار رمز",type_="password",required=True)}</div>
           {_btn("ذخیره رمز","",color="green")}
         </form>
       </div>
       <div class="card card-p">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px">تغییر آیدی تلگرام</h2>
-        <form method="post" action="/admin/admins/super/telegram_id" style="display:flex;flex-direction:column;gap:12px">
-          {_input("new_telegram_id","آیدی عددی تلگرام",type_="number",required=True)}
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر آیدی تلگرام</h2>
+        <form method="post" action="/admin/admins/super/telegram_id" style="display:flex;flex-direction:column;gap:14px">
+          <div><label>آیدی عددی تلگرام</label>{_input("new_telegram_id","مثلاً: 638469407",type_="number",required=True)}</div>
           {_btn("ذخیره آیدی","",color="green")}
         </form>
       </div>
