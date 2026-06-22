@@ -25,49 +25,6 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 router = APIRouter(prefix="/admin")
 
-# ─── Jinja2 Templates ──────────────────────────────────────────────────────
-from fastapi.templating import Jinja2Templates as _Jinja2Templates
-import os as _os
-
-_TEMPLATE_DIR = _os.path.join(_os.path.dirname(__file__), "templates", "admin")
-_templates = _Jinja2Templates(directory=_TEMPLATE_DIR)
-_templates.env.filters["from_json"] = lambda s: json.loads(s or "[]")
-
-
-def _tpl(template_name: str, request, ctx: dict, flash: str = "", flash_ok: bool = True):
-    """Render یک template با context استاندارد."""
-    admin_info = _get_admin(request)
-    perms = admin_info[2] if admin_info else []
-    is_super = admin_info[1] if admin_info else False
-
-    # nav_item helper برای Jinja2
-    def _nav_item(href, icon, label, perm=None, badge=0):
-        if perm and not (is_super or perm in perms):
-            return ""
-        path = request.url.path
-        is_active = (path == href) if href == "/admin/" else path.startswith(href)
-        badge_html = f'<span class="nav-badge">{badge}</span>' if badge > 0 else ""
-        active_cls = " active" if is_active else ""
-        return (
-            f'<a href="{href}" class="nav-item{active_cls}" data-href="{href}">'
-            f'<i data-lucide="{icon}"></i><span>{label}</span>{badge_html}</a>'
-        )
-
-    base_ctx = {
-        "request": request,
-        "admin_info": admin_info,
-        "is_super": is_super,
-        "perms": perms,
-        "flash": flash,
-        "flash_ok": flash_ok,
-        "open_tickets": _open_ticket_count() if admin_info else 0,
-        "pending_partners": _pending_partner_count() if admin_info else 0,
-        "nav_item": _nav_item,
-        "e": e,
-    }
-    base_ctx.update(ctx)
-    return _templates.TemplateResponse(template_name, base_ctx)
-
 # ─────────────────────────── Config ────────────────────────────────────────
 
 def _env(k: str, default: str = "") -> str:
@@ -239,8 +196,8 @@ def _pending_partner_count() -> int:
 DEFAULT_THEME = {
     "sidebar_bg":     "#05070A",
     "sidebar_text":   "#9AA7B8",
-    "sidebar_active": "#00D7FF",
-    "primary":        "#00D7FF",
+    "sidebar_active": "#2EC4B6",
+    "primary":        "#2EC4B6",
     "primary_text":   "#ffffff",
     "accent":         "#F59E0B",
     "page_bg":        "#F7F8FA",
@@ -311,7 +268,11 @@ def _layout(title: str, body: str, admin_info=None,
         <aside id="sidebar" class="sidebar">
           <div class="sidebar-header">
             <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند">
-              <div class="brand-text-only">STOCK<span>LAND</span><small>مدیریت فروشگاه</small></div>
+              <div class="brand-text-only" style="direction:ltr">
+                <span style="color:#E8EDF2;font-weight:900;letter-spacing:1.5px">STOCK</span>
+                <span style="color:#2EC4B6;font-weight:900;letter-spacing:1.5px"> LAND</span>
+                <small style="display:block;font-size:9.5px;color:#536075;letter-spacing:.8px;font-weight:400;margin-top:3px;direction:rtl">مدیریت فروشگاه</small>
+              </div>
             </a>
             <button class="icon-button sidebar-close" onclick="toggleSidebar()" aria-label="بستن منو"><i data-lucide="x"></i></button>
           </div>
@@ -406,7 +367,7 @@ def _layout(title: str, body: str, admin_info=None,
     .sidebar-header {{ min-height:88px; display:flex; align-items:center; padding:20px 22px 16px; border-bottom:1px solid rgba(255,255,255,.07); position:relative; }}
     .brand-lockup {{ display:flex; align-items:center; text-decoration:none; min-width:0; flex:1; }}
     .brand-text-only {{ font:900 22px/1.1 'Vazirmatn',sans-serif !important; color:#fff; letter-spacing:1.5px; }}
-    .brand-text-only span {{ color:#00D7FF; }}
+    .brand-text-only span {{ color:#2EC4B6; }}
     .brand-text-only small {{ display:block; font-size:10px; font-weight:400; color:#536075; margin-top:4px; letter-spacing:.5px; }}
     .sidebar-close {{ display:none !important; margin-right:auto; color:#9aa7b8 !important; background:rgba(255,255,255,.06) !important; }}
     .nav-caption {{ color:#536075; font-size:10px; font-weight:700; letter-spacing:.08em; padding:20px 26px 8px; }}
@@ -524,9 +485,10 @@ def _layout(title: str, body: str, admin_info=None,
     .btn-sm {{ min-height:34px; padding:6px 12px; font-size:11.5px; border-radius:10px; }}
     .btn-slate {{ background:#f8fafc; color:#475569; border-color:var(--border); }} .btn-green {{ background:#ecfdf3; color:#15803d; border-color:#bbf7d0; }} .btn-red {{ background:#fff1f2; color:#be123c; border-color:#fecdd3; }} .btn-indigo {{ background:#ecfeff; color:#0e7490; border-color:#a5f3fc; }}
     input, textarea, select {{
-      width:100%; min-height:44px; border:1px solid var(--border); border-radius:14px; padding:10px 16px;
+      width:100%; min-height:44px; border:1px solid var(--border); border-radius:14px;
+      padding:11px 18px 11px 14px;
       font-size:13px; background:var(--card-bg); color:var(--text-main); outline:none;
-      transition:border 180ms,box-shadow 180ms; direction:rtl; text-align:right;
+      transition:border 180ms,box-shadow 180ms; direction:rtl; text-align:right; font-family:inherit;
     }}
     input[type=checkbox], input[type=radio] {{
       width:16px !important; height:16px !important; min-height:16px !important;
@@ -719,23 +681,25 @@ async def login_get(request: Request, err: str = "", flash: str = ""):
         err_html += f'<div class="mb-4 text-amber-700 text-sm text-center bg-amber-50 p-2 rounded-lg">⏱ {e(flash)}</div>'
 
     body = f"""
-    <div class="min-h-screen flex items-center justify-center -mt-16">
-      <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
-        <div class="text-center mb-6">
-          <div class="text-4xl mb-2">🛍</div>
-          <h1 class="text-xl font-bold text-gray-800">پنل مدیریت استوک لند</h1>
+    <div style="min-height:80vh;display:flex;align-items:center;justify-content:center">
+      <div style="background:var(--card-bg);border-radius:24px;box-shadow:0 20px 60px rgba(15,23,42,.12);padding:40px 36px;width:100%;max-width:380px">
+        <div style="text-align:center;margin-bottom:28px">
+          <div style="font-size:24px;font-weight:900;letter-spacing:1.5px;margin-bottom:6px;direction:ltr">
+            <span style="color:#374151">STOCK</span><span style="color:#2EC4B6"> LAND</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted)">پنل مدیریت فروشگاه</div>
         </div>
         {err_html}
-        <form method="post" action="/admin/login" class="space-y-4">
+        <form method="post" action="/admin/login" style="display:flex;flex-direction:column;gap:14px">
           <div>
-            <label class="text-sm text-gray-600 block mb-1">نام کاربری</label>
-            {_input("username", "نام کاربری", required=True)}
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">نام کاربری</label>
+            <input type="text" name="username" placeholder="نام کاربری" required style="width:100%;padding:11px 18px;border:1.5px solid var(--border);border-radius:12px;font-size:13px;direction:rtl;text-align:right;outline:none;font-family:inherit">
           </div>
           <div>
-            <label class="text-sm text-gray-600 block mb-1">رمز ورود</label>
-            {_input("password", "رمز ورود", type_="password", required=True)}
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">رمز ورود</label>
+            <input type="password" name="password" placeholder="رمز ورود" required style="width:100%;padding:11px 18px;border:1.5px solid var(--border);border-radius:12px;font-size:13px;direction:rtl;text-align:right;outline:none;font-family:inherit">
           </div>
-          {_btn("ورود به پنل ←")}
+          <button type="submit" style="width:100%;padding:12px;background:#2EC4B6;color:#fff;font-weight:700;font-size:14px;border:none;border-radius:12px;cursor:pointer;margin-top:4px">ورود به پنل ←</button>
         </form>
       </div>
     </div>"""
@@ -1021,9 +985,9 @@ async def dashboard(request: Request, err: str = ""):
         data: {{
           labels: {chart_labels},
           datasets: [{{
-            label: 'فروش روزانه', data: {chart_values}, borderColor: '#00D7FF',
+            label: 'فروش روزانه', data: {chart_values}, borderColor: '#2EC4B6',
             backgroundColor: gradient, borderWidth: 2.5, fill: true, tension: .42,
-            pointRadius: 0, pointHoverRadius: 5, pointHoverBackgroundColor: '#00D7FF',
+            pointRadius: 0, pointHoverRadius: 5, pointHoverBackgroundColor: '#2EC4B6',
             pointHoverBorderColor: '#fff', pointHoverBorderWidth: 3
           }}]
         }},
@@ -2068,12 +2032,63 @@ async def admins_list(request: Request, flash: str = ""):
     finally:
         conn.close()
 
-    return _tpl("admins.html", request, {
-        "title": "ادمین‌ها",
-        "admins": admins,
-        "permissions": ALL_PERMISSIONS,
-        "all_permissions": ALL_PERMISSIONS,
-    }, flash=flash)
+    rows = ""
+    for a in admins:
+        perms_list = json.loads(a["permissions"] or "[]")
+        badges = " ".join(f'<span class="badge badge-info">{ALL_PERMISSIONS.get(p,p)}</span>' for p in perms_list) or '<span style="color:var(--text-muted);font-size:12px">بدون اختیار</span>'
+        status_badge = '<span class="badge badge-success">فعال</span>' if a["is_active"] else '<span class="badge badge-danger">غیرفعال</span>'
+        rows += f"""<tr>
+          <td style="font-weight:600">{e(a["name"])}</td>
+          <td style="font-size:11px;color:var(--text-muted)">{e(a["telegram_id"] or "—")}</td>
+          <td style="font-size:11px;color:var(--text-muted)">{e(a["web_username"] or "—")}</td>
+          <td>{badges}</td>
+          <td>{status_badge}</td>
+          <td><div style="display:flex;gap:6px">
+            <a href="/admin/admins/{a["id"]}/edit" class="btn btn-indigo btn-sm">ویرایش</a>
+            <form method="post" action="/admin/admins/{a["id"]}/toggle"><button class="btn btn-slate btn-sm">{"غیرفعال" if a["is_active"] else "فعال"}</button></form>
+            <form method="post" action="/admin/admins/{a["id"]}/delete" onsubmit="return confirm('حذف شود؟')"><button class="btn btn-red btn-sm">حذف</button></form>
+          </div></td>
+        </tr>"""
+
+    perm_checks = '<div class="perm-grid">' + "".join(
+        f'<label class="perm-label"><input type="checkbox" name="perm_{k}" value="1" style="width:15px;height:15px;min-height:15px;cursor:pointer">{v}</label>'
+        for k, v in ALL_PERMISSIONS.items()
+    ) + '</div>'
+
+    body = f"""
+    <div class="page-header"><h1>مدیریت ادمین‌ها</h1><p>کنترل دسترسی مدیران پنل</p></div>
+    <div class="card card-p" style="margin-bottom:20px">
+      <h2 style="font-size:15px;font-weight:700;margin-bottom:16px">افزودن ادمین جدید</h2>
+      <form method="post" action="/admin/admins/add">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+          <div><label>نام نمایشی *</label>{_input("name","مثلاً: پشتیبانی",required=True)}</div>
+          <div><label>آیدی تلگرام</label>{_input("telegram_id","مثلاً: 123456789",type_="number")}</div>
+          <div><label>یوزرنیم *</label>{_input("web_username","مثلاً: support1",required=True)}</div>
+          <div><label>رمز *</label>{_input("web_password","رمز قوی",type_="password",required=True)}</div>
+        </div>
+        <div style="margin-bottom:14px"><label>اختیارات دسترسی</label>{perm_checks}</div>
+        {_btn("افزودن ادمین","",color="green")}
+      </form>
+    </div>
+    <div class="card" style="overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
+        <span style="font-size:14px;font-weight:700">ادمین‌های فعلی ({len(admins)})</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نام</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تلگرام</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">یوزرنیم</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">اختیارات</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='6' style='text-align:center;padding:32px;color:var(--text-muted)'>ادمینی اضافه نشده</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("ادمین‌ها", body, adm, flash=flash)
 
 
 @router.get("/account", response_class=HTMLResponse)
@@ -2081,14 +2096,22 @@ async def account_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
     if not adm or not adm[1]:
         return _redir("/admin/")
+    current_username = _env("ADMIN_WEB_USERNAME", "admin")
     body = f"""
     <div style="max-width:560px">
-      <div class="page-header">
-        <h1>تنظیمات حساب</h1>
-        <p>اطلاعات امنیتی مدیر ارشد</p>
+      <div class="page-header"><h1>تنظیمات حساب</h1><p>اطلاعات امنیتی مدیر ارشد</p></div>
+      <div class="card card-p" style="margin-bottom:16px">
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px">تغییر نام کاربری</h2>
+        <form method="post" action="/admin/account/username" style="display:flex;flex-direction:column;gap:12px">
+          <div><label>نام کاربری فعلی</label>
+            <input type="text" value="{e(current_username)}" disabled style="background:var(--page-bg);color:var(--text-muted)">
+          </div>
+          {_input("new_username","نام کاربری جدید (فقط a-z, 0-9)",required=True)}
+          {_btn("ذخیره نام کاربری","",color="indigo")}
+        </form>
       </div>
       <div class="card card-p" style="margin-bottom:16px">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px;color:var(--text-main)">تغییر رمز پنل</h2>
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px">تغییر رمز پنل</h2>
         <form method="post" action="/admin/admins/super/password" style="display:flex;flex-direction:column;gap:12px">
           {_input("new_password","رمز جدید",type_="password",required=True)}
           {_input("confirm_password","تکرار رمز",type_="password",required=True)}
@@ -2096,7 +2119,7 @@ async def account_page(request: Request, flash: str = ""):
         </form>
       </div>
       <div class="card card-p">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px;color:var(--text-main)">تغییر آیدی تلگرام</h2>
+        <h2 style="font-size:14px;font-weight:700;margin-bottom:16px">تغییر آیدی تلگرام</h2>
         <form method="post" action="/admin/admins/super/telegram_id" style="display:flex;flex-direction:column;gap:12px">
           {_input("new_telegram_id","آیدی عددی تلگرام",type_="number",required=True)}
           {_btn("ذخیره آیدی","",color="green")}
@@ -2104,6 +2127,35 @@ async def account_page(request: Request, flash: str = ""):
       </div>
     </div>"""
     return _layout("تنظیمات حساب", body, adm, flash=flash)
+
+
+@router.post("/account/username")
+async def account_change_username(request: Request, new_username: str = Form("")):
+    adm = _get_admin(request)
+    if not adm or not adm[1]:
+        return _redir("/admin/login")
+    new_username = new_username.strip().lower()
+    import re as _re
+    if not new_username or not _re.match(r'^[a-z0-9_]{3,32}$', new_username):
+        return _redir("/admin/account?flash=نام+کاربری+نامعتبر+است+(فقط+حروف+انگلیسی+کوچک+و+عدد)")
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    try:
+        lines = open(env_path, encoding="utf-8").readlines() if os.path.exists(env_path) else []
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.startswith("ADMIN_WEB_USERNAME="):
+                new_lines.append(f"ADMIN_WEB_USERNAME={new_username}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"ADMIN_WEB_USERNAME={new_username}\n")
+        open(env_path, "w", encoding="utf-8").writelines(new_lines)
+        os.environ["ADMIN_WEB_USERNAME"] = new_username
+    except Exception as ex:
+        return _redir(f"/admin/account?flash=خطا:+{str(ex)[:40]}")
+    return _redir("/admin/account?flash=نام+کاربری+تغییر+کرد")
 
 
 @router.post("/admins/super/password")
@@ -3574,19 +3626,53 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
         conn.close()
 
     total = sum(stats.values())
-    tabs = [
-        ("همه", "", total),
-        ("منتظر ادمین", "waiting_admin", stats["waiting_admin"]),
-        ("منتظر کاربر", "waiting_user", stats["waiting_user"]),
-        ("بسته", "closed", stats["closed"]),
-    ]
+    tabs = [("همه","",total),("منتظر ادمین","waiting_admin",stats["waiting_admin"]),
+            ("منتظر کاربر","waiting_user",stats["waiting_user"]),("بسته","closed",stats["closed"])]
 
-    return _tpl("tickets.html", request, {
-        "title": "تیکت‌ها",
-        "tickets": tickets,
-        "tabs": tabs,
-        "status_filter": status_filter,
-    }, flash=flash)
+    tabs_html = '<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">'
+    for lbl, val, cnt in tabs:
+        active = status_filter == val
+        bg = "var(--primary)" if active else "var(--card-bg)"
+        col = "#000" if active else "var(--text-muted)"
+        bdr = "var(--primary)" if active else "var(--border)"
+        tabs_html += f'<a href="/admin/tickets?status_filter={val}" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:12px;border:1.5px solid {bdr};background:{bg};color:{col};font-size:13px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl}<span style="padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"}">{cnt}</span></a>'
+    tabs_html += '</div>'
+
+    def sbadge(s):
+        m = {"waiting_admin":("danger","منتظر ادمین"),"waiting_user":("warning","منتظر کاربر"),"closed":("neutral","بسته")}
+        t,l = m.get(s,("neutral",s))
+        return f'<span class="status-badge status-{t}"><span></span>{l}</span>'
+
+    rows = "".join(f"""<tr>
+      <td><a href="/admin/tickets/{t["id"]}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t["id"]}</a></td>
+      <td><code style="font-size:11px;background:var(--page-bg);padding:2px 8px;border-radius:6px">{e(str(t["user_id"]))}</code></td>
+      <td><span style="font-size:11.5px">{e(t["type"] or "support")}</span></td>
+      <td>{sbadge(t["status"])}</td>
+      <td style="color:var(--text-muted);font-size:12px">{int(t["msg_count"] or 0)} پیام</td>
+      <td style="color:var(--text-muted);font-size:11px">{(t["updated_at"] or "")[:16]}</td>
+      <td><a href="/admin/tickets/{t["id"]}" class="btn btn-indigo btn-sm">مشاهده</a></td>
+    </tr>""" for t in tickets)
+
+    body = f"""
+    <div class="page-header"><h1>تیکت‌های پشتیبانی</h1><p>مدیریت و پاسخ به درخواست‌های کاربران</p></div>
+    {tabs_html}
+    <div class="card" style="overflow:hidden">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
+            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
+            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">User ID</th>
+            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نوع</th>
+            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
+            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">پیام‌ها</th>
+            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
+            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='7' style='text-align:center;padding:40px;color:var(--text-muted);font-size:13px'>تیکتی یافت نشد</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("تیکت‌ها", body, adm, flash=flash)
 
 
 @router.get("/tickets/{tid}", response_class=HTMLResponse)
