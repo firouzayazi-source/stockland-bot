@@ -1388,15 +1388,248 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
 
     bot.send_message(chat_id, "لطفا یکی از سرویس‌های زیر را انتخاب کنید:", reply_markup=kb)
 
-#======================= handle_confirm_full ======================
+#======================= ORDER SUMMARY + DISCOUNT =======================
+
+def _get_eff_price(product, uid):
+    """قیمت موثر بر اساس همکار یا مشتری بودن."""
+    price = product[3]
+    partner_price = product[6] if len(product) > 6 else None
+    partner_ok = is_partner_approved(uid)
+    return partner_price if (partner_ok and partner_price) else price
+
+
+def _show_order_summary(chat_id, uid, product, category, pid):
+    """نمایش خلاصه سفارش — با یا بدون کد تخفیف."""
+    title     = product[2]
+    base      = _get_eff_price(product, uid)
+    state     = user_states.get(uid, {})
+    discount  = int(state.get("applied_discount", 0))
+    code_name = state.get("applied_code", "")
+    final     = max(0, base - discount)
+
+    lines = [f"🛒 <b>{title}</b>\n"]
+    lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
+    if discount > 0:
+        lines.append(f"🎟 کد تخفیف: <code>{code_name}</code>")
+        lines.append(f"💸 تخفیف: <b>−{discount:,}</b> تومان")
+        lines.append(f"\n💰 مبلغ قابل پرداخت:\n<b>{final:,}</b> تومان")
+    else:
+        lines.append(f"\n💰 مبلغ قابل پرداخت:\n<b>{final:,}</b> تومان")
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton(
+        f"💳 پرداخت — {final:,} تومان",
+        callback_data=f"do_pay_{category}_{pid}"
+    ))
+    if discount > 0:
+        kb.row(
+            types.InlineKeyboardButton("🔄 تغییر کد", callback_data=f"enter_code_{category}_{pid}"),
+            types.InlineKeyboardButton("🗑 حذف کد",   callback_data=f"remove_code_{category}_{pid}")
+        )
+    else:
+        kb.add(types.InlineKeyboardButton(
+            "🎟 دارم کد تخفیف",
+            callback_data=f"enter_code_{category}_{pid}"
+        ))
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_purchase"))
+
+    bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_full_"))
+def handle_confirm_full(call):
+    parts = call.data.split("_")
+    if len(parts) < 4:
+        bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True); return
+    pid_str  = parts[-1]
+    category = "_".join(parts[2:-1])
+    if not pid_str.isdigit():
+        bot.answer_callback_query(call.id, "شناسه نامعتبر", show_alert=True); return
+    pid = int(pid_str); uid = call.from_user.id
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True); return
+    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
+    if exceeded:
+        bot.answer_callback_query(call.id, f"سقف روزانه ({limit_val}) تکمیل شد", show_alert=True); return
+    # ذخیره نوع پرداخت در state
+    user_states.setdefault(uid, {})["pay_type"] = "full"
+    _show_order_summary(call.message.chat.id, uid, product, category, pid)
+    bot.answer_callback_query(call.id)
+
+
+#======================== confirm_wallet =====================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_wallet_"))
+def handle_confirm_wallet(call):
+    parts = call.data.split("_")
+    if len(parts) < 4:
+        bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True); return
+    pid_str  = parts[-1]
+    category = "_".join(parts[2:-1])
+    if not pid_str.isdigit():
+        bot.answer_callback_query(call.id, "شناسه نامعتبر", show_alert=True); return
+    pid = int(pid_str); uid = call.from_user.id
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True); return
+    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
+    if exceeded:
+        bot.answer_callback_query(call.id, f"سقف روزانه ({limit_val}) تکمیل شد", show_alert=True); return
+    user_states.setdefault(uid, {})["pay_type"] = "wallet"
+    _show_order_summary(call.message.chat.id, uid, product, category, pid)
+    bot.answer_callback_query(call.id)
+
+
+# ─── ورود کد تخفیف ──────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("enter_code_"))
+def handle_enter_code(call):
+    uid  = call.from_user.id
+    suf  = call.data[len("enter_code_"):]
+    # ذخیره info برای برگشت بعد از کد
+    user_states.setdefault(uid, {})["code_context"] = suf
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data=f"code_cancel_{suf}"))
+    bot.send_message(call.message.chat.id,
+        "🎟 کد تخفیف خود را ارسال کنید:", reply_markup=kb)
+    bot.register_next_step_handler(call.message, _handle_code_input)
+    bot.answer_callback_query(call.id)
+
+
+def _handle_code_input(message):
+    uid  = message.from_user.id
+    code = (message.text or "").strip().upper()
+    if not code:
+        return
+    state   = user_states.get(uid, {})
+    context = state.get("code_context", "")
+    # parse category و pid از context
+    parts = context.rsplit("_", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.send_message(message.chat.id, "❌ خطا — دوباره امتحان کنید"); return
+    category, pid_str = parts[0], parts[1]
+    pid     = int(pid_str)
+    product = get_product_by_id(pid)
+    if not product:
+        bot.send_message(message.chat.id, "❌ محصول یافت نشد"); return
+
+    base   = _get_eff_price(product, uid)
+    result = validate_discount(code, product_id=pid, amount=base)
+    if not result["valid"]:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت به سفارش",
+            callback_data=f"code_cancel_{context}"))
+        bot.send_message(message.chat.id, f"❌ {result['error']}", reply_markup=kb)
+        return
+
+    use_discount(result["code_id"])
+    state["applied_discount"] = result["discount_amount"]
+    state["applied_code"]     = code
+    user_states[uid]          = state
+    _show_order_summary(message.chat.id, uid, product, category, pid)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("code_cancel_"))
+def handle_code_cancel(call):
+    uid     = call.from_user.id
+    context = call.data[len("code_cancel_"):]
+    parts   = context.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        pid     = int(parts[1])
+        category = parts[0]
+        product  = get_product_by_id(pid)
+        if product:
+            _show_order_summary(call.message.chat.id, uid, product, category, pid)
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("remove_code_"))
+def handle_remove_code(call):
+    uid = call.from_user.id
+    state = user_states.get(uid, {})
+    state.pop("applied_discount", None)
+    state.pop("applied_code", None)
+    user_states[uid] = state
+    context = call.data[len("remove_code_"):]
+    parts   = context.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        product = get_product_by_id(int(parts[1]))
+        if product:
+            _show_order_summary(call.message.chat.id, uid, product, parts[0], int(parts[1]))
+    bot.answer_callback_query(call.id, "کد تخفیف حذف شد")
+
+
+# ─── پرداخت نهایی ────────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("do_pay_"))
+def handle_do_pay(call):
+    uid     = call.from_user.id
+    context = call.data[len("do_pay_"):]
+    parts   = context.rsplit("_", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.answer_callback_query(call.id, "خطا", show_alert=True); return
+    category, pid_str = parts[0], parts[1]
+    pid     = int(pid_str)
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True); return
+
+    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
+    if exceeded:
+        bot.answer_callback_query(call.id, f"سقف روزانه ({limit_val}) تکمیل شد", show_alert=True); return
+
+    base     = _get_eff_price(product, uid)
+    discount = int(user_states.get(uid, {}).get("applied_discount", 0))
+    eff_price = max(0, base - discount)
+
+    # پاک کردن state تخفیف
+    state = user_states.get(uid, {})
+    state.pop("applied_discount", None)
+    state.pop("applied_code", None)
+    state.pop("pay_type", None)
+    state.pop("code_context", None)
+    user_states[uid] = state
+
+    wallet_balance = get_wallet_balance(uid)
+
+    if wallet_balance >= eff_price:
+        # کیف‌پول کافیه
+        finalize_product_order(call, uid, product, category, eff_price)
+    else:
+        # ارسال به درگاه
+        from services.payments import start_wallet_charge_payment
+        start_wallet_charge_payment(
+            bot=bot, message=call.message, uid=uid, amount=eff_price,
+            clear_user_state=clear_user_state,
+            payment_type="product", product_id=pid, wallet_reserved=0
+        )
+    bot.answer_callback_query(call.id)
+
+
+# ─── deprecated handlers (backward compat) ───────────────────────────────────
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pay_nodiscount_"))
+def handle_pay_nodiscount(call):
+    uid = call.from_user.id
+    pending_cb = user_states.get(uid, {}).get("pending_cb", "")
+    if not pending_cb:
+        bot.answer_callback_query(call.id, "خطا", show_alert=True); return
+    user_states.setdefault(uid, {})["discount_asked"] = True
+    call.data = pending_cb
+    if pending_cb.startswith("confirm_full_"):
+        handle_confirm_full(call)
+    else:
+        handle_confirm_wallet(call)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_start_"))
+def handle_discount_start(call): pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_skip_"))
+def handle_discount_skip(call): pass
+
 
 def _daily_limit_exceeded(uid, product, pid):
-    """True if the user's daily purchase cap for this product is reached.
-
-    Defense-in-depth: even though send_product_detail already checks this,
-    the user might have bought elsewhere between seeing the button and
-    pressing it. Returns (exceeded: bool, limit_val: int).
-    """
+    """True if the user's daily purchase cap for this product is reached."""
     partner_ok = is_partner_approved(int(uid))
     buyer_type = "partner" if partner_ok else "customer"
     daily_lim_c = product[7] if len(product) > 7 else 0
