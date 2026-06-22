@@ -5196,14 +5196,13 @@ async def broadcast_page(request: Request, flash: str = ""):
       {_card("بدون خرید", str(non_buyers), "عضو بدون خرید", "orange")}
     </div>
 
-    <div class="card p-6">
-      <h2 class="font-bold text-gray-700 mb-4">ارسال پیام جدید</h2>
-      <form method="post" action="/admin/broadcast/send" class="space-y-4">
+    <div class="card card-p">
+      <h2 style="font-size:15px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">ارسال پیام جدید</h2>
+      <form method="post" action="/admin/broadcast/send" style="display:flex;flex-direction:column;gap:18px">
 
         <div>
-          <label class="text-sm font-medium text-gray-700 block mb-1">مخاطبان *</label>
-          <select name="target" id="target-select" onchange="toggleTargetOptions(this.value)"
-            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <label>مخاطبان *</label>
+          <select name="target" id="target-select" onchange="toggleTargetOptions(this.value)">
             <option value="all">همه کاربران ({total_users} نفر)</option>
             <option value="buyers">خریداران ({total_buyers} نفر)</option>
             <option value="non_buyers">بدون خرید ({non_buyers} نفر)</option>
@@ -5213,37 +5212,32 @@ async def broadcast_page(request: Request, flash: str = ""):
         </div>
 
         <div id="product-select" style="display:none">
-          <label class="text-sm font-medium text-gray-700 block mb-1">محصول</label>
-          <select name="product_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-            {prod_opts}
-          </select>
+          <label>محصول</label>
+          <select name="product_id">{prod_opts}</select>
         </div>
 
         <div id="category-select" style="display:none">
-          <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی</label>
-          <select name="category_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-            {cat_opts}
-          </select>
+          <label>دسته‌بندی</label>
+          <select name="category_id">{cat_opts}</select>
         </div>
 
         <div>
-          <label class="text-sm font-medium text-gray-700 block mb-1">متن پیام * (HTML پشتیبانی می‌شود)</label>
-          {_textarea("text", "متن پیام را بنویسید...\n<b>بولد</b> و <i>ایتالیک</i> پشتیبانی می‌شود.", rows=5)}
+          <label>متن پیام * <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(HTML پشتیبانی می‌شود: &lt;b&gt;، &lt;i&gt;، &lt;code&gt;)</span></label>
+          {_textarea("text", "متن پیام را اینجا بنویسید...", rows=6)}
         </div>
 
         <div>
-          <label class="text-sm font-medium text-gray-700 block mb-1">آدرس عکس (اختیاری)</label>
+          <label>آدرس عکس <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(اختیاری)</span></label>
           {_input("photo_url", "https://example.com/image.jpg")}
         </div>
 
         <div>
-          <label class="text-sm font-medium text-gray-700 block mb-1">دکمه‌های Inline (اختیاری)</label>
-          <div class="text-xs text-gray-400 mb-1">فرمت: متن|لینک — هر دکمه در یک خط</div>
+          <label>دکمه‌های Inline <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(اختیاری — فرمت: متن|لینک — هر دکمه یک خط)</span></label>
           {_textarea("buttons", "دکمه اول|https://t.me/yourbot\nدکمه دوم|https://site.com", rows=3)}
         </div>
 
-        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
-          ⚠️ بعد از ارسال، عملیات در پس‌زمینه انجام می‌شود. صفحه را ببندید و بعداً وضعیت را چک کنید.
+        <div style="background:#FEF3C7;border:1px solid #FDE68A;border-radius:12px;padding:12px 16px;font-size:13px;color:#92400E">
+          ⚠️ بعد از ارسال، عملیات در پس‌زمینه اجرا می‌شود. صفحه را ببندید و بعداً وضعیت را بررسی کنید.
         </div>
 
         {_btn("📢 شروع ارسال", color="green")}
@@ -5252,8 +5246,8 @@ async def broadcast_page(request: Request, flash: str = ""):
 
     <script>
     function toggleTargetOptions(val) {{
-      document.getElementById('product-select').style.display = val === 'product' ? '' : 'none';
-      document.getElementById('category-select').style.display = val === 'category' ? '' : 'none';
+      document.getElementById('product-select').style.display = val === 'product' ? 'block' : 'none';
+      document.getElementById('category-select').style.display = val === 'category' ? 'block' : 'none';
     }}
     </script>"""
 
