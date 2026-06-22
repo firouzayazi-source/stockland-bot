@@ -932,36 +932,6 @@ def _layout(title: str, body: str, admin_info=None,
     .main-wrap {{ overflow-x:hidden; }}
     .table-wrap, .overflow-x-auto {{ overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }}
 
-    /* ── Ticket cards on mobile ─────────────────────────────── */
-    @media (max-width:640px) {{
-      .ticket-table-wrap table,
-      .ticket-table-wrap thead,
-      .ticket-table-wrap tbody,
-      .ticket-table-wrap tr,
-      .ticket-table-wrap td,
-      .ticket-table-wrap th {{ display:block; }}
-      .ticket-table-wrap thead {{ display:none; }}
-      .ticket-table-wrap tbody tr {{
-        background:#fff; border-radius:14px; margin-bottom:10px;
-        box-shadow:0 1px 4px rgba(15,23,42,.07);
-        border:1px solid #E5E7EB; padding:12px 14px;
-        cursor:pointer;
-      }}
-      .ticket-table-wrap tbody td {{
-        display:flex; justify-content:space-between; align-items:center;
-        padding:6px 2px; border-bottom:1px solid #F3F4F6; font-size:12.5px;
-      }}
-      .ticket-table-wrap tbody td:last-child {{ border-bottom:none; padding-top:10px; }}
-      .ticket-table-wrap tbody td::before {{
-        content:attr(data-label);
-        color:#9CA3AF; font-size:10.5px; font-weight:600;
-        text-transform:uppercase; letter-spacing:.3px;
-        flex-shrink:0; margin-left:8px; white-space:nowrap;
-      }}
-      .ticket-table-wrap tbody td:empty,
-      .ticket-table-wrap tbody td[data-label=""]::before {{ display:none; }}
-    }}
-
     /* ── Touch targets 44px ─────────────────────────────────── */
     @media (max-width:820px) {{
       .btn-sm {{ min-height:36px; padding:0 12px; }}
