@@ -1253,22 +1253,57 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             if get_product_support_flag(pid):
                 from db import ticket_create, ticket_ensure_schema, ticket_add_message
                 ticket_ensure_schema()
-                tid = ticket_create(uid, type_="product_support",
-                                     product_id=pid, order_id=order_id)
-                kb_sup = types.InlineKeyboardMarkup()
-                kb_sup.add(types.InlineKeyboardButton(
-                    "💬 ورود به پشتیبانی محصول", callback_data=f"ticket_v2_open_{tid}"
+                # feed_item را رزرو کرده‌ایم اما به کاربر نمی‌فرستیم
+                tid = ticket_create(
+                    uid, type_="product_setup",
+                    product_id=pid, order_id=order_id,
+                    feed_id=feed_id,
+                    feed_data=str(feed_data),
+                    setup_status="waiting_info"
+                )
+                # پیام سیستمی داخل تیکت
+                ticket_add_message(tid, "admin",
+                    f"📦 سفارش #{order_id} — {title}\n"
+                    "لطفاً اطلاعات مورد نیاز را در این گفتگو ارسال کنید.",
+                    media_type=None)
+                kb_setup = types.InlineKeyboardMarkup()
+                kb_setup.add(types.InlineKeyboardButton(
+                    "💬 ارسال اطلاعات", callback_data=f"ticket_v2_open_{tid}"
                 ))
+                # به کاربر بگو اطلاعات بده — محصول هنوز ارسال نشده
                 bot.send_message(
                     call.message.chat.id,
-                    f"🟦 <b>پشتیبانی پس از خرید</b>\n\n"
-                    f"محصول: {title}\n"
-                    f"سفارش: #{order_id}\n\n"
-                    "جهت راه‌اندازی یا سوال، از دکمه زیر وارد چت پشتیبانی شوید:",
-                    parse_mode="HTML", reply_markup=kb_sup
+                    f"✅ سفارش #{order_id} ثبت شد.\n\n"
+                    f"📦 <b>{title}</b>\n\n"
+                    "🟡 <b>برای تکمیل سفارش، اطلاعات مورد نیاز را ارسال کنید.</b>\n"
+                    "پشتیبانی پس از دریافت اطلاعات، محصول را تحویل می‌دهد.",
+                    parse_mode="HTML", reply_markup=kb_setup
                 )
-        except Exception:
-            pass
+                # نوتیف به ادمین
+                try:
+                    bot.send_message(ADMIN_ID,
+                        f"🟢 <b>گفتگوی راه‌اندازی محصول</b>\n"
+                        f"سفارش: #{order_id}\nمحصول: {title}\n"
+                        f"کاربر: <code>{uid}</code>\n"
+                        f"تیکت: #{tid}",
+                        parse_mode="HTML")
+                except Exception:
+                    pass
+                return  # اتمام — محصول از طریق تیکت تحویل می‌گیره
+        except Exception as _se:
+            logger.error("product_setup ticket error: %s", _se)
+
+        # تحویل عادی (اگه setup flag فعال نبود)
+        bot.send_message(
+            call.message.chat.id,
+            f"سفارش ثبت و تحویل شد ✅\n\n"
+            f"شماره سفارش: #{order_id}\n"
+            f"سرویس: {title}\n"
+            f"مبلغ: {eff_price:,} تومان\n"
+            f"موجودی فعلی: {new_balance:,} تومان\n\n"
+            f"<code>{html.escape(str(feed_data))}</code>",
+            parse_mode="HTML"
+        )
 
         try:
             bot.send_message(

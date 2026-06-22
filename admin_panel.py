@@ -2860,6 +2860,15 @@ async def product_new_get(request: Request):
       </div>
       <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>
         {_textarea("description", "توضیحات محصول...", rows=3)}</div>
+      <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
+        <label class="perm-label" style="font-size:13px">
+          <input type="checkbox" name="support_after_purchase" value="1" style="width:16px;height:16px;min-height:16px;cursor:pointer">
+          <div>
+            <strong>نیاز به راه‌اندازی / دریافت اطلاعات مشتری</strong>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">پس از خرید، به جای تحویل مستقیم، گفتگوی راه‌اندازی باز می‌شود</div>
+          </div>
+        </label>
+      </div>
       <div class="flex gap-3">{_btn("ذخیره محصول", color="green")} {_btn("انصراف", "/admin/products", "slate")}</div>
     </form>"""
 
@@ -2873,6 +2882,8 @@ async def product_new_post(request: Request,
     adm = _get_admin(request)
     guard = _require(adm, "products")
     if guard: return guard
+    form = await request.form()
+    support_after = 1 if form.get("support_after_purchase") == "1" else 0
 
     if not category_id.strip().isdigit():
         return _redir("/admin/products/new?flash=دسته‌بندی+انتخاب+کنید")
@@ -2887,10 +2898,10 @@ async def product_new_post(request: Request,
         cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
             INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active)
-            VALUES (?,?,?,?,?,?,?,?,?,1);""",
+                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?);""",
             (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
-             int(limit_c or 0), int(limit_p or 0), description.strip()))
+             int(limit_c or 0), int(limit_p or 0), description.strip(), support_after))
         conn.commit()
     finally:
         conn.close()
@@ -4406,102 +4417,135 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
 
 
 @router.get("/tickets", response_class=HTMLResponse)
-async def tickets_list(request: Request, status_filter: str = "", flash: str = ""):
+async def tickets_list(request: Request, status_filter: str = "", type_filter: str = "", flash: str = ""):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
 
     conn = _db()
     try:
-        where = "WHERE t.status=?" if status_filter else ""
-        params = (status_filter, 100) if status_filter else (100,)
+        wheres, params = [], []
+        if status_filter:
+            wheres.append("t.status=?"); params.append(status_filter)
+        if type_filter:
+            wheres.append("t.type=?"); params.append(type_filter)
+        where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+        params.append(200)
         try:
             tickets = conn.execute(f"""
                 SELECT t.*,
                        (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
-                       (SELECT sender FROM ticket_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_sender
-                FROM tickets t {where}
-                ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
-                         t.updated_at DESC LIMIT ?;
+                       (SELECT sender FROM ticket_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_sender,
+                       p.title AS product_title
+                FROM tickets t
+                LEFT JOIN products p ON p.id=t.product_id
+                {where_sql}
+                ORDER BY CASE t.status
+                    WHEN 'waiting_info' THEN 0 WHEN 'waiting_admin' THEN 1
+                    WHEN 'reviewing' THEN 2 WHEN 'waiting_user' THEN 3 ELSE 4 END,
+                    t.updated_at DESC LIMIT ?;
             """, params).fetchall()
         except Exception:
-            # fallback به query ساده اگه schema جدید نداره
             tickets = conn.execute(f"""
-                SELECT t.*,
-                       (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
-                       NULL AS last_sender
-                FROM tickets t {where}
+                SELECT t.*, (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
+                NULL AS last_sender, NULL AS product_title
+                FROM tickets t {where_sql}
                 ORDER BY id DESC LIMIT ?;
             """, params).fetchall()
-        stats = {s: conn.execute("SELECT COUNT(*) FROM tickets WHERE status=?;", (s,)).fetchone()[0]
-                 for s in ("waiting_admin", "waiting_user", "closed")}
+        stats = {}
+        for s in ("waiting_admin","waiting_user","closed","waiting_info","reviewing","ready_delivery"):
+            stats[s] = conn.execute("SELECT COUNT(*) FROM tickets WHERE status=?;",(s,)).fetchone()[0]
+        type_counts = {}
+        for t in ("support","product_setup","partner"):
+            type_counts[t] = conn.execute("SELECT COUNT(*) FROM tickets WHERE type=?;",(t,)).fetchone()[0]
     finally:
         conn.close()
 
-    total = sum(stats.values())
-    tabs = [("همه","",total),("منتظر ادمین","waiting_admin",stats["waiting_admin"]),
-            ("منتظر کاربر","waiting_user",stats["waiting_user"]),("بسته","closed",stats["closed"])]
+    def tq(sf="", tf=""):
+        return f"?status_filter={sf}&type_filter={tf}"
 
-    tabs_html = '<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">'
-    for lbl, val, cnt in tabs:
-        active = status_filter == val
+    type_tabs = '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'
+    for lbl, val, cnt in [
+        ("همه", "", sum(type_counts.values())),
+        ("🔵 پشتیبانی", "support", type_counts["support"]),
+        ("🟢 راه‌اندازی", "product_setup", type_counts["product_setup"]),
+        ("🟠 همکاری", "partner", type_counts["partner"]),
+    ]:
+        active = type_filter == val
         bg = "var(--primary)" if active else "var(--card-bg)"
         col = "#000" if active else "var(--text-muted)"
-        bdr = "var(--primary)" if active else "var(--border)"
-        tabs_html += f'<a href="/admin/tickets?status_filter={val}" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:12px;border:1.5px solid {bdr};background:{bg};color:{col};font-size:13px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl}<span style="padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"}">{cnt}</span></a>'
-    tabs_html += '</div>'
+        type_tabs += f'<a href="{tq(status_filter, val)}" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;border:1.5px solid {"var(--primary)" if active else "var(--border)"};background:{bg};color:{col};font-size:12px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} <span style="font-size:10px;padding:1px 6px;border-radius:20px;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"};">{cnt}</span></a>'
+    type_tabs += "</div>"
 
-    def sbadge(s, last_sender=None):
-        if s == "waiting_admin":
-            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#FEE2E2;color:#B91C1C;border-radius:20px;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#EF4444;display:inline-block"></span>نیاز به پاسخ</span>'
-        elif s == "waiting_user":
-            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#DCFCE7;color:#166534;border-radius:20px;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#22C55E;display:inline-block"></span>پاسخ داده شد</span>'
-        else:
-            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#F3F4F6;color:#6B7280;border-radius:20px;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#9CA3AF;display:inline-block"></span>بسته</span>'
+    status_tabs = '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
+    for lbl, val, cnt in [("همه","",sum(stats.values())),("منتظر اطلاعات","waiting_info",stats.get("waiting_info",0)),
+                          ("نیاز به پاسخ","waiting_admin",stats.get("waiting_admin",0)),("در بررسی","reviewing",stats.get("reviewing",0)),
+                          ("آماده تحویل","ready_delivery",stats.get("ready_delivery",0)),("منتظر کاربر","waiting_user",stats.get("waiting_user",0)),
+                          ("بسته","closed",stats.get("closed",0))]:
+        active = status_filter == val
+        bg = "#374151" if active else "var(--card-bg)"; col = "#fff" if active else "var(--text-muted)"
+        status_tabs += f'<a href="{tq(val, type_filter)}" style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:9px;border:1.5px solid {"#374151" if active else "var(--border)"};background:{bg};color:{col};font-size:11px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} {cnt}</a>'
+    status_tabs += "</div>"
+
+    def sbadge(s):
+        defs = {"waiting_info":("🔴","منتظر اطلاعات","#FEE2E2","#B91C1C"),
+                "waiting_admin":("🔴","نیاز به پاسخ","#FEE2E2","#B91C1C"),
+                "reviewing":("🟡","در بررسی","#FEF3C7","#B45309"),
+                "waiting_user":("🟢","پاسخ داده شد","#DCFCE7","#166534"),
+                "ready_delivery":("🟢","آماده تحویل","#DCFCE7","#166534"),
+                "closed":("⚫","بسته","#F3F4F6","#6B7280")}
+        icon,label,bg,color = defs.get(s,("⚪",s,"#F3F4F6","#6B7280"))
+        return f'<span style="padding:3px 9px;background:{bg};color:{color};border-radius:20px;font-size:11px;font-weight:600">{icon} {label}</span>'
+
+    def tbadge(t):
+        defs = {"product_setup":("🟢","راه‌اندازی","#DCFCE7","#166534"),
+                "partner":("🟠","همکاری","#FEF3C7","#B45309"),
+                "support":("🔵","پشتیبانی","#EFF6FF","#1D4ED8")}
+        icon,label,bg,color = defs.get(t,("🔵","پشتیبانی","#EFF6FF","#1D4ED8"))
+        return f'<span style="padding:2px 7px;background:{bg};color:{color};border-radius:20px;font-size:10px;font-weight:600">{icon} {label}</span>'
 
     rows = ""
     for t in tickets:
-        try:
-            ls = t["last_sender"]
-        except Exception:
-            ls = None
-        last_col = ""
-        if ls == "user" and t["status"] == "waiting_admin":
-            last_col = '<span style="color:#EF4444;font-weight:600">کاربر ↗</span>'
-        elif ls == "admin":
-            last_col = '<span style="color:#22C55E">ادمین ↙</span>'
-        else:
-            last_col = "—"
+        try: ls = t["last_sender"]
+        except: ls = None
+        try: ptitle = e((t["product_title"] or "")[:30])
+        except: ptitle = ""
+        try: tid_type = t["type"] or "support"
+        except: tid_type = "support"
         rows += f"""<tr style="cursor:pointer" onclick="location.href='/admin/tickets/{t['id']}'">
-          <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
-          <td style="padding:12px 16px"><code style="font-size:11px;background:var(--page-bg);padding:2px 8px;border-radius:6px">{e(str(t['user_id']))}</code></td>
-          <td style="padding:12px 16px">{sbadge(t['status'])}</td>
-          <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">{last_col}</td>
-          <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">{int(t['msg_count'] or 0)} پیام</td>
-          <td style="padding:12px 16px;font-size:11px;color:var(--text-muted)">{(t['updated_at'] or '')[:16]}</td>
-          <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" class="btn btn-indigo btn-sm">مشاهده</a></td>
+          <td style="padding:10px 14px"><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
+          <td style="padding:10px 14px">{tbadge(tid_type)}</td>
+          <td style="padding:10px 14px"><code style="font-size:11px;background:var(--page-bg);padding:2px 6px;border-radius:5px">{e(str(t['user_id']))}</code></td>
+          <td style="padding:10px 14px">{sbadge(t['status'])}</td>
+          <td style="padding:10px 14px;font-size:11.5px;color:var(--text-muted)">{ptitle or ("↗ کاربر" if ls=="user" else ("↙ ادمین" if ls=="admin" else ""))}</td>
+          <td style="padding:10px 14px;font-size:11px;color:var(--text-muted)">{int(t['msg_count'] or 0)} پیام</td>
+          <td style="padding:10px 14px;font-size:11px;color:var(--text-muted)">{(t['updated_at'] or '')[:16]}</td>
+          <td style="padding:10px 14px"><a href="/admin/tickets/{t['id']}" class="btn btn-indigo btn-sm">مشاهده</a></td>
         </tr>"""
 
     body = f"""
-    <div class="page-header"><h1>تیکت‌های پشتیبانی</h1><p>مدیریت و پاسخ به درخواست‌های کاربران</p></div>
-    {tabs_html}
+    <div class="page-header"><h1>تیکت‌ها</h1><p>مدیریت گفتگوها و پشتیبانی</p></div>
+    {type_tabs}
+    {status_tabs}
     <div class="card" style="overflow:hidden">
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">کاربر</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آخرین پیام</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تعداد</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
-            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نوع</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">کاربر</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">محصول / پیام</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">پیام‌ها</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='7' style='text-align:center;padding:40px;color:var(--text-muted);font-size:13px'>تیکتی یافت نشد</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='8' style='text-align:center;padding:40px;color:var(--text-muted)'>تیکتی یافت نشد</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
     return _layout("تیکت‌ها", body, adm, flash=flash)
+
 
 
 @router.get("/tickets/{tid}", response_class=HTMLResponse)
@@ -4638,51 +4682,103 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             </form>"""
 
     # ── ساختار صفحه ─────────────────────────────────────────────────────────
-    ticket_type = "پشتیبانی عمومی" if is_general else e(ticket["product_title"] or "-")
+    ticket_type_str = "پشتیبانی عمومی" if is_general else e(ticket["product_title"] or "-")
+
+    try: t_type = ticket["type"] or "support"
+    except: t_type = "support"
+    try: t_order_id = ticket["order_id"] or 0
+    except: t_order_id = 0
+    try: t_feed_id = ticket["feed_id"]
+    except: t_feed_id = None
+    try: t_setup_status = ticket["setup_status"] or ticket["status"]
+    except: t_setup_status = ticket["status"]
+
+    type_labels = {
+        "product_setup": "🟢 راه‌اندازی محصول",
+        "partner": "🟠 همکاری",
+        "support": "🔵 پشتیبانی عمومی",
+    }
+    type_label = type_labels.get(t_type, "🔵 پشتیبانی عمومی")
+
+    # بخش اختصاصی product_setup
+    setup_panel = ""
+    if t_type == "product_setup" and not is_closed:
+        setup_status_opts = [
+            ("waiting_info", "🔴 منتظر اطلاعات"),
+            ("reviewing", "🟡 در حال بررسی"),
+            ("ready_delivery", "🟢 آماده تحویل"),
+        ]
+        setup_status_btns = "".join(
+            f'<form method="post" action="/admin/tickets/{tid}/setup-status" style="display:inline">'
+            f'<input type="hidden" name="status" value="{sv}">'
+            f'<button class="btn btn-slate btn-sm" style="{"background:var(--primary);color:#000;font-weight:700" if t_setup_status==sv else ""}">{sl}</button></form>'
+            for sv, sl in setup_status_opts
+        )
+        deliver_btn = ""
+        if t_feed_id and t_setup_status in ("ready_delivery", "reviewing"):
+            deliver_btn = f"""
+            <form method="post" action="/admin/tickets/{tid}/deliver"
+                  onsubmit="return confirm('محصول به کاربر تحویل داده شود و گفتگو بسته شود؟')">
+              <button class="btn btn-primary" style="width:100%;margin-top:12px">
+                <i data-lucide="send" style="width:15px"></i> تحویل محصول و بستن گفتگو
+              </button>
+            </form>"""
+        setup_panel = f"""
+        <div class="card card-p" style="margin-bottom:12px;border:2px solid #2EC4B620">
+          <h3 style="font-size:13px;font-weight:700;margin-bottom:12px;color:#166534">🟢 اطلاعات راه‌اندازی محصول</h3>
+          <dl style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px">
+            <dt style="color:var(--text-muted)">محصول</dt><dd style="font-weight:600">{e(ticket["product_title"] or "—")}</dd>
+            <dt style="color:var(--text-muted)">سفارش</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">#{t_order_id}</code></dd>
+            <dt style="color:var(--text-muted)">فید</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">#{t_feed_id or "—"}</code></dd>
+          </dl>
+          <div style="margin-top:12px">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">وضعیت راه‌اندازی</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">{setup_status_btns}</div>
+          </div>
+          {deliver_btn}
+        </div>"""
+
+    direct_form_html = "" if is_closed else f"""
+        <div class="card p-4 mt-3" style="border:2px dashed var(--border);background:var(--page-bg)">
+          <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px">📩 پیام مستقیم</p>
+          <form method="post" action="/admin/tickets/{tid}/direct" style="display:flex;gap:8px">
+            <textarea name="direct_msg" rows="2" placeholder="پیام آزاد..."
+              style="flex:1;border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:13px;resize:none;font-family:inherit"></textarea>
+            <button type="submit" style="background:#6B7280;color:#fff;border:none;border-radius:10px;padding:8px 14px;font-size:12px;cursor:pointer;align-self:flex-end">ارسال</button>
+          </form>
+        </div>"""
 
     body = f"""
-    <div class="flex items-center gap-3 mb-4 flex-wrap">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
       {_btn("← تیکت‌ها", "/admin/tickets", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">🎫 تیکت #{tid}</h1>
+      <h1 style="font-size:17px;font-weight:800">تیکت #{tid}</h1>
       {_ticket_status_badge(ticket["status"])}
-      <span class="text-sm text-gray-400">{ticket_type}</span>
+      <span style="font-size:12px;color:var(--text-muted)">{type_label}</span>
     </div>
 
     <div class="grid lg:grid-cols-3 gap-4">
-      <!-- مکالمه + فرم پاسخ -->
       <div class="lg:col-span-2">
-        <div class="card p-4 overflow-y-auto" style="min-height:280px;max-height:450px;" id="chat-box">
+        <div class="card p-4 overflow-y-auto" style="min-height:280px;max-height:500px;" id="chat-box">
           {chat_html}
         </div>
         {reply_form}
-        {"" if is_closed else f'''
-        <div class="card p-4 mt-3 border-dashed border-2 border-gray-200 bg-gray-50">
-          <p class="text-xs text-gray-400 mb-2">📩 پیام مستقیم (بدون ثبت در تاریخچه)</p>
-          <form method="post" action="/admin/tickets/{tid}/direct" class="flex gap-2">
-            <textarea name="direct_msg" rows="2" placeholder="پیام آزاد..."
-              class="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm resize-none"></textarea>
-            <button type="submit" class="bg-gray-500 hover:bg-gray-600 text-white rounded-lg px-3 py-2 text-xs self-end">ارسال</button>
-          </form>
-        </div>'''}
+        {direct_form_html}
       </div>
 
-      <!-- اطلاعات -->
-      <div class="space-y-3">
-        <div class="card p-4">
-          <h3 class="font-bold text-gray-700 mb-3 text-sm">اطلاعات تیکت</h3>
-          <dl class="space-y-2 text-sm">
-            <div class="flex justify-between"><dt class="text-gray-400">User ID</dt>
-              <dd><code class="text-xs bg-gray-100 px-1 rounded">{user_id_val}</code></dd></div>
-            <div class="flex justify-between"><dt class="text-gray-400">نوع</dt><dd class="text-gray-700 text-xs">{ticket_type}</dd></div>
-            <div class="flex justify-between"><dt class="text-gray-400">پیام‌ها</dt>
-              <dd class="font-bold text-indigo-600">{len(messages)}</dd></div>
-            <div class="flex justify-between"><dt class="text-gray-400">تاریخ</dt>
-              <dd class="text-xs text-gray-400">{(ticket["created_at"] or "")[:16]}</dd></div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        {setup_panel}
+        <div class="card card-p">
+          <h3 style="font-size:13px;font-weight:700;margin-bottom:12px">اطلاعات تیکت</h3>
+          <dl style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px">
+            <dt style="color:var(--text-muted)">User ID</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">{user_id_val}</code></dd>
+            <dt style="color:var(--text-muted)">نوع</dt><dd style="font-weight:600">{type_label}</dd>
+            <dt style="color:var(--text-muted)">پیام‌ها</dt><dd style="font-weight:700;color:var(--primary)">{len(messages)}</dd>
+            <dt style="color:var(--text-muted)">تاریخ</dt><dd style="color:var(--text-muted)">{(ticket["created_at"] or "")[:16]}</dd>
           </dl>
         </div>
-        <div class="card p-4">
-          <h3 class="font-bold text-gray-700 mb-2 text-sm">تغییر وضعیت</h3>
-          <div>{status_btns}</div>
+        <div class="card card-p">
+          <h3 style="font-size:13px;font-weight:700;margin-bottom:10px">تغییر وضعیت</h3>
+          {status_btns}
         </div>
       </div>
     </div>
@@ -4728,6 +4824,72 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     </script>"""
 
     return _layout(f"تیکت #{tid}", body, adm, flash=flash)
+
+
+@router.post("/tickets/{tid}/setup-status")
+async def ticket_setup_status(request: Request, tid: int):
+    adm = _get_admin(request)
+    if not adm: return _redir("/admin/login")
+    form = await request.form()
+    new_status = str(form.get("status", "reviewing"))
+    conn = _db()
+    try:
+        conn.execute("UPDATE tickets SET setup_status=?, status=?, updated_at=datetime('now') WHERE id=?;",
+                     (new_status, new_status, tid))
+        conn.commit()
+    finally:
+        conn.close()
+    _log(request, "تغییر وضعیت راه‌اندازی", "تیکت‌ها", f"تیکت #{tid} → {new_status}")
+    return _redir(f"/admin/tickets/{tid}?flash=وضعیت+تغییر+کرد")
+
+
+@router.post("/tickets/{tid}/deliver")
+async def ticket_deliver_product(request: Request, tid: int):
+    adm = _get_admin(request)
+    if not adm: return _redir("/admin/login")
+    conn = _db()
+    try:
+        ticket = conn.execute("SELECT * FROM tickets WHERE id=? LIMIT 1;", (tid,)).fetchone()
+        if not ticket:
+            return _redir(f"/admin/tickets?flash=تیکت+یافت+نشد")
+        try: feed_id = ticket["feed_id"]
+        except: feed_id = None
+        try: feed_data = ticket["feed_data"]
+        except: feed_data = None
+        try: order_id = ticket["order_id"] or 0
+        except: order_id = 0
+        user_id = int(ticket["user_id"])
+        try: ptitle = ticket["product_title"] if "product_title" in ticket.keys() else "محصول"
+        except: ptitle = "محصول"
+
+        if not feed_data:
+            return _redir(f"/admin/tickets/{tid}?flash=اطلاعات+محصول+یافت+نشد")
+
+        # ارسال به کاربر
+        bot_token = _env("BOT_TOKEN")
+        msg_text = (f"✅ <b>سفارش شما تکمیل شد</b>\n\n"
+                    f"سفارش: #{order_id}\n"
+                    f"محصول: {e(ptitle)}\n\n"
+                    f"<code>{html.escape(str(feed_data))}</code>")
+        try:
+            _requests.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": user_id, "text": msg_text, "parse_mode": "HTML"},
+                timeout=10
+            )
+        except Exception as ex:
+            _tg_logger.error("ticket deliver send error: %s", ex)
+            return _redir(f"/admin/tickets/{tid}?flash=خطا+در+ارسال+به+کاربر")
+
+        # بستن تیکت
+        conn.execute("UPDATE tickets SET status='closed', setup_status='closed', closed_at=datetime('now') WHERE id=?;", (tid,))
+        conn.commit()
+
+        _log(request, "تحویل محصول از تیکت", "تیکت‌ها",
+             f"تیکت #{tid} سفارش #{order_id} به کاربر {user_id} تحویل داده شد")
+    finally:
+        conn.close()
+    return _redir(f"/admin/tickets/{tid}?flash=✅+محصول+تحویل+داده+شد+و+گفتگو+بسته+شد")
 
 
 @router.post("/tickets/{tid}/reply")

@@ -1828,6 +1828,9 @@ def ticket_ensure_schema() -> None:
             ("order_id",       "INTEGER DEFAULT 0"),
             ("user_msg_count", "INTEGER DEFAULT 0"),
             ("updated_at",     "TEXT"),
+            ("feed_id",        "INTEGER DEFAULT NULL"),
+            ("feed_data",      "TEXT DEFAULT NULL"),
+            ("setup_status",   "TEXT DEFAULT NULL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} {typedef};")
@@ -1862,15 +1865,22 @@ def ticket_ensure_schema() -> None:
 
 
 def ticket_create(user_id: int, type_: str = "support",
-                  product_id: int = 0, order_id: int = 0) -> int:
+                  product_id: int = 0, order_id: int = 0,
+                  feed_id: int = None, feed_data: str = None,
+                  setup_status: str = None) -> int:
     conn = _get_connection()
     try:
         now = datetime.utcnow().isoformat()
+        initial_status = "waiting_info" if type_ == "product_setup" else "waiting_admin"
+        if setup_status:
+            initial_status = setup_status
         cur = conn.execute(
             """INSERT INTO tickets (type, user_id, product_id, order_id,
-               status, user_msg_count, created_at, updated_at)
-               VALUES (?,?,?,?,'waiting_admin',0,?,?);""",
-            (type_, user_id, product_id, order_id, now, now)
+               status, setup_status, feed_id, feed_data, user_msg_count, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,0,?,?);""",
+            (type_, user_id, product_id, order_id,
+             initial_status, setup_status or initial_status,
+             feed_id, feed_data, now, now)
         )
         ticket_id = cur.lastrowid
         conn.commit()
