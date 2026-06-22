@@ -391,6 +391,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "orders")}
             <div class="nav-divider"><span>کاربران</span></div>
+            {nav_item("/admin/users", "users", "کاربران", "wallets")}
             {nav_item("/admin/partners", "handshake", "همکاران", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
@@ -3213,7 +3214,18 @@ async def feed_upload(request: Request, pid: int, items: str=Form("")):
         conn.commit()
     finally:
         conn.close()
-    return _redir(f"/admin/feed/{pid}?flash={len(blocks)}+آیتم+اضافه+شد")
+
+    dispatched = 0
+    try:
+        from bot import try_dispatch_pending_for_product
+        dispatched = try_dispatch_pending_for_product(pid, limit=len(blocks))
+    except Exception:
+        pass
+
+    msg = f"{len(blocks)}+آیتم+اضافه+شد"
+    if dispatched > 0:
+        msg += f"+و+{dispatched}+سفارش+معلق+تحویل+داده+شد"
+    return _redir(f"/admin/feed/{pid}?flash={msg}")
 
 @router.post("/feed/{pid}/bulk-upload")
 async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
@@ -3265,6 +3277,21 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
 
     _log(request, "آپلود موجودی", "موجودی", f"محصول #{pid} — {len(items)} آیتم", admin_info=adm)
 
+    # ارسال خودکار به سفارشات معلق (FIFO)
+    dispatched = 0
+    try:
+        import sys, os
+        app_dir = os.path.dirname(__file__)
+        if app_dir not in sys.path:
+            sys.path.insert(0, app_dir)
+        from bot import try_dispatch_pending_for_product
+        dispatched = try_dispatch_pending_for_product(pid, limit=len(items))
+        if dispatched > 0:
+            _log(request, "ارسال خودکار سفارش معلق", "موجودی",
+                 f"محصول #{pid} — {dispatched} سفارش تحویل داده شد")
+    except Exception as _ex:
+        _tg_logger.warning("pending dispatch error: %s", _ex)
+
     # اطلاع‌رسانی به مشترکان
     try:
         from db import get_stock_subscribers, mark_subscriptions_notified, reset_subscriptions_on_restock
@@ -3290,7 +3317,10 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
     except Exception:
         pass
 
-    return _redir(f"/admin/feed/{pid}?flash=✅+{len(items)}+آیتم+اضافه+شد")
+    flash_msg = f"✅+{len(items)}+آیتم+اضافه+شد"
+    if dispatched > 0:
+        flash_msg += f"+و+{dispatched}+سفارش+معلق+تحویل+داده+شد"
+    return _redir(f"/admin/feed/{pid}?flash={flash_msg}")
 
 
 @router.post("/feed/{pid}/delete-all")
@@ -3938,6 +3968,132 @@ async def order_return(request: Request, oid: int):
 
 
 # ─────────────────────────── Wallets ───────────────────────────────────────
+
+@router.get("/users", response_class=HTMLResponse)
+async def users_list(request: Request, q: str = "", sort: str = "last_seen", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        sort_col = sort if sort in ("user_id","full_name","first_seen","last_seen","orders","balance") else "last_seen"
+        where = "WHERE u.user_id=? OR u.username LIKE ? OR u.full_name LIKE ?" if q else ""
+        params = (int(q) if q.isdigit() else 0, f"%{q}%", f"%{q}%") if q else ()
+        users = conn.execute(f"""
+            SELECT u.*,
+                   COALESCE(w.balance,0) AS balance,
+                   COUNT(DISTINCT o.id) AS orders
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id=u.user_id
+            LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id
+            {where}
+            GROUP BY u.user_id
+            ORDER BY {sort_col} DESC
+            LIMIT 500;
+        """, params).fetchall()
+        total = conn.execute(f"SELECT COUNT(*) FROM users;").fetchone()[0]
+    finally:
+        conn.close()
+
+    def sort_link(col, label):
+        active = sort == col
+        style = "color:var(--primary);font-weight:700" if active else "color:var(--text-muted)"
+        return f'<a href="?q={e(q)}&sort={col}" style="{style};text-decoration:none;font-size:11px">{label} {"↓" if active else ""}</a>'
+
+    rows = ""
+    for u in users:
+        rows += f"""<tr>
+          <td style="padding:10px 14px;font-family:monospace;font-size:12px">{u["user_id"]}</td>
+          <td style="padding:10px 14px;font-size:13px">{e(u["full_name"] or "—")}</td>
+          <td style="padding:10px 14px;font-size:12px;color:var(--text-muted)">{"@"+e(u["username"]) if u["username"] else "—"}</td>
+          <td style="padding:10px 14px;font-size:12px;color:var(--text-muted)">{(u["first_seen"] or "")[:10]}</td>
+          <td style="padding:10px 14px;font-size:12px;color:var(--text-muted)">{(u["last_seen"] or "")[:10]}</td>
+          <td style="padding:10px 14px;font-size:13px;font-weight:600">{u["orders"] or 0}</td>
+          <td style="padding:10px 14px;font-size:13px;color:#22C55E;font-weight:600">{int(u["balance"] or 0):,}</td>
+          <td style="padding:10px 14px">
+            <a href="/admin/wallets?q={u['user_id']}" class="btn btn-indigo btn-sm">کیف‌پول</a>
+          </td>
+        </tr>"""
+
+    body = f"""
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div class="page-header" style="margin:0"><h1>کاربران ({total:,})</h1><p>همه کاربرانی که با ربات تعامل داشتند</p></div>
+      <div style="display:flex;gap:10px">
+        <a href="/admin/users/export.xlsx" class="btn btn-green btn-sm"><i data-lucide="download" style="width:14px"></i> Excel</a>
+      </div>
+    </div>
+    <div class="card card-p" style="margin-bottom:16px;padding:14px 20px">
+      <form method="get" style="display:flex;gap:10px">
+        <div style="flex:1">{_input("q","جستجو User ID یا نام...",value=q)}</div>
+        <button type="submit" class="btn btn-primary">جستجو</button>
+        {"<a href='/admin/users' class='btn btn-slate'>پاک</a>" if q else ""}
+      </form>
+    </div>
+    <div class="card" style="overflow:hidden">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
+            <th style="padding:10px 14px;text-align:right">{sort_link("user_id","ID")}</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نام</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">یوزرنیم</th>
+            <th style="padding:10px 14px;text-align:right">{sort_link("first_seen","اولین ورود")}</th>
+            <th style="padding:10px 14px;text-align:right">{sort_link("last_seen","آخرین فعالیت")}</th>
+            <th style="padding:10px 14px;text-align:right">{sort_link("orders","خریدها")}</th>
+            <th style="padding:10px 14px;text-align:right">{sort_link("balance","کیف‌پول")}</th>
+            <th style="padding:10px 14px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='8' style='text-align:center;padding:40px;color:var(--text-muted)'>کاربری یافت نشد</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("کاربران", body, adm, flash=flash)
+
+
+@router.get("/users/export.xlsx")
+async def users_export(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    conn = _db()
+    try:
+        users = conn.execute("""
+            SELECT u.user_id, u.username, u.full_name, u.first_seen, u.last_seen,
+                   COALESCE(w.balance,0) AS balance, COUNT(DISTINCT o.id) AS orders
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id=u.user_id
+            LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id
+            GROUP BY u.user_id ORDER BY u.last_seen DESC LIMIT 10000;
+        """).fetchall()
+    finally:
+        conn.close()
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from fastapi.responses import Response
+        import io
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "users"
+        ws.sheet_view.rightToLeft = True
+        headers = ["User ID","یوزرنیم","نام","اولین ورود","آخرین فعالیت","خریدها","کیف‌پول"]
+        hfill = PatternFill("solid", fgColor="2EC4B6")
+        for ci,h in enumerate(headers,1):
+            c = ws.cell(1,ci,h); c.fill=hfill; c.font=Font(bold=True,color="FFFFFF")
+        for ri,u in enumerate(users,2):
+            for ci,v in enumerate([u[0],u[1] or "",u[2] or "",str(u[3] or "")[:10],str(u[4] or "")[:10],u[6] or 0,u[5] or 0],1):
+                ws.cell(ri,ci,v)
+        buf=io.BytesIO(); wb.save(buf); buf.seek(0)
+        return Response(content=buf.read(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":"attachment; filename=users.xlsx"})
+    except ImportError:
+        from fastapi.responses import Response
+        lines=["\ufeffUser ID,یوزرنیم,نام,اولین ورود,آخرین فعالیت,خریدها,کیف‌پول"]
+        for u in users:
+            lines.append(f'{u[0]},{u[1] or ""},{u[2] or ""},{str(u[3] or "")[:10]},{str(u[4] or "")[:10]},{u[6] or 0},{u[5] or 0}')
+        return Response(content="\n".join(lines).encode("utf-8"),
+            media_type="text/csv;charset=utf-8",
+            headers={"Content-Disposition":"attachment; filename=users.csv"})
+
 
 @router.get("/wallets", response_class=HTMLResponse)
 async def wallets_list(request: Request, q: str="", flash: str=""):

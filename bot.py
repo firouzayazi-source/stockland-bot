@@ -577,15 +577,29 @@ def _tg_send_to_user(user_id: int, text: str, reply_markup=None, parse_mode="HTM
 # ─── Keyboards ──────────────────────────────────────────────────────────────
 
 def _ticket_user_kb(ticket_id: int, has_messages: bool = False) -> types.InlineKeyboardMarkup:
-    """keyboard کاربر — دکمه پایان فقط بعد از ارسال اولین پیام"""
-    kb = types.InlineKeyboardMarkup()
-    if has_messages:
-        kb.add(types.InlineKeyboardButton("🔒 پایان گفتگو", callback_data=f"ticket_v2_close_{ticket_id}"))
-    return kb
+    """هیچ دکمه‌ای نمایش داده نمی‌شه — جریان از طریق پیام‌های متنی مدیریت می‌شه."""
+    return types.InlineKeyboardMarkup()
+
+
+def _is_real_message(msg_text: str, content_type: str) -> bool:
+    """آیا این پیام واقعی و معتبر است؟ (نه استیکر/ایموجی/نقطه/فاصله)"""
+    if content_type not in ("text", "photo", "document", "voice", "video", "audio"):
+        return False  # استیکر، animation و... واقعی نیستن
+    if not msg_text or not msg_text.strip():
+        return False
+    text = msg_text.strip()
+    # پیام‌های بی‌معنی
+    if len(text) <= 2:
+        return False
+    # فقط ایموجی یا نقطه
+    import unicodedata
+    non_emoji = [c for c in text if unicodedata.category(c) not in ('So', 'Sk', 'Sm', 'Sc')]
+    if len("".join(non_emoji).strip()) <= 1:
+        return False
+    return True
 
 
 def _ticket_has_user_message(ticket_id: int) -> bool:
-    """آیا کاربر حداقل یک پیام ارسال کرده؟"""
     try:
         from db import _get_connection
         conn = _get_connection()
@@ -599,6 +613,26 @@ def _ticket_has_user_message(ticket_id: int) -> bool:
         return count > 0
     except Exception:
         return False
+
+
+def _ticket_real_msg_count(ticket_id: int) -> int:
+    """تعداد پیام‌های واقعی کاربر در تیکت."""
+    try:
+        from db import _get_connection
+        conn = _get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM ticket_messages WHERE ticket_id=? AND sender='user';",
+            (ticket_id,)
+        )
+        count = cur.fetchone()[0]
+        conn.close()
+        return count
+    except Exception:
+        return 0
+
+
+TICKET_MAX_USER_MSGS = 3
 
 
 def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup:
@@ -696,18 +730,21 @@ def _ticket_v2_handle_user_message(message) -> None:
         bot.send_message(message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
         return
 
-    # ─── Anti-spam: سقف ۳ پیام متوالی ─────────────────────────────────────
+    # ─── Anti-spam: سقف ۳ پیام واقعی متوالی ────────────────────────────────
     cur_count = int(ticket["user_msg_count"] or 0)
     if cur_count >= TICKET_MAX_USER_MSGS:
-        bot.reply_to(
-            message,
-            f"⚠️ شما {TICKET_MAX_USER_MSGS} پیام ارسال کرده‌اید.\n"
-            "لطفاً منتظر پاسخ پشتیبانی بمانید، سپس می‌توانید ادامه دهید."
-        )
+        bot.reply_to(message,
+            f"⏳ لطفاً منتظر پاسخ پشتیبانی بمانید.\n"
+            "پس از پاسخ، می‌توانید ادامه دهید.")
         return
 
-    # ─── ذخیره پیام با file_id ────────────────────────────────────────────
+    # ─── بررسی واقعی بودن پیام ───────────────────────────────────────────
     txt = (message.text or "").strip()
+    if not _is_real_message(txt, message.content_type):
+        # پیام غیرواقعی — از سهمیه کسر نمی‌شه
+        bot.reply_to(message, "لطفاً پیام خود را با متن کامل ارسال کنید.")
+        return
+
     media = message.content_type if message.content_type != "text" else None
     file_id = None
     if media:
@@ -733,15 +770,27 @@ def _ticket_v2_handle_user_message(message) -> None:
     )
     new_count = ticket_user_sent(int(ticket_id))
 
-    # بعد از اولین پیام، دکمه پایان گفتگو نمایش داده بشه
+    # بعد از اولین پیام — تأیید
     if new_count == 1:
-        end_kb = _ticket_user_kb(int(ticket_id), has_messages=True)
-        bot.send_message(
-            message.chat.id,
-            "✅ پیام شما دریافت شد.\nپشتیبانی در اولین فرصت پاسخ خواهد داد. 🙏",
-            reply_markup=end_kb
+        bot.send_message(message.chat.id,
+            "✅ پیام شما دریافت شد.\n"
+            "پشتیبانی در اولین فرصت پاسخ خواهد داد. 🙏\n\n"
+            f"({TICKET_MAX_USER_MSGS - new_count} پیام دیگر می‌توانید ارسال کنید)"
         )
-        return
+
+    elif new_count >= TICKET_MAX_USER_MSGS:
+        # بستن سهمیه — تا پاسخ ادمین
+        user_states.pop(uid, None)
+        bot.send_message(message.chat.id,
+            "✅ پیام شما ثبت شد.\n\n"
+            "🔒 <b>گفتگو در انتظار پاسخ پشتیبانی است.</b>\n"
+            "پس از پاسخ پشتیبانی، می‌توانید ادامه دهید.",
+            parse_mode="HTML"
+        )
+    else:
+        bot.send_message(message.chat.id,
+            f"✅ پیام دریافت شد. ({TICKET_MAX_USER_MSGS - new_count} پیام دیگر)"
+        )
 
     # ─── نوتیف به ادمین ─────────────────────────────────────────────────
     panel_url = f"https://panel.stland.ir/admin/tickets/{ticket_id}"
@@ -755,13 +804,6 @@ def _ticket_v2_handle_user_message(message) -> None:
         bot.send_message(ADMIN_ID, notif_text, reply_markup=notif_kb, parse_mode="HTML")
     except Exception as ex:
         logger.error("Admin notification failed: %s", ex)
-
-    # ─── تأیید به کاربر ──────────────────────────────────────────────────
-    remaining = TICKET_MAX_USER_MSGS - new_count
-    if remaining > 0:
-        bot.reply_to(message, "✅ پیام شما دریافت شد. 🙏")
-    else:
-        bot.reply_to(message, "✅ پیام شما دریافت شد.\nلطفاً منتظر پاسخ پشتیبانی بمانید.")
 
 
 # ─── Handler پیام‌های متنی کاربر در حالت تیکت ────────────────────────────────
