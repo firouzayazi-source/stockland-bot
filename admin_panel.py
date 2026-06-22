@@ -809,7 +809,7 @@ def _layout(title: str, body: str, admin_info=None,
     textarea, select {{
       width:100%; min-height:44px; border:1.5px solid var(--bdr-input);
       border-radius:var(--r-md); padding:10px 16px 10px 14px;
-      font-size:16px; background:var(--bg-input); color:var(--txt-primary);
+      font-size:16px !important; background:var(--bg-input); color:var(--txt-primary);
       outline:none; transition:border .18s, box-shadow .18s;
       direction:rtl; text-align:right; font-family:var(--font);
       -webkit-appearance:none; appearance:none;
@@ -1557,9 +1557,9 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
             desc_html = f'<span class="text-gray-400 font-normal">← {e(desc)}</span>' if desc else ""
 
             if is_long:
-                field_input = f'<textarea id="f_{e(key)}" name="value" rows="3" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 font-mono bg-white">{e(val)}</textarea>'
+                field_input = f'<textarea id="f_{e(key)}" name="value" rows="3" class="w-full border border-gray-200 rounded-lg px-3 py-2 font-mono bg-white">{e(val)}</textarea>'
             else:
-                field_input = f'<input type="text" id="f_{e(key)}" name="value" value="{e(val)}" class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 bg-white">'
+                field_input = f'<input type="text" id="f_{e(key)}" name="value" value="{e(val)}" class="flex-1 border border-gray-200 rounded-lg px-3 py-2 bg-white">'
 
             fields_html += f"""
             <div class="p-4 border border-gray-100 rounded-xl bg-gray-50 hover:bg-white transition mb-3">
@@ -2935,7 +2935,7 @@ async def categories_edit_get(request: Request, cid: int, flash: str = ""):
         </div>
         <div>
           <label class="text-sm font-medium text-gray-700 block mb-1">والد</label>
-          <select name="parent_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">{cat_opts}</select>
+          <select name="parent_id" class="w-full border border-gray-300 rounded-lg px-3 py-2">{cat_opts}</select>
         </div>
         <div class="flex items-center gap-3">
           <label class="text-sm font-medium text-gray-700">فعال</label>
@@ -3115,7 +3115,7 @@ async def product_new_get(request: Request):
     <form method="post" action="/admin/products/new" class="card p-6 max-w-2xl space-y-4">
       <div>
         <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی *</label>
-        <select name="category_id" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300">
+        <select name="category_id" required class="w-full border border-gray-300 rounded-lg px-3 py-2">
           <option value="">انتخاب کنید...</option>
           {cat_opts}
         </select>
@@ -3214,7 +3214,7 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
       <div class="md:col-span-2">
         <form method="post" action="/admin/products/{pid}/edit" class="bg-white rounded-xl shadow p-6 space-y-4">
           <div><label class="text-sm font-medium text-gray-700 block mb-1">دسته</label>
-            <select name="category" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">{cats}</select></div>
+            <select name="category" class="w-full border border-gray-300 rounded-lg px-3 py-2">{cats}</select></div>
           <div><label class="text-sm font-medium text-gray-700 block mb-1">عنوان</label>
             {_input("title","",str(p["title"] or ""),required=True)}</div>
           <div class="grid grid-cols-2 gap-4">
@@ -4409,8 +4409,8 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
               <summary class="cursor-pointer px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 list-none">✏️ ویرایش موجودی</summary>
               <form method="post" action="/admin/wallets/adjust" class="flex gap-2 items-end mt-2 p-2 bg-gray-50 rounded-lg">
                 <input type="hidden" name="uid" value="{w["user_id"]}">
-                <input type="number" name="amount" placeholder="مبلغ" required class="w-24 border border-gray-300 rounded px-2 py-1 text-xs">
-                <select name="op" class="border border-gray-300 rounded px-2 py-1 text-xs">
+                <input type="number" name="amount" placeholder="مبلغ" required class="w-24 border border-gray-300 rounded px-2 py-1">
+                <select name="op" class="border border-gray-300 rounded px-2 py-1">
                   <option value="add">➕ افزودن</option>
                   <option value="sub">➖ کاهش</option>
                   <option value="set">✏️ تنظیم</option>
