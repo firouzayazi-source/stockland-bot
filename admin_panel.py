@@ -3982,17 +3982,28 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
         else:
             return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#F3F4F6;color:#6B7280;border-radius:20px;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#9CA3AF;display:inline-block"></span>بسته</span>'
 
-    rows = "".join(f"""<tr style="cursor:pointer" onclick="location.href='/admin/tickets/{t['id']}'">
-      <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
-      <td style="padding:12px 16px"><code style="font-size:11px;background:var(--page-bg);padding:2px 8px;border-radius:6px">{e(str(t['user_id']))}</code></td>
-      <td style="padding:12px 16px">{sbadge(t['status'], t.get('last_sender'))}</td>
-      <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">
-        {f'<span style="color:#EF4444;font-weight:600">کاربر ↗</span>' if t.get("last_sender")=="user" and t["status"]=="waiting_admin" else (f'<span style="color:#22C55E">ادمین ↙</span>' if t.get("last_sender")=="admin" else '—')}
-      </td>
-      <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">{int(t['msg_count'] or 0)} پیام</td>
-      <td style="padding:12px 16px;font-size:11px;color:var(--text-muted)">{(t['updated_at'] or '')[:16]}</td>
-      <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" class="btn btn-indigo btn-sm">مشاهده</a></td>
-    </tr>""" for t in tickets)
+    rows = ""
+    for t in tickets:
+        try:
+            ls = t["last_sender"]
+        except Exception:
+            ls = None
+        last_col = ""
+        if ls == "user" and t["status"] == "waiting_admin":
+            last_col = '<span style="color:#EF4444;font-weight:600">کاربر ↗</span>'
+        elif ls == "admin":
+            last_col = '<span style="color:#22C55E">ادمین ↙</span>'
+        else:
+            last_col = "—"
+        rows += f"""<tr style="cursor:pointer" onclick="location.href='/admin/tickets/{t['id']}'">
+          <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
+          <td style="padding:12px 16px"><code style="font-size:11px;background:var(--page-bg);padding:2px 8px;border-radius:6px">{e(str(t['user_id']))}</code></td>
+          <td style="padding:12px 16px">{sbadge(t['status'])}</td>
+          <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">{last_col}</td>
+          <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">{int(t['msg_count'] or 0)} پیام</td>
+          <td style="padding:12px 16px;font-size:11px;color:var(--text-muted)">{(t['updated_at'] or '')[:16]}</td>
+          <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" class="btn btn-indigo btn-sm">مشاهده</a></td>
+        </tr>"""
 
     body = f"""
     <div class="page-header"><h1>تیکت‌های پشتیبانی</h1><p>مدیریت و پاسخ به درخواست‌های کاربران</p></div>
