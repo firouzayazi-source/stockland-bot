@@ -3267,6 +3267,16 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
           </div>
           <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>
             {_textarea("description","",str(p["description"] or ""),rows=3)}</div>
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" name="support_after_purchase" value="1"
+                {"checked" if int(p["support_after_purchase"] if "support_after_purchase" in p.keys() else 0) else ""}>
+              <div>
+                <div class="text-sm font-medium text-gray-800">نیاز به راه‌اندازی / دریافت اطلاعات مشتری</div>
+                <div class="text-xs text-gray-400 mt-0.5">پس از خرید، گفتگوی پشتیبانی اختصاصی باز می‌شود</div>
+              </div>
+            </label>
+          </div>
           {_btn("ذخیره", color="green")}
         </form>
       </div>
@@ -3300,13 +3310,15 @@ async def product_edit_post(request: Request, pid: int,
     adm = _get_admin(request)
     guard = _require(adm, "products")
     if guard: return guard
+    form = await request.form()
+    support_after = 1 if form.get("support_after_purchase") == "1" else 0
     pp = int(partner_price or 0)
     conn = _db()
     try:
         conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-            daily_limit_customer=?,daily_limit_partner=?,description=? WHERE id=?;""",
+            daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=? WHERE id=?;""",
             (category,title.strip(),int(price or 0),pp if pp>0 else None,
-             int(limit_c or 0),int(limit_p or 0),description.strip(),pid))
+             int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,pid))
         conn.commit()
     finally:
         conn.close()
