@@ -719,34 +719,19 @@ def _layout(title: str, body: str, admin_info=None,
   ['mousemove','keydown','click','scroll','touchstart'].forEach(function(ev){ document.addEventListener(ev,reset,true); });
   reset();
 
-  // Real-time badges via SSE
+  // Badge polling (every 12s)
   function updateBadge(id, count){
     var el = document.getElementById(id);
     if(!el) return;
     if(count>0){ el.textContent=count; el.classList.remove('hidden'); }
     else el.classList.add('hidden');
   }
-  function startSSE(){
-    if(!window.EventSource){ startPolling(); return; }
-    var es = new EventSource('/admin/stream');
-    es.onmessage = function(ev){
-      try{
-        var d = JSON.parse(ev.data);
-        updateBadge('ticket-badge-top', d.tickets||0);
-        updateBadge('partner-badge-top', d.partners||0);
-      }catch(e){}
-    };
-    es.onerror = function(){ es.close(); setTimeout(startSSE, 6000); };
-  }
-  function startPolling(){
-    setInterval(function(){
-      fetch('/admin/badges.json').then(function(r){return r.json();}).then(function(d){
-        updateBadge('ticket-badge-top', d.tickets||0);
-        updateBadge('partner-badge-top', d.partners||0);
-      }).catch(function(){});
-    }, 10000);
-  }
-  startSSE();
+  setInterval(function(){
+    fetch('/admin/badges.json').then(function(r){return r.json();}).then(function(d){
+      updateBadge('ticket-badge-top', d.tickets||0);
+      updateBadge('partner-badge-top', d.partners||0);
+    }).catch(function(){});
+  }, 12000);
   """}
   renderIcons();
 }})();
@@ -4070,11 +4055,16 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     last_msg_id = 0
 
     def _render_media(msg) -> str:
-        """رندر امن رسانه‌ها — هرگز crash نمی‌دهد."""
+        """رندر امن رسانه — هرگز crash نمی‌دهد."""
         try:
-            mt = (msg["media_type"] or "").strip().lower()
-            fid = msg.get("media_file_id") or ""
-            txt = (msg["text"] or "").strip()
+            # sqlite3.Row از .get() پشتیبانی نمی‌کند، از try/except استفاده می‌کنیم
+            try: mt = (msg["media_type"] or "").strip().lower()
+            except: mt = ""
+            try: fid = msg["media_file_id"] or ""
+            except: fid = ""
+            try: txt = (msg["text"] or "").strip()
+            except: txt = ""
+
             caption = f'<div style="margin-top:6px;font-size:13px">{e(txt)}</div>' if txt and not txt.startswith("[") else ""
             proxy = f"/admin/tickets/media/{e(fid)}" if fid else ""
 
@@ -4082,37 +4072,24 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
                 return (
                     f'<a href="{proxy}" target="_blank">'
                     f'<img src="{proxy}" style="max-width:260px;max-height:200px;border-radius:10px;display:block" '
-                    f'onerror="this.parentElement.innerHTML=\'📷 عکس (خطا در بارگذاری)\'"></a>'
+                    f'onerror="this.parentElement.innerHTML=\'📷 خطا در بارگذاری\'"></a>'
                     + caption
                 )
             elif mt == "voice" and proxy:
-                return (
-                    f'<audio controls style="max-width:260px;height:36px">'
-                    f'<source src="{proxy}">🎤 مرورگر شما از پخش صدا پشتیبانی نمی‌کند</audio>'
-                    + caption
-                )
+                return f'<audio controls style="max-width:260px"><source src="{proxy}"></audio>{caption}'
             elif mt == "video" and proxy:
-                return (
-                    f'<video controls style="max-width:280px;max-height:200px;border-radius:10px">'
-                    f'<source src="{proxy}">🎥 مرورگر شما از پخش ویدیو پشتیبانی نمی‌کند</video>'
-                    + caption
-                )
+                return f'<video controls style="max-width:280px;max-height:200px;border-radius:10px"><source src="{proxy}"></video>{caption}'
             elif mt in ("document", "audio") and proxy:
                 icon = "🎵" if mt == "audio" else "📎"
-                fname = txt if txt and not txt.startswith("[") else f"فایل.{mt}"
-                return (
-                    f'<a href="{proxy}" download="{e(fname)}" target="_blank" '
-                    f'style="display:inline-flex;align-items:center;gap:7px;padding:8px 14px;'
-                    f'background:rgba(0,0,0,.07);border-radius:10px;text-decoration:none;color:inherit;font-size:13px">'
-                    f'{icon} دانلود {e(fname)}</a>'
-                )
+                label = txt if txt and not txt.startswith("[") else "دانلود فایل"
+                return f'<a href="{proxy}" download target="_blank" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:rgba(0,0,0,.06);border-radius:9px;text-decoration:none;color:inherit;font-size:12px">{icon} {e(label)}</a>'
             elif mt and mt not in ("text", ""):
                 icons = {"sticker": "🎭", "animation": "🎬", "video_note": "📹"}
-                return f'{icons.get(mt,"📁")} <em style="opacity:.7;font-size:12px">[{e(mt)}]</em>{caption}'
+                return f'{icons.get(mt, "📁")} <em style="opacity:.6;font-size:12px">[{e(mt)}]</em>{caption}'
             else:
                 return e(txt) if txt else ""
-        except Exception as ex:
-            return f'<em style="opacity:.5;font-size:12px">[خطا در نمایش رسانه]</em>'
+        except Exception:
+            return '<em style="opacity:.5;font-size:12px">[خطا]</em>'
 
     for msg in messages:
         is_adm = msg["sender"] == "admin"
@@ -4362,51 +4339,6 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
         _tg_send(user_id, f"📩 <b>پیام مستقیم از پشتیبانی:</b>\n\n{html.escape(direct_msg)}")
 
     return _redir(f"/admin/tickets/{tid}?flash=پیام+مستقیم+ارسال+شد")
-
-
-@router.get("/stream")
-async def admin_stream(request: Request):
-    """SSE endpoint — real-time badge updates بدون block کردن event loop."""
-    from fastapi.responses import StreamingResponse, Response
-    import asyncio
-
-    adm = _get_admin(request)
-    if not adm:
-        return Response("unauthorized", status_code=401)
-
-    loop = asyncio.get_event_loop()
-
-    async def generator():
-        last = (-1, -1)
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                # DB calls در thread جداگانه — event loop block نمی‌شه
-                t, p = await loop.run_in_executor(
-                    None,
-                    lambda: (_open_ticket_count(), _pending_partner_count())
-                )
-                cur = (t, p)
-                if cur != last:
-                    last = cur
-                    payload = json.dumps({"tickets": t, "partners": p})
-                    yield f"data: {payload}\n\n"
-                else:
-                    yield ": ping\n\n"
-                await asyncio.sleep(5)
-        except Exception:
-            return
-
-    return StreamingResponse(
-        generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        }
-    )
 
 
 @router.get("/badges.json")
