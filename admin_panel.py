@@ -3953,15 +3953,24 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
     try:
         where = "WHERE t.status=?" if status_filter else ""
         params = (status_filter, 100) if status_filter else (100,)
-        tickets = conn.execute(f"""
-            SELECT t.*,
-                   (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
-                   (SELECT sender FROM ticket_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_sender,
-                   (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id AND m.sender='user') AS unread_user
-            FROM tickets t {where}
-            ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
-                     t.updated_at DESC LIMIT ?;
-        """, params).fetchall()
+        try:
+            tickets = conn.execute(f"""
+                SELECT t.*,
+                       (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
+                       (SELECT sender FROM ticket_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_sender
+                FROM tickets t {where}
+                ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
+                         t.updated_at DESC LIMIT ?;
+            """, params).fetchall()
+        except Exception:
+            # fallback به query ساده اگه schema جدید نداره
+            tickets = conn.execute(f"""
+                SELECT t.*,
+                       (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
+                       NULL AS last_sender
+                FROM tickets t {where}
+                ORDER BY id DESC LIMIT ?;
+            """, params).fetchall()
         stats = {s: conn.execute("SELECT COUNT(*) FROM tickets WHERE status=?;", (s,)).fetchone()[0]
                  for s in ("waiting_admin", "waiting_user", "closed")}
     finally:
@@ -4357,33 +4366,37 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
 
 @router.get("/stream")
 async def admin_stream(request: Request):
-    """SSE endpoint — ارسال real-time badge updates به پنل ادمین."""
-    from fastapi.responses import StreamingResponse
-    adm = _get_admin(request)
-    if not adm:
-        from fastapi.responses import Response
-        return Response("unauthorized", status_code=401)
-
+    """SSE endpoint — real-time badge updates بدون block کردن event loop."""
+    from fastapi.responses import StreamingResponse, Response
     import asyncio
 
+    adm = _get_admin(request)
+    if not adm:
+        return Response("unauthorized", status_code=401)
+
+    loop = asyncio.get_event_loop()
+
     async def generator():
-        last_tickets = -1
-        last_partners = -1
+        last = (-1, -1)
         try:
             while True:
                 if await request.is_disconnected():
                     break
-                t = _open_ticket_count()
-                p = _pending_partner_count()
-                if t != last_tickets or p != last_partners:
-                    last_tickets, last_partners = t, p
+                # DB calls در thread جداگانه — event loop block نمی‌شه
+                t, p = await loop.run_in_executor(
+                    None,
+                    lambda: (_open_ticket_count(), _pending_partner_count())
+                )
+                cur = (t, p)
+                if cur != last:
+                    last = cur
                     payload = json.dumps({"tickets": t, "partners": p})
                     yield f"data: {payload}\n\n"
                 else:
-                    yield ": ping\n\n"  # keep-alive
-                await asyncio.sleep(4)
+                    yield ": ping\n\n"
+                await asyncio.sleep(5)
         except Exception:
-            pass
+            return
 
     return StreamingResponse(
         generator(),
