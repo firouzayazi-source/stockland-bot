@@ -719,19 +719,34 @@ def _layout(title: str, body: str, admin_info=None,
   ['mousemove','keydown','click','scroll','touchstart'].forEach(function(ev){ document.addEventListener(ev,reset,true); });
   reset();
 
-  // Badge polling
+  // Real-time badges via SSE
   function updateBadge(id, count){
     var el = document.getElementById(id);
     if(!el) return;
     if(count>0){ el.textContent=count; el.classList.remove('hidden'); }
     else el.classList.add('hidden');
   }
-  setInterval(function(){
-    fetch('/admin/badges.json').then(function(r){ return r.json(); }).then(function(d){
-      updateBadge('ticket-badge-top', d.tickets||0);
-      updateBadge('partner-badge-top', d.partners||0);
-    }).catch(function(){});
-  }, 15000);
+  function startSSE(){
+    if(!window.EventSource){ startPolling(); return; }
+    var es = new EventSource('/admin/stream');
+    es.onmessage = function(ev){
+      try{
+        var d = JSON.parse(ev.data);
+        updateBadge('ticket-badge-top', d.tickets||0);
+        updateBadge('partner-badge-top', d.partners||0);
+      }catch(e){}
+    };
+    es.onerror = function(){ es.close(); setTimeout(startSSE, 6000); };
+  }
+  function startPolling(){
+    setInterval(function(){
+      fetch('/admin/badges.json').then(function(r){return r.json();}).then(function(d){
+        updateBadge('ticket-badge-top', d.tickets||0);
+        updateBadge('partner-badge-top', d.partners||0);
+      }).catch(function(){});
+    }, 10000);
+  }
+  startSSE();
   """}
   renderIcons();
 }})();
@@ -3373,6 +3388,73 @@ async def feed_item_edit_post(request: Request, fid: int,
 
 # ─────────────────────────── Orders ────────────────────────────────────────
 
+@router.get("/orders/export.xlsx")
+async def orders_export_excel(request: Request, q: str = "", status: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from fastapi.responses import Response
+    except ImportError:
+        return Response("openpyxl نصب نیست. دستور: pip install openpyxl", media_type="text/plain", status_code=500)
+
+    conn = _db()
+    try:
+        wheres, params = [], []
+        if q:
+            wheres.append("(title LIKE ? OR CAST(user_id AS TEXT) LIKE ?)")
+            params += [f"%{q}%", f"%{q}%"]
+        if status:
+            wheres.append("status=?"); params.append(status)
+        where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+        orders = conn.execute(
+            f"SELECT id,user_id,category,title,price,status,created_at FROM orders {where_sql} ORDER BY id DESC LIMIT 5000;",
+            params
+        ).fetchall()
+    finally:
+        conn.close()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "سفارش‌ها"
+    ws.sheet_view.rightToLeft = True
+
+    headers = ["#", "شناسه کاربر", "دسته", "محصول", "مبلغ (تومان)", "وضعیت", "تاریخ"]
+    header_fill = PatternFill("solid", fgColor="2EC4B6")
+    header_font = Font(bold=True, color="FFFFFF")
+    for ci, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=ci, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    status_map = {"active":"ارسال شد","returned":"برگشتی","pending":"در انتظار"}
+    for ri, o in enumerate(orders, 2):
+        ws.cell(ri, 1, o["id"])
+        ws.cell(ri, 2, o["user_id"])
+        ws.cell(ri, 3, o["category"] or "")
+        ws.cell(ri, 4, o["title"] or "")
+        ws.cell(ri, 5, int(o["price"] or 0))
+        ws.cell(ri, 6, status_map.get(o["status"] or "", o["status"] or ""))
+        ws.cell(ri, 7, (o["created_at"] or "")[:16])
+
+    for col in ws.columns:
+        ws.column_dimensions[col[0].column_letter].width = max(len(str(col[0].value or ""))+4, 14)
+
+    import io
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    _log(request, "خروجی Excel سفارش‌ها", "سفارش‌ها", f"{len(orders)} ردیف")
+    return Response(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=orders.xlsx"}
+    )
+
+
 @router.get("/orders", response_class=HTMLResponse)
 async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
     adm = _get_admin(request)
@@ -3436,11 +3518,14 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
     ) + "</div>" if pages > 1 else ""
 
     body = f"""
-    <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
-      <h1 class="text-2xl font-bold text-gray-800">🧾 سفارش‌ها ({total:,})</h1>
-      <div class="flex items-center gap-3">
-        <span class="px-3 py-1.5 bg-red-50 text-red-700 rounded-lg text-sm">↩️ برگشتی: {returned_total}</span>
-        <form method="get" class="flex gap-2">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div class="page-header" style="margin:0"><h1>سفارش‌ها ({total:,})</h1></div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <a href="/admin/orders/export.xlsx?q={e(q)}" class="btn btn-green btn-sm">
+          <i data-lucide="download" style="width:14px"></i> خروجی Excel
+        </a>
+        <span style="font-size:12px;color:#EF4444;background:#FEE2E2;padding:4px 10px;border-radius:8px">↩️ برگشتی: {returned_total}</span>
+        <form method="get" style="display:flex;gap:8px">
           {_input("q","جستجو User ID...",q)} {_btn("جستجو","","slate",True)}
         </form>
       </div>
@@ -3870,7 +3955,9 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
         params = (status_filter, 100) if status_filter else (100,)
         tickets = conn.execute(f"""
             SELECT t.*,
-                   (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count
+                   (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
+                   (SELECT sender FROM ticket_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_sender,
+                   (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id AND m.sender='user') AS unread_user
             FROM tickets t {where}
             ORDER BY CASE t.status WHEN 'waiting_admin' THEN 0 WHEN 'waiting_user' THEN 1 ELSE 2 END,
                      t.updated_at DESC LIMIT ?;
@@ -3893,19 +3980,24 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
         tabs_html += f'<a href="/admin/tickets?status_filter={val}" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:12px;border:1.5px solid {bdr};background:{bg};color:{col};font-size:13px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl}<span style="padding:1px 7px;border-radius:20px;font-size:10px;font-weight:700;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"}">{cnt}</span></a>'
     tabs_html += '</div>'
 
-    def sbadge(s):
-        m = {"waiting_admin":("danger","منتظر ادمین"),"waiting_user":("warning","منتظر کاربر"),"closed":("neutral","بسته")}
-        t,l = m.get(s,("neutral",s))
-        return f'<span class="status-badge status-{t}"><span></span>{l}</span>'
+    def sbadge(s, last_sender=None):
+        if s == "waiting_admin":
+            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#FEE2E2;color:#B91C1C;border-radius:20px;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#EF4444;display:inline-block"></span>نیاز به پاسخ</span>'
+        elif s == "waiting_user":
+            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#DCFCE7;color:#166534;border-radius:20px;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#22C55E;display:inline-block"></span>پاسخ داده شد</span>'
+        else:
+            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#F3F4F6;color:#6B7280;border-radius:20px;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#9CA3AF;display:inline-block"></span>بسته</span>'
 
-    rows = "".join(f"""<tr>
-      <td><a href="/admin/tickets/{t["id"]}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t["id"]}</a></td>
-      <td><code style="font-size:11px;background:var(--page-bg);padding:2px 8px;border-radius:6px">{e(str(t["user_id"]))}</code></td>
-      <td><span style="font-size:11.5px">{e(t["type"] or "support")}</span></td>
-      <td>{sbadge(t["status"])}</td>
-      <td style="color:var(--text-muted);font-size:12px">{int(t["msg_count"] or 0)} پیام</td>
-      <td style="color:var(--text-muted);font-size:11px">{(t["updated_at"] or "")[:16]}</td>
-      <td><a href="/admin/tickets/{t["id"]}" class="btn btn-indigo btn-sm">مشاهده</a></td>
+    rows = "".join(f"""<tr style="cursor:pointer" onclick="location.href='/admin/tickets/{t['id']}'">
+      <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" style="color:var(--primary);font-weight:700;font-size:12px;text-decoration:none">#{t['id']}</a></td>
+      <td style="padding:12px 16px"><code style="font-size:11px;background:var(--page-bg);padding:2px 8px;border-radius:6px">{e(str(t['user_id']))}</code></td>
+      <td style="padding:12px 16px">{sbadge(t['status'], t.get('last_sender'))}</td>
+      <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">
+        {f'<span style="color:#EF4444;font-weight:600">کاربر ↗</span>' if t.get("last_sender")=="user" and t["status"]=="waiting_admin" else (f'<span style="color:#22C55E">ادمین ↙</span>' if t.get("last_sender")=="admin" else '—')}
+      </td>
+      <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">{int(t['msg_count'] or 0)} پیام</td>
+      <td style="padding:12px 16px;font-size:11px;color:var(--text-muted)">{(t['updated_at'] or '')[:16]}</td>
+      <td style="padding:12px 16px"><a href="/admin/tickets/{t['id']}" class="btn btn-indigo btn-sm">مشاهده</a></td>
     </tr>""" for t in tickets)
 
     body = f"""
@@ -3915,13 +4007,13 @@ async def tickets_list(request: Request, status_filter: str = "", flash: str = "
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
-            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
-            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">User ID</th>
-            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">نوع</th>
-            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
-            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">پیام‌ها</th>
-            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
-            <th style="padding:12px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">کاربر</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آخرین پیام</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تعداد</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">آپدیت</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right"></th>
           </tr></thead>
           <tbody>{rows or "<tr><td colspan='7' style='text-align:center;padding:40px;color:var(--text-muted);font-size:13px'>تیکتی یافت نشد</td></tr>"}</tbody>
         </table>
@@ -3963,38 +4055,71 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     is_closed = (ticket["status"] == "closed")
     user_id_val = int(ticket["user_id"])
 
-    # ── مکالمه با نمایش عکس ─────────────────────────────────────────────────
+    # ── مکالمه با نمایش کامل رسانه ──────────────────────────────────────────
     bot_token = _env("BOT_TOKEN")
     chat_html = ""
     last_msg_id = 0
+
+    def _render_media(msg) -> str:
+        """رندر امن رسانه‌ها — هرگز crash نمی‌دهد."""
+        try:
+            mt = (msg["media_type"] or "").strip().lower()
+            fid = msg.get("media_file_id") or ""
+            txt = (msg["text"] or "").strip()
+            caption = f'<div style="margin-top:6px;font-size:13px">{e(txt)}</div>' if txt and not txt.startswith("[") else ""
+            proxy = f"/admin/tickets/media/{e(fid)}" if fid else ""
+
+            if mt == "photo" and proxy:
+                return (
+                    f'<a href="{proxy}" target="_blank">'
+                    f'<img src="{proxy}" style="max-width:260px;max-height:200px;border-radius:10px;display:block" '
+                    f'onerror="this.parentElement.innerHTML=\'📷 عکس (خطا در بارگذاری)\'"></a>'
+                    + caption
+                )
+            elif mt == "voice" and proxy:
+                return (
+                    f'<audio controls style="max-width:260px;height:36px">'
+                    f'<source src="{proxy}">🎤 مرورگر شما از پخش صدا پشتیبانی نمی‌کند</audio>'
+                    + caption
+                )
+            elif mt == "video" and proxy:
+                return (
+                    f'<video controls style="max-width:280px;max-height:200px;border-radius:10px">'
+                    f'<source src="{proxy}">🎥 مرورگر شما از پخش ویدیو پشتیبانی نمی‌کند</video>'
+                    + caption
+                )
+            elif mt in ("document", "audio") and proxy:
+                icon = "🎵" if mt == "audio" else "📎"
+                fname = txt if txt and not txt.startswith("[") else f"فایل.{mt}"
+                return (
+                    f'<a href="{proxy}" download="{e(fname)}" target="_blank" '
+                    f'style="display:inline-flex;align-items:center;gap:7px;padding:8px 14px;'
+                    f'background:rgba(0,0,0,.07);border-radius:10px;text-decoration:none;color:inherit;font-size:13px">'
+                    f'{icon} دانلود {e(fname)}</a>'
+                )
+            elif mt and mt not in ("text", ""):
+                icons = {"sticker": "🎭", "animation": "🎬", "video_note": "📹"}
+                return f'{icons.get(mt,"📁")} <em style="opacity:.7;font-size:12px">[{e(mt)}]</em>{caption}'
+            else:
+                return e(txt) if txt else ""
+        except Exception as ex:
+            return f'<em style="opacity:.5;font-size:12px">[خطا در نمایش رسانه]</em>'
+
     for msg in messages:
         is_adm = msg["sender"] == "admin"
-        pos = "items-end" if is_adm else "items-start"
-        bubble = "bg-indigo-600 text-white" if is_adm else "bg-white border border-gray-200 text-gray-800"
-        lbl = "ادمین 👤" if is_adm else f"کاربر ({user_id_val})"
-        src_badge = "" if msg["source"] == "telegram" else ' <span class="text-xs opacity-50">[پنل]</span>'
+        pos = "flex-end" if is_adm else "flex-start"
+        bg = "var(--primary)" if is_adm else "var(--card-bg)"
+        col = "#000" if is_adm else "var(--text-main)"
+        border = "" if is_adm else "border:1px solid var(--border);"
+        lbl = "ادمین" if is_adm else f"کاربر ({user_id_val})"
+        src_badge = "" if (msg["source"] or "") == "telegram" else ' <span style="opacity:.5;font-size:10px">[پنل]</span>'
         last_msg_id = max(last_msg_id, int(msg["id"] or 0))
-
-        content_html = ""
-        if msg["media_type"] == "photo" and msg.get("media_file_id") and bot_token:
-            # نمایش عکس از Telegram CDN
-            file_url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={msg['media_file_id']}"
-            img_proxy = f"/admin/tickets/media/{e(msg['media_file_id'])}"
-            content_html = f'<img src="{img_proxy}" class="rounded-lg max-w-full mt-1" style="max-height:200px" onerror="this.style.display=\'none\'">'
-            if msg["text"] and msg["text"] != "[photo]":
-                content_html += f'<div class="mt-1">{e(msg["text"])}</div>'
-        elif msg["media_type"] and msg["media_type"] not in ("text", None):
-            icon = {"document": "📎", "video": "🎥", "audio": "🎵", "voice": "🎤", "sticker": "🎭"}.get(msg["media_type"], "📁")
-            content_html = f'{icon} <em class="text-xs opacity-80">[{msg["media_type"]}]</em>'
-            if msg["text"] and not msg["text"].startswith("["):
-                content_html += f' {e(msg["text"])}'
-        else:
-            content_html = e(msg["text"] or "")
+        content_html = _render_media(msg)
 
         chat_html += f"""
-        <div class="flex flex-col {pos} mb-3" data-msg-id="{msg['id']}">
-          <div class="text-xs text-gray-400 mb-1">{lbl}{src_badge} · {(msg["created_at"] or "")[:16]}</div>
-          <div class="{bubble} rounded-2xl px-4 py-2 text-sm" style="max-width:85%;word-break:break-word;white-space:pre-wrap">{content_html}</div>
+        <div style="display:flex;flex-direction:column;align-items:{pos};margin-bottom:12px" data-msg-id="{msg['id']}">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">{e(lbl)}{src_badge} · {(msg["created_at"] or "")[:16]}</div>
+          <div style="background:{bg};color:{col};{border}border-radius:16px;padding:10px 14px;max-width:85%;word-break:break-word;white-space:pre-wrap;font-size:13.5px">{content_html or '<em style="opacity:.4">پیام خالی</em>'}</div>
         </div>"""
 
     if not chat_html:
@@ -4228,6 +4353,47 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
         _tg_send(user_id, f"📩 <b>پیام مستقیم از پشتیبانی:</b>\n\n{html.escape(direct_msg)}")
 
     return _redir(f"/admin/tickets/{tid}?flash=پیام+مستقیم+ارسال+شد")
+
+
+@router.get("/stream")
+async def admin_stream(request: Request):
+    """SSE endpoint — ارسال real-time badge updates به پنل ادمین."""
+    from fastapi.responses import StreamingResponse
+    adm = _get_admin(request)
+    if not adm:
+        from fastapi.responses import Response
+        return Response("unauthorized", status_code=401)
+
+    import asyncio
+
+    async def generator():
+        last_tickets = -1
+        last_partners = -1
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                t = _open_ticket_count()
+                p = _pending_partner_count()
+                if t != last_tickets or p != last_partners:
+                    last_tickets, last_partners = t, p
+                    payload = json.dumps({"tickets": t, "partners": p})
+                    yield f"data: {payload}\n\n"
+                else:
+                    yield ": ping\n\n"  # keep-alive
+                await asyncio.sleep(4)
+        except Exception:
+            pass
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @router.get("/badges.json")
