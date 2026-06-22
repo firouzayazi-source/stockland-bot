@@ -442,6 +442,12 @@ def _layout(title: str, body: str, admin_info=None,
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <script>
+    document.addEventListener('gesturestart',function(e){{e.preventDefault();}});
+    document.addEventListener('gesturechange',function(e){{e.preventDefault();}});
+    document.addEventListener('gestureend',function(e){{e.preventDefault();}});
+    document.addEventListener('touchmove',function(e){{if(e.touches.length>1)e.preventDefault();}},{{passive:false}});
+  </script>
   <title>{e(title)} — استوک لند</title>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -803,7 +809,7 @@ def _layout(title: str, body: str, admin_info=None,
     textarea, select {{
       width:100%; min-height:44px; border:1.5px solid var(--bdr-input);
       border-radius:var(--r-md); padding:10px 16px 10px 14px;
-      font-size:13.5px; background:var(--bg-input); color:var(--txt-primary);
+      font-size:16px; background:var(--bg-input); color:var(--txt-primary);
       outline:none; transition:border .18s, box-shadow .18s;
       direction:rtl; text-align:right; font-family:var(--font);
       -webkit-appearance:none; appearance:none;
