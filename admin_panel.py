@@ -229,9 +229,40 @@ def _ensure_theme_table():
                 value TEXT NOT NULL
             );
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id   INTEGER,
+                admin_name TEXT,
+                action     TEXT NOT NULL,
+                section    TEXT,
+                details    TEXT,
+                ip         TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            );
+        """)
         conn.commit()
     finally:
         conn.close()
+
+
+def _log(request: Request, action: str, section: str = "", details: str = "", admin_info=None):
+    """ثبت فعالیت ادمین — هیچ‌وقت exception نمی‌ده."""
+    try:
+        adm = admin_info or _get_admin(request)
+        if not adm:
+            return
+        ip = (request.client.host if request.client else "—")
+        name = adm[3] if len(adm) > 3 else f"admin#{adm[0]}"
+        conn = _db()
+        conn.execute(
+            "INSERT INTO admin_logs (admin_id,admin_name,action,section,details,ip) VALUES (?,?,?,?,?,?);",
+            (adm[0], name, action, section, details[:500] if details else "", ip)
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def _layout(title: str, body: str, admin_info=None,
@@ -294,6 +325,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/settings", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "دیتابیس", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
+            {nav_item("/admin/logs", "activity", "گزارش فعالیت", "admins")}
           </nav>
           <div class="sidebar-footer">
             <div class="sidebar-status"><span class="status-dot"></span><div><strong>سامانه فعال</strong><small>همه سرویس‌ها پایدارند</small></div></div>
@@ -486,9 +518,9 @@ def _layout(title: str, body: str, admin_info=None,
     .btn-slate {{ background:#f8fafc; color:#475569; border-color:var(--border); }} .btn-green {{ background:#ecfdf3; color:#15803d; border-color:#bbf7d0; }} .btn-red {{ background:#fff1f2; color:#be123c; border-color:#fecdd3; }} .btn-indigo {{ background:#ecfeff; color:#0e7490; border-color:#a5f3fc; }}
     input, textarea, select {{
       width:100%; min-height:44px; border:1px solid var(--border); border-radius:14px;
-      padding:11px 18px 11px 14px;
+      padding:11px 18px 11px 14px !important;
       font-size:13px; background:var(--card-bg); color:var(--text-main); outline:none;
-      transition:border 180ms,box-shadow 180ms; direction:rtl; text-align:right; font-family:inherit;
+      transition:border 180ms,box-shadow 180ms; direction:rtl !important; text-align:right !important; font-family:inherit;
     }}
     input[type=checkbox], input[type=radio] {{
       width:16px !important; height:16px !important; min-height:16px !important;
@@ -693,11 +725,11 @@ async def login_get(request: Request, err: str = "", flash: str = ""):
         <form method="post" action="/admin/login" style="display:flex;flex-direction:column;gap:14px">
           <div>
             <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">نام کاربری</label>
-            <input type="text" name="username" placeholder="نام کاربری" required style="width:100%;padding:11px 18px;border:1.5px solid var(--border);border-radius:12px;font-size:13px;direction:rtl;text-align:right;outline:none;font-family:inherit">
+            {_input("username","نام کاربری",required=True)}
           </div>
           <div>
             <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">رمز ورود</label>
-            <input type="password" name="password" placeholder="رمز ورود" required style="width:100%;padding:11px 18px;border:1.5px solid var(--border);border-radius:12px;font-size:13px;direction:rtl;text-align:right;outline:none;font-family:inherit">
+            {_input("password","رمز ورود",type_="password",required=True)}
           </div>
           <button type="submit" style="width:100%;padding:12px;background:#2EC4B6;color:#fff;font-weight:700;font-size:14px;border:none;border-radius:12px;cursor:pointer;margin-top:4px">ورود به پنل ←</button>
         </form>
@@ -706,16 +738,19 @@ async def login_get(request: Request, err: str = "", flash: str = ""):
     return _layout("ورود", body)
 
 @router.post("/login")
-async def login_post(username: str = Form(""), password: str = Form("")):
+async def login_post(request: Request, username: str = Form(""), password: str = Form("")):
     ensure_admins_table()
+    _ensure_theme_table()
     username = username.strip()
     password = password.strip()
 
     # سوپرادمین
+    super_un = _env("ADMIN_WEB_USERNAME", "admin")
     super_pw = _env("ADMIN_WEB_PASSWORD")
-    if username.lower() in ("admin", "super") and super_pw and _hmac.compare_digest(password, super_pw):
+    if username.lower() in (super_un.lower(), "admin", "super") and super_pw and _hmac.compare_digest(password, super_pw):
         resp = _redir("/admin/")
         resp.set_cookie("adm", _make_session("super"), max_age=300, httponly=True, samesite="lax")
+        _log(request, "ورود", "احراز هویت", f"سوپرادمین از {request.client.host if request.client else '-'}")
         return resp
 
     # ادمین از دیتابیس
@@ -729,14 +764,19 @@ async def login_post(username: str = Form(""), password: str = Form("")):
         if row and row["is_active"] and row["web_password_hash"] == _hash_pw(password):
             resp = _redir("/admin/")
             resp.set_cookie("adm", _make_session(str(row["id"])), max_age=300, httponly=True, samesite="lax")
+            _log(request, "ورود", "احراز هویت", f"ادمین #{row['id']}")
             return resp
     except Exception:
         pass
 
+    _log(request, "ورود ناموفق", "احراز هویت", f"یوزرنیم: {username[:30]}")
     return _redir("/admin/login?err=1")
 
 @router.get("/logout")
-async def logout():
+async def logout(request: Request):
+    adm = _get_admin(request)
+    if adm:
+        _log(request, "خروج", "احراز هویت", "", admin_info=adm)
     resp = _redir("/admin/login")
     resp.delete_cookie("adm")
     return resp
@@ -1233,47 +1273,6 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
     </div>"""
 
     return _layout("تنظیمات", body, adm, flash=flash)
-
-
-def _theme_color_input(key, label, theme):
-    val = theme.get(key, DEFAULT_THEME.get(key, "#000000"))
-    # تبدیل hex به RGB
-    def hex_to_rgb(h):
-        h = h.lstrip('#')
-        if len(h) == 3: h = h[0]*2 + h[1]*2 + h[2]*2
-        try:
-            return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        except:
-            return 100, 100, 100
-    r, g, b = hex_to_rgb(val)
-    return f"""
-    <div class="color-item" data-key="{key}">
-      <div class="color-header">
-        <div class="color-preview" id="prev_{key}" style="background:{val}"></div>
-        <div>
-          <div class="color-label">{label}</div>
-          <code class="color-hex" id="hex_{key}">{val}</code>
-        </div>
-      </div>
-      <div class="slider-group">
-        <div class="slider-row">
-          <span class="slider-lbl" style="color:#ef4444">R</span>
-          <input type="range" min="0" max="255" value="{r}" class="rgb-slider r-slider" data-key="{key}" oninput="updateColor('{key}')">
-          <span class="slider-val" id="r_{key}">{r}</span>
-        </div>
-        <div class="slider-row">
-          <span class="slider-lbl" style="color:#22c55e">G</span>
-          <input type="range" min="0" max="255" value="{g}" class="rgb-slider g-slider" data-key="{key}" oninput="updateColor('{key}')">
-          <span class="slider-val" id="g_{key}">{g}</span>
-        </div>
-        <div class="slider-row">
-          <span class="slider-lbl" style="color:#3b82f6">B</span>
-          <input type="range" min="0" max="255" value="{b}" class="rgb-slider b-slider" data-key="{key}" oninput="updateColor('{key}')">
-          <span class="slider-val" id="b_{key}">{b}</span>
-        </div>
-      </div>
-      <input type="hidden" name="{key}" id="inp_{key}" value="{val}">
-    </div>"""
 
 
 @router.post("/settings/theme")
@@ -3601,6 +3600,103 @@ def _ticket_status_badge(status: str) -> str:
     c = colors.get(status, "slate")
     l = labels.get(status, status)
     return f'<span class="px-2 py-0.5 text-xs rounded-full bg-{c}-100 text-{c}-700">{l}</span>'
+
+
+@router.get("/logs", response_class=HTMLResponse)
+async def admin_logs_page(request: Request, q: str = "", section: str = "", page: int = 0, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "admins")
+    if guard: return guard
+    _ensure_theme_table()
+
+    PER_PAGE = 50
+    conn = _db()
+    try:
+        # sections list
+        sections = [r[0] for r in conn.execute("SELECT DISTINCT section FROM admin_logs WHERE section!='' ORDER BY section;").fetchall()]
+
+        wheres, params = [], []
+        if q:
+            wheres.append("(admin_name LIKE ? OR action LIKE ? OR details LIKE ?)")
+            params += [f"%{q}%", f"%{q}%", f"%{q}%"]
+        if section:
+            wheres.append("section=?")
+            params.append(section)
+        where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+
+        total = conn.execute(f"SELECT COUNT(*) FROM admin_logs {where_sql};", params).fetchone()[0]
+        logs = conn.execute(
+            f"SELECT * FROM admin_logs {where_sql} ORDER BY id DESC LIMIT ? OFFSET ?;",
+            params + [PER_PAGE, page * PER_PAGE]
+        ).fetchall()
+    finally:
+        conn.close()
+
+    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+
+    def action_badge(a):
+        danger_words = ("حذف", "ناموفق", "ریست", "خروج", "بازیابی")
+        warn_words = ("تغییر", "ویرایش", "غیرفعال")
+        if any(w in a for w in danger_words): return "badge badge-danger"
+        if any(w in a for w in warn_words): return "badge badge-warning"
+        return "badge badge-success"
+
+    rows = "".join(f"""<tr>
+      <td style="color:var(--text-muted);font-size:11px">#{l["id"]}</td>
+      <td style="font-weight:600;font-size:13px">{e(l["admin_name"] or "—")}</td>
+      <td><span class="{action_badge(l["action"])}">{e(l["action"])}</span></td>
+      <td style="color:var(--text-muted);font-size:12px">{e(l["section"] or "—")}</td>
+      <td style="font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{e(l['details'] or '')}">{e((l["details"] or "")[:80])}</td>
+      <td style="color:var(--text-muted);font-size:11px;font-family:monospace">{e(l["ip"] or "—")}</td>
+      <td style="color:var(--text-muted);font-size:11px">{e((l["created_at"] or "")[:16])}</td>
+    </tr>""" for l in logs)
+
+    section_opts = "<option value=''>همه بخش‌ها</option>" + "".join(
+        f'<option value="{e(s)}" {"selected" if section==s else ""}>{e(s)}</option>' for s in sections
+    )
+
+    pagination = ""
+    if pages > 1:
+        pagination = '<div style="display:flex;gap:6px;justify-content:center;margin-top:16px;flex-wrap:wrap">'
+        for i in range(pages):
+            active = i == page
+            pagination += f'<a href="?q={e(q)}&section={e(section)}&page={i}" style="padding:5px 12px;border-radius:8px;font-size:12px;text-decoration:none;background:{"var(--primary)" if active else "var(--card-bg)"};color:{"#000" if active else "var(--text-muted)"};border:1px solid var(--border)">{i+1}</a>'
+        pagination += "</div>"
+
+    body = f"""
+    <div class="page-header"><h1>گزارش فعالیت ادمین‌ها</h1><p>{total:,} رویداد ثبت‌شده</p></div>
+    <div class="card card-p" style="margin-bottom:16px">
+      <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">جستجو</label>
+          {_input("q","نام ادمین، عملیات، جزئیات...",value=q)}
+        </div>
+        <div style="min-width:160px">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">بخش</label>
+          <select name="section">{section_opts}</select>
+        </div>
+        <button type="submit" class="btn btn-primary" style="min-width:80px;min-height:44px">فیلتر</button>
+        <a href="/admin/logs" class="btn btn-slate" style="min-height:44px">پاک</a>
+      </form>
+    </div>
+    <div class="card" style="overflow:hidden">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
+            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">#</th>
+            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">ادمین</th>
+            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
+            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">بخش</th>
+            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">جزئیات</th>
+            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">IP</th>
+            <th style="padding:10px 14px;font-size:10px;color:var(--text-muted);font-weight:700;text-align:right">زمان</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='7' style='text-align:center;padding:40px;color:var(--text-muted)'>رویدادی ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>
+    {pagination}"""
+    return _layout("گزارش فعالیت", body, adm, flash=flash)
 
 
 @router.get("/tickets", response_class=HTMLResponse)
