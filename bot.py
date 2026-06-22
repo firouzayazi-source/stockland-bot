@@ -239,7 +239,7 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase"))
     markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
 
-    # بررسی موجودی — اگه صفره دکمه «اطلاع بده» اضافه کن
+    # دکمه کد تخفیف — فقط اگه محصول موجود باشه
     try:
         from db import count_feed_items
         avail = count_feed_items(int(pid), delivered=False)
@@ -247,6 +247,11 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
             markup.add(types.InlineKeyboardButton(
                 "🔔 اطلاع بده وقتی موجود شد",
                 callback_data=f"notify_stock_{pid}"
+            ))
+        else:
+            markup.add(types.InlineKeyboardButton(
+                "🎟 دارم کد تخفیف",
+                callback_data=f"discount_start_{category}_{pid}"
             ))
     except Exception:
         pass
@@ -1524,6 +1529,62 @@ def handle_confirm_wallet(call):
     )
     
     
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_start_"))
+def handle_discount_start(call):
+    """کاربر روی «دارم کد تخفیف» زد."""
+    uid = call.from_user.id
+    # discount_start_{category}_{pid}
+    parts = call.data[len("discount_start_"):].rsplit("_", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.answer_callback_query(call.id, "خطا", show_alert=True)
+        return
+    category, pid_str = parts[0], parts[1]
+    pid = int(pid_str)
+
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
+        return
+
+    price = product[3]
+    partner_ok = is_partner_approved(uid)
+    partner_price = product[6] if len(product) > 6 else None
+    eff_price = partner_price if (partner_ok and partner_price) else price
+
+    # ذخیره context برای بازگشت بعد از کد
+    user_states[uid] = {
+        "mode": "discount_input",
+        "pid": pid,
+        "category": category,
+        "eff_price": eff_price,
+    }
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ بدون تخفیف ← ادامه", callback_data=f"discount_skip_{category}_{pid_str}"))
+    bot.send_message(
+        call.message.chat.id,
+        "🎟 <b>کد تخفیف خود را ارسال کنید:</b>",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    bot.register_next_step_handler(call.message, _process_discount_code)
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_skip_"))
+def handle_discount_skip(call):
+    """کاربر بدون تخفیف ادامه داد."""
+    uid = call.from_user.id
+    user_states.pop(uid, None)
+    # بازسازی منوی خرید
+    suffix = call.data[len("discount_skip_"):]
+    parts = suffix.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        category, pid_str = parts[0], parts[1]
+        call.data = f"confirm_wallet_{category}_{pid_str}"
+        handle_confirm_wallet(call)
+
+
 # ─── کد تخفیف ───────────────────────────────────────────────────────────────
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("apply_discount_"))
@@ -1546,32 +1607,41 @@ def _process_discount_code(message):
     uid = message.from_user.id
     code = (message.text or "").strip()
     state = user_states.get(uid, {})
-    resume_cb = state.get("discount_resume_cb", "")
-    pid_str = resume_cb.split("_")[-1] if "_" in resume_cb else ""
-    pid = int(pid_str) if pid_str.isdigit() else 0
 
-    product = get_product_by_id(pid) if pid else None
-    price = product[3] if product else 0
+    pid = state.get("pid", 0)
+    category = state.get("category", "")
+    eff_price = state.get("eff_price", 0)
 
-    result = validate_discount(code, product_id=pid, amount=price)
+    result = validate_discount(code, product_id=pid, amount=eff_price)
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("❌ بدون تخفیف ← ادامه", callback_data=f"resume_buy_{resume_cb}"))
-        bot.send_message(message.chat.id, f"❌ {result['error']}\nمی‌توانید بدون تخفیف ادامه دهید:", reply_markup=kb)
+        kb.add(types.InlineKeyboardButton(
+            "❌ بدون تخفیف ← ادامه",
+            callback_data=f"discount_skip_{category}_{pid}"
+        ))
+        bot.send_message(message.chat.id,
+            f"❌ {result['error']}",
+            reply_markup=kb)
         return
 
     discount = result["discount_amount"]
     use_discount(result["code_id"])
     state["applied_discount"] = discount
-    state["discount_code_id"] = result["code_id"]
     user_states[uid] = state
 
+    final_price = max(0, eff_price - discount)
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton(f"✅ ادامه خرید با تخفیف {discount:,} تومان", callback_data=f"resume_buy_{resume_cb}"))
+    kb.add(types.InlineKeyboardButton(
+        f"✅ ادامه خرید — {final_price:,} تومان",
+        callback_data=f"confirm_wallet_{category}_{pid}"
+    ))
     bot.send_message(message.chat.id,
-        f"✅ کد تخفیف اعمال شد!\n💰 مبلغ تخفیف: <b>{discount:,}</b> تومان\n"
-        f"مبلغ نهایی: <b>{max(0, price - discount):,}</b> تومان",
-        parse_mode="HTML", reply_markup=kb)
+        f"✅ کد تخفیف اعمال شد!\n"
+        f"💰 تخفیف: <b>{discount:,}</b> تومان\n"
+        f"💳 مبلغ نهایی: <b>{final_price:,}</b> تومان",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "skip_discount")
