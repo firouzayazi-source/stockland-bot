@@ -3170,6 +3170,9 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
         <form method="post" action="/admin/feed/{pid}/clear-delivered" onsubmit="return confirm('تحویل‌شده‌ها پاک شوند؟')">
           <button class="text-xs text-red-400 hover:text-red-600">🗑 پاک‌سازی تحویل‌شده‌ها</button>
         </form>
+        <form method="post" action="/admin/feed/{pid}/delete-all" onsubmit="return confirm('⚠️ همه {total} آیتم این محصول حذف شوند؟ این عمل برگشت‌پذیر نیست!')">
+          <button class="text-xs text-red-600 hover:text-red-800 font-bold">🗑🗑 حذف کل موجودی ({total})</button>
+        </form>
       </div>
       <table class="w-full text-right">
         <thead><tr class="text-xs text-gray-500 border-b">
@@ -3261,6 +3264,22 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
 
     _log(request, "آپلود موجودی", "موجودی", f"محصول #{pid} — {len(items)} آیتم", admin_info=adm)
     return _redir(f"/admin/feed/{pid}?flash=✅+{len(items)}+آیتم+اضافه+شد")
+
+
+@router.post("/feed/{pid}/delete-all")
+async def feed_delete_all(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+    conn = _db()
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM product_feed WHERE product_id=?;", (pid,)).fetchone()[0]
+        conn.execute("DELETE FROM product_feed WHERE product_id=?;", (pid,))
+        conn.commit()
+    finally:
+        conn.close()
+    _log(request, "حذف کل موجودی", "موجودی", f"محصول #{pid} — {count} آیتم حذف شد")
+    return _redir(f"/admin/feed/{pid}?flash=✅+{count}+آیتم+حذف+شد")
 
 
 @router.post("/feed/{pid}/clear-delivered")
@@ -3382,12 +3401,6 @@ async def orders_export_excel(request: Request, q: str = "", status: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "orders")
     if guard: return guard
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        from fastapi.responses import Response
-    except ImportError:
-        return Response("openpyxl نصب نیست. دستور: pip install openpyxl", media_type="text/plain", status_code=500)
 
     conn = _db()
     try:
@@ -3405,43 +3418,69 @@ async def orders_export_excel(request: Request, q: str = "", status: str = ""):
     finally:
         conn.close()
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "سفارش‌ها"
-    ws.sheet_view.rightToLeft = True
+    status_fa = {"active": "ارسال شد", "returned": "برگشتی", "pending": "در انتظار"}
 
-    headers = ["#", "شناسه کاربر", "دسته", "محصول", "مبلغ (تومان)", "وضعیت", "تاریخ"]
-    header_fill = PatternFill("solid", fgColor="2EC4B6")
-    header_font = Font(bold=True, color="FFFFFF")
-    for ci, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=ci, value=h)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center")
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from fastapi.responses import Response
+        import io
 
-    status_map = {"active":"ارسال شد","returned":"برگشتی","pending":"در انتظار"}
-    for ri, o in enumerate(orders, 2):
-        ws.cell(ri, 1, o["id"])
-        ws.cell(ri, 2, o["user_id"])
-        ws.cell(ri, 3, o["category"] or "")
-        ws.cell(ri, 4, o["title"] or "")
-        ws.cell(ri, 5, int(o["price"] or 0))
-        ws.cell(ri, 6, status_map.get(o["status"] or "", o["status"] or ""))
-        ws.cell(ri, 7, (o["created_at"] or "")[:16])
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "orders"
+        ws.sheet_view.rightToLeft = True
 
-    for col in ws.columns:
-        ws.column_dimensions[col[0].column_letter].width = max(len(str(col[0].value or ""))+4, 14)
+        headers = ["#", "User ID", "دسته", "محصول", "مبلغ", "وضعیت", "تاریخ"]
+        hfill = PatternFill("solid", fgColor="2EC4B6")
+        hfont = Font(bold=True, color="FFFFFF", name="Calibri")
+        for ci, h in enumerate(headers, 1):
+            c = ws.cell(row=1, column=ci, value=h)
+            c.fill = hfill; c.font = hfont
+            c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 22
 
-    import io
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    _log(request, "خروجی Excel سفارش‌ها", "سفارش‌ها", f"{len(orders)} ردیف")
-    return Response(
-        content=buf.read(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=orders.xlsx"}
-    )
+        for ri, o in enumerate(orders, 2):
+            ws.cell(ri, 1, o["id"] or "")
+            ws.cell(ri, 2, o["user_id"] or "")
+            ws.cell(ri, 3, o["category"] or "")
+            ws.cell(ri, 4, o["title"] or "")
+            ws.cell(ri, 5, int(o["price"] or 0))
+            ws.cell(ri, 6, status_fa.get(o["status"] or "", o["status"] or ""))
+            ws.cell(ri, 7, (o["created_at"] or "")[:16])
+            if ri % 2 == 0:
+                for ci in range(1, 8):
+                    ws.cell(ri, ci).fill = PatternFill("solid", fgColor="F8FAFB")
+
+        col_widths = [8, 12, 16, 28, 14, 14, 18]
+        for ci, w in enumerate(col_widths, 1):
+            ws.column_dimensions[ws.cell(1, ci).column_letter].width = w
+
+        buf = io.BytesIO()
+        wb.save(buf); buf.seek(0)
+        _log(request, "خروجی Excel", "سفارش‌ها", f"{len(orders)} ردیف")
+        return Response(
+            content=buf.read(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=orders_{len(orders)}.xlsx"}
+        )
+
+    except ImportError:
+        # Fallback: CSV اگه openpyxl نصب نیست
+        from fastapi.responses import Response
+        lines = ["#,User ID,دسته,محصول,مبلغ,وضعیت,تاریخ"]
+        for o in orders:
+            lines.append(f'{o["id"]},{o["user_id"] or ""},{o["category"] or ""},'
+                         f'"{(o["title"] or "").replace(chr(34), "")}",'
+                         f'{int(o["price"] or 0)},{status_fa.get(o["status"] or "", "")},'
+                         f'{(o["created_at"] or "")[:16]}')
+        csv_content = "\ufeff" + "\n".join(lines)  # BOM برای UTF-8 در Excel
+        _log(request, "خروجی CSV", "سفارش‌ها", f"{len(orders)} ردیف")
+        return Response(
+            content=csv_content.encode("utf-8"),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename=orders_{len(orders)}.csv"}
+        )
 
 
 @router.get("/orders", response_class=HTMLResponse)
@@ -3484,9 +3523,7 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
         if not is_returned:
             action_btns = f"""
             <a href="/admin/orders/{o['id']}/edit" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">✏️ ویرایش</a>
-            <form method="post" action="/admin/orders/{o['id']}/return" class="inline" onsubmit="return confirm('محصول برگشت داده شود؟ پیام از چت کاربر حذف و موجودی بازگردانده می‌شود.')">
-              <button class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">↩️ برگشت</button>
-            </form>"""
+            <a href="/admin/orders/{o['id']}/return" class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">↩️ برگشت</a>"""
         else:
             action_btns = '<span class="text-xs text-gray-400">برگشت خورده</span>'
 
@@ -3589,35 +3626,155 @@ async def order_edit_post(request: Request, oid: int, title: str=Form(""), price
     return _redir("/admin/orders?flash=سفارش+ویرایش+شد")
 
 
+@router.get("/orders/{oid}/return", response_class=HTMLResponse)
+async def order_return_form(request: Request, oid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    conn = _db()
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
+        if not order:
+            return _redir(f"/admin/orders?flash=سفارش+یافت+نشد")
+        wallet = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (order["user_id"],)).fetchone()
+        wallet_balance = int(wallet["balance"] if wallet else 0)
+        price = int(order["price"] or 0)
+    finally:
+        conn.close()
+
+    body = f"""
+    <div style="max-width:640px">
+      <div class="page-header">
+        <h1>برگشت سفارش #{oid}</h1>
+        <p>محصول: {e(order["title"] or "")} — کاربر: {order["user_id"]}</p>
+      </div>
+      <form method="post" action="/admin/orders/{oid}/return">
+        <div class="card card-p" style="margin-bottom:14px">
+          <h2 class="section-title">تکلیف محصول</h2>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
+              <input type="radio" name="product_action" value="restore" checked style="width:17px;height:17px;min-height:17px;cursor:pointer">
+              <div><strong>بازگشت به موجودی</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">محصول مجدداً قابل فروش می‌شود</div></div>
+            </label>
+            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
+              <input type="radio" name="product_action" value="delete" style="width:17px;height:17px;min-height:17px;cursor:pointer">
+              <div><strong>حذف دائم از فید</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">محصول از چرخه فروش خارج می‌شود</div></div>
+            </label>
+          </div>
+        </div>
+
+        <div class="card card-p" style="margin-bottom:14px">
+          <h2 class="section-title">تکلیف کیف‌پول کاربر</h2>
+          <div style="background:var(--page-bg);border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:14px">
+            موجودی فعلی: <strong>{wallet_balance:,} تومان</strong> — مبلغ سفارش: <strong>{price:,} تومان</strong>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
+              <input type="radio" name="wallet_action" value="none" checked style="width:17px;height:17px;min-height:17px;cursor:pointer">
+              <div><strong>بدون تغییر کیف‌پول</strong></div>
+            </label>
+            <label class="perm-label" style="padding:12px;background:#F0FDF4;border-radius:12px;font-size:13px">
+              <input type="radio" name="wallet_action" value="full" style="width:17px;height:17px;min-height:17px;cursor:pointer">
+              <div><strong>بازگشت کامل — {price:,} تومان</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">مبلغ کامل سفارش به کیف‌پول اضافه می‌شود</div></div>
+            </label>
+            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
+              <input type="radio" name="wallet_action" value="custom_add" style="width:17px;height:17px;min-height:17px;cursor:pointer">
+              <div><strong>افزایش مبلغ دلخواه</strong></div>
+            </label>
+            <label class="perm-label" style="padding:12px;background:#FEF2F2;border-radius:12px;font-size:13px">
+              <input type="radio" name="wallet_action" value="custom_deduct" style="width:17px;height:17px;min-height:17px;cursor:pointer">
+              <div><strong>کسر از کیف‌پول</strong></div>
+            </label>
+          </div>
+          <div style="margin-top:14px">
+            <label>مبلغ (تومان) — فقط برای گزینه‌های دلخواه</label>
+            {_input("custom_amount", f"مثلاً: {price}", type_="number")}
+          </div>
+        </div>
+
+        <div class="card card-p" style="margin-bottom:14px">
+          <h2 class="section-title">اطلاعات تکمیلی</h2>
+          <div style="margin-bottom:14px">
+            <label>علت برگشت</label>
+            <select name="reason">
+              <option value="wrong_product">ارسال محصول اشتباه</option>
+              <option value="replacement">جایگزینی محصول</option>
+              <option value="order_fix">اصلاح سفارش</option>
+              <option value="customer_request">درخواست مشتری</option>
+              <option value="other">سایر</option>
+            </select>
+          </div>
+          <div>
+            <label>توضیحات اضافه (اختیاری)</label>
+            {_input("note", "توضیح بیشتر...")}
+          </div>
+          <div style="margin-top:14px">
+            <label class="perm-label" style="font-size:13px">
+              <input type="checkbox" name="notify_user" value="1" checked style="width:15px;height:15px;min-height:15px">
+              ارسال نوتیف به کاربر
+            </label>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px">
+          {_btn("ثبت برگشت","",color="red")}
+          <a href="/admin/orders/{oid}" class="btn btn-slate">انصراف</a>
+        </div>
+      </form>
+    </div>"""
+    return _layout(f"برگشت سفارش #{oid}", body, adm)
+
+
 @router.post("/orders/{oid}/return")
 async def order_return(request: Request, oid: int):
     adm = _get_admin(request)
     guard = _require(adm, "orders")
     if guard: return guard
 
+    form = await request.form()
+    product_action = str(form.get("product_action", "restore"))
+    wallet_action  = str(form.get("wallet_action", "none"))
+    custom_amount  = int(form.get("custom_amount") or 0)
+    reason         = str(form.get("reason", "other"))
+    note           = str(form.get("note", ""))
+    notify_user    = form.get("notify_user") == "1"
+
     try:
-        from db import order_mark_returned
-        result = order_mark_returned(oid)
+        from db import order_mark_returned_advanced
+        result = order_mark_returned_advanced(
+            oid,
+            product_action=product_action,
+            wallet_action=wallet_action,
+            custom_amount=custom_amount,
+        )
     except Exception as ex:
         _tg_logger.error("order_return error: %s", ex)
-        return _redir(f"/admin/orders?flash=خطا+در+برگشت:+{str(ex)[:40]}")
+        return _redir(f"/admin/orders?flash=خطا:+{str(ex)[:50]}")
 
     if not result.get("ok"):
-        return _redir(f"/admin/orders?flash={result.get('error', 'خطا')}")
+        return _redir(f"/admin/orders?flash={result.get('error','خطا')}")
 
-    # حذف پیام تحویل از چت کاربر
+    # حذف پیام تحویل
     if result.get("chat_id") and result.get("message_id"):
         _tg_delete_message(result["chat_id"], result["message_id"])
 
-    # اطلاع به کاربر
-    if result.get("user_id"):
-        _tg_send(
-            int(result["user_id"]),
+    # نوتیف به کاربر
+    if notify_user and result.get("user_id"):
+        wallet_msg = ""
+        if wallet_action == "full":
+            wallet_msg = f"\n💰 مبلغ {result.get('price',0):,} تومان به کیف‌پول شما افزوده شد."
+        elif wallet_action == "custom_add" and custom_amount:
+            wallet_msg = f"\n💰 مبلغ {custom_amount:,} تومان به کیف‌پول شما افزوده شد."
+        _tg_send(int(result["user_id"]),
             f"⚠️ سفارش #{oid} (<b>{html.escape(str(result.get('title') or ''))}</b>) "
-            "توسط پشتیبانی برگشت داده شد.\nدر صورت سوال با پشتیبانی در تماس باشید."
-        )
+            f"توسط پشتیبانی برگشت داده شد.{wallet_msg}\n"
+            "در صورت سوال با پشتیبانی در تماس باشید.")
 
-    return _redir("/admin/orders?flash=محصول+برگشت+داده+شد+و+موجودی+بازگردانده+شد")
+    # لاگ کامل
+    _log(request, "برگشت سفارش", "سفارش‌ها",
+         f"سفارش #{oid} | محصول: {product_action} | کیف‌پول: {wallet_action} | علت: {reason} | {note[:80]}")
+
+    return _redir(f"/admin/orders?flash=سفارش+{oid}+برگشت+داده+شد")
 
 
 # ─────────────────────────── Wallets ───────────────────────────────────────

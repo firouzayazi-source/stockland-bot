@@ -2063,7 +2063,99 @@ def order_set_feed_id(order_id: int, feed_id: int) -> None:
         conn.close()
 
 
+def order_mark_returned_advanced(
+    order_id: int,
+    product_action: str = "restore",   # 'restore' | 'delete'
+    wallet_action: str = "none",        # 'none' | 'full' | 'custom_add' | 'custom_deduct'
+    custom_amount: int = 0,
+) -> dict:
+    """
+    برگشت پیشرفته:
+    - product_action: restore (به موجودی برگرد) یا delete (حذف دائم)
+    - wallet_action: none | full | custom_add | custom_deduct
+    """
+    from datetime import datetime as _dt
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id=? LIMIT 1;", (order_id,)).fetchone()
+        if not order:
+            return {"ok": False, "error": "سفارش یافت نشد"}
+        if (order["status"] or "active") == "returned":
+            return {"ok": False, "error": "این سفارش قبلاً برگشت خورده"}
+
+        price = int(order["price"] or 0)
+
+        # feed_id
+        try:
+            feed_id = order["feed_id"]
+        except Exception:
+            feed_id = None
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_messages (
+                feed_id INTEGER PRIMARY KEY, order_id INTEGER,
+                chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
+            );
+        """)
+        if not feed_id:
+            dm = conn.execute("SELECT feed_id FROM delivery_messages WHERE order_id=? LIMIT 1;", (order_id,)).fetchone()
+            if dm:
+                feed_id = dm["feed_id"]
+
+        # پیام تحویل
+        chat_id = message_id = None
+        if feed_id:
+            dmsg = conn.execute("SELECT chat_id,message_id FROM delivery_messages WHERE feed_id=? LIMIT 1;", (feed_id,)).fetchone()
+            if dmsg:
+                chat_id, message_id = dmsg["chat_id"], dmsg["message_id"]
+
+        # تکلیف محصول فید
+        if feed_id:
+            if product_action == "restore":
+                conn.execute("UPDATE product_feed SET delivered=0, order_id=NULL, delivered_at=NULL WHERE id=?;", (int(feed_id),))
+            else:  # delete
+                conn.execute("DELETE FROM product_feed WHERE id=?;", (int(feed_id),))
+
+        # تکلیف کیف‌پول
+        wallet_delta = 0
+        if wallet_action == "full":
+            wallet_delta = price
+        elif wallet_action == "custom_add":
+            wallet_delta = abs(custom_amount)
+        elif wallet_action == "custom_deduct":
+            wallet_delta = -abs(custom_amount)
+
+        if wallet_delta != 0:
+            user_id = order["user_id"]
+            existing = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (user_id,)).fetchone()
+            if existing:
+                new_bal = max(0, int(existing["balance"]) + wallet_delta)
+                conn.execute("UPDATE wallets SET balance=?, updated_at=datetime('now') WHERE user_id=?;", (new_bal, user_id))
+            else:
+                new_bal = max(0, wallet_delta)
+                conn.execute("INSERT INTO wallets (user_id, balance, updated_at) VALUES (?,?,datetime('now'));", (user_id, new_bal))
+
+        now = _dt.utcnow().isoformat()
+        conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;", (now, order_id))
+        conn.commit()
+
+        return {
+            "ok": True, "feed_id": feed_id, "product_id": order["product_id"],
+            "chat_id": chat_id, "message_id": message_id,
+            "user_id": order["user_id"], "title": order["title"], "price": price,
+            "wallet_delta": wallet_delta,
+        }
+    except Exception as ex:
+        conn.rollback()
+        return {"ok": False, "error": str(ex)[:100]}
+    finally:
+        conn.close()
+
+
 def order_mark_returned(order_id: int) -> dict:
+    """Backward compat — restore to inventory, no wallet change."""
+    return order_mark_returned_advanced(order_id, product_action="restore", wallet_action="none")
     """
     برگشت محصول:
       - وضعیت سفارش → 'returned'
