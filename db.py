@@ -854,25 +854,27 @@ def get_feed_stats(product_id: int):
     return total, remaining, delivered
 
 
-def claim_next_feed_item(product_id: int):
+def claim_next_feed_item(product_id: int, order_id: int = None):
     """
     اتمیک: اولین آیتم تحویل‌نشده را claim می‌کند (delivered=1) و برمی‌گرداند: (feed_id, data) یا None.
-
-    برای جلوگیری از تحویل تکراری در درخواست‌های همزمان، از تراکنش BEGIN IMMEDIATE استفاده می‌کنیم.
+    از BEGIN IMMEDIATE برای جلوگیری از race condition در خریدهای همزمان استفاده می‌شه.
     """
     conn = _get_connection()
     cur = conn.cursor()
     try:
-        # SQLite write-lock early to avoid race between SELECT and UPDATE
+        # migration: اضافه کردن ستون‌های tracking اگه نباشن
+        try:
+            cur.execute("ALTER TABLE product_feed ADD COLUMN order_id INTEGER;")
+            cur.execute("ALTER TABLE product_feed ADD COLUMN delivered_at TEXT;")
+            conn.commit()
+        except Exception:
+            pass  # ستون‌ها قبلاً اضافه شدن
+
         cur.execute("BEGIN IMMEDIATE;")
         cur.execute(
-            """
-            SELECT id, data
-            FROM product_feed
-            WHERE product_id = ? AND delivered = 0
-            ORDER BY id ASC
-            LIMIT 1;
-            """,
+            """SELECT id, data FROM product_feed
+               WHERE product_id=? AND delivered=0
+               ORDER BY id ASC LIMIT 1;""",
             (product_id,),
         )
         row = cur.fetchone()
@@ -881,12 +883,19 @@ def claim_next_feed_item(product_id: int):
             return None
 
         feed_id, feed_data = row[0], row[1]
+
+        # چک مضاعف: مطمئن شو این آیتم قبلاً تحویل داده نشده
+        cur.execute("SELECT delivered FROM product_feed WHERE id=?;", (feed_id,))
+        chk = cur.fetchone()
+        if not chk or chk[0] != 0:
+            conn.rollback()
+            return None
+
         cur.execute(
-            "UPDATE product_feed SET delivered = 1 WHERE id = ? AND delivered = 0;",
-            (feed_id,),
+            "UPDATE product_feed SET delivered=1, order_id=?, delivered_at=datetime('now') WHERE id=? AND delivered=0;",
+            (order_id, feed_id),
         )
         if cur.rowcount != 1:
-            # someone else claimed it
             conn.rollback()
             return None
 

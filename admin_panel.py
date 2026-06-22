@@ -395,7 +395,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings", "settings", "تنظیمات", "settings")}
-            {nav_item("/admin/database", "database", "دیتابیس", "database")}
+            {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
             {nav_item("/admin/logs", "activity", "گزارش فعالیت", "admins")}
           </nav>
@@ -1734,7 +1734,7 @@ async def database_page(request: Request, flash: str = ""):
       </table>
     </div>"""
 
-    return _layout("دیتابیس", body, adm, flash=flash)
+    return _layout("پشتیبان‌گیری", body, adm, flash=flash)
 
 @router.get("/database/auto-backup/{fname}")
 async def auto_backup_download(request: Request, fname: str):
@@ -1806,6 +1806,7 @@ async def database_restore(request: Request, backup_file: UploadFile = None):
         shutil.copy2(db_path, bak)
     shutil.move(tmp, db_path)
 
+    _log(request, "بازیابی بکاپ", "پشتیبان‌گیری", "بازیابی موفق")
     return _redir("/admin/database?flash=بازیابی+موفق+ربات+ریستارت+می‌شود")
 
 @router.post("/database/reset")
@@ -2336,6 +2337,8 @@ async def admins_add(request: Request):
         try: conn.close()
         except: pass
 
+    _log(request, "ایجاد ادمین", "ادمین‌ها", f"یوزرنیم: {web_username}")
+    _log(request, "ایجاد ادمین", "ادمین‌ها", f"یوزرنیم: {web_username}")
     return _redir("/admin/admins?flash=ادمین+جدید+اضافه+شد")
 
 @router.get("/admins/{aid}/edit", response_class=HTMLResponse)
@@ -2470,6 +2473,7 @@ async def admins_delete(request: Request, aid: int):
         conn.commit()
     finally:
         conn.close()
+    _log(request, "حذف ادمین", "ادمین‌ها", f"id: {aid}")
     return _redir("/admin/admins?flash=ادمین+حذف+شد")
 
 # ─────────────────────────── Categories ────────────────────────────────────
@@ -3013,6 +3017,7 @@ async def product_delete(request: Request, pid: int):
         conn.commit()
     finally:
         conn.close()
+    _log(request, "حذف محصول", "محصولات", f"id: {pid}")
     return _redir("/admin/products?flash=محصول+حذف+شد")
 
 # ─────────────────────────── Feed ──────────────────────────────────────────
@@ -3215,16 +3220,27 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
     except Exception:
         return _redir(f"/admin/feed/{pid}?flash=خطا+در+خواندن+فایل")
 
-    # پشتیبانی از CSV و TXT — هر خط یک آیتم، کاما جداکننده ستون‌ها
+    # پشتیبانی از دو فرمت:
+    # ۱) هر خط یک آیتم (TXT/CSV ساده)
+    # ۲) آیتم‌های چندخطی با *** جدا شده
     items = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # اگر CSV بود، ستون اول رو بگیر
-        item = line.split(",")[0].strip()
-        if item:
-            items.append(item)
+    if "***" in text:
+        # فرمت چندخطی: هر *** یک جداکننده است
+        parts = text.split("***")
+        for part in parts:
+            item = part.strip()
+            if item and item not in ("", "\n"):
+                items.append(item)
+    else:
+        # فرمت تک‌خطی: هر خط یک آیتم
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # CSV: اولین ستون رو بگیر
+            item = line.split(",")[0].strip()
+            if item:
+                items.append(item)
 
     if not items:
         return _redir(f"/admin/feed/{pid}?flash=فایل+خالی+است")
@@ -3738,7 +3754,7 @@ def _ticket_status_badge(status: str) -> str:
 
 
 @router.get("/logs", response_class=HTMLResponse)
-async def admin_logs_page(request: Request, q: str = "", section: str = "", page: int = 0, flash: str = ""):
+async def admin_logs_page(request: Request, q: str = "", section: str = "", admin_name: str = "", page: int = 0, flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "admins")
     if guard: return guard
@@ -3747,16 +3763,17 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", page
     PER_PAGE = 50
     conn = _db()
     try:
-        # sections list
         sections = [r[0] for r in conn.execute("SELECT DISTINCT section FROM admin_logs WHERE section!='' ORDER BY section;").fetchall()]
+        admin_names = [r[0] for r in conn.execute("SELECT DISTINCT admin_name FROM admin_logs WHERE admin_name IS NOT NULL ORDER BY admin_name;").fetchall()]
 
         wheres, params = [], []
         if q:
             wheres.append("(admin_name LIKE ? OR action LIKE ? OR details LIKE ?)")
             params += [f"%{q}%", f"%{q}%", f"%{q}%"]
         if section:
-            wheres.append("section=?")
-            params.append(section)
+            wheres.append("section=?"); params.append(section)
+        if admin_name:
+            wheres.append("admin_name=?"); params.append(admin_name)
         where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
 
         total = conn.execute(f"SELECT COUNT(*) FROM admin_logs {where_sql};", params).fetchone()[0]
@@ -3789,24 +3806,31 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", page
     section_opts = "<option value=''>همه بخش‌ها</option>" + "".join(
         f'<option value="{e(s)}" {"selected" if section==s else ""}>{e(s)}</option>' for s in sections
     )
+    admin_opts = "<option value=''>همه ادمین‌ها</option>" + "".join(
+        f'<option value="{e(n)}" {"selected" if admin_name==n else ""}>{e(n)}</option>' for n in admin_names
+    )
 
     pagination = ""
     if pages > 1:
         pagination = '<div style="display:flex;gap:6px;justify-content:center;margin-top:16px;flex-wrap:wrap">'
         for i in range(pages):
             active = i == page
-            pagination += f'<a href="?q={e(q)}&section={e(section)}&page={i}" style="padding:5px 12px;border-radius:8px;font-size:12px;text-decoration:none;background:{"var(--primary)" if active else "var(--card-bg)"};color:{"#000" if active else "var(--text-muted)"};border:1px solid var(--border)">{i+1}</a>'
+            pagination += f'<a href="?q={e(q)}&section={e(section)}&admin_name={e(admin_name)}&page={i}" style="padding:5px 12px;border-radius:8px;font-size:12px;text-decoration:none;background:{"var(--primary)" if active else "var(--card-bg)"};color:{"#000" if active else "var(--text-muted)"};border:1px solid var(--border)">{i+1}</a>'
         pagination += "</div>"
 
     body = f"""
     <div class="page-header"><h1>گزارش فعالیت ادمین‌ها</h1><p>{total:,} رویداد ثبت‌شده</p></div>
     <div class="card card-p" style="margin-bottom:16px">
       <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-        <div style="flex:1;min-width:200px">
+        <div style="flex:1;min-width:180px">
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">جستجو</label>
-          {_input("q","نام ادمین، عملیات، جزئیات...",value=q)}
+          {_input("q","عملیات، جزئیات...",value=q)}
         </div>
-        <div style="min-width:160px">
+        <div style="min-width:140px">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">ادمین</label>
+          <select name="admin_name">{admin_opts}</select>
+        </div>
+        <div style="min-width:140px">
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:5px">بخش</label>
           <select name="section">{section_opts}</select>
         </div>
@@ -4177,6 +4201,7 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
     ok = _tg_send(user_id, msg_text)
 
     if ok:
+        _log(request, "پاسخ تیکت", "تیکت‌ها", f"ticket #{tid}")
         return _redir(f"/admin/tickets/{tid}?flash=پاسخ+ارسال+شد")
     else:
         return _redir(f"/admin/tickets/{tid}?flash=ذخیره+شد+اما+ارسال+تلگرام+ناموفق")

@@ -557,10 +557,29 @@ def _tg_send_to_user(user_id: int, text: str, reply_markup=None, parse_mode="HTM
 
 # ─── Keyboards ──────────────────────────────────────────────────────────────
 
-def _ticket_user_kb(ticket_id: int) -> types.InlineKeyboardMarkup:
+def _ticket_user_kb(ticket_id: int, has_messages: bool = False) -> types.InlineKeyboardMarkup:
+    """keyboard کاربر — دکمه پایان فقط بعد از ارسال اولین پیام"""
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔒 پایان مکالمه", callback_data=f"ticket_v2_close_{ticket_id}"))
+    if has_messages:
+        kb.add(types.InlineKeyboardButton("🔒 پایان گفتگو", callback_data=f"ticket_v2_close_{ticket_id}"))
     return kb
+
+
+def _ticket_has_user_message(ticket_id: int) -> bool:
+    """آیا کاربر حداقل یک پیام ارسال کرده؟"""
+    try:
+        from db import _get_connection
+        conn = _get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM ticket_messages WHERE ticket_id=? AND sender='user';",
+            (ticket_id,)
+        )
+        count = cur.fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception:
+        return False
 
 
 def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup:
@@ -576,27 +595,30 @@ def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup
 # ─── Support Ticket Flow (کاربر) ─────────────────────────────────────────────
 
 def _support_ticket_start(chat_id: int, user_id: int) -> None:
-    """ایجاد یا ادامه تیکت پشتیبانی."""
+    """ایجاد یا ادامه تیکت پشتیبانی — کاربر مستقیم وارد گفتگو می‌شه."""
     ticket_ensure_schema()
     existing = ticket_get_open_support(user_id)
     if existing:
         ticket_id = existing["id"]
         user_states[user_id] = {"mode": "ticket_v2", "ticket_id": ticket_id}
-        kb = _ticket_user_kb(ticket_id)
+        has_msg = _ticket_has_user_message(ticket_id)
+        kb = _ticket_user_kb(ticket_id, has_messages=has_msg)
         bot.send_message(
             chat_id,
-            f"💬 ادامه مکالمه تیکت <b>#{ticket_id}</b>\nپیام خود را ارسال کنید:",
+            f"💬 ادامه مکالمه تیکت <b>#{ticket_id}</b>\n\n"
+            "پیام خود را ارسال کنید، پشتیبانی در اولین فرصت پاسخ خواهد داد.",
             reply_markup=kb, parse_mode="HTML"
         )
     else:
         ticket_id = ticket_create(user_id, type_="support")
         user_states[user_id] = {"mode": "ticket_v2", "ticket_id": ticket_id}
-        kb = _ticket_user_kb(ticket_id)
+        # ابتدا بدون دکمه پایان — فقط راهنما
+        kb = _ticket_user_kb(ticket_id, has_messages=False)
         bot.send_message(
             chat_id,
-            f"💬 تیکت پشتیبانی <b>#{ticket_id}</b> باز شد.\n\n"
-            "پیام خود را ارسال کنید. در اولین فرصت پاسخ داده خواهد شد.\n"
-            "⚠️ لطفاً از ارسال چند پیام پشت سر هم خودداری کنید.",
+            "💬 <b>پشتیبانی آنلاین</b>\n\n"
+            "پیام خود را ارسال کنید، پشتیبانی در اولین فرصت پاسخ خواهد داد.\n\n"
+            "⚠️ لطفاً مشکل خود را در یک پیام کامل توضیح دهید.",
             reply_markup=kb, parse_mode="HTML"
         )
 
@@ -692,12 +714,21 @@ def _ticket_v2_handle_user_message(message) -> None:
     )
     new_count = ticket_user_sent(int(ticket_id))
 
-    # ─── نوتیف ساده به ادمین (بدون forward کامل) ─────────────────────────
-    panel_url = f"https://stockland-bot-production.up.railway.app/admin/tickets/{ticket_id}"
+    # بعد از اولین پیام، دکمه پایان گفتگو نمایش داده بشه
+    if new_count == 1:
+        end_kb = _ticket_user_kb(int(ticket_id), has_messages=True)
+        bot.send_message(
+            message.chat.id,
+            "✅ پیام شما دریافت شد.\nپشتیبانی در اولین فرصت پاسخ خواهد داد. 🙏",
+            reply_markup=end_kb
+        )
+        return
+
+    # ─── نوتیف به ادمین ─────────────────────────────────────────────────
+    panel_url = f"https://panel.stland.ir/admin/tickets/{ticket_id}"
     notif_text = (
         f"🔔 پیام جدید در تیکت <b>#{ticket_id}</b>\n"
-        f"کاربر: <code>{uid}</code>\n"
-        f"برای پاسخ به پنل مراجعه کنید."
+        f"کاربر: <code>{uid}</code>"
     )
     notif_kb = types.InlineKeyboardMarkup()
     notif_kb.add(types.InlineKeyboardButton("🌐 مشاهده در پنل", url=panel_url))
@@ -709,7 +740,7 @@ def _ticket_v2_handle_user_message(message) -> None:
     # ─── تأیید به کاربر ──────────────────────────────────────────────────
     remaining = TICKET_MAX_USER_MSGS - new_count
     if remaining > 0:
-        bot.reply_to(message, "✅ پیام شما دریافت شد.\nدر اولین فرصت پاسخ خواهیم داد. با تشکر 🙏")
+        bot.reply_to(message, "✅ پیام شما دریافت شد. 🙏")
     else:
         bot.reply_to(message, "✅ پیام شما دریافت شد.\nلطفاً منتظر پاسخ پشتیبانی بمانید.")
 
@@ -1139,7 +1170,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
     # ----------------------------
     # تحویل فوری در صورت وجود موجودی
     # ----------------------------
-    feed_item = safe_claim_next_feed_item(pid)
+    feed_item = claim_next_feed_item(pid, order_id=order_id)
 
     if feed_item:
         feed_id, feed_data = feed_item
