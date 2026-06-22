@@ -909,6 +909,72 @@ def _layout(title: str, body: str, admin_info=None,
       .main-content {{ padding:10px 10px 28px; }}
       .stat-grid {{ grid-template-columns:1fr 1fr; gap:8px; }}
     }}
+
+    /* ── Safe Area (iPhone notch / home indicator) ──────────── */
+    .topbar {{
+      padding-right: max(24px, env(safe-area-inset-right));
+      padding-left:  max(16px, env(safe-area-inset-left));
+    }}
+    .sidebar {{
+      padding-bottom: env(safe-area-inset-bottom);
+    }}
+    .main-content {{
+      padding-bottom: max(32px, calc(env(safe-area-inset-bottom) + 24px));
+    }}
+    @media (max-width:820px) {{
+      .main-wrap.with-sidebar {{
+        padding-top: max(60px, calc(env(safe-area-inset-top) + 56px));
+      }}
+    }}
+
+    /* ── No horizontal scroll on page ──────────────────────── */
+    html, body {{ overflow-x:hidden; max-width:100vw; }}
+    .main-wrap {{ overflow-x:hidden; }}
+    .table-wrap, .overflow-x-auto {{ overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }}
+
+    /* ── Ticket cards on mobile ─────────────────────────────── */
+    @media (max-width:640px) {{
+      .ticket-table-wrap table,
+      .ticket-table-wrap thead,
+      .ticket-table-wrap tbody,
+      .ticket-table-wrap tr,
+      .ticket-table-wrap td,
+      .ticket-table-wrap th {{ display:block; }}
+      .ticket-table-wrap thead {{ display:none; }}
+      .ticket-table-wrap tbody tr {{
+        background:#fff; border-radius:14px; margin-bottom:10px;
+        box-shadow:0 1px 4px rgba(15,23,42,.07);
+        border:1px solid #E5E7EB; padding:12px 14px;
+        cursor:pointer;
+      }}
+      .ticket-table-wrap tbody td {{
+        display:flex; justify-content:space-between; align-items:center;
+        padding:6px 2px; border-bottom:1px solid #F3F4F6; font-size:12.5px;
+      }}
+      .ticket-table-wrap tbody td:last-child {{ border-bottom:none; padding-top:10px; }}
+      .ticket-table-wrap tbody td::before {{
+        content:attr(data-label);
+        color:#9CA3AF; font-size:10.5px; font-weight:600;
+        text-transform:uppercase; letter-spacing:.3px;
+        flex-shrink:0; margin-left:8px; white-space:nowrap;
+      }}
+      .ticket-table-wrap tbody td:empty,
+      .ticket-table-wrap tbody td[data-label=""]::before {{ display:none; }}
+    }}
+
+    /* ── Touch targets 44px ─────────────────────────────────── */
+    @media (max-width:820px) {{
+      .btn-sm {{ min-height:36px; padding:0 12px; }}
+      a.btn-sm, button.btn-sm {{ display:inline-flex; align-items:center; justify-content:center; }}
+      .nav-item {{ min-height:44px; }}
+      .icon-button {{ width:44px; height:44px; }}
+    }}
+
+    /* ── Prevent text overflow on mobile ────────────────────── */
+    @media (max-width:640px) {{
+      .truncate-mobile {{ max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+      td {{ word-break:break-word; }}
+    }}
   </style>
 </head>
 <body>
@@ -4808,14 +4874,14 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         last_col = ptitle or ("↗ کاربر" if ls=="user" else ("↙ ادمین" if ls=="admin" else ""))
 
         rows += f"""<tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="location.href='/admin/tickets/{t['id']}'">
-          <td class="px-4 py-3"><a href="/admin/tickets/{t['id']}" class="text-xs font-bold text-indigo-600">#{t['id']}</a></td>
-          <td class="px-4 py-3">{type_b}</td>
-          <td class="px-4 py-3"><code class="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{e(str(t['user_id']))}</code></td>
-          <td class="px-4 py-3">{status_b}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{last_col}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{int(t['msg_count'] or 0)} پیام</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(t['updated_at'] or '')[:16]}</td>
-          <td class="px-4 py-3"><a href="/admin/tickets/{t['id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">مشاهده</a></td>
+          <td class="px-4 py-3" data-label="#"><a href="/admin/tickets/{t['id']}" class="text-xs font-bold text-indigo-600">#{t['id']}</a></td>
+          <td class="px-4 py-3" data-label="نوع">{type_b}</td>
+          <td class="px-4 py-3" data-label="کاربر"><code class="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{e(str(t['user_id']))}</code></td>
+          <td class="px-4 py-3" data-label="وضعیت">{status_b}</td>
+          <td class="px-4 py-3 text-xs text-gray-400" data-label="محصول">{last_col}</td>
+          <td class="px-4 py-3 text-xs text-gray-400" data-label="پیام‌ها">{int(t['msg_count'] or 0)} پیام</td>
+          <td class="px-4 py-3 text-xs text-gray-400" data-label="آپدیت">{(t['updated_at'] or '')[:16]}</td>
+          <td class="px-4 py-3" data-label=""><a href="/admin/tickets/{t['id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">مشاهده</a></td>
         </tr>"""
 
     body = f"""
@@ -4825,7 +4891,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
     {type_tabs}
     {status_tabs}
     <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
+      <div class="overflow-x-auto ticket-table-wrap">
         <table class="w-full text-right min-w-max">
           <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
             <th class="px-4 py-3">#</th><th class="px-4 py-3">نوع</th>
