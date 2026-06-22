@@ -1411,9 +1411,7 @@ def _daily_limit_exceeded(uid, product, pid):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_full_"))
 def handle_confirm_full(call):
 
-    # confirm_full_{category}_{pid} -- pid is last, category may contain "_"
     parts = call.data.split("_")
-
     if len(parts) < 4:
         bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True)
         return
@@ -1433,23 +1431,51 @@ def handle_confirm_full(call):
         bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
         return
 
-    # سقف خرید روزانه
     exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
     if exceeded:
-        bot.answer_callback_query(
-            call.id,
-            f"سقف خرید روزانه ({limit_val}) تکمیل شده است.",
-            show_alert=True,
-        )
+        bot.answer_callback_query(call.id, f"سقف خرید روزانه ({limit_val}) تکمیل شده است.", show_alert=True)
         return
 
-    price = product[3]
+    title  = product[2]
+    price  = product[3]
     partner_price = product[6] if len(product) > 6 else None
-    partner_ok = is_partner_approved(uid)
-    eff_price = partner_price if (partner_ok and partner_price) else price
+    partner_ok    = is_partner_approved(uid)
+    eff_price     = partner_price if (partner_ok and partner_price) else price
+
+    # تخفیف اعمال شده؟
+    discount  = user_states.get(uid, {}).get("applied_discount", 0)
+    eff_price = max(0, eff_price - discount)
+
+    # کد تخفیف هنوز پرسیده نشده؟
+    if not discount and not user_states.get(uid, {}).get("discount_asked"):
+        st = user_states.setdefault(uid, {})
+        st["discount_asked"] = True
+        st["pending_cb"]     = call.data
+        st["pid"]            = pid
+        st["category"]       = category
+        st["eff_price"]      = eff_price
+
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton(
+            f"✅ ادامه بدون تخفیف — {eff_price:,} تومان",
+            callback_data=f"pay_nodiscount_full_{category}_{pid_str}"
+        ))
+        bot.send_message(
+            call.message.chat.id,
+            f"🛒 <b>{title}</b>\n"
+            f"💰 مبلغ: <b>{eff_price:,}</b> تومان\n\n"
+            "🎟 اگر کد تخفیف دارید همین الان ارسال کنید.\n"
+            "در غیر این صورت دکمه زیر را بزنید:",
+            parse_mode="HTML", reply_markup=kb
+        )
+        bot.register_next_step_handler(call.message, _process_discount_code)
+        bot.answer_callback_query(call.id)
+        return
+
+    # پاک کردن state
+    user_states.pop(uid, None)
 
     from services.payments import start_wallet_charge_payment
-
     start_wallet_charge_payment(
         bot=bot,
         message=call.message,
@@ -1555,16 +1581,17 @@ def handle_confirm_wallet(call):
     
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pay_nodiscount_"))
 def handle_pay_nodiscount(call):
-    """کاربر بدون تخفیف ادامه داد — برو سراغ پرداخت."""
     uid = call.from_user.id
     pending_cb = user_states.get(uid, {}).get("pending_cb", "")
-    if pending_cb:
-        # discount_asked = True → مستقیم به پرداخت
-        user_states.setdefault(uid, {})["discount_asked"] = True
-        call.data = pending_cb
-        handle_confirm_wallet(call)
-    else:
+    if not pending_cb:
         bot.answer_callback_query(call.id, "خطا — دوباره امتحان کنید", show_alert=True)
+        return
+    user_states.setdefault(uid, {})["discount_asked"] = True
+    call.data = pending_cb
+    if pending_cb.startswith("confirm_full_"):
+        handle_confirm_full(call)
+    else:
+        handle_confirm_wallet(call)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("discount_start_"))
