@@ -389,6 +389,7 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>فروش</span></div>
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
+            {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "orders")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/partners", "handshake", "همکاران", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
@@ -3263,6 +3264,32 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
         conn.close()
 
     _log(request, "آپلود موجودی", "موجودی", f"محصول #{pid} — {len(items)} آیتم", admin_info=adm)
+
+    # اطلاع‌رسانی به مشترکان
+    try:
+        from db import get_stock_subscribers, mark_subscriptions_notified, reset_subscriptions_on_restock
+        from db import get_product_by_id as _gpbi
+        subs = get_stock_subscribers(pid)
+        if subs:
+            _prod = _gpbi(pid)
+            _title = _prod[2] if _prod else f"محصول #{pid}"
+            bot_token = _env("BOT_TOKEN")
+            for sub_uid in subs:
+                try:
+                    _requests.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": sub_uid,
+                              "text": f"🔔 محصول <b>{_title}</b> موجود شد!\nهم‌اکنون می‌توانید خرید کنید.",
+                              "parse_mode": "HTML"},
+                        timeout=5
+                    )
+                except Exception:
+                    pass
+            mark_subscriptions_notified(pid)
+            reset_subscriptions_on_restock(pid)
+    except Exception:
+        pass
+
     return _redir(f"/admin/feed/{pid}?flash=✅+{len(items)}+آیتم+اضافه+شد")
 
 
@@ -3395,6 +3422,139 @@ async def feed_item_edit_post(request: Request, fid: int,
     return _redir(f"/admin/feed/{pid}?flash=آیتم+ویرایش+شد")
 
 # ─────────────────────────── Orders ────────────────────────────────────────
+
+@router.get("/discounts", response_class=HTMLResponse)
+async def discounts_list(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    from db import ensure_discount_table
+    ensure_discount_table()
+    conn = _db()
+    try:
+        codes = conn.execute("SELECT * FROM discount_codes ORDER BY id DESC;").fetchall()
+    finally:
+        conn.close()
+
+    rows = ""
+    for c in codes:
+        try: pid_val = str(c["product_id"]) if c["product_id"] else "همه"
+        except: pid_val = "همه"
+        type_fa = "درصد" if c["type"] == "percent" else "ثابت (تومان)"
+        status_badge = '<span class="badge badge-success">فعال</span>' if c["is_active"] else '<span class="badge badge-danger">غیرفعال</span>'
+        rows += f"""<tr>
+          <td style="padding:11px 16px;font-weight:700;font-family:monospace">{e(c['code'])}</td>
+          <td style="padding:11px 16px">{c['value']} {type_fa}</td>
+          <td style="padding:11px 16px;color:var(--text-muted)">{pid_val}</td>
+          <td style="padding:11px 16px">{c['used_count']} / {c['max_uses'] or '∞'}</td>
+          <td style="padding:11px 16px">{(c['expires_at'] or '—')[:10]}</td>
+          <td style="padding:11px 16px">{status_badge}</td>
+          <td style="padding:11px 16px;display:flex;gap:6px">
+            <form method="post" action="/admin/discounts/{c['id']}/toggle">
+              <button class="btn btn-slate btn-sm">{'غیرفعال' if c['is_active'] else 'فعال'}</button>
+            </form>
+            <form method="post" action="/admin/discounts/{c['id']}/delete" onsubmit="return confirm('حذف شود؟')">
+              <button class="btn btn-red btn-sm">حذف</button>
+            </form>
+          </td>
+        </tr>"""
+
+    body = f"""
+    <div class="page-header"><h1>کدهای تخفیف</h1><p>مدیریت کوپن‌های تخفیف فروشگاه</p></div>
+    <div class="card card-p" style="margin-bottom:20px">
+      <h2 class="section-title">افزودن کد جدید</h2>
+      <form method="post" action="/admin/discounts/add">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
+          <div><label>کد تخفیف *</label>{_input("code","مثلاً: SALE20",required=True)}</div>
+          <div><label>نوع</label>
+            <select name="type"><option value="percent">درصد</option><option value="fixed">مبلغ ثابت (تومان)</option></select>
+          </div>
+          <div><label>مقدار *</label>{_input("value","مثلاً: 20",type_="number",required=True)}</div>
+          <div><label>حداکثر استفاده (۰=نامحدود)</label>{_input("max_uses","0",type_="number")}</div>
+          <div><label>حداقل مبلغ خرید</label>{_input("min_amount","0",type_="number")}</div>
+          <div><label>تاریخ انقضا (اختیاری)</label>{_input("expires_at","","type_","date")}</div>
+        </div>
+        {_btn("افزودن کد","",color="green")}
+      </form>
+    </div>
+    <div class="card" style="overflow:hidden">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--page-bg);border-bottom:2px solid var(--border)">
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">کد</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">تخفیف</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">محصول</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">استفاده</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">انقضا</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">وضعیت</th>
+            <th style="padding:11px 16px;font-size:11px;color:var(--text-muted);font-weight:700;text-align:right">عملیات</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='7' style='text-align:center;padding:32px;color:var(--text-muted)'>هنوز کدی اضافه نشده</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("کدهای تخفیف", body, adm, flash=flash)
+
+
+@router.post("/discounts/add")
+async def discounts_add(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    from db import ensure_discount_table
+    ensure_discount_table()
+    form = await request.form()
+    code = str(form.get("code","")).strip().upper()
+    dtype = str(form.get("type","percent"))
+    value = int(form.get("value") or 0)
+    max_uses = int(form.get("max_uses") or 0)
+    min_amount = int(form.get("min_amount") or 0)
+    expires_at = str(form.get("expires_at","")).strip() or None
+    if not code or not value:
+        return _redir("/admin/discounts?flash=کد+و+مقدار+اجباری+است")
+    conn = _db()
+    try:
+        conn.execute(
+            "INSERT INTO discount_codes (code,type,value,max_uses,min_amount,expires_at) VALUES (?,?,?,?,?,?);",
+            (code, dtype, value, max_uses, min_amount, expires_at)
+        )
+        conn.commit()
+    except Exception as ex:
+        return _redir(f"/admin/discounts?flash=خطا:+{str(ex)[:40]}")
+    finally:
+        conn.close()
+    _log(request, "ایجاد کد تخفیف", "تخفیف", f"کد: {code}")
+    return _redir("/admin/discounts?flash=کد+تخفیف+اضافه+شد")
+
+
+@router.post("/discounts/{cid}/toggle")
+async def discount_toggle(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("UPDATE discount_codes SET is_active=1-is_active WHERE id=?;", (cid,))
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir("/admin/discounts?flash=وضعیت+تغییر+کرد")
+
+
+@router.post("/discounts/{cid}/delete")
+async def discount_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("DELETE FROM discount_codes WHERE id=?;", (cid,))
+        conn.commit()
+    finally:
+        conn.close()
+    _log(request, "حذف کد تخفیف", "تخفیف", f"id:{cid}")
+    return _redir("/admin/discounts?flash=کد+حذف+شد")
+
 
 @router.get("/orders/export.xlsx")
 async def orders_export_excel(request: Request, q: str = "", status: str = ""):

@@ -73,6 +73,13 @@ from db import (
     get_category_path,
     # کاربران و تیکت
     upsert_user,
+    # کد تخفیف
+    validate_discount, use_discount,
+    # اشتراک موجودی
+    subscribe_stock, get_stock_subscribers, mark_subscriptions_notified,
+    reset_subscriptions_on_restock,
+    # پشتیبانی محصول
+    get_product_support_flag, ensure_product_support_schema,
 )
 from services.payments import start_wallet_charge_payment
 from config import (
@@ -231,6 +238,18 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase"))
     markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
+
+    # بررسی موجودی — اگه صفره دکمه «اطلاع بده» اضافه کن
+    try:
+        from db import count_feed_items
+        avail = count_feed_items(int(pid), delivered=False)
+        if avail == 0:
+            markup.add(types.InlineKeyboardButton(
+                "🔔 اطلاع بده وقتی موجود شد",
+                callback_data=f"notify_stock_{pid}"
+            ))
+    except Exception:
+        pass
 
     bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
 
@@ -1186,6 +1205,29 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             parse_mode="HTML"
         )
 
+        # پشتیبانی اختصاصی محصول بعد از خرید
+        try:
+            ensure_product_support_schema()
+            if get_product_support_flag(pid):
+                from db import ticket_create, ticket_ensure_schema, ticket_add_message
+                ticket_ensure_schema()
+                tid = ticket_create(uid, type_="product_support",
+                                     product_id=pid, order_id=order_id)
+                kb_sup = types.InlineKeyboardMarkup()
+                kb_sup.add(types.InlineKeyboardButton(
+                    "💬 ورود به پشتیبانی محصول", callback_data=f"ticket_v2_open_{tid}"
+                ))
+                bot.send_message(
+                    call.message.chat.id,
+                    f"🟦 <b>پشتیبانی پس از خرید</b>\n\n"
+                    f"محصول: {title}\n"
+                    f"سفارش: #{order_id}\n\n"
+                    "جهت راه‌اندازی یا سوال، از دکمه زیر وارد چت پشتیبانی شوید:",
+                    parse_mode="HTML", reply_markup=kb_sup
+                )
+        except Exception:
+            pass
+
         try:
             bot.send_message(
                 ADMIN_ID,
@@ -1345,21 +1387,15 @@ def handle_confirm_full(call):
 #======================== confirm_wallet =====================
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_wallet_"))
 def handle_confirm_wallet(call):
-
-    # confirm_wallet_{category}_{pid} -- pid is last, category may contain "_"
     parts = call.data.split("_")
-
     if len(parts) < 4:
         bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True)
         return
-
     pid_str = parts[-1]
     category = "_".join(parts[2:-1])
-
     if not pid_str.isdigit():
         bot.answer_callback_query(call.id, "شناسه محصول نامعتبر است", show_alert=True)
         return
-
     pid = int(pid_str)
     uid = call.from_user.id
 
@@ -1368,26 +1404,22 @@ def handle_confirm_wallet(call):
         bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
         return
 
-    # سقف خرید روزانه
     exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
     if exceeded:
-        bot.answer_callback_query(
-            call.id,
-            f"سقف خرید روزانه ({limit_val}) تکمیل شده است.",
-            show_alert=True,
-        )
+        bot.answer_callback_query(call.id, f"سقف خرید روزانه ({limit_val}) تکمیل شده است.", show_alert=True)
         return
 
     title = product[2]
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
-
     partner_ok = is_partner_approved(uid)
     eff_price = partner_price if (partner_ok and partner_price) else price
 
-    wallet_balance = get_wallet_balance(uid)
+    # درخواست کد تخفیف
+    discount = user_states.get(uid, {}).get("applied_discount", 0)
+    eff_price = max(0, eff_price - discount)
 
-    # 🟢 اگر کیف پول کامل پوشش دهد → مستقیم خرید
+    wallet_balance = get_wallet_balance(uid)
     if wallet_balance >= eff_price:
         finalize_product_order(call, uid, product, category, eff_price)
         return
@@ -1415,7 +1447,94 @@ def handle_confirm_wallet(call):
     )
     
     
-# ========= ADMIN PRODUCT UI =========
+# ─── کد تخفیف ───────────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("apply_discount_"))
+def handle_discount_prompt(call):
+    """ارسال prompt برای دریافت کد تخفیف."""
+    uid = call.from_user.id
+    # save callback data so we can resume after discount
+    state = user_states.get(uid, {})
+    state["discount_resume_cb"] = call.data.replace("apply_discount_", "")
+    user_states[uid] = state
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ بدون تخفیف", callback_data="skip_discount"))
+    bot.send_message(call.message.chat.id,
+        "🎟 کد تخفیف خود را ارسال کنید:\n(در صورت نداشتن، گزینه «بدون تخفیف» را انتخاب کنید)",
+        reply_markup=kb)
+    bot.register_next_step_handler(call.message, _process_discount_code)
+
+
+def _process_discount_code(message):
+    uid = message.from_user.id
+    code = (message.text or "").strip()
+    state = user_states.get(uid, {})
+    resume_cb = state.get("discount_resume_cb", "")
+    pid_str = resume_cb.split("_")[-1] if "_" in resume_cb else ""
+    pid = int(pid_str) if pid_str.isdigit() else 0
+
+    product = get_product_by_id(pid) if pid else None
+    price = product[3] if product else 0
+
+    result = validate_discount(code, product_id=pid, amount=price)
+    if not result["valid"]:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("❌ بدون تخفیف ← ادامه", callback_data=f"resume_buy_{resume_cb}"))
+        bot.send_message(message.chat.id, f"❌ {result['error']}\nمی‌توانید بدون تخفیف ادامه دهید:", reply_markup=kb)
+        return
+
+    discount = result["discount_amount"]
+    use_discount(result["code_id"])
+    state["applied_discount"] = discount
+    state["discount_code_id"] = result["code_id"]
+    user_states[uid] = state
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton(f"✅ ادامه خرید با تخفیف {discount:,} تومان", callback_data=f"resume_buy_{resume_cb}"))
+    bot.send_message(message.chat.id,
+        f"✅ کد تخفیف اعمال شد!\n💰 مبلغ تخفیف: <b>{discount:,}</b> تومان\n"
+        f"مبلغ نهایی: <b>{max(0, price - discount):,}</b> تومان",
+        parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "skip_discount")
+def handle_skip_discount(call):
+    uid = call.from_user.id
+    resume_cb = user_states.get(uid, {}).get("discount_resume_cb", "")
+    if resume_cb:
+        call.data = resume_cb
+        if resume_cb.startswith("confirm_wallet_"):
+            handle_confirm_wallet(call)
+        elif resume_cb.startswith("confirm_full_"):
+            handle_confirm_full(call)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("resume_buy_"))
+def handle_resume_buy(call):
+    original_cb = call.data[len("resume_buy_"):]
+    call.data = original_cb
+    if original_cb.startswith("confirm_wallet_"):
+        handle_confirm_wallet(call)
+    elif original_cb.startswith("confirm_full_"):
+        handle_confirm_full(call)
+
+
+# ─── اشتراک موجودی ───────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("notify_stock_"))
+def handle_notify_stock(call):
+    uid = call.from_user.id
+    pid = int(call.data.split("_")[-1])
+    added = subscribe_stock(uid, pid)
+    if added:
+        bot.answer_callback_query(call.id, "✅ به‌محض موجود شدن اطلاع داده می‌شود", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, "قبلاً ثبت شده‌اید", show_alert=False)
+
+
+# ─── پشتیبانی محصول پس از خرید ───────────────────────────────────────────────
+
+
 
 def send_admin_categories(chat_id):
     kb = types.InlineKeyboardMarkup()

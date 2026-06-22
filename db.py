@@ -2268,3 +2268,174 @@ def feed_returned_count(product_id: int) -> int:
         ).fetchone()[0])
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── کد تخفیف ───────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_discount_table():
+    conn = _get_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS discount_codes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            code        TEXT    UNIQUE NOT NULL COLLATE NOCASE,
+            type        TEXT    NOT NULL DEFAULT 'percent',   -- 'percent' | 'fixed'
+            value       INTEGER NOT NULL,
+            max_uses    INTEGER DEFAULT 0,
+            used_count  INTEGER DEFAULT 0,
+            min_amount  INTEGER DEFAULT 0,
+            product_id  INTEGER DEFAULT NULL,
+            expires_at  TEXT    DEFAULT NULL,
+            is_active   INTEGER DEFAULT 1,
+            created_at  TEXT    DEFAULT (datetime('now','localtime'))
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
+def validate_discount(code: str, product_id: int = None, amount: int = 0) -> dict:
+    """
+    اعتبارسنجی کد تخفیف.
+    Returns: {valid, discount_amount, type, value, code_id, error}
+    """
+    ensure_discount_table()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM discount_codes WHERE code=? COLLATE NOCASE AND is_active=1 LIMIT 1;",
+            (code.strip(),)
+        ).fetchone()
+        if not row:
+            return {"valid": False, "error": "کد تخفیف یافت نشد یا غیرفعال است"}
+        if row["max_uses"] > 0 and row["used_count"] >= row["max_uses"]:
+            return {"valid": False, "error": "ظرفیت استفاده از این کد تمام شده است"}
+        if row["expires_at"] and row["expires_at"] < datetime.utcnow().isoformat():
+            return {"valid": False, "error": "کد تخفیف منقضی شده است"}
+        if row["min_amount"] > 0 and amount < row["min_amount"]:
+            return {"valid": False, "error": f"حداقل مبلغ خرید برای این کد {row['min_amount']:,} تومان است"}
+        if row["product_id"] and product_id and int(row["product_id"]) != int(product_id):
+            return {"valid": False, "error": "این کد برای محصول دیگری است"}
+
+        discount = row["value"] if row["type"] == "fixed" else int(amount * row["value"] / 100)
+        discount = min(discount, amount)
+        return {"valid": True, "discount_amount": discount, "type": row["type"],
+                "value": row["value"], "code_id": row["id"], "error": None}
+    finally:
+        conn.close()
+
+
+def use_discount(code_id: int):
+    """افزایش شمارنده استفاده از کد."""
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE discount_codes SET used_count=used_count+1 WHERE id=?;", (code_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── اشتراک موجودی ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_subscription_table():
+    conn = _get_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_subscriptions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            created_at TEXT    DEFAULT (datetime('now','localtime')),
+            notified   INTEGER DEFAULT 0,
+            UNIQUE(user_id, product_id)
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
+def subscribe_stock(user_id: int, product_id: int) -> bool:
+    """ثبت اشتراک موجودی. True=جدید، False=قبلاً ثبت شده."""
+    ensure_subscription_table()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO stock_subscriptions (user_id, product_id) VALUES (?,?);",
+            (user_id, product_id)
+        )
+        changed = conn.execute("SELECT changes();").fetchone()[0]
+        conn.commit()
+        return bool(changed)
+    finally:
+        conn.close()
+
+
+def get_stock_subscribers(product_id: int) -> list:
+    """لیست کاربرانی که اشتراک این محصول دارند و هنوز نوتیف نگرفتن."""
+    ensure_subscription_table()
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT user_id FROM stock_subscriptions WHERE product_id=? AND notified=0;",
+            (product_id,)
+        ).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_subscriptions_notified(product_id: int):
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE stock_subscriptions SET notified=1 WHERE product_id=?;",
+            (product_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reset_subscriptions_on_restock(product_id: int):
+    """وقتی موجودی اومد، اشتراک‌ها رو reset کن برای دور بعد."""
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM stock_subscriptions WHERE product_id=? AND notified=1;",
+            (product_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── پشتیبانی اختصاصی محصول ─────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_product_support_schema():
+    """اضافه کردن ستون support_after_purchase به products."""
+    conn = _get_connection()
+    try:
+        try:
+            conn.execute("ALTER TABLE products ADD COLUMN support_after_purchase INTEGER DEFAULT 0;")
+            conn.commit()
+        except Exception:
+            pass  # ستون قبلاً وجود داشت
+    finally:
+        conn.close()
+
+
+def get_product_support_flag(product_id: int) -> bool:
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT support_after_purchase FROM products WHERE id=? LIMIT 1;", (product_id,)).fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
