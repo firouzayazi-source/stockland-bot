@@ -27,10 +27,12 @@ router = APIRouter(prefix="/admin")
 
 # ── migrations at startup ────────────────────────────────────────────────────
 try:
-    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table
+    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_seller_schema, ensure_referral_schema
     ensure_product_support_schema()
     ensure_discount_table()
     ensure_subscription_table()
+    ensure_seller_schema()
+    ensure_referral_schema()
 except Exception:
     pass
 
@@ -402,7 +404,8 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/referrals", "users", "سیستم معرفی", "wallets")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
-            {nav_item("/admin/partners", "handshake", "همکاران", "partners", pending_partners)}
+            {nav_item("/admin/sellers", "store", "فروشندگان", "wallets")}
+            {nav_item("/admin/partners", "handshake", "همکاران (قدیمی)", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
@@ -3988,6 +3991,318 @@ async def discount_delete(request: Request, cid: int):
         conn.close()
     _log(request, "حذف کد تخفیف", "تخفیف", f"id:{cid}")
     return _redir("/admin/discounts?flash=کد+حذف+شد")
+
+
+@router.get("/sellers", response_class=HTMLResponse)
+async def sellers_list(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import seller_list_all, seller_list_payouts, ensure_seller_schema, seller_get_levels
+    ensure_seller_schema()
+    sellers  = seller_list_all()
+    payouts  = seller_list_payouts("pending")
+    levels   = seller_get_levels()
+    conn     = _db()
+    try:
+        total_paid = conn.execute("SELECT COALESCE(SUM(commission),0) FROM seller_commissions WHERE status='earned';").fetchone()[0]
+    finally:
+        conn.close()
+
+    # آمار
+    total_s = len(sellers)
+    active_s = sum(1 for s in sellers if s["status"] == "active")
+
+    level_map = {l["id"]: f'{l["emoji"]} {l["name"]}' for l in levels}
+
+    rows = "".join(f"""<tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="location.href='/admin/sellers/{s['user_id']}'">
+      <td class="px-4 py-3 text-xs text-gray-400">{s['user_id']}</td>
+      <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(s['full_name'] or '—')}</td>
+      <td class="px-4 py-3"><code class="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-bold">{e(s['code'])}</code></td>
+      <td class="px-4 py-3 text-sm">{level_map.get(s['level_id'],'—')}</td>
+      <td class="px-4 py-3 text-sm font-bold text-indigo-600">{s['total_sales']}</td>
+      <td class="px-4 py-3 text-sm font-bold text-green-600">{int(s['total_earned'] or 0):,} ت</td>
+      <td class="px-4 py-3 text-sm font-bold text-amber-600">{int(s['wallet_balance'] or 0):,} ت</td>
+      <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if s['status']=="active" else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">'+e(s['status'])+'</span>'}</td>
+      <td class="px-4 py-3"><a href="/admin/sellers/{s['user_id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">مدیریت</a></td>
+    </tr>""" for s in sellers)
+
+    payout_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-3 text-xs text-gray-400">#{p['id']}</td>
+      <td class="px-4 py-3 text-sm">{e(p['full_name'] or str(p['seller_id']))}</td>
+      <td class="px-4 py-3"><code class="text-xs">{e(p['code'])}</code></td>
+      <td class="px-4 py-3 text-sm font-bold text-amber-600">{int(p['amount']):,} ت</td>
+      <td class="px-4 py-3 text-xs text-gray-500">{e(p['card_number'] or '—')}</td>
+      <td class="px-4 py-3 text-xs text-gray-400">{(p['requested_at'] or '')[:16]}</td>
+      <td class="px-4 py-3">
+        <div class="flex gap-1">
+          <form method="post" action="/admin/sellers/payout/{p['id']}/approve" class="inline">
+            <button class="btn-sm bg-green-50 text-green-700 border border-green-200 rounded px-2 py-1 text-xs">✅ تأیید</button>
+          </form>
+          <form method="post" action="/admin/sellers/payout/{p['id']}/reject" class="inline">
+            <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded px-2 py-1 text-xs">❌ رد</button>
+          </form>
+        </div>
+      </td>
+    </tr>""" for p in payouts)
+
+    body = f"""
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">🏪 فروشندگان</h1>
+      <a href="/admin/sellers/settings" class="btn-sm bg-gray-100 text-gray-700 border border-gray-200 rounded px-3 py-1.5 text-xs">⚙️ تنظیمات سطوح</a>
+    </div>
+    <div class="grid grid-cols-4 gap-4 mb-6">
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total_s}</div><div class="text-xs text-gray-400 mt-1">کل فروشندگان</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{active_s}</div><div class="text-xs text-gray-400 mt-1">فعال</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{len(payouts)}</div><div class="text-xs text-gray-400 mt-1">تسویه در انتظار</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-purple-600">{int(total_paid or 0):,}</div><div class="text-xs text-gray-400 mt-1">کل پورسانت (ت)</div></div>
+    </div>
+    <div class="card p-6 mb-4">
+      <h2 class="font-bold text-gray-700 mb-4">➕ فعال‌سازی فروشنده</h2>
+      <form method="post" action="/admin/sellers/activate" class="flex gap-3 items-end">
+        <div><label class="text-sm font-medium text-gray-700 block mb-1">User ID تلگرام</label>{_input("user_id","مثلاً: 123456789",type_="number",required=True)}</div>
+        {_btn("فعال‌سازی","",color="green")}
+      </form>
+    </div>
+    {"" if not payouts else f'''<div class="card overflow-hidden mb-4">
+      <div class="px-5 py-3 border-b bg-amber-50 flex items-center gap-2">
+        <span class="font-medium text-amber-700">💰 درخواست‌های تسویه ({len(payouts)})</span>
+      </div>
+      <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-4 py-3">#</th><th class="px-4 py-3">فروشنده</th><th class="px-4 py-3">کد</th>
+          <th class="px-4 py-3">مبلغ</th><th class="px-4 py-3">شماره کارت</th>
+          <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">عملیات</th>
+        </tr></thead>
+        <tbody>{payout_rows}</tbody>
+      </table></div>
+    </div>'''}
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">ID</th><th class="px-4 py-3">نام</th><th class="px-4 py-3">کد</th>
+            <th class="px-4 py-3">سطح</th><th class="px-4 py-3">فروش</th>
+            <th class="px-4 py-3">درآمد</th><th class="px-4 py-3">کیف‌پول</th>
+            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3"></th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='9' class='text-center py-8 text-gray-400'>فروشنده‌ای ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("فروشندگان", body, adm, flash=flash)
+
+
+@router.post("/sellers/activate")
+async def sellers_activate(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    form = await request.form()
+    uid = int(form.get("user_id") or 0)
+    if not uid:
+        return _redir("/admin/sellers?flash=User+ID+اجباریه")
+    from db import seller_activate
+    code = seller_activate(uid)
+    _log(request, "فعال‌سازی فروشنده", "فروشندگان", f"user:{uid} code:{code}")
+    # اطلاع به کاربر
+    try:
+        bot_token = _env("BOT_TOKEN")
+        _requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": uid,
+                  "text": f"🎉 <b>حساب فروشندگی شما فعال شد!</b>\n\nکد معرفی: <code>{code}</code>\n\n"
+                          "برای مشاهده پنل فروشنده از منوی ربات استفاده کنید.",
+                  "parse_mode":"HTML"}, timeout=5)
+    except Exception:
+        pass
+    return _redir(f"/admin/sellers?flash=فروشنده+{uid}+فعال+شد+—+کد:+{code}")
+
+
+@router.get("/sellers/settings", response_class=HTMLResponse)
+async def sellers_settings_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import seller_get_levels
+    levels = seller_get_levels()
+
+    level_rows = "".join(f"""
+    <tr class="border-b hover:bg-gray-50">
+      <form method="post" action="/admin/sellers/settings/level/{l['id']}">
+        <td class="px-4 py-3 text-sm font-bold">{e(l['emoji'])} {e(l['name'])}</td>
+        <td class="px-4 py-3"><input type="number" name="min_sales" value="{l['min_sales']}" class="w-24 border border-gray-200 rounded px-2 py-1 text-sm"></td>
+        <td class="px-4 py-3"><input type="number" name="commission" value="{l['commission']}" class="w-32 border border-gray-200 rounded px-2 py-1 text-sm"></td>
+        <td class="px-4 py-3"><button type="submit" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-3 py-1 text-xs">ذخیره</button></td>
+      </form>
+    </tr>""" for l in levels)
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← فروشندگان", "/admin/sellers", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">⚙️ تنظیمات سطوح فروش</h1>
+    </div>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">سطح</th>
+            <th class="px-4 py-3">حداقل فروش</th>
+            <th class="px-4 py-3">پورسانت (تومان)</th>
+            <th class="px-4 py-3"></th>
+          </tr></thead>
+          <tbody>{level_rows}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("تنظیمات فروشندگان", body, adm, flash=flash)
+
+
+@router.post("/sellers/settings/level/{lid}")
+async def sellers_settings_level(request: Request, lid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    form = await request.form()
+    min_s = int(form.get("min_sales") or 0)
+    comm  = int(form.get("commission") or 0)
+    conn  = _db()
+    try:
+        conn.execute("UPDATE seller_levels SET min_sales=?,commission=?,updated_at=datetime('now') WHERE id=?;",
+                     (min_s, comm, lid))
+        conn.commit()
+    finally:
+        conn.close()
+    return _redir("/admin/sellers/settings?flash=سطح+ذخیره+شد")
+
+
+@router.get("/sellers/{sid}", response_class=HTMLResponse)
+async def seller_detail(request: Request, sid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import seller_get, seller_get_levels, ensure_seller_schema
+    ensure_seller_schema()
+    seller = seller_get(sid)
+    if not seller:
+        return _redir("/admin/sellers?flash=فروشنده+یافت+نشد")
+    levels = seller_get_levels()
+    conn = _db()
+    try:
+        sales = conn.execute("""SELECT * FROM seller_commissions WHERE seller_id=? ORDER BY id DESC LIMIT 20;""", (sid,)).fetchall()
+        payouts = conn.execute("SELECT * FROM seller_payouts WHERE seller_id=? ORDER BY id DESC LIMIT 10;", (sid,)).fetchall()
+        user = conn.execute("SELECT * FROM users WHERE user_id=?;", (sid,)).fetchone()
+    finally:
+        conn.close()
+
+    level_opts = "".join(f'<option value="{l["id"]}" {"selected" if l["id"]==seller["level_id"] else ""}>{l["emoji"]} {l["name"]}</option>' for l in levels)
+    status_opts = "".join(f'<option value="{s}" {"selected" if s==seller["status"] else ""}>{{"active":"فعال","suspended":"تعلیق","cancelled":"لغو"}}[s]</option>' for s in ["active","suspended","cancelled"])
+
+    sale_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-2 text-xs text-gray-400">#{c['order_id']}</td>
+      <td class="px-4 py-2 text-xs text-gray-600">{e(c['product_title'] or '—')}</td>
+      <td class="px-4 py-2 text-xs text-gray-500">{int(c['order_amount']):,} ت</td>
+      <td class="px-4 py-2 text-xs font-bold text-green-600">{int(c['commission']):,} ت</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{(c['created_at'] or '')[:10]}</td>
+    </tr>""" for c in sales)
+
+    def _pout_status(st):
+        m = {"pending":'<span class="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">در انتظار</span>',
+             "approved":'<span class="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">تأیید شد</span>',
+             "rejected":'<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs">رد شد</span>'}
+        return m.get(st, e(st or "—"))
+
+    pout_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-2 text-xs">#{p['id']}</td>
+      <td class="px-4 py-2 text-xs font-bold text-amber-600">{int(p['amount']):,} ت</td>
+      <td class="px-4 py-2 text-xs text-gray-500">{e(p['card_number'] or '—')}</td>
+      <td class="px-4 py-2 text-xs">{_pout_status(p['status'])}</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{(p['requested_at'] or '')[:10]}</td>
+    </tr>""" for p in payouts)
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← فروشندگان", "/admin/sellers", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">فروشنده #{sid}</h1>
+      <span class="px-2 py-0.5 text-xs {'bg-green-100 text-green-700' if seller['status']=='active' else 'bg-red-100 text-red-700'} rounded-full">{seller['level_emoji']} {seller['level_name']}</span>
+    </div>
+    <div class="grid md:grid-cols-3 gap-4 mb-6">
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{seller['total_sales']}</div><div class="text-xs text-gray-400 mt-1">کل فروش</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{int(seller['total_earned'] or 0):,}</div><div class="text-xs text-gray-400 mt-1">کل درآمد (ت)</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{int(seller['wallet_balance'] or 0):,}</div><div class="text-xs text-gray-400 mt-1">کیف‌پول (ت)</div></div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mb-4">
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">🔑 کد و لینک</h2>
+        <div class="mb-3"><span class="text-xs text-gray-500">کد معرفی</span><br><code class="text-lg font-bold text-indigo-700">{e(seller['code'])}</code></div>
+        <div class="text-xs text-gray-400 break-all">t.me/...?start={e(seller['code'])}</div>
+      </div>
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">⚙️ ویرایش</h2>
+        <form method="post" action="/admin/sellers/{sid}/update" class="space-y-3">
+          <div><label class="text-xs text-gray-500 block mb-1">سطح</label><select name="level_id">{level_opts}</select></div>
+          <div><label class="text-xs text-gray-500 block mb-1">وضعیت</label><select name="status">{status_opts}</select></div>
+          <div><label class="text-xs text-gray-500 block mb-1">پورسانت اختصاصی (تومان — خالی=سطح)</label>{_input("custom_commission","",str(seller.get('custom_commission') or ''),"number")}</div>
+          {_btn("ذخیره","",color="green")}
+        </form>
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="card overflow-hidden">
+        <div class="px-5 py-3 border-b bg-gray-50 font-medium text-sm text-gray-700">📋 فروش‌های اخیر ({len(sales)})</div>
+        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b"><th class="px-4 py-2">سفارش</th><th class="px-4 py-2">محصول</th><th class="px-4 py-2">مبلغ</th><th class="px-4 py-2">پورسانت</th><th class="px-4 py-2">تاریخ</th></tr></thead>
+          <tbody>{sale_rows or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>فروشی ثبت نشده</td></tr>"}</tbody>
+        </table></div>
+      </div>
+      <div class="card overflow-hidden">
+        <div class="px-5 py-3 border-b bg-gray-50 font-medium text-sm text-gray-700">💸 تسویه‌ها</div>
+        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b"><th class="px-4 py-2">#</th><th class="px-4 py-2">مبلغ</th><th class="px-4 py-2">کارت</th><th class="px-4 py-2">وضعیت</th><th class="px-4 py-2">تاریخ</th></tr></thead>
+          <tbody>{pout_rows or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>تسویه‌ای ثبت نشده</td></tr>"}</tbody>
+        </table></div>
+      </div>
+    </div>"""
+    return _layout(f"فروشنده #{sid}", body, adm, flash=flash)
+
+
+@router.post("/sellers/{sid}/update")
+async def seller_update_route(request: Request, sid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    form = await request.form()
+    from db import seller_update
+    kwargs = {
+        "level_id": int(form.get("level_id") or 1),
+        "status": str(form.get("status","active")),
+    }
+    custom = form.get("custom_commission","").strip()
+    kwargs["custom_commission"] = int(custom) if custom else None
+    seller_update(sid, **kwargs)
+    _log(request, "ویرایش فروشنده", "فروشندگان", f"user:{sid}")
+    return _redir(f"/admin/sellers/{sid}?flash=ذخیره+شد")
+
+
+@router.post("/sellers/payout/{pid}/approve")
+async def seller_payout_approve(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import seller_payout_update
+    seller_payout_update(pid, "approved")
+    _log(request, "تأیید تسویه", "فروشندگان", f"payout:{pid}")
+    return _redir("/admin/sellers?flash=تسویه+تأیید+شد")
+
+
+@router.post("/sellers/payout/{pid}/reject")
+async def seller_payout_reject(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import seller_payout_update
+    seller_payout_update(pid, "rejected")
+    _log(request, "رد تسویه", "فروشندگان", f"payout:{pid}")
+    return _redir("/admin/sellers?flash=تسویه+رد+شد")
 
 
 @router.get("/referrals", response_class=HTMLResponse)
