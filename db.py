@@ -2288,31 +2288,47 @@ def ensure_discount_table():
     conn = _get_connection()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS discount_codes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            code            TEXT    UNIQUE NOT NULL COLLATE NOCASE,
+            type            TEXT    NOT NULL DEFAULT 'percent',  -- 'percent' | 'fixed' | 'wallet'
+            value           INTEGER NOT NULL DEFAULT 0,
+            max_value       INTEGER DEFAULT 0,    -- سقف تخفیف (برای درصدی) — 0=نامحدود
+            min_amount      INTEGER DEFAULT 0,    -- حداقل مبلغ سفارش
+            max_uses        INTEGER DEFAULT 0,    -- 0=نامحدود
+            max_uses_per_user INTEGER DEFAULT 0,  -- 0=نامحدود
+            used_count      INTEGER DEFAULT 0,
+            product_id      INTEGER DEFAULT NULL, -- NULL=همه محصولات
+            category_id     INTEGER DEFAULT NULL, -- NULL=همه دسته‌ها
+            first_buy_only  INTEGER DEFAULT 0,    -- فقط اولین خرید
+            vip_only        INTEGER DEFAULT 0,    -- فقط کاربران VIP
+            starts_at       TEXT    DEFAULT NULL,
+            expires_at      TEXT    DEFAULT NULL,
+            is_active       INTEGER DEFAULT 1,
+            created_at      TEXT    DEFAULT (datetime('now','localtime')),
+            description     TEXT    DEFAULT ''
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS discount_usage (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            code        TEXT    UNIQUE NOT NULL COLLATE NOCASE,
-            type        TEXT    NOT NULL DEFAULT 'percent',   -- 'percent' | 'fixed'
-            value       INTEGER NOT NULL,
-            max_uses    INTEGER DEFAULT 0,
-            used_count  INTEGER DEFAULT 0,
-            min_amount  INTEGER DEFAULT 0,
-            product_id  INTEGER DEFAULT NULL,
-            expires_at  TEXT    DEFAULT NULL,
-            is_active   INTEGER DEFAULT 1,
-            created_at  TEXT    DEFAULT (datetime('now','localtime'))
+            code_id     INTEGER NOT NULL,
+            user_id     INTEGER NOT NULL,
+            order_id    INTEGER,
+            used_at     TEXT DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY(code_id) REFERENCES discount_codes(id)
         );
     """)
     conn.commit()
     conn.close()
 
 
-def validate_discount(code: str, product_id: int = None, amount: int = 0) -> dict:
-    """
-    اعتبارسنجی کد تخفیف.
-    Returns: {valid, discount_amount, type, value, code_id, error}
-    """
+def validate_discount(code: str, product_id: int = None, category_id: int = None,
+                      amount: int = 0, user_id: int = None) -> dict:
+    """اعتبارسنجی جامع کد تخفیف."""
     ensure_discount_table()
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
+    now = datetime.utcnow().isoformat()
     try:
         row = conn.execute(
             "SELECT * FROM discount_codes WHERE code=? COLLATE NOCASE AND is_active=1 LIMIT 1;",
@@ -2321,27 +2337,65 @@ def validate_discount(code: str, product_id: int = None, amount: int = 0) -> dic
         if not row:
             return {"valid": False, "error": "کد تخفیف یافت نشد یا غیرفعال است"}
         if row["max_uses"] > 0 and row["used_count"] >= row["max_uses"]:
-            return {"valid": False, "error": "ظرفیت استفاده از این کد تمام شده است"}
-        if row["expires_at"] and row["expires_at"] < datetime.utcnow().isoformat():
+            return {"valid": False, "error": "ظرفیت این کد تمام شده است"}
+        if row["starts_at"] and row["starts_at"] > now:
+            return {"valid": False, "error": "این کد هنوز فعال نشده است"}
+        if row["expires_at"] and row["expires_at"] < now:
             return {"valid": False, "error": "کد تخفیف منقضی شده است"}
         if row["min_amount"] > 0 and amount < row["min_amount"]:
-            return {"valid": False, "error": f"حداقل مبلغ خرید برای این کد {row['min_amount']:,} تومان است"}
+            return {"valid": False, "error": f"حداقل مبلغ سفارش {row['min_amount']:,} تومان است"}
         if row["product_id"] and product_id and int(row["product_id"]) != int(product_id):
             return {"valid": False, "error": "این کد برای محصول دیگری است"}
+        if row["category_id"] and category_id and int(row["category_id"]) != int(category_id):
+            return {"valid": False, "error": "این کد برای دسته‌بندی دیگری است"}
+        if user_id:
+            if row["max_uses_per_user"] > 0:
+                uses = conn.execute(
+                    "SELECT COUNT(*) FROM discount_usage WHERE code_id=? AND user_id=?;",
+                    (row["id"], user_id)
+                ).fetchone()[0]
+                if uses >= row["max_uses_per_user"]:
+                    return {"valid": False, "error": "سقف استفاده شما از این کد تمام شده است"}
+            if row["first_buy_only"]:
+                has_order = conn.execute(
+                    "SELECT COUNT(*) FROM orders WHERE user_id=? AND status='active';",
+                    (str(user_id),)
+                ).fetchone()[0]
+                if has_order > 0:
+                    return {"valid": False, "error": "این کد فقط برای اولین خرید است"}
 
-        discount = row["value"] if row["type"] == "fixed" else int(amount * row["value"] / 100)
+        # محاسبه تخفیف
+        if row["type"] == "percent":
+            discount = int(amount * row["value"] / 100)
+            if row["max_value"] > 0:
+                discount = min(discount, row["max_value"])
+        elif row["type"] == "fixed":
+            discount = row["value"]
+        elif row["type"] == "wallet":
+            discount = row["value"]  # اعتبار کیف‌پول
+        else:
+            discount = 0
         discount = min(discount, amount)
-        return {"valid": True, "discount_amount": discount, "type": row["type"],
-                "value": row["value"], "code_id": row["id"], "error": None}
+
+        return {
+            "valid": True, "discount_amount": discount, "type": row["type"],
+            "value": row["value"], "code_id": row["id"], "error": None,
+            "description": row["description"] or ""
+        }
     finally:
         conn.close()
 
 
-def use_discount(code_id: int):
-    """افزایش شمارنده استفاده از کد."""
+def use_discount(code_id: int, user_id: int = None, order_id: int = None):
+    """ثبت استفاده از کد."""
     conn = _get_connection()
     try:
         conn.execute("UPDATE discount_codes SET used_count=used_count+1 WHERE id=?;", (code_id,))
+        if user_id:
+            conn.execute(
+                "INSERT INTO discount_usage (code_id,user_id,order_id) VALUES (?,?,?);",
+                (code_id, user_id, order_id)
+            )
         conn.commit()
     finally:
         conn.close()
@@ -2449,3 +2503,107 @@ def get_product_support_flag(product_id: int) -> bool:
     finally:
         conn.close()
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── سیستم معرفی کاربران ─────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_referral_schema():
+    conn = _get_connection()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS referral_settings (
+            id              INTEGER PRIMARY KEY DEFAULT 1,
+            reward_amount   INTEGER DEFAULT 5000,
+            is_active       INTEGER DEFAULT 1,
+            updated_at      TEXT    DEFAULT (datetime('now','localtime'))
+        );
+        INSERT OR IGNORE INTO referral_settings (id) VALUES (1);
+
+        CREATE TABLE IF NOT EXISTS referrals (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id     INTEGER NOT NULL,
+            referred_id     INTEGER NOT NULL UNIQUE,
+            rewarded        INTEGER DEFAULT 0,
+            reward_amount   INTEGER DEFAULT 0,
+            first_order_id  INTEGER DEFAULT NULL,
+            created_at      TEXT    DEFAULT (datetime('now','localtime')),
+            rewarded_at     TEXT    DEFAULT NULL
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_referral_settings() -> dict:
+    ensure_referral_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM referral_settings WHERE id=1;").fetchone()
+        return dict(row) if row else {"reward_amount": 5000, "is_active": 1}
+    finally:
+        conn.close()
+
+
+def register_referral(referrer_id: int, referred_id: int) -> bool:
+    """ثبت معرفی — False اگه قبلاً ثبت شده."""
+    ensure_referral_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO referrals (referrer_id, referred_id) VALUES (?,?);",
+            (referrer_id, referred_id)
+        )
+        changed = conn.execute("SELECT changes();").fetchone()[0]
+        conn.commit()
+        return bool(changed)
+    finally:
+        conn.close()
+
+
+def process_referral_reward(referred_id: int, order_id: int) -> dict:
+    """
+    اگه کاربر اولین خریدش رو کرده و معرف داره → پاداش بده.
+    Returns: {rewarded, referrer_id, amount}
+    """
+    ensure_referral_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        ref = conn.execute(
+            "SELECT * FROM referrals WHERE referred_id=? AND rewarded=0 LIMIT 1;",
+            (referred_id,)
+        ).fetchone()
+        if not ref:
+            return {"rewarded": False}
+
+        settings = conn.execute("SELECT * FROM referral_settings WHERE id=1;").fetchone()
+        amount   = int(settings["reward_amount"] if settings else 5000)
+
+        # اضافه کردن به کیف‌پول معرف
+        existing = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (ref["referrer_id"],)).fetchone()
+        if existing:
+            conn.execute("UPDATE wallets SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?;",
+                         (amount, ref["referrer_id"]))
+        else:
+            conn.execute("INSERT INTO wallets (user_id, balance, updated_at) VALUES (?,?,datetime('now'));",
+                         (ref["referrer_id"], amount))
+
+        conn.execute("""UPDATE referrals SET rewarded=1, reward_amount=?, first_order_id=?,
+            rewarded_at=datetime('now') WHERE id=?;""", (amount, order_id, ref["id"]))
+        conn.commit()
+        return {"rewarded": True, "referrer_id": ref["referrer_id"], "amount": amount}
+    finally:
+        conn.close()
+
+
+def get_referral_stats(referrer_id: int) -> dict:
+    ensure_referral_schema()
+    conn = _get_connection()
+    try:
+        total    = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (referrer_id,)).fetchone()[0]
+        rewarded = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND rewarded=1;", (referrer_id,)).fetchone()[0]
+        earned   = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE referrer_id=? AND rewarded=1;", (referrer_id,)).fetchone()[0]
+        return {"total": total, "rewarded": rewarded, "earned": int(earned)}
+    finally:
+        conn.close()
