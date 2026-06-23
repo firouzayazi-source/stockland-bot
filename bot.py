@@ -859,22 +859,191 @@ def handle_start(message):
     except Exception:
         pass
 
-    # بررسی لینک معرفی: /start ref_12345
+    # بررسی لینک معرفی: /start ref_12345 یا /start STLAND-4521
     args = message.text.split() if message.text else []
-    if len(args) > 1 and args[1].startswith("ref_"):
-        try:
-            referrer_id = int(args[1][4:])
-            if referrer_id != uid:
-                from db import register_referral, get_referral_settings, ensure_referral_schema
-                ensure_referral_schema()
-                settings = get_referral_settings()
-                if settings.get("is_active"):
-                    register_referral(referrer_id, uid)
-        except Exception:
-            pass
+    if len(args) > 1:
+        arg = args[1]
+        if arg.startswith("ref_"):
+            # سیستم معرفی کاربران عادی
+            try:
+                referrer_id = int(arg[4:])
+                if referrer_id != uid:
+                    from db import register_referral, get_referral_settings, ensure_referral_schema
+                    ensure_referral_schema()
+                    settings = get_referral_settings()
+                    if settings.get("is_active"):
+                        register_referral(referrer_id, uid)
+            except Exception:
+                pass
+        elif arg.startswith("STLAND-"):
+            # لینک فروشنده
+            try:
+                from db import ensure_seller_schema
+                ensure_seller_schema()
+                import sqlite3 as _sq
+                from config import DB_PATH as _DBP
+                _conn = _sq.connect(_DBP)
+                seller_row = _conn.execute("SELECT user_id FROM sellers WHERE code=? AND status='active';", (arg,)).fetchone()
+                _conn.close()
+                if seller_row and seller_row[0] != uid:
+                    user_states.setdefault(uid, {})["via_seller"] = seller_row[0]
+                    user_states[uid]["via_seller_code"] = arg
+            except Exception:
+                pass
 
     text = tf("MSG_WELCOME", name=full_name or "دوست عزیز")
     bot.send_message(message.chat.id, text, reply_markup=main_menu(user_id=uid), parse_mode="HTML")
+
+
+# ─── پنل فروشنده ─────────────────────────────────────────────────────────────
+
+def _seller_panel_msg(uid: int) -> tuple:
+    """ساخت پیام و keyboard پنل فروشنده."""
+    from db import seller_get, ensure_seller_schema
+    ensure_seller_schema()
+    s = seller_get(uid)
+    if not s or s["status"] != "active":
+        return "❌ شما فروشنده فعال نیستید.", types.InlineKeyboardMarkup()
+
+    bot_info  = bot.get_me()
+    link      = f"https://t.me/{bot_info.username}?start={s['code']}"
+    next_min  = s.get("next_min")
+    progress  = ""
+    if next_min:
+        pct = min(100, int(s["total_sales"] / next_min * 100))
+        bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+        progress = f"\n\n📈 پیشرفت تا سطح بعدی:\n{bar} {pct}%  ({s['total_sales']}/{next_min})"
+
+    text = (
+        f"🏪 <b>پنل فروشنده</b>\n\n"
+        f"{s['level_emoji']} سطح: <b>{s['level_name']}</b>\n"
+        f"🔑 کد معرفی: <code>{s['code']}</code>\n"
+        f"🔗 لینک: <code>{link}</code>\n\n"
+        f"👥 کاربران جذب‌شده: <b>{s['invited_users']}</b>\n"
+        f"🛒 فروش موفق: <b>{s['total_sales']}</b>\n"
+        f"💰 درآمد کل: <b>{int(s['total_earned'] or 0):,}</b> تومان\n"
+        f"💳 قابل برداشت: <b>{int(s['wallet_balance'] or 0):,}</b> تومان"
+        f"{progress}"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("📋 کپی کد", callback_data=f"seller_copy_{s['code']}"),
+        types.InlineKeyboardButton("📜 تاریخچه فروش", callback_data="seller_history"),
+    )
+    kb.add(types.InlineKeyboardButton("💸 درخواست تسویه", callback_data="seller_payout"))
+    return text, kb
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "seller_panel")
+def handle_seller_panel(call):
+    uid = call.from_user.id
+    text, kb = _seller_panel_msg(uid)
+    bot.send_message(call.message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("seller_copy_"))
+def handle_seller_copy(call):
+    code = call.data[len("seller_copy_"):]
+    bot.answer_callback_query(call.id, f"کد: {code}", show_alert=True)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "seller_history")
+def handle_seller_history(call):
+    uid = call.from_user.id
+    from db import ensure_seller_schema
+    ensure_seller_schema()
+    import sqlite3 as _sq
+    from config import DB_PATH as _DBP
+    conn = _sq.connect(_DBP); conn.row_factory = _sq.Row
+    rows = conn.execute("""
+        SELECT product_title, order_amount, commission, created_at
+        FROM seller_commissions WHERE seller_id=? ORDER BY id DESC LIMIT 10;
+    """, (uid,)).fetchall()
+    conn.close()
+    if not rows:
+        bot.answer_callback_query(call.id, "هنوز فروشی ثبت نشده", show_alert=True)
+        return
+    lines = ["📜 <b>آخرین فروش‌ها:</b>\n"]
+    for r in rows:
+        lines.append(f"• {r['product_title'] or '—'} — {int(r['commission']):,} ت  <i>{(r['created_at'] or '')[:10]}</i>")
+    bot.send_message(call.message.chat.id, "\n".join(lines), parse_mode="HTML")
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "seller_payout")
+def handle_seller_payout_start(call):
+    uid = call.from_user.id
+    from db import seller_get
+    s = seller_get(uid)
+    if not s or int(s.get("wallet_balance",0)) < 50000:
+        bot.answer_callback_query(call.id,
+            "حداقل موجودی برای تسویه ۵۰,۰۰۰ تومان است.", show_alert=True)
+        return
+    user_states[uid] = {"mode": "seller_payout", "step": "amount",
+                        "max": int(s["wallet_balance"])}
+    bot.send_message(call.message.chat.id,
+        f"💸 <b>درخواست تسویه</b>\n\n"
+        f"💳 موجودی قابل برداشت: <b>{int(s['wallet_balance']):,}</b> تومان\n\n"
+        "مبلغ درخواستی را ارسال کنید (عدد — به تومان):",
+        parse_mode="HTML")
+    bot.answer_callback_query(call.id)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "seller_payout")
+def handle_seller_payout_flow(message):
+    uid   = message.from_user.id
+    state = user_states.get(uid, {})
+    step  = state.get("step")
+
+    if step == "amount":
+        try:
+            amount = int((message.text or "").replace(",","").strip())
+            if amount < 50000:
+                bot.send_message(message.chat.id, "❌ حداقل مبلغ ۵۰,۰۰۰ تومان است."); return
+            if amount > state.get("max", 0):
+                bot.send_message(message.chat.id, "❌ مبلغ از موجودی بیشتر است."); return
+            state["amount"] = amount
+            state["step"]   = "card"
+            user_states[uid] = state
+            bot.send_message(message.chat.id, "💳 شماره کارت مقصد را ارسال کنید (16 رقم):")
+        except Exception:
+            bot.send_message(message.chat.id, "❌ عدد صحیح وارد کنید.")
+
+    elif step == "card":
+        card = (message.text or "").replace("-","").replace(" ","").strip()
+        if len(card) != 16 or not card.isdigit():
+            bot.send_message(message.chat.id, "❌ شماره کارت ۱۶ رقمی وارد کنید."); return
+        state["card"]  = card
+        state["step"]  = "name"
+        user_states[uid] = state
+        bot.send_message(message.chat.id, "👤 نام صاحب کارت را ارسال کنید:")
+
+    elif step == "name":
+        name  = (message.text or "").strip()
+        if len(name) < 3:
+            bot.send_message(message.chat.id, "❌ نام معتبر وارد کنید."); return
+        amount = state["amount"]; card = state["card"]
+        user_states.pop(uid, None)
+        from db import seller_request_payout
+        result = seller_request_payout(uid, amount, card, name)
+        if result.get("ok"):
+            bot.send_message(message.chat.id,
+                f"✅ <b>درخواست تسویه ثبت شد</b>\n\n"
+                f"💰 مبلغ: <b>{amount:,}</b> تومان\n"
+                f"💳 کارت: {card}\n"
+                f"👤 نام: {name}\n\n"
+                "پس از تأیید ادمین، مبلغ واریز می‌شود.",
+                parse_mode="HTML")
+            # اطلاع به ادمین
+            try:
+                bot.send_message(ADMIN_ID,
+                    f"💸 درخواست تسویه جدید\n"
+                    f"فروشنده: {uid}\nمبلغ: {amount:,} ت\nکارت: {card}\nنام: {name}")
+            except Exception:
+                pass
+        else:
+            bot.send_message(message.chat.id, f"❌ {result.get('error','خطا')}")
 
 
 @bot.message_handler(commands=["referral", "invite"])
@@ -1278,6 +1447,29 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                     parse_mode="HTML")
             except Exception:
                 pass
+    except Exception:
+        pass
+
+    # پورسانت فروشنده
+    try:
+        seller_uid = user_states.get(uid, {}).get("via_seller")
+        if seller_uid:
+            from db import seller_record_sale
+            commission = seller_record_sale(
+                seller_id=seller_uid, order_id=order_id,
+                buyer_id=uid, product_id=pid,
+                product_title=title, order_amount=eff_price
+            )
+            if commission > 0:
+                user_states.get(uid, {}).pop("via_seller", None)
+                try:
+                    bot.send_message(seller_uid,
+                        f"🛒 <b>فروش جدید!</b>\n"
+                        f"محصول: {title}\n"
+                        f"💰 پورسانت: <b>{commission:,}</b> تومان",
+                        parse_mode="HTML")
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -2626,6 +2818,13 @@ def handle_category_button(message):
     if not cat:
         return
     _show_category(message.chat.id, cat["id"], user_id=message.from_user.id)
+
+
+@bot.message_handler(func=lambda m: m.text == "🏪 پنل فروشنده")
+def handle_seller_panel_btn(message):
+    uid = message.from_user.id
+    text, kb = _seller_panel_msg(uid)
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_WALLET"))
