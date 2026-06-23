@@ -25,6 +25,15 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 router = APIRouter(prefix="/admin")
 
+# ── migrations at startup ────────────────────────────────────────────────────
+try:
+    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table
+    ensure_product_support_schema()
+    ensure_discount_table()
+    ensure_subscription_table()
+except Exception:
+    pass
+
 # ─────────────────────────── Config ────────────────────────────────────────
 
 def _env(k: str, default: str = "") -> str:
@@ -390,6 +399,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "orders")}
+            {nav_item("/admin/referrals", "users", "سیستم معرفی", "wallets")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
             {nav_item("/admin/partners", "handshake", "همکاران", "partners", pending_partners)}
@@ -3200,6 +3210,13 @@ async def product_new_post(request: Request,
     if not category_id.strip().isdigit():
         return _redir("/admin/products/new?flash=دسته‌بندی+انتخاب+کنید")
 
+    # migration: اطمینان از وجود ستون قبل از ذخیره
+    try:
+        from db import ensure_product_support_schema
+        ensure_product_support_schema()
+    except Exception:
+        pass
+
     cat_id = int(category_id)
     pp = int(partner_price or 0)
     slug = "".join(c if c.isalnum() else "_" for c in title).lower()[:40] or "product"
@@ -3313,6 +3330,12 @@ async def product_edit_post(request: Request, pid: int,
     form = await request.form()
     support_after = 1 if form.get("support_after_purchase") == "1" else 0
     pp = int(partner_price or 0)
+    # migration: اطمینان از وجود ستون
+    try:
+        from db import ensure_product_support_schema
+        ensure_product_support_schema()
+    except Exception:
+        pass
     conn = _db()
     try:
         conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
@@ -3801,23 +3824,43 @@ async def discounts_list(request: Request, flash: str = ""):
     ensure_discount_table()
     conn = _db()
     try:
-        codes = conn.execute("SELECT * FROM discount_codes ORDER BY id DESC;").fetchall()
+        try:
+            codes = conn.execute("""
+                SELECT dc.*,
+                       (SELECT COUNT(*) FROM discount_usage du WHERE du.code_id=dc.id) as real_uses
+                FROM discount_codes dc ORDER BY id DESC;
+            """).fetchall()
+        except Exception:
+            codes = conn.execute("SELECT * FROM discount_codes ORDER BY id DESC;").fetchall()
+        products   = conn.execute("SELECT id,title FROM products WHERE is_active=1 ORDER BY title;").fetchall()
+        categories = conn.execute("SELECT id,name FROM categories WHERE is_active=1 ORDER BY name;").fetchall()
     finally:
         conn.close()
 
+    prod_opts = '<option value="">— همه محصولات —</option>' + "".join(f'<option value="{p["id"]}">{e(p["title"])}</option>' for p in products)
+    cat_opts  = '<option value="">— همه دسته‌ها —</option>'  + "".join(f'<option value="{c["id"]}">{e(c["name"])}</option>'  for c in categories)
+
     rows = ""
     for c in codes:
-        try: pid_val = str(c["product_id"]) if c["product_id"] else "همه"
-        except: pid_val = "همه"
-        type_fa = "درصد" if c["type"] == "percent" else "ثابت (تومان)"
-        status_badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if c["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
+        type_fa  = {"percent":"درصد","fixed":"ثابت (تومان)","wallet":"اعتبار کیف‌پول"}.get(c["type"],"")
+        status_b = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if c["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
+        flags    = []
+        try:
+            if c["first_buy_only"]: flags.append('<span class="px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded">اولین خرید</span>')
+            if c["vip_only"]:       flags.append('<span class="px-1.5 py-0.5 text-xs bg-yellow-100 text-yellow-700 rounded">VIP</span>')
+        except Exception: pass
+        try: max_v = c["max_value"]
+        except: max_v = 0
+        try: real_u = c["real_uses"]
+        except: real_u = c["used_count"] or 0
+        flag_html = " ".join(flags) or "—"
         rows += f"""<tr class="border-b hover:bg-gray-50">
           <td class="px-4 py-3"><code class="text-sm font-bold text-indigo-700">{e(c['code'])}</code></td>
-          <td class="px-4 py-3 text-sm text-gray-700">{c['value']} {type_fa}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{pid_val}</td>
-          <td class="px-4 py-3 text-sm text-gray-600">{c['used_count']} / {c['max_uses'] or '∞'}</td>
+          <td class="px-4 py-3 text-sm text-gray-700">{c['value']} {type_fa}{f" (سقف {max_v:,})" if max_v else ""}</td>
+          <td class="px-4 py-3 text-xs text-gray-500">{real_u} / {c['max_uses'] or '∞'}</td>
           <td class="px-4 py-3 text-xs text-gray-400">{(c['expires_at'] or '—')[:10]}</td>
-          <td class="px-4 py-3">{status_badge}</td>
+          <td class="px-4 py-3">{flag_html}</td>
+          <td class="px-4 py-3">{status_b}</td>
           <td class="px-4 py-3">
             <div class="flex gap-1">
               <form method="post" action="/admin/discounts/{c['id']}/toggle" class="inline">
@@ -3835,19 +3878,27 @@ async def discounts_list(request: Request, flash: str = ""):
       <h1 class="text-2xl font-bold text-gray-800">🏷 کدهای تخفیف</h1>
     </div>
     <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن کد جدید</h2>
-      <form method="post" action="/admin/discounts/add">
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
-          <div><label>کد تخفیف *</label>{_input("code","مثلاً: SALE20",required=True)}</div>
-          <div><label>نوع</label>
-            <select name="type"><option value="percent">درصد</option><option value="fixed">مبلغ ثابت (تومان)</option></select>
-          </div>
-          <div><label>مقدار *</label>{_input("value","مثلاً: 20",type_="number",required=True)}</div>
-          <div><label>حداکثر استفاده (۰=نامحدود)</label>{_input("max_uses","0",type_="number")}</div>
-          <div><label>حداقل مبلغ خرید</label>{_input("min_amount","0",type_="number")}</div>
-          <div><label>تاریخ انقضا (اختیاری)</label>{_input("expires_at","","type_","date")}</div>
+      <h2 class="font-bold text-gray-700 mb-4">➕ کد جدید</h2>
+      <form method="post" action="/admin/discounts/add" class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">کد *</label>{_input("code","مثلاً: STLAND20",required=True)}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">نوع</label>
+            <select name="type"><option value="percent">درصدی (%)</option><option value="fixed">ثابت (تومان)</option><option value="wallet">اعتبار کیف‌پول</option></select></div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">مقدار *</label>{_input("value","مثلاً: 20",type_="number",required=True)}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف تخفیف (درصدی — ۰=نامحدود)</label>{_input("max_value","0",type_="number")}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ سفارش</label>{_input("min_amount","0",type_="number")}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف کل (۰=نامحدود)</label>{_input("max_uses","0",type_="number")}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف هر کاربر</label>{_input("max_uses_per_user","0",type_="number")}</div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">تاریخ انقضا</label><input type="date" name="expires_at"></div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">محصول خاص</label><select name="product_id">{prod_opts}</select></div>
+          <div><label class="text-sm font-medium text-gray-700 block mb-1">دسته خاص</label><select name="category_id">{cat_opts}</select></div>
         </div>
-        {_btn("افزودن کد","",color="green")}
+        <div class="flex flex-wrap gap-4 p-4 bg-gray-50 rounded-lg">
+          <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" name="first_buy_only" value="1"> فقط اولین خرید</label>
+          <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" name="vip_only" value="1"> فقط VIP</label>
+        </div>
+        <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>{_input("description","مناسبت، هدف...")}</div>
+        {_btn("➕ افزودن","",color="green")}
       </form>
     </div>
     <div class="card overflow-hidden">
@@ -3855,11 +3906,10 @@ async def discounts_list(request: Request, flash: str = ""):
         <table class="w-full text-right min-w-max">
           <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
             <th class="px-4 py-3">کد</th><th class="px-4 py-3">تخفیف</th>
-            <th class="px-4 py-3">محصول</th><th class="px-4 py-3">استفاده</th>
-            <th class="px-4 py-3">انقضا</th><th class="px-4 py-3">وضعیت</th>
-            <th class="px-4 py-3">عملیات</th>
+            <th class="px-4 py-3">استفاده</th><th class="px-4 py-3">انقضا</th>
+            <th class="px-4 py-3">ویژگی</th><th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>هنوز کدی اضافه نشده</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>کدی اضافه نشده</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
@@ -3873,27 +3923,41 @@ async def discounts_add(request: Request):
     if guard: return guard
     from db import ensure_discount_table
     ensure_discount_table()
-    form = await request.form()
-    code = str(form.get("code","")).strip().upper()
-    dtype = str(form.get("type","percent"))
-    value = int(form.get("value") or 0)
+    form     = await request.form()
+    code     = str(form.get("code","")).strip().upper()
+    dtype    = str(form.get("type","percent"))
+    value    = int(form.get("value") or 0)
+    max_val  = int(form.get("max_value") or 0)
+    min_amt  = int(form.get("min_amount") or 0)
     max_uses = int(form.get("max_uses") or 0)
-    min_amount = int(form.get("min_amount") or 0)
-    expires_at = str(form.get("expires_at","")).strip() or None
+    max_per  = int(form.get("max_uses_per_user") or 0)
+    exp      = str(form.get("expires_at","")).strip() or None
+    pid      = form.get("product_id") or None
+    cid      = form.get("category_id") or None
+    fbo      = 1 if form.get("first_buy_only") == "1" else 0
+    vip      = 1 if form.get("vip_only") == "1" else 0
+    desc     = str(form.get("description","")).strip()
     if not code or not value:
         return _redir("/admin/discounts?flash=کد+و+مقدار+اجباری+است")
     conn = _db()
     try:
-        conn.execute(
-            "INSERT INTO discount_codes (code,type,value,max_uses,min_amount,expires_at) VALUES (?,?,?,?,?,?);",
-            (code, dtype, value, max_uses, min_amount, expires_at)
-        )
+        try:
+            conn.execute("""INSERT INTO discount_codes
+                (code,type,value,max_value,min_amount,max_uses,max_uses_per_user,
+                 product_id,category_id,first_buy_only,vip_only,expires_at,description)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);""",
+                (code,dtype,value,max_val,min_amt,max_uses,max_per,
+                 pid or None, cid or None, fbo, vip, exp, desc))
+        except Exception:
+            # fallback برای schema قدیمی
+            conn.execute("INSERT INTO discount_codes (code,type,value,max_uses,min_amount,expires_at) VALUES (?,?,?,?,?,?);",
+                (code,dtype,value,max_uses,min_amt,exp))
         conn.commit()
     except Exception as ex:
         return _redir(f"/admin/discounts?flash=خطا:+{str(ex)[:40]}")
     finally:
         conn.close()
-    _log(request, "ایجاد کد تخفیف", "تخفیف", f"کد: {code}")
+    _log(request, "ایجاد کد تخفیف", "تخفیف", f"کد: {code} | نوع: {dtype} | مقدار: {value}")
     return _redir("/admin/discounts?flash=کد+تخفیف+اضافه+شد")
 
 
@@ -3924,6 +3988,97 @@ async def discount_delete(request: Request, cid: int):
         conn.close()
     _log(request, "حذف کد تخفیف", "تخفیف", f"id:{cid}")
     return _redir("/admin/discounts?flash=کد+حذف+شد")
+
+
+@router.get("/referrals", response_class=HTMLResponse)
+async def referrals_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import ensure_referral_schema, get_referral_settings
+    ensure_referral_schema()
+    settings = get_referral_settings()
+    conn = _db()
+    try:
+        refs = conn.execute("""
+            SELECT r.*, u1.full_name as referrer_name, u2.full_name as referred_name
+            FROM referrals r
+            LEFT JOIN users u1 ON u1.user_id=r.referrer_id
+            LEFT JOIN users u2 ON u2.user_id=r.referred_id
+            ORDER BY r.id DESC LIMIT 200;
+        """).fetchall()
+        total     = conn.execute("SELECT COUNT(*) FROM referrals;").fetchone()[0]
+        rewarded  = conn.execute("SELECT COUNT(*) FROM referrals WHERE rewarded=1;").fetchone()[0]
+        total_pay = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;").fetchone()[0]
+    except Exception:
+        refs = []; total = rewarded = total_pay = 0
+    finally:
+        conn.close()
+
+    rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-3 text-xs text-gray-400">#{r['id']}</td>
+      <td class="px-4 py-3 text-sm">{e(r['referrer_name'] or str(r['referrer_id']))}</td>
+      <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
+      <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت شد</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">در انتظار خرید</span>'}</td>
+      <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
+      <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+    </tr>""" for r in refs)
+
+    body = f"""
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">👥 سیستم معرفی</h1>
+    </div>
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total}</div><div class="text-xs text-gray-400 mt-1">کل معرفی‌ها</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{rewarded}</div><div class="text-xs text-gray-400 mt-1">پرداخت شده</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{int(total_pay):,}</div><div class="text-xs text-gray-400 mt-1">جمع پاداش (تومان)</div></div>
+    </div>
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-4">⚙️ تنظیمات</h2>
+      <form method="post" action="/admin/referrals/settings" class="flex flex-wrap gap-4 items-end">
+        <div><label class="text-sm font-medium text-gray-700 block mb-1">مبلغ پاداش (تومان)</label>
+          {_input("reward_amount","",str(settings.get("reward_amount",5000)),"number",True)}</div>
+        <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت سیستم</label>
+          <select name="is_active">
+            <option value="1" {"selected" if settings.get("is_active") else ""}>فعال</option>
+            <option value="0" {"" if settings.get("is_active") else "selected"}>غیرفعال</option>
+          </select></div>
+        {_btn("ذخیره","",color="green")}
+      </form>
+    </div>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">#</th><th class="px-4 py-3">معرف</th><th class="px-4 py-3">کاربر جدید</th>
+            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پاداش</th><th class="px-4 py-3">تاریخ</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>معرفی‌ای ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("سیستم معرفی", body, adm, flash=flash)
+
+
+@router.post("/referrals/settings")
+async def referrals_settings(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    form = await request.form()
+    amount = int(form.get("reward_amount") or 5000)
+    active = int(form.get("is_active") or 1)
+    from db import ensure_referral_schema
+    ensure_referral_schema()
+    conn = _db()
+    try:
+        conn.execute("UPDATE referral_settings SET reward_amount=?,is_active=?,updated_at=datetime('now') WHERE id=1;",
+                     (amount, active))
+        conn.commit()
+    finally:
+        conn.close()
+    _log(request, "تنظیم معرفی", "معرفی", f"پاداش: {amount:,} | فعال: {active}")
+    return _redir("/admin/referrals?flash=تنظیمات+ذخیره+شد")
 
 
 @router.get("/orders/export.xlsx")
