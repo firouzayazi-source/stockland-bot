@@ -6250,15 +6250,17 @@ async def partners_list(request: Request, status_filter: str="", flash: str=""):
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-4">🤝 همکاران</h1>
     {tabs}
-    <div class="bg-white rounded-xl shadow overflow-hidden">
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">User ID</th><th class="px-4 py-3">نام</th>
-          <th class="px-4 py-3">شماره</th><th class="px-4 py-3">شهر|فروشگاه</th>
-          <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"}</tbody>
-      </table>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">User ID</th><th class="px-4 py-3">نام</th>
+            <th class="px-4 py-3">شماره</th><th class="px-4 py-3">شهر / فروشگاه</th>
+            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
+          </tr></thead>
+          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"}</tbody>
+        </table>
+      </div>
     </div>"""
 
     return _layout("همکاران", body, adm, flash=flash)
