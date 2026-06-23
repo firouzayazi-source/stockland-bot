@@ -2607,3 +2607,283 @@ def get_referral_stats(referrer_id: int) -> dict:
         return {"total": total, "rewarded": rewarded, "earned": int(earned)}
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── سیستم فروشندگان ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+SELLER_LEVELS = [
+    {"id":1,"name":"برنز",  "emoji":"🥉","min_sales":0,  "commission":50000},
+    {"id":2,"name":"نقره",  "emoji":"🥈","min_sales":5,  "commission":70000},
+    {"id":3,"name":"طلایی", "emoji":"🥇","min_sales":20, "commission":100000},
+    {"id":4,"name":"الماس", "emoji":"💎","min_sales":50, "commission":300000},
+]
+
+def ensure_seller_schema():
+    conn = _get_connection()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS seller_levels (
+            id              INTEGER PRIMARY KEY,
+            name            TEXT    NOT NULL,
+            emoji           TEXT    DEFAULT '',
+            min_sales       INTEGER DEFAULT 0,
+            commission      INTEGER DEFAULT 50000,
+            updated_at      TEXT    DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS sellers (
+            user_id         INTEGER PRIMARY KEY,
+            code            TEXT    UNIQUE NOT NULL,
+            level_id        INTEGER DEFAULT 1,
+            status          TEXT    DEFAULT 'active',
+            total_sales     INTEGER DEFAULT 0,
+            total_earned    INTEGER DEFAULT 0,
+            wallet_balance  INTEGER DEFAULT 0,
+            custom_commission INTEGER DEFAULT NULL,
+            invited_users   INTEGER DEFAULT 0,
+            created_at      TEXT    DEFAULT (datetime('now','localtime')),
+            updated_at      TEXT    DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY(level_id) REFERENCES seller_levels(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS seller_commissions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            seller_id       INTEGER NOT NULL,
+            order_id        INTEGER NOT NULL,
+            buyer_id        INTEGER NOT NULL,
+            product_id      INTEGER,
+            product_title   TEXT    DEFAULT '',
+            order_amount    INTEGER DEFAULT 0,
+            commission      INTEGER DEFAULT 0,
+            level_id        INTEGER DEFAULT 1,
+            status          TEXT    DEFAULT 'earned',
+            created_at      TEXT    DEFAULT (datetime('now','localtime')),
+            paid_at         TEXT    DEFAULT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS seller_payouts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            seller_id       INTEGER NOT NULL,
+            amount          INTEGER NOT NULL,
+            status          TEXT    DEFAULT 'pending',
+            card_number     TEXT    DEFAULT '',
+            card_name       TEXT    DEFAULT '',
+            requested_at    TEXT    DEFAULT (datetime('now','localtime')),
+            processed_at    TEXT    DEFAULT NULL,
+            admin_note      TEXT    DEFAULT ''
+        );
+    """)
+    # seed default levels
+    for lv in SELLER_LEVELS:
+        conn.execute("""INSERT OR IGNORE INTO seller_levels (id,name,emoji,min_sales,commission)
+            VALUES (?,?,?,?,?);""", (lv["id"],lv["name"],lv["emoji"],lv["min_sales"],lv["commission"]))
+    conn.commit()
+    conn.close()
+
+
+def _gen_seller_code() -> str:
+    import random, string
+    while True:
+        code = "STLAND-" + "".join(random.choices(string.digits, k=4))
+        conn = _get_connection()
+        exists = conn.execute("SELECT 1 FROM sellers WHERE code=?;", (code,)).fetchone()
+        conn.close()
+        if not exists:
+            return code
+
+
+def seller_activate(user_id: int) -> str:
+    """فعال‌سازی فروشنده — کد می‌سازه."""
+    ensure_seller_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        existing = conn.execute("SELECT code FROM sellers WHERE user_id=?;", (user_id,)).fetchone()
+        if existing:
+            return existing["code"]
+        code = _gen_seller_code()
+        conn.execute("INSERT INTO sellers (user_id,code) VALUES (?,?);", (user_id, code))
+        conn.commit()
+        return code
+    finally:
+        conn.close()
+
+
+def seller_get(user_id: int) -> dict | None:
+    ensure_seller_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("""
+            SELECT s.*, sl.name as level_name, sl.emoji as level_emoji,
+                   sl.commission as level_commission, sl.min_sales as level_min,
+                   (SELECT sl2.min_sales FROM seller_levels sl2 WHERE sl2.id=s.level_id+1 LIMIT 1) as next_min
+            FROM sellers s JOIN seller_levels sl ON sl.id=s.level_id
+            WHERE s.user_id=?;
+        """, (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def seller_is_active(user_id: int) -> bool:
+    ensure_seller_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT status FROM sellers WHERE user_id=? AND status='active';", (user_id,)).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+def seller_get_commission(seller_id: int, product_id: int = None) -> int:
+    """محاسبه پورسانت — اختصاصی اگه داشت، وگرنه سطح."""
+    ensure_seller_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        s = conn.execute("""
+            SELECT s.custom_commission, sl.commission
+            FROM sellers s JOIN seller_levels sl ON sl.id=s.level_id
+            WHERE s.user_id=? AND s.status='active';
+        """, (seller_id,)).fetchone()
+        if not s:
+            return 0
+        return int(s["custom_commission"] if s["custom_commission"] else s["commission"])
+    finally:
+        conn.close()
+
+
+def seller_record_sale(seller_id: int, order_id: int, buyer_id: int,
+                        product_id: int, product_title: str, order_amount: int) -> int:
+    """ثبت فروش و پورسانت — returns commission amount."""
+    ensure_seller_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        s = conn.execute("SELECT * FROM sellers WHERE user_id=? AND status='active';", (seller_id,)).fetchone()
+        if not s:
+            return 0
+        commission = seller_get_commission(seller_id, product_id)
+        now = datetime.utcnow().isoformat()
+        conn.execute("""
+            INSERT INTO seller_commissions
+                (seller_id,order_id,buyer_id,product_id,product_title,order_amount,commission,level_id,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?);
+        """, (seller_id, order_id, buyer_id, product_id, product_title, order_amount, commission, s["level_id"], now))
+
+        new_sales = int(s["total_sales"]) + 1
+        new_earned = int(s["total_earned"]) + commission
+        new_wallet = int(s["wallet_balance"]) + commission
+
+        # بررسی ارتقای سطح
+        new_level = s["level_id"]
+        levels = conn.execute("SELECT * FROM seller_levels ORDER BY min_sales DESC;").fetchall()
+        for lv in levels:
+            if new_sales >= lv["min_sales"]:
+                new_level = lv["id"]
+                break
+
+        conn.execute("""
+            UPDATE sellers SET total_sales=?, total_earned=?, wallet_balance=?,
+            level_id=?, invited_users=invited_users+1, updated_at=? WHERE user_id=?;
+        """, (new_sales, new_earned, new_wallet, new_level, now, seller_id))
+        conn.commit()
+        return commission
+    finally:
+        conn.close()
+
+
+def seller_request_payout(seller_id: int, amount: int, card_number: str, card_name: str) -> dict:
+    ensure_seller_schema()
+    conn = _get_connection()
+    try:
+        s = conn.execute("SELECT wallet_balance FROM sellers WHERE user_id=?;", (seller_id,)).fetchone()
+        if not s or int(s[0]) < amount:
+            return {"ok": False, "error": "موجودی کافی نیست"}
+        conn.execute("""INSERT INTO seller_payouts (seller_id,amount,card_number,card_name)
+            VALUES (?,?,?,?);""", (seller_id, amount, card_number, card_name))
+        conn.execute("UPDATE sellers SET wallet_balance=wallet_balance-? WHERE user_id=?;", (amount, seller_id))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def seller_list_all() -> list:
+    ensure_seller_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT s.*, sl.name as level_name, sl.emoji as level_emoji,
+                   u.full_name, u.username
+            FROM sellers s
+            JOIN seller_levels sl ON sl.id=s.level_id
+            LEFT JOIN users u ON u.user_id=s.user_id
+            ORDER BY s.total_sales DESC;
+        """).fetchall()
+    finally:
+        conn.close()
+
+
+def seller_list_payouts(status: str = None) -> list:
+    ensure_seller_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = f"WHERE p.status='{status}'" if status else ""
+        return conn.execute(f"""
+            SELECT p.*, s.code, u.full_name, u.username
+            FROM seller_payouts p
+            JOIN sellers s ON s.user_id=p.seller_id
+            LEFT JOIN users u ON u.user_id=p.seller_id
+            {where} ORDER BY p.id DESC LIMIT 200;
+        """).fetchall()
+    finally:
+        conn.close()
+
+
+def seller_update(seller_id: int, **kwargs):
+    ensure_seller_schema()
+    conn = _get_connection()
+    try:
+        allowed = {"status","level_id","custom_commission","wallet_balance"}
+        sets = ", ".join(f"{k}=?" for k in kwargs if k in allowed)
+        vals = [v for k,v in kwargs.items() if k in allowed]
+        if sets:
+            conn.execute(f"UPDATE sellers SET {sets}, updated_at=datetime('now') WHERE user_id=?;",
+                         vals + [seller_id])
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def seller_payout_update(payout_id: int, status: str, note: str = ""):
+    ensure_seller_schema()
+    conn = _get_connection()
+    try:
+        p = conn.execute("SELECT seller_id, amount, status FROM seller_payouts WHERE id=?;", (payout_id,)).fetchone()
+        if not p:
+            return
+        if p[2] != "pending":
+            return
+        conn.execute("UPDATE seller_payouts SET status=?,admin_note=?,processed_at=datetime('now') WHERE id=?;",
+                     (status, note, payout_id))
+        # اگه رد شد پول برگرده
+        if status == "rejected":
+            conn.execute("UPDATE sellers SET wallet_balance=wallet_balance+? WHERE user_id=?;", (p[1], p[0]))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def seller_get_levels() -> list:
+    ensure_seller_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM seller_levels ORDER BY id;").fetchall()
+    finally:
+        conn.close()
