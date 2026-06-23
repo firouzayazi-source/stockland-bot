@@ -31,16 +31,7 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     if sys_row1:
         kb.row(*sys_row1)
 
-    # پنل فروشنده (اگه فعال باشه)
-    if user_id:
-        try:
-            from db import seller_is_active
-            if seller_is_active(int(user_id)):
-                kb.row(types.KeyboardButton("🏪 پنل فروشنده"))
-        except Exception:
-            pass
-
-    # همکار
+    # همکار یا درخواست نمایندگی
     partner_btn = None
     if user_id and is_partner_approved(int(user_id)):
         if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):

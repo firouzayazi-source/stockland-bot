@@ -1312,11 +1312,14 @@ def reject_partner(tg_user_id: int):
 
 def is_partner_approved(tg_user_id: int) -> bool:
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM partners WHERE tg_user_id=? AND status='approved' LIMIT 1;", (tg_user_id,))
-    ok = cur.fetchone() is not None
-    conn.close()
-    return ok
+    try:
+        ok = conn.execute(
+            "SELECT 1 FROM partners WHERE tg_user_id=? AND status='approved' LIMIT 1;",
+            (tg_user_id,)
+        ).fetchone() is not None
+        return ok
+    finally:
+        conn.close()
 
 
 def count_user_product_orders_today(user_id: int, product_id: int | None = None, buyer_type: str | None = None) -> int:
@@ -2887,3 +2890,42 @@ def seller_get_levels() -> list:
         return conn.execute("SELECT * FROM seller_levels ORDER BY id;").fetchall()
     finally:
         conn.close()
+
+
+# ── درخواست فروشندگی (جایگزین درخواست نمایندگی) ──────────────────────────────
+
+def seller_apply(user_id: int, full_name: str, phone: str, city: str, shop_name: str, note: str = "") -> bool:
+    """ثبت درخواست فروشندگی — ذخیره در partner_requests برای بررسی ادمین."""
+    try:
+        upsert_partner_request(
+            tg_user_id=user_id, phone=phone, username="",
+            full_name=full_name, note=note, city=city, shop_name=shop_name
+        )
+        return True
+    except Exception:
+        return False
+
+
+def seller_pending_applications() -> list:
+    """درخواست‌های در انتظار فروشندگی."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT p.*, u.username
+            FROM partners p
+            LEFT JOIN users u ON u.user_id=p.tg_user_id
+            WHERE p.status='pending'
+            ORDER BY p.created_at DESC LIMIT 100;
+        """).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def seller_approve_application(user_id: int) -> str:
+    """تأیید درخواست: approve در partners + activate در sellers."""
+    approve_partner(user_id)
+    code = seller_activate(user_id)
+    return code
