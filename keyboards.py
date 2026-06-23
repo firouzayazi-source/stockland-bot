@@ -1,12 +1,12 @@
 from telebot import types
 from db import get_root_categories, get_subcategories, get_category_products, is_partner_approved
-from ui_texts import MAIN_BUTTON_KEYS, t, is_main_button_enabled, DEFAULT_UI_TEXTS
 
 
 # ─── منوی اصلی (Reply Keyboard) ─────────────────────────────────────────────
 
 def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     """منوی اصلی داینامیک — دسته‌های ریشه از DB + دکمه‌های سیستمی"""
+    from ui_texts import t, is_main_button_enabled, DEFAULT_UI_TEXTS
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 
     # دکمه‌های دسته‌بندی (داینامیک از DB)
@@ -17,14 +17,12 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
             emoji = (cat["emoji"] or "").strip()
             label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
             cat_buttons.append(types.KeyboardButton(label))
-        # دو تا دو تا نشون بده
         for i in range(0, len(cat_buttons), 2):
             if i + 1 < len(cat_buttons):
                 kb.row(cat_buttons[i], cat_buttons[i + 1])
             else:
                 kb.row(cat_buttons[i])
 
-    # دکمه‌های سیستمی ثابت
     sys_row1 = []
     if is_main_button_enabled("MAIN_BTN_MY_ORDERS"):
         sys_row1.append(types.KeyboardButton(t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "خریدهای من 🧾"))))
@@ -33,7 +31,16 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     if sys_row1:
         kb.row(*sys_row1)
 
-    # همکار یا درخواست نمایندگی
+    # پنل فروشنده (اگه فعال باشه)
+    if user_id:
+        try:
+            from db import seller_is_active
+            if seller_is_active(int(user_id)):
+                kb.row(types.KeyboardButton("🏪 پنل فروشنده"))
+        except Exception:
+            pass
+
+    # همکار
     partner_btn = None
     if user_id and is_partner_approved(int(user_id)):
         if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
