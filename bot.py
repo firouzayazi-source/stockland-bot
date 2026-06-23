@@ -850,8 +850,8 @@ def handle_start(message):
     init_db(DB_PATH)
     ticket_ensure_schema()
 
-    uid = message.from_user.id
-    username = message.from_user.username
+    uid       = message.from_user.id
+    username  = message.from_user.username
     full_name = ((message.from_user.first_name or "") + " " + (message.from_user.last_name or "")).strip()
 
     try:
@@ -859,8 +859,45 @@ def handle_start(message):
     except Exception:
         pass
 
+    # بررسی لینک معرفی: /start ref_12345
+    args = message.text.split() if message.text else []
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            referrer_id = int(args[1][4:])
+            if referrer_id != uid:
+                from db import register_referral, get_referral_settings, ensure_referral_schema
+                ensure_referral_schema()
+                settings = get_referral_settings()
+                if settings.get("is_active"):
+                    register_referral(referrer_id, uid)
+        except Exception:
+            pass
+
     text = tf("MSG_WELCOME", name=full_name or "دوست عزیز")
     bot.send_message(message.chat.id, text, reply_markup=main_menu(user_id=uid), parse_mode="HTML")
+
+
+@bot.message_handler(commands=["referral", "invite"])
+def handle_referral_cmd(message):
+    uid = message.from_user.id
+    from db import get_referral_stats, get_referral_settings, ensure_referral_schema
+    ensure_referral_schema()
+    settings = get_referral_settings()
+    if not settings.get("is_active"):
+        bot.send_message(message.chat.id, "❌ سیستم معرفی فعلاً غیرفعال است.")
+        return
+    stats    = get_referral_stats(uid)
+    bot_info = bot.get_me()
+    link     = f"https://t.me/{bot_info.username}?start=ref_{uid}"
+    bot.send_message(message.chat.id,
+        f"🔗 <b>لینک معرفی شما:</b>\n<code>{link}</code>\n\n"
+        f"👥 معرفی‌شدگان: <b>{stats['total']}</b>\n"
+        f"✅ پرداخت‌شده: <b>{stats['rewarded']}</b>\n"
+        f"💰 کل درآمد: <b>{stats['earned']:,}</b> تومان\n\n"
+        f"📌 به ازای هر خرید اول دوستی که معرفی می‌کنید "
+        f"<b>{settings.get('reward_amount',5000):,}</b> تومان به کیف‌پول شما اضافه می‌شود.",
+        parse_mode="HTML"
+    )
 
 
 
@@ -1228,6 +1265,22 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         buyer_type=buyer_type
     )
 
+    # پاداش معرفی — فقط اگه این اولین خرید کاربره
+    try:
+        from db import process_referral_reward, ensure_referral_schema
+        ensure_referral_schema()
+        ref_result = process_referral_reward(uid, order_id)
+        if ref_result.get("rewarded"):
+            try:
+                bot.send_message(ref_result["referrer_id"],
+                    f"🎉 یکی از دوستانی که معرفی کردید خرید کرد!\n"
+                    f"💰 <b>{ref_result['amount']:,}</b> تومان به کیف‌پول شما اضافه شد.",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # ----------------------------
     # تحویل فوری در صورت وجود موجودی
     # ----------------------------
@@ -1428,7 +1481,7 @@ def _show_order_summary(chat_id, uid, product, category, pid):
         )
     else:
         kb.add(types.InlineKeyboardButton(
-            "🎟 دارم کد تخفیف",
+            "🎟 کد تخفیف دارم",
             callback_data=f"enter_code_{category}_{pid}"
         ))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_purchase"))
