@@ -584,18 +584,19 @@ def _ticket_user_kb(ticket_id: int, has_messages: bool = False) -> types.InlineK
 
 
 def _is_real_message(msg_text: str, content_type: str) -> bool:
-    """آیا این پیام واقعی و معتبر است؟ (نه استیکر/ایموجی/نقطه/فاصله)"""
-    if content_type not in ("text", "photo", "document", "voice", "video", "audio"):
-        return False  # استیکر، animation و... واقعی نیستن
+    """آیا این پیام واقعی و معتبر است؟"""
+    # رسانه‌ها بدون متن هم معتبرن
+    if content_type in ("photo", "document", "voice", "video", "audio"):
+        return True
+    if content_type != "text":
+        return False  # استیکر، animation و... قبول نیست
     if not msg_text or not msg_text.strip():
         return False
     text = msg_text.strip()
-    # پیام‌های بی‌معنی
     if len(text) <= 2:
         return False
-    # فقط ایموجی یا نقطه
     import unicodedata
-    non_emoji = [c for c in text if unicodedata.category(c) not in ('So', 'Sk', 'Sm', 'Sc')]
+    non_emoji = [c for c in text if unicodedata.category(c) not in ('So','Sk','Sm','Sc')]
     if len("".join(non_emoji).strip()) <= 1:
         return False
     return True
@@ -743,8 +744,9 @@ def _ticket_v2_handle_user_message(message) -> None:
     # ─── بررسی واقعی بودن پیام ───────────────────────────────────────────
     txt = (message.text or "").strip()
     if not _is_real_message(txt, message.content_type):
-        # پیام غیرواقعی — از سهمیه کسر نمی‌شه
-        bot.reply_to(message, "لطفاً پیام خود را با متن کامل ارسال کنید.")
+        bot.reply_to(message,
+            "لطفاً پیام متنی یا عکس/فایل معتبر ارسال کنید.\n"
+            "(استیکر و ایموجی تنها قبول نمی‌شود)")
         return
 
     media = message.content_type if message.content_type != "text" else None
