@@ -3185,12 +3185,20 @@ async def product_new_get(request: Request):
         {_textarea("description", "توضیحات محصول...", rows=3)}</div>
       <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
         <label class="perm-label" style="font-size:13px">
-          <input type="checkbox" name="support_after_purchase" value="1" style="width:16px;height:16px;min-height:16px;cursor:pointer">
+          <input type="checkbox" name="support_after_purchase" value="1"
+            id="setup_chk_new" onchange="document.getElementById('setup_msg_new').style.display=this.checked?'block':'none'"
+            style="width:16px;height:16px;min-height:16px;cursor:pointer">
           <div>
             <strong>نیاز به راه‌اندازی / دریافت اطلاعات مشتری</strong>
             <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">پس از خرید، به جای تحویل مستقیم، گفتگوی راه‌اندازی باز می‌شود</div>
           </div>
         </label>
+        <div id="setup_msg_new" style="display:none;margin-top:12px">
+          <label style="font-size:12px;font-weight:600;color:var(--text-muted)">
+            متن راهنما برای مشتری — چه اطلاعاتی باید بفرستد؟
+          </label>
+          {_textarea("setup_message","مثلاً: لطفاً ایمیل اپل، شماره موبایل و کد تأیید دو مرحله‌ای را ارسال کنید.",rows=3)}
+        </div>
       </div>
       <div class="flex gap-3">{_btn("ذخیره محصول", color="green")} {_btn("انصراف", "/admin/products", "slate")}</div>
     </form>"""
@@ -3228,10 +3236,11 @@ async def product_new_post(request: Request,
         cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
             INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase)
-            VALUES (?,?,?,?,?,?,?,?,?,1,?);""",
+                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?,?);""",
             (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
-             int(limit_c or 0), int(limit_p or 0), description.strip(), support_after))
+             int(limit_c or 0), int(limit_p or 0), description.strip(), support_after,
+             str(form.get("setup_message","")).strip()))
         conn.commit()
     finally:
         conn.close()
@@ -3286,14 +3295,23 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
           <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>
             {_textarea("description","",str(p["description"] or ""),rows=3)}</div>
           <div class="p-4 bg-gray-50 rounded-lg">
-            <label class="flex items-center gap-3 cursor-pointer">
+            <label class="flex items-center gap-3 cursor-pointer mb-3">
               <input type="checkbox" name="support_after_purchase" value="1"
+                id="setup_chk_edit"
+                onchange="document.getElementById('setup_msg_edit').style.display=this.checked?'block':'none'"
                 {"checked" if int(p["support_after_purchase"] if "support_after_purchase" in p.keys() else 0) else ""}>
               <div>
                 <div class="text-sm font-medium text-gray-800">نیاز به راه‌اندازی / دریافت اطلاعات مشتری</div>
-                <div class="text-xs text-gray-400 mt-0.5">پس از خرید، گفتگوی پشتیبانی اختصاصی باز می‌شود</div>
+                <div class="text-xs text-gray-400 mt-0.5">پس از خرید، محصول مستقیم ارسال نمی‌شود — گفتگوی راه‌اندازی باز می‌شود</div>
               </div>
             </label>
+            <div id="setup_msg_edit" style="display:{"block" if int(p["support_after_purchase"] if "support_after_purchase" in p.keys() else 0) else "none"}">
+              <label class="text-xs font-medium text-gray-600 block mb-1">
+                متن راهنما برای مشتری — چه اطلاعاتی باید بفرستد؟
+              </label>
+              {_textarea("setup_message","مثلاً: ایمیل اپل، شماره موبایل و کد تأیید را ارسال کنید.",
+                         value=str(p["setup_message"] if "setup_message" in p.keys() else ""),rows=3)}
+            </div>
           </div>
           {_btn("ذخیره", color="green")}
         </form>
@@ -3340,9 +3358,10 @@ async def product_edit_post(request: Request, pid: int,
     conn = _db()
     try:
         conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-            daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=? WHERE id=?;""",
+            daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=? WHERE id=?;""",
             (category,title.strip(),int(price or 0),pp if pp>0 else None,
-             int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,pid))
+             int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
+             str(form.get("setup_message","")).strip(),pid))
         conn.commit()
     finally:
         conn.close()
@@ -5996,3 +6015,4 @@ async def partner_reject(request: Request, uid: int):
     except Exception:
         pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
+    
