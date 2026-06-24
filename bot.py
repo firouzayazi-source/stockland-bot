@@ -794,18 +794,20 @@ def _ticket_v2_handle_user_message(message) -> None:
             f"✅ پیام دریافت شد. ({TICKET_MAX_USER_MSGS - new_count} پیام دیگر)"
         )
 
-    # ─── نوتیف به ادمین ─────────────────────────────────────────────────
-    panel_url = f"https://panel.stland.ir/admin/tickets/{ticket_id}"
-    notif_text = (
-        f"🔔 پیام جدید در تیکت <b>#{ticket_id}</b>\n"
-        f"کاربر: <code>{uid}</code>"
-    )
-    notif_kb = types.InlineKeyboardMarkup()
-    notif_kb.add(types.InlineKeyboardButton("🌐 مشاهده در پنل", url=panel_url))
-    try:
-        bot.send_message(ADMIN_ID, notif_text, reply_markup=notif_kb, parse_mode="HTML")
-    except Exception as ex:
-        logger.error("Admin notification failed: %s", ex)
+    # ─── نوتیف به ادمین — فقط اولین پیام از هر batch ─────────────────────
+    # اگه new_count==1 یعنی اولین پیام بعد از پاسخ ادمین — حتماً نوتیف بده
+    # اگه بیشتر از ۱ باشه — نوتیف نده (قبلاً داده شده)
+    if new_count == 1:
+        panel_url = f"https://panel.stland.ir/admin/tickets/{ticket_id}"
+        notif_kb = types.InlineKeyboardMarkup()
+        notif_kb.add(types.InlineKeyboardButton("🌐 مشاهده در پنل", url=panel_url))
+        try:
+            bot.send_message(ADMIN_ID,
+                f"🔔 پیام جدید در تیکت <b>#{ticket_id}</b>\n"
+                f"کاربر: <code>{uid}</code>",
+                reply_markup=notif_kb, parse_mode="HTML")
+        except Exception as ex:
+            logger.error("Admin notification failed: %s", ex)
 
 
 # ─── Handler پیام‌های متنی کاربر در حالت تیکت ────────────────────────────────
@@ -3396,13 +3398,21 @@ def handle_callbacks(call: types.CallbackQuery):
             tid_val = int(data.split("_")[-1])
         except ValueError:
             return
-        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid_val}
         ticket = ticket_get(tid_val)
-        if not ticket or ticket["status"] == "closed":
-            bot.send_message(call.message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
+        if not ticket:
+            bot.send_message(call.message.chat.id, "❌ تیکت یافت نشد.")
             return
-        kb = _ticket_user_kb(tid_val)
-        bot.send_message(call.message.chat.id, f"💬 ادامه تیکت #{tid_val} — پیام خود را ارسال کنید:", reply_markup=kb)
+        if ticket["status"] == "closed":
+            bot.send_message(call.message.chat.id,
+                "این گفتگو بسته شده است.", reply_markup=main_menu(user_id=uid))
+            return
+        # بازگشت به حالت چت تیکت
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid_val}
+        bot.send_message(
+            call.message.chat.id,
+            f"💬 <b>گفتگوی #{tid_val} ادامه دارد</b>\n\nپیام خود را ارسال کنید:",
+            parse_mode="HTML"
+        )
         return
 
     if data.startswith("ticket_v2_close_"):
