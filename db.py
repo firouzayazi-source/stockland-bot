@@ -2484,14 +2484,18 @@ def reset_subscriptions_on_restock(product_id: int):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_product_support_schema():
-    """اضافه کردن ستون support_after_purchase به products."""
+    """اضافه کردن ستون‌های setup به products."""
     conn = _get_connection()
     try:
-        try:
-            conn.execute("ALTER TABLE products ADD COLUMN support_after_purchase INTEGER DEFAULT 0;")
-            conn.commit()
-        except Exception:
-            pass  # ستون قبلاً وجود داشت
+        for col, default in [
+            ("support_after_purchase", "INTEGER DEFAULT 0"),
+            ("setup_message", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE products ADD COLUMN {col} {default};")
+                conn.commit()
+            except Exception:
+                pass
     finally:
         conn.close()
 
@@ -2503,6 +2507,18 @@ def get_product_support_flag(product_id: int) -> bool:
         return bool(row and row[0])
     except Exception:
         return False
+    finally:
+        conn.close()
+
+
+def get_product_setup_message(product_id: int) -> str:
+    """متن راهنما برای کاربر هنگام راه‌اندازی محصول."""
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT setup_message FROM products WHERE id=? LIMIT 1;", (product_id,)).fetchone()
+        return (row[0] or "").strip() if row else ""
+    except Exception:
+        return ""
     finally:
         conn.close()
 
