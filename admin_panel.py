@@ -4944,10 +4944,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
                 FROM tickets t
                 LEFT JOIN products p ON p.id=t.product_id
                 {where_sql}
-                ORDER BY CASE t.status
-                    WHEN 'waiting_info' THEN 0 WHEN 'waiting_admin' THEN 1
-                    WHEN 'reviewing' THEN 2 WHEN 'waiting_user' THEN 3 ELSE 4 END,
-                    t.updated_at DESC LIMIT ?;
+                ORDER BY t.updated_at DESC, t.id DESC LIMIT ?;
             """, params).fetchall()
         except Exception:
             tickets = conn.execute(f"""
@@ -5142,19 +5139,34 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
 
     for msg in messages:
         is_adm = msg["sender"] == "admin"
-        pos = "flex-end" if is_adm else "flex-start"
-        bg = "var(--primary)" if is_adm else "var(--card-bg)"
-        col = "#000" if is_adm else "var(--text-main)"
-        border = "" if is_adm else "border:1px solid var(--border);"
-        lbl = "ادمین" if is_adm else f"کاربر ({user_id_val})"
-        src_badge = "" if (msg["source"] or "") == "telegram" else ' <span style="opacity:.5;font-size:10px">[پنل]</span>'
         last_msg_id = max(last_msg_id, int(msg["id"] or 0))
         content_html = _render_media(msg)
+        src_icon = "🖥" if (msg.get("source") or "") not in ("telegram","") else "📱"
+        time_str = (msg["created_at"] or "")[:16]
 
-        chat_html += f"""
-        <div style="display:flex;flex-direction:column;align-items:{pos};margin-bottom:12px" data-msg-id="{msg['id']}">
-          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">{e(lbl)}{src_badge} · {(msg["created_at"] or "")[:16]}</div>
-          <div style="background:{bg};color:{col};{border}border-radius:16px;padding:10px 14px;max-width:85%;word-break:break-word;white-space:pre-wrap;font-size:13.5px">{content_html or '<em style="opacity:.4">پیام خالی</em>'}</div>
+        if is_adm:
+            chat_html += f"""
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px" data-msg-id="{msg['id']}">
+          <div style="max-width:80%">
+            <div style="background:#2EC4B6;color:#fff;border-radius:18px 4px 18px 18px;
+                        padding:10px 14px;font-size:13.5px;word-break:break-word;white-space:pre-wrap;
+                        box-shadow:0 1px 2px rgba(0,0,0,.1)">
+              {content_html or '<em style="opacity:.6">پیام خالی</em>'}
+            </div>
+            <div style="font-size:10px;color:#aaa;text-align:left;margin-top:3px">{src_icon} ادمین · {time_str}</div>
+          </div>
+        </div>"""
+        else:
+            chat_html += f"""
+        <div style="display:flex;justify-content:flex-start;margin-bottom:10px" data-msg-id="{msg['id']}">
+          <div style="max-width:80%">
+            <div style="background:#fff;border:1px solid #E5E7EB;border-radius:4px 18px 18px 18px;
+                        padding:10px 14px;font-size:13.5px;word-break:break-word;white-space:pre-wrap;
+                        box-shadow:0 1px 2px rgba(0,0,0,.06)">
+              {content_html or '<em style="opacity:.4">پیام خالی</em>'}
+            </div>
+            <div style="font-size:10px;color:#aaa;margin-top:3px">📱 کاربر {user_id_val} · {time_str}</div>
+          </div>
         </div>"""
 
     if not chat_html:
@@ -5474,9 +5486,29 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
     finally:
         conn.close()
 
-    # ارسال به کاربر از طریق Telegram API
+    # ارسال به کاربر از طریق Telegram API — با دکمه «ادامه گفتگو»
     msg_text = f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid}):\n\n{html.escape(text)}"
-    ok = _tg_send(user_id, msg_text)
+    continue_kb = {
+        "inline_keyboard": [[
+            {"text": "💬 ادامه گفتگو", "callback_data": f"ticket_v2_continue_{tid}"}
+        ]]
+    }
+    import json as _json
+    token = _env("BOT_TOKEN", "")
+    ok = False
+    if token:
+        try:
+            r = _requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": user_id, "text": msg_text,
+                      "parse_mode": "HTML", "reply_markup": continue_kb},
+                timeout=8
+            )
+            ok = r.json().get("ok", False)
+        except Exception:
+            ok = _tg_send(user_id, msg_text)
+    else:
+        ok = _tg_send(user_id, msg_text)
 
     if ok:
         _log(request, "پاسخ تیکت", "تیکت‌ها", f"ticket #{tid}")
@@ -6015,4 +6047,3 @@ async def partner_reject(request: Request, uid: int):
     except Exception:
         pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
-    
