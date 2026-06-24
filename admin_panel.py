@@ -5141,7 +5141,9 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
         is_adm = msg["sender"] == "admin"
         last_msg_id = max(last_msg_id, int(msg["id"] or 0))
         content_html = _render_media(msg)
-        src_icon = "🖥" if (msg.get("source") or "") not in ("telegram","") else "📱"
+        try: src = msg["source"] or ""
+        except: src = ""
+        src_icon = "🖥" if src not in ("telegram", "") else "📱"
         time_str = (msg["created_at"] or "")[:16]
 
         if is_adm:
