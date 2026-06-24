@@ -239,15 +239,17 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase"))
     markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
 
-    # اگه موجودی صفره دکمه اطلاع‌رسانی نشون بده
+    # اطلاع‌رسانی موجودی — فقط برای محصولات معمولی (نه setup)
     try:
-        from db import count_feed_items
-        avail = count_feed_items(int(pid), delivered=False)
-        if avail == 0:
-            markup.add(types.InlineKeyboardButton(
-                "🔔 اطلاع بده وقتی موجود شد",
-                callback_data=f"notify_stock_{pid}"
-            ))
+        from db import count_feed_items, get_product_support_flag as _gpf
+        is_setup = _gpf(int(pid))
+        if not is_setup:
+            avail = count_feed_items(int(pid), delivered=False)
+            if avail == 0:
+                markup.add(types.InlineKeyboardButton(
+                    "🔔 اطلاع بده وقتی موجود شد",
+                    callback_data=f"notify_stock_{pid}"
+                ))
     except Exception:
         pass
 
@@ -1290,57 +1292,57 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
     # ----------------------------
     # تحویل فوری در صورت وجود موجودی
     # ----------------------------
+    # ── اول چک کن نیاز به راه‌اندازی داره یا نه ──────────────────────────
+    try:
+        ensure_product_support_schema()
+        if get_product_support_flag(pid):
+            from db import ticket_create, ticket_ensure_schema, ticket_add_message, get_product_setup_message
+            ticket_ensure_schema()
+
+            setup_msg = get_product_setup_message(pid) or "اطلاعات مورد نیاز را در این گفتگو ارسال کنید."
+
+            tid = ticket_create(
+                uid, type_="product_setup",
+                product_id=pid, order_id=order_id,
+                feed_id=None,
+                feed_data=None,
+                setup_status="waiting_info"
+            )
+            ticket_add_message(tid, "admin",
+                f"📦 سفارش #{order_id} — {title}\n\n{setup_msg}",
+                media_type=None)
+
+            kb_setup = types.InlineKeyboardMarkup()
+            kb_setup.add(types.InlineKeyboardButton(
+                "💬 ارسال اطلاعات", callback_data=f"ticket_v2_open_{tid}"
+            ))
+            bot.send_message(
+                call.message.chat.id,
+                f"✅ سفارش #{order_id} ثبت شد.\n\n"
+                f"📦 <b>{title}</b>\n\n"
+                f"🟡 <b>{setup_msg}</b>\n\n"
+                "پشتیبانی پس از دریافت اطلاعات، محصول را تحویل می‌دهد.",
+                parse_mode="HTML", reply_markup=kb_setup
+            )
+            try:
+                bot.send_message(ADMIN_ID,
+                    f"🟢 <b>گفتگوی راه‌اندازی محصول</b>\n"
+                    f"سفارش: #{order_id} | محصول: {title}\n"
+                    f"کاربر: <code>{uid}</code> | تیکت: #{tid}",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+            return  # ← هیچ feed claim نمی‌شه
+    except Exception as _se:
+        logger.error("product_setup error: %s", _se)
+
+    # ── محصول معمولی: claim از DB ─────────────────────────────────────────
     feed_item = claim_next_feed_item(pid, order_id=order_id)
 
     if feed_item:
         feed_id, feed_data = feed_item
 
-        # ── اول چک کن نیاز به راه‌اندازی داره یا نه ──────────────────────────
-        try:
-            ensure_product_support_schema()
-            if get_product_support_flag(pid):
-                from db import ticket_create, ticket_ensure_schema, ticket_add_message, get_product_setup_message
-                ticket_ensure_schema()
-
-                # پیام راهنمای ادمین برای کاربر
-                setup_msg = get_product_setup_message(pid) or "اطلاعات مورد نیاز را در این گفتگو ارسال کنید."
-
-                tid = ticket_create(
-                    uid, type_="product_setup",
-                    product_id=pid, order_id=order_id,
-                    feed_id=feed_id,
-                    feed_data=str(feed_data),
-                    setup_status="waiting_info"
-                )
-                ticket_add_message(tid, "admin",
-                    f"📦 سفارش #{order_id} — {title}\n\n{setup_msg}",
-                    media_type=None)
-
-                kb_setup = types.InlineKeyboardMarkup()
-                kb_setup.add(types.InlineKeyboardButton(
-                    "💬 ارسال اطلاعات", callback_data=f"ticket_v2_open_{tid}"
-                ))
-                bot.send_message(
-                    call.message.chat.id,
-                    f"✅ سفارش #{order_id} ثبت شد.\n\n"
-                    f"📦 <b>{title}</b>\n\n"
-                    f"🟡 <b>{setup_msg}</b>\n\n"
-                    "پشتیبانی پس از دریافت اطلاعات، محصول را تحویل می‌دهد.",
-                    parse_mode="HTML", reply_markup=kb_setup
-                )
-                try:
-                    bot.send_message(ADMIN_ID,
-                        f"🟢 <b>گفتگوی راه‌اندازی محصول</b>\n"
-                        f"سفارش: #{order_id} | محصول: {title}\n"
-                        f"کاربر: <code>{uid}</code> | تیکت: #{tid}",
-                        parse_mode="HTML")
-                except Exception:
-                    pass
-                return  # ← بدون ارسال feed_data به کاربر
-        except Exception as _se:
-            logger.error("product_setup error: %s", _se)
-
-        # ── تحویل عادی (بدون نیاز به راه‌اندازی) ────────────────────────────
+        # تحویل عادی
         bot.send_message(
             call.message.chat.id,
             f"سفارش ثبت و تحویل شد ✅\n\n"
@@ -3362,6 +3364,30 @@ def handle_callbacks(call: types.CallbackQuery):
     if data == "ticket_v2_new":
         bot.answer_callback_query(call.id)
         _support_ticket_start(call.message.chat.id, uid)
+        return
+
+    if data.startswith("ticket_v2_open_"):
+        # باز کردن تیکت راه‌اندازی — کاربر می‌تونه پیام بفرسته
+        bot.answer_callback_query(call.id)
+        try:
+            tid_val = int(data.split("_")[-1])
+        except ValueError:
+            return
+        ticket = ticket_get(tid_val)
+        if not ticket:
+            bot.send_message(call.message.chat.id, "❌ تیکت یافت نشد.")
+            return
+        if ticket["status"] == "closed":
+            bot.send_message(call.message.chat.id, "این سفارش قبلاً تکمیل شده است.", reply_markup=main_menu(user_id=uid))
+            return
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid_val}
+        bot.send_message(
+            call.message.chat.id,
+            f"💬 <b>گفتگوی راه‌اندازی #{tid_val}</b>\n\n"
+            "اطلاعات مورد نیاز را ارسال کنید.\n"
+            "می‌توانید متن، عکس، فایل یا اسکرین‌شات بفرستید.",
+            parse_mode="HTML"
+        )
         return
 
     if data.startswith("ticket_v2_continue_"):
