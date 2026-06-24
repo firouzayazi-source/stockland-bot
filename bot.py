@@ -79,7 +79,7 @@ from db import (
     subscribe_stock, get_stock_subscribers, mark_subscriptions_notified,
     reset_subscriptions_on_restock,
     # پشتیبانی محصول
-    get_product_support_flag, ensure_product_support_schema,
+    get_product_support_flag, ensure_product_support_schema, get_product_setup_message,
 )
 from services.payments import start_wallet_charge_payment
 from config import (
@@ -1295,24 +1295,16 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
     if feed_item:
         feed_id, feed_data = feed_item
 
-        bot.send_message(
-            call.message.chat.id,
-            f"سفارش ثبت و تحویل شد ✅\n\n"
-            f"شماره سفارش: #{order_id}\n"
-            f"سرویس: {title}\n"
-            f"مبلغ: {eff_price:,} تومان\n"
-            f"موجودی فعلی: {new_balance:,} تومان\n\n"
-            f"<code>{html.escape(str(feed_data))}</code>",
-            parse_mode="HTML"
-        )
-
-        # پشتیبانی اختصاصی محصول بعد از خرید
+        # ── اول چک کن نیاز به راه‌اندازی داره یا نه ──────────────────────────
         try:
             ensure_product_support_schema()
             if get_product_support_flag(pid):
-                from db import ticket_create, ticket_ensure_schema, ticket_add_message
+                from db import ticket_create, ticket_ensure_schema, ticket_add_message, get_product_setup_message
                 ticket_ensure_schema()
-                # feed_item را رزرو کرده‌ایم اما به کاربر نمی‌فرستیم
+
+                # پیام راهنمای ادمین برای کاربر
+                setup_msg = get_product_setup_message(pid) or "اطلاعات مورد نیاز را در این گفتگو ارسال کنید."
+
                 tid = ticket_create(
                     uid, type_="product_setup",
                     product_id=pid, order_id=order_id,
@@ -1320,39 +1312,35 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                     feed_data=str(feed_data),
                     setup_status="waiting_info"
                 )
-                # پیام سیستمی داخل تیکت
                 ticket_add_message(tid, "admin",
-                    f"📦 سفارش #{order_id} — {title}\n"
-                    "لطفاً اطلاعات مورد نیاز را در این گفتگو ارسال کنید.",
+                    f"📦 سفارش #{order_id} — {title}\n\n{setup_msg}",
                     media_type=None)
+
                 kb_setup = types.InlineKeyboardMarkup()
                 kb_setup.add(types.InlineKeyboardButton(
                     "💬 ارسال اطلاعات", callback_data=f"ticket_v2_open_{tid}"
                 ))
-                # به کاربر بگو اطلاعات بده — محصول هنوز ارسال نشده
                 bot.send_message(
                     call.message.chat.id,
                     f"✅ سفارش #{order_id} ثبت شد.\n\n"
                     f"📦 <b>{title}</b>\n\n"
-                    "🟡 <b>برای تکمیل سفارش، اطلاعات مورد نیاز را ارسال کنید.</b>\n"
+                    f"🟡 <b>{setup_msg}</b>\n\n"
                     "پشتیبانی پس از دریافت اطلاعات، محصول را تحویل می‌دهد.",
                     parse_mode="HTML", reply_markup=kb_setup
                 )
-                # نوتیف به ادمین
                 try:
                     bot.send_message(ADMIN_ID,
                         f"🟢 <b>گفتگوی راه‌اندازی محصول</b>\n"
-                        f"سفارش: #{order_id}\nمحصول: {title}\n"
-                        f"کاربر: <code>{uid}</code>\n"
-                        f"تیکت: #{tid}",
+                        f"سفارش: #{order_id} | محصول: {title}\n"
+                        f"کاربر: <code>{uid}</code> | تیکت: #{tid}",
                         parse_mode="HTML")
                 except Exception:
                     pass
-                return  # اتمام — محصول از طریق تیکت تحویل می‌گیره
+                return  # ← بدون ارسال feed_data به کاربر
         except Exception as _se:
-            logger.error("product_setup ticket error: %s", _se)
+            logger.error("product_setup error: %s", _se)
 
-        # تحویل عادی (اگه setup flag فعال نبود)
+        # ── تحویل عادی (بدون نیاز به راه‌اندازی) ────────────────────────────
         bot.send_message(
             call.message.chat.id,
             f"سفارش ثبت و تحویل شد ✅\n\n"
@@ -1363,17 +1351,10 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             f"<code>{html.escape(str(feed_data))}</code>",
             parse_mode="HTML"
         )
-
         try:
-            bot.send_message(
-                ADMIN_ID,
-                "📦 تحویل فوری محصول\n\n"
-                f"Order ID: #{order_id}\n"
-                f"User ID: {uid}\n"
-                f"محصول: {title} (#{pid})\n"
-                f"مبلغ: {eff_price:,} تومان"
-            )
-        except:
+            bot.send_message(ADMIN_ID,
+                f"📦 تحویل فوری\nOrder: #{order_id} | User: {uid}\n{title} — {eff_price:,} ت")
+        except Exception:
             pass
 
     else:
@@ -1581,10 +1562,11 @@ def _handle_code_input(message):
         bot.send_message(message.chat.id, f"❌ {result['error']}", reply_markup=kb)
         return
 
-    use_discount(result["code_id"])
-    state["applied_discount"] = result["discount_amount"]
-    state["applied_code"]     = code
-    user_states[uid]          = state
+    use_discount(result["code_id"], user_id=uid)
+    state["applied_discount"]  = result["discount_amount"]
+    state["applied_code"]      = code
+    state["discount_code_id"]  = result["code_id"]
+    user_states[uid]           = state
     _show_order_summary(message.chat.id, uid, product, category, pid)
 
 
@@ -1637,16 +1619,18 @@ def handle_do_pay(call):
     if exceeded:
         bot.answer_callback_query(call.id, f"سقف روزانه ({limit_val}) تکمیل شد", show_alert=True); return
 
-    base     = _get_eff_price(product, uid)
-    discount = int(user_states.get(uid, {}).get("applied_discount", 0))
+    base      = _get_eff_price(product, uid)
+    discount  = int(user_states.get(uid, {}).get("applied_discount", 0))
     eff_price = max(0, base - discount)
 
-    # پاک کردن state تخفیف
+    # state رو پاک می‌کنیم (code_id قبلاً در _handle_code_input مصرف شده)
     state = user_states.get(uid, {})
     state.pop("applied_discount", None)
     state.pop("applied_code", None)
+    state.pop("discount_code_id", None)
     state.pop("pay_type", None)
     state.pop("code_context", None)
+    state.pop("discount_asked", None)
     user_states[uid] = state
 
     wallet_balance = get_wallet_balance(uid)
