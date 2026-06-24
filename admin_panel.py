@@ -1919,6 +1919,13 @@ async def database_page(request: Request, flash: str = ""):
           <span>{RESET_LABELS.get(s,s)}</span>
         </label>''' for s in RESET_LABELS.keys())
 
+    # auto_section پیش‌محاسبه
+    if auto_files:
+        auto_section = ('<div class="card overflow-hidden mb-5"><div class="px-5 py-3 border-b bg-gray-50 flex justify-between"><span class="font-medium text-gray-700">🕐 بکاپ‌های خودکار</span><span class="text-xs text-gray-400">آخرین ۵ بکاپ</span></div><div class="overflow-x-auto"><table class="w-full text-right min-w-max"><thead><tr class="text-xs text-gray-500 border-b bg-gray-50"><th class="px-4 py-3">زمان</th><th class="px-4 py-3">حجم</th><th class="px-4 py-3">دانلود</th></tr></thead><tbody>'
+            + auto_rows + '</tbody></table></div></div>')
+    else:
+        auto_section = ""
+
     body = f"""
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold text-gray-800">💾 پشتیبان‌گیری و بازیابی</h1>
@@ -1978,20 +1985,7 @@ async def database_page(request: Request, flash: str = ""):
     </div>
 
     <!-- بکاپ‌های خودکار -->
-    {"" if not auto_files else f'''<div class="card overflow-hidden mb-5">
-      <div class="px-5 py-3 border-b bg-gray-50 flex items-center justify-between">
-        <span class="font-medium text-gray-700">🕐 بکاپ‌های خودکار</span>
-        <span class="text-xs text-gray-400">آخرین ۵ بکاپ</span>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">زمان</th><th class="px-4 py-3">حجم</th><th class="px-4 py-3">دانلود</th>
-          </tr></thead>
-          <tbody>{auto_rows}</tbody>
-        </table>
-      </div>
-    </div>'''}
+    {auto_section}
 
     <!-- ریست فکتوری -->
     <div class="card p-6 border-2 border-red-100">
