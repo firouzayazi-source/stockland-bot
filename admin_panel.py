@@ -4423,8 +4423,8 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
     # خریدها
     order_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
       <td class="px-4 py-2 text-xs text-gray-400">#{o['id']}</td>
-      <td class="px-4 py-2 text-sm">{e(o['product_title'] or o['service'] or '—')}</td>
-      <td class="px-4 py-2 text-sm font-medium text-green-600">{int(o['amount'] or 0):,} ت</td>
+      <td class="px-4 py-2 text-sm">{e(o['title'] or '—')}</td>
+      <td class="px-4 py-2 text-sm font-medium text-green-600">{int(o['price'] or 0):,} ت</td>
       <td class="px-4 py-2 text-xs text-gray-400">{(o['created_at'] or '')[:16]}</td>
     </tr>""" for o in orders)
 
