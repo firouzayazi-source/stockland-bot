@@ -5018,7 +5018,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         for s in ("waiting_admin","waiting_user","closed","waiting_info","reviewing","ready_delivery"):
             stats[s] = conn.execute("SELECT COUNT(*) FROM tickets WHERE status=?;",(s,)).fetchone()[0]
         type_counts = {}
-        for t in ("support","product_setup","partner"):
+        for t in ("support","product_setup","partner_support"):
             type_counts[t] = conn.execute("SELECT COUNT(*) FROM tickets WHERE type=?;",(t,)).fetchone()[0]
     finally:
         conn.close()
@@ -5031,7 +5031,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         ("همه", "", sum(type_counts.values())),
         ("🔵 پشتیبانی", "support", type_counts["support"]),
         ("🟢 راه‌اندازی", "product_setup", type_counts["product_setup"]),
-        ("🟠 همکاری", "partner", type_counts["partner"]),
+        ("🤝 همکاران", "partner_support", type_counts["partner_support"]),
     ]:
         active = type_filter == val
         bg = "var(--primary)" if active else "var(--card-bg)"
