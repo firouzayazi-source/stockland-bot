@@ -108,6 +108,10 @@ DEFAULT_UI_TEXTS = {
         "لطفاً شهر خود را وارد کنید:",
     "MSG_PARTNER_SHOP_REQUEST":
         "لطفاً نام فروشگاه یا کانال خود را وارد کنید:",
+    "PARTNER_GUIDE_TEXT":
+        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
+        "متن راهنمای همکاری توسط مدیر تنظیم نشده است.\n"
+        "برای اطلاعات بیشتر با پشتیبانی در تماس باشید.",
 
     # ─── عناوین UI ────────────────────────────────────────────────────────
     "TXT_MAIN_MENU_TITLE":   "منوی اصلی",
@@ -211,6 +215,7 @@ TEXT_GROUPS = {
         "MSG_PARTNER_APPROVED", "MSG_PARTNER_REJECTED",
         "MSG_PARTNER_REQUEST_SENT", "MSG_PARTNER_PHONE_REQUEST",
         "MSG_PARTNER_CITY_REQUEST", "MSG_PARTNER_SHOP_REQUEST",
+        "PARTNER_GUIDE_TEXT",
     ],
 }
 
@@ -269,4 +274,5 @@ TEXT_DESCRIPTIONS = {
     "MSG_PARTNER_PHONE_REQUEST": "پیام | درخواست شماره موبایل",
     "MSG_PARTNER_CITY_REQUEST":  "پیام | درخواست شهر",
     "MSG_PARTNER_SHOP_REQUEST":  "پیام | درخواست نام فروشگاه",
+    "PARTNER_GUIDE_TEXT":        "متن کامل | راهنمای همکاری در فروش — از HTML پشتیبانی می‌کند",
 }
