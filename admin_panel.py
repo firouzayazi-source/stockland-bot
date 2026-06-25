@@ -2025,7 +2025,7 @@ async def database_page(request: Request, flash: str = ""):
         <div class="text-5xl mb-4" id="ov-icon">⏳</div>
         <h3 class="font-bold text-gray-800 text-lg mb-1" id="ov-title">در حال انجام...</h3>
         <p class="text-xs text-gray-400 mb-4" id="ov-msg">لطفاً صبر کنید</p>
-        <div class="w-full bg-gray-100 rounded-full h-2.5 mb-4">
+        <div style="direction:ltr" class="w-full bg-gray-100 rounded-full h-2.5 mb-4">
           <div id="ov-bar" class="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style="width:5%"></div>
         </div>
         <button onclick="document.getElementById('overlay').classList.add('hidden')"
@@ -2094,12 +2094,17 @@ async def database_page(request: Request, flash: str = ""):
               return;
             }}
             poll(d.job_id, function(res) {{
+              document.getElementById('ov-bar').style.width = '100%';
+              document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full transition-all duration-500';
               document.getElementById('ov-icon').textContent = '✅';
-              document.getElementById('ov-title').textContent = 'بکاپ آماده شد';
+              document.getElementById('ov-title').textContent = 'بکاپ آماده شد!';
               document.getElementById('ov-msg').textContent = 'فایل در حال دانلود...';
-              document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full';
               document.getElementById('ov-close').classList.remove('hidden');
-              setTimeout(function(){{window.location.href='/admin/database/backup/download/'+d.job_id;}}, 400);
+              setTimeout(function(){{
+                var a = document.createElement('a');
+                a.href = '/admin/database/backup/download/' + d.job_id;
+                a.click();
+              }}, 800);
             }});
           }});
       }} else {{
