@@ -1561,7 +1561,6 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
     content = ""
 
     if active_group == "🔘 دکمه‌های منو":
-        # فعال/غیرفعال کردن دکمه‌های سیستمی
         btn_label_map = {
             "MAIN_BTN_MY_ORDERS": "خریدهای من 🧾",
             "MAIN_BTN_WALLET": "کیف پول 💰",
@@ -1570,91 +1569,65 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
             "MAIN_BTN_GUIDE": "راهنما 🔑",
             "MAIN_BTN_SUPPORT": "پشتیبانی 👨‍💻",
         }
-        rows = ""
+        toggle_rows = ""
         for k in _BTN_KEYS:
             en = btn_states.get(k, True)
-            badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if en else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
-            rows += f"""<tr class="border-b hover:bg-gray-50">
-              <td class="px-4 py-3 text-sm font-medium">{e(btn_label_map.get(k,k))}</td>
-              <td class="px-4 py-3">{badge}</td>
-              <td class="px-4 py-3 text-xs text-gray-400">منوی اصلی ربات</td>
-              <td class="px-4 py-3"><form method="post" action="/admin/settings/toggle-btn">
-                <input type="hidden" name="key" value="{e(k)}">
-                <button class="btn-sm border rounded hover:bg-gray-50">{"غیرفعال کن" if en else "فعال کن"}</button>
-              </form></td>
-            </tr>"""
-        content = f"""<div class="overflow-x-auto"><table class="w-full text-right">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">دکمه</th><th class="px-4 py-3">وضعیت</th>
-            <th class="px-4 py-3">محل نمایش</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead><tbody>{rows}</tbody></table></div>"""
+            toggle_rows += f"""
+            <label class="flex items-center justify-between p-4 border border-gray-100 rounded-xl hover:bg-gray-50 transition cursor-pointer">
+              <div class="flex items-center gap-3">
+                <span class="text-sm font-medium text-gray-700">{e(btn_label_map.get(k,k))}</span>
+                <span class="text-xs text-gray-400">Reply Keyboard | منوی اصلی</span>
+              </div>
+              <input type="checkbox" name="btn_{e(k)}" {"checked" if en else ""}
+                onchange="markDirty()" class="w-5 h-5 rounded text-indigo-600">
+            </label>"""
+
+        content = f"""
+        <form id="settings-form" method="post" action="/admin/settings/save-all">
+          <input type="hidden" name="group" value="{e(active_group)}">
+          <input type="hidden" name="is_buttons" value="1">
+          <div class="space-y-2 mb-6">{toggle_rows}</div>
+          {_settings_action_bar()}
+        </form>"""
 
     else:
-        # متن‌های گروه انتخاب‌شده
         keys = _GROUPS.get(active_group, [])
         fields_html = ""
         for key in keys:
-            val = get_val(key)
-            default = _DEFAULTS.get(key, "")
-            desc = _DESCS.get(key, "")
-            is_long = len(default) > 80 or "\n" in default
-            is_modified = key in db_texts
-
-            modified_badge = '<span class="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded mr-1">ویرایش‌شده</span>' if is_modified else ''
-            desc_html = f'<span class="text-gray-400 font-normal">← {e(desc)}</span>' if desc else ""
+            val      = get_val(key)
+            default  = _DEFAULTS.get(key, "")
+            label    = _DESCS.get(key, "") or key  # عنوان قابل فهم، نه نام متغیر
+            is_long  = len(default) > 80 or "\n" in default
 
             if is_long:
-                field_input = f'<textarea id="f_{e(key)}" name="value" rows="3" class="w-full border border-gray-200 rounded-lg px-3 py-2 font-mono bg-white">{e(val)}</textarea>'
+                field_input = (
+                    f'<textarea name="field_{e(key)}" rows="3" onchange="markDirty()" oninput="markDirty()" '
+                    f'class="w-full border border-gray-200 rounded-lg px-3 py-2 bg-white text-sm">{e(val)}</textarea>'
+                )
             else:
-                field_input = f'<input type="text" id="f_{e(key)}" name="value" value="{e(val)}" class="flex-1 border border-gray-200 rounded-lg px-3 py-2 bg-white">'
+                field_input = (
+                    f'<input type="text" name="field_{e(key)}" value="{e(val)}" onchange="markDirty()" oninput="markDirty()" '
+                    f'class="w-full border border-gray-200 rounded-lg px-3 py-2 bg-white text-sm">'
+                )
 
             fields_html += f"""
-            <div class="p-4 border border-gray-100 rounded-xl bg-gray-50 hover:bg-white transition mb-3">
-              <div class="flex items-start justify-between mb-2">
-                <div>
-                  <code class="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">{e(key)}</code>
-                  {modified_badge}
-                  <div class="text-xs text-gray-400 mt-1">{desc_html}</div>
-                </div>
-                <form method="post" action="/admin/settings/reset-field" class="mr-2">
-                  <input type="hidden" name="key" value="{e(key)}">
-                  <input type="hidden" name="group" value="{e(active_group)}">
-                  <button title="بازگشت به پیش‌فرض"
-                    class="text-xs text-gray-400 hover:text-red-500 transition px-2 py-1 rounded hover:bg-red-50">
-                    🔄 پیش‌فرض
-                  </button>
-                </form>
-              </div>
-              <form method="post" action="/admin/settings/save-field" class="{"space-y-1" if is_long else "flex gap-2 items-end"}">
-                <input type="hidden" name="key" value="{e(key)}">
-                <input type="hidden" name="group" value="{e(active_group)}">
-                {field_input}
-                <button class="btn-sm bg-indigo-600 text-white rounded-lg px-3 py-2 hover:bg-indigo-700 whitespace-nowrap {"mt-2" if is_long else ""}">
-                  💾 ذخیره
-                </button>
-              </form>
-              {"" if not default else f'<div class="mt-2 text-xs text-gray-300">پیش‌فرض: {e(default[:120])}{"..." if len(default)>120 else ""}</div>'}
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-gray-700 mb-1.5">{e(label)}</label>
+              {field_input}
             </div>"""
 
-        # دکمه ذخیره همه گروه
         content = f"""
-        <form method="post" action="/admin/settings/save-group">
+        <form id="settings-form" method="post" action="/admin/settings/save-all">
           <input type="hidden" name="group" value="{e(active_group)}">
-          <div class="flex items-center justify-between mb-4">
-            <span class="text-sm text-gray-500">{len(keys)} فیلد</span>
-            <button class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium">
-              💾 ذخیره همه این بخش
-            </button>
-          </div>
-        </form>
-        {fields_html}"""
+          <div class="mb-6">{fields_html}</div>
+          {_settings_action_bar()}
+        </form>"""
 
     body = f"""
     <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">⚙️ مدیریت متن‌ها و تنظیمات</h1>
+      <h1 class="text-2xl font-bold text-gray-800">⚙️ مدیریت متن‌ها</h1>
     </div>
 
-    <!-- موبایل: نوار بالا | دسکتاپ: sidebar -->
     <div class="mb-4 lg:hidden overflow-x-auto">
       <div class="flex gap-2 pb-2 min-w-max">
         {" ".join(f'<a href="/admin/settings?group={e(g)}" class="px-3 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if g == active_group else "bg-white text-gray-600"}">{group_icons.get(g,"📝")} {e(g)}</a>' for g in group_names)}
@@ -1662,22 +1635,51 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
     </div>
 
     <div class="flex gap-6">
-      <!-- Sidebar فقط دسکتاپ -->
       <div class="hidden lg:block w-52 shrink-0">
         <div class="card p-2 space-y-0.5 sticky top-20">
           {sidebar}
         </div>
       </div>
-      <!-- Content -->
       <div class="flex-1 min-w-0">
         <div class="card p-4 md:p-6">
-          <h2 class="font-bold text-gray-700 text-lg mb-4">{e(active_group)}</h2>
+          <h2 class="font-bold text-gray-700 text-lg mb-5">{e(active_group)}</h2>
           {content}
         </div>
       </div>
-    </div>"""
+    </div>
+
+    <script>
+    var _dirty = false;
+    function markDirty() {{
+      _dirty = true;
+      var btn = document.getElementById('save-btn');
+      if(btn) {{ btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }}
+    }}
+    window.addEventListener('beforeunload', function(e) {{
+      if(_dirty) {{ e.preventDefault(); e.returnValue = ''; }}
+    }});
+    document.getElementById('settings-form').addEventListener('submit', function() {{ _dirty = false; }});
+    function confirmReset() {{
+      return confirm('تمام تنظیمات این بخش به حالت اولیه بازگردانده شود؟');
+    }}
+    </script>"""
 
     return _layout("تنظیمات", body, adm, flash=flash)
+
+
+def _settings_action_bar():
+    return """
+      <div class="flex items-center gap-3 pt-4 border-t">
+        <button type="submit" id="save-btn" disabled
+          style="opacity:.5;cursor:not-allowed"
+          class="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold transition">
+          💾 ذخیره تغییرات
+        </button>
+        <button type="submit" formaction="/admin/settings/reset-group" onclick="return confirmReset()"
+          class="px-5 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200 transition">
+          🔄 بازگردانی پیش‌فرض
+        </button>
+      </div>"""
 
 
 @router.post("/settings/theme")
@@ -1714,6 +1716,91 @@ async def settings_theme_reset(request: Request):
     finally:
         conn.close()
     return _redir("/admin/settings?flash=رنگ‌های+پیش‌فرض+بازگردانده+شد")
+
+
+def _clear_ui_cache():
+    try:
+        from ui_texts import ui_cache_clear
+        ui_cache_clear()
+    except Exception:
+        pass
+
+
+@router.post("/settings/save-all")
+async def settings_save_all(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    form = await request.form()
+    group = str(form.get("group", ""))
+    is_buttons = form.get("is_buttons") == "1"
+    try:
+        from ui_texts import (DEFAULT_UI_TEXTS as _D, TEXT_GROUPS as _G, MAIN_BUTTON_KEYS as _BK)
+    except ImportError:
+        _D = {}; _G = {}; _BK = []
+
+    conn = _db()
+    try:
+        if is_buttons:
+            # ذخیره وضعیت دکمه‌ها
+            for k in _BK:
+                enabled = form.get(f"btn_{k}") is not None
+                val = "1" if enabled else "0"
+                conn.execute(
+                    "INSERT INTO ui_texts (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+                    (f"MAIN_BTN_ENABLED_{k}", val)
+                )
+        else:
+            # ذخیره متن‌ها — فقط آن‌هایی که تغییر کرده‌اند
+            keys = _G.get(group, [])
+            for key in keys:
+                new_val = form.get(f"field_{key}")
+                if new_val is None:
+                    continue
+                new_val = str(new_val)
+                default = _D.get(key, "")
+                if new_val == default:
+                    # برابر پیش‌فرض → حذف از DB
+                    conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
+                else:
+                    conn.execute(
+                        "INSERT INTO ui_texts (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+                        (key, new_val)
+                    )
+        conn.commit()
+    finally:
+        conn.close()
+    _clear_ui_cache()
+    _log(request, "ذخیره تنظیمات", "تنظیمات", group)
+    return _redir(f"/admin/settings?group={group}&flash=✅+تغییرات+ذخیره+شد")
+
+
+@router.post("/settings/reset-group")
+async def settings_reset_group(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    form = await request.form()
+    group = str(form.get("group", ""))
+    is_buttons = form.get("is_buttons") == "1"
+    try:
+        from ui_texts import TEXT_GROUPS as _G, MAIN_BUTTON_KEYS as _BK
+    except ImportError:
+        _G = {}; _BK = []
+    conn = _db()
+    try:
+        if is_buttons:
+            for k in _BK:
+                conn.execute("DELETE FROM ui_texts WHERE key=?;", (f"MAIN_BTN_ENABLED_{k}",))
+        else:
+            for key in _G.get(group, []):
+                conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
+        conn.commit()
+    finally:
+        conn.close()
+    _clear_ui_cache()
+    _log(request, "بازگردانی پیش‌فرض", "تنظیمات", group)
+    return _redir(f"/admin/settings?group={group}&flash=🔄+به+پیش‌فرض+بازگردانده+شد")
 
 
 @router.post("/settings/save-field")
