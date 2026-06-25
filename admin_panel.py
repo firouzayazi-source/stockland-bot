@@ -5061,7 +5061,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
 
     def tbadge(t):
         defs = {"product_setup":("🟢","راه‌اندازی","#DCFCE7","#166534"),
-                "partner":("🟠","همکاری","#FEF3C7","#B45309"),
+                "partner_support":("🤝","همکاران","#D1FAE5","#047857"),
                 "support":("🔵","پشتیبانی","#EFF6FF","#1D4ED8")}
         icon,label,bg,color = defs.get(t,("🔵","پشتیبانی","#EFF6FF","#1D4ED8"))
         return f'<span style="padding:2px 7px;background:{bg};color:{color};border-radius:20px;font-size:10px;font-weight:600">{icon} {label}</span>'
@@ -5076,7 +5076,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         except: tid_type = "support"
 
         # type badge
-        type_colors = {"product_setup":("green","راه‌اندازی"),"partner":("yellow","همکاری"),"support":("blue","پشتیبانی")}
+        type_colors = {"product_setup":("green","راه‌اندازی"),"partner_support":("teal","همکاران"),"support":("blue","پشتیبانی")}
         tc, tl = type_colors.get(tid_type,("blue","پشتیبانی"))
         type_b = f'<span class="px-2 py-0.5 text-xs bg-{tc}-100 text-{tc}-700 rounded-full">{tl}</span>'
 
