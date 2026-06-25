@@ -1,123 +1,174 @@
 """
-StockLand Backup Engine — فرمت اختصاصی .stbak
-ZIP(manifest.json + data.json) با پسوند .stbak
+StockLand Backup Engine v2 — ماژول‌محور با وابستگی هوشمند
 """
 import hashlib, io, json, os, sqlite3, zipfile
 from datetime import datetime
 
-STBAK_VERSION   = "1.0"
-SYSTEM_VERSION  = "2.4.1"
-DB_VERSION      = "1.0"
+STBAK_VERSION  = "1.0"
+SYSTEM_VERSION = "2.4.1"
+DB_VERSION     = "1.0"
 
-# جداول و وابستگی‌ها
-ALL_SECTIONS = {
-    "users":           {"tables": ["users"],              "deps": []},
-    "categories":      {"tables": ["categories"],         "deps": []},
-    "products":        {"tables": ["products"],           "deps": ["categories"]},
-    "orders":          {"tables": ["orders"],             "deps": ["users", "products"]},
-    "wallets":         {"tables": ["wallets", "wallet_orders", "zarinpal_transactions"], "deps": ["users"]},
-    "product_feed":    {"tables": ["product_feed"],       "deps": ["products"]},
-    "tickets":         {"tables": ["tickets", "ticket_messages"], "deps": ["users"]},
-    "partners":        {"tables": ["partners"],           "deps": ["users"]},
-    "discount_codes":  {"tables": ["discount_codes", "discount_usage"], "deps": []},
-    "referrals":       {"tables": ["referrals", "referral_settings"], "deps": []},
-    "logs":            {"tables": ["admin_logs"],         "deps": []},
-    "settings":        {"tables": ["ui_texts_custom", "other_services", "feed_alert_settings"], "deps": []},
+# ── تعریف ماژول‌ها (module-based, not table-based) ─────────────────────────
+MODULES = {
+    "settings": {
+        "label": "⚙️ تنظیمات سیستم",
+        "tables": ["ui_texts_custom", "other_services", "feed_alert_settings"],
+        "deps": [],
+    },
+    "users": {
+        "label": "👥 کاربران",
+        "tables": ["users"],
+        "deps": [],
+    },
+    "wallets": {
+        "label": "💰 کیف‌پول",
+        "tables": ["wallets", "wallet_orders", "zarinpal_transactions"],
+        "deps": ["users"],
+    },
+    "categories": {
+        "label": "🗂 دسته‌بندی‌ها",
+        "tables": ["categories"],
+        "deps": [],
+    },
+    "products": {
+        "label": "📦 محصولات",
+        "tables": ["products", "product_feed", "stock_subscriptions"],
+        "deps": ["categories"],
+    },
+    "orders": {
+        "label": "🧾 سفارش‌ها",
+        "tables": ["orders", "pending_deliveries"],
+        "deps": ["users", "products"],
+    },
+    "tickets": {
+        "label": "🎫 تیکت‌ها و گفتگوها",
+        "tables": ["tickets", "ticket_messages"],
+        "deps": ["users"],
+    },
+    "partners": {
+        "label": "🤝 همکاران",
+        "tables": ["partners"],
+        "deps": ["users"],
+    },
+    "discounts": {
+        "label": "🏷 کدهای تخفیف",
+        "tables": ["discount_codes", "discount_usage"],
+        "deps": [],
+    },
+    "referrals": {
+        "label": "👤 معرفی کاربران",
+        "tables": ["referrals", "referral_settings"],
+        "deps": ["users"],
+    },
+    "logs": {
+        "label": "📋 لاگ‌ها",
+        "tables": ["admin_logs"],
+        "deps": [],
+    },
 }
 
-SECTION_LABELS = {
-    "users": "کاربران", "categories": "دسته‌بندی‌ها", "products": "محصولات",
-    "orders": "سفارش‌ها", "wallets": "کیف‌پول", "product_feed": "موجودی",
-    "tickets": "تیکت‌ها", "partners": "همکاران", "discount_codes": "کدهای تخفیف",
-    "referrals": "معرفی", "logs": "لاگ‌ها", "settings": "تنظیمات",
+# backward compat aliases
+ALL_SECTIONS   = MODULES
+SECTION_LABELS = {k: v["label"] for k, v in MODULES.items()}
+RESET_LABELS   = SECTION_LABELS.copy()
+
+# وابستگی‌های هوشمند — اگه X انتخاب شد، اینا هم اضافه می‌شن
+SMART_DEPS = {mod: MODULES[mod]["deps"] for mod in MODULES}
+
+# وابستگی‌های ریست معکوس — اگه X ریست شد، اینا هم باید ریست بشن
+RESET_CASCADE = {
+    "users":      ["wallets", "orders", "tickets", "partners", "referrals"],
+    "categories": ["products"],
+    "products":   ["orders"],
 }
 
-# وابستگی‌های هوشمند — اگه section انتخاب شد، اینا هم باید باشن
-SMART_DEPS = {
-    "products":     ["categories"],
-    "orders":       ["users", "products"],
-    "wallets":      ["users"],
-    "product_feed": ["products"],
-    "tickets":      ["users"],
-    "partners":     ["users"],
-}
 
-
-def resolve_sections(selected: list[str]) -> list[str]:
-    """حل وابستگی‌ها — sections مورد نیاز را برمی‌گرداند."""
+def resolve_sections(selected: list) -> list:
+    """وابستگی‌های forward را حل می‌کند."""
     result = set(selected)
-    for s in list(result):
-        for dep in SMART_DEPS.get(s, []):
-            result.add(dep)
-    # ترتیب صحیح برای restore
-    order = list(ALL_SECTIONS.keys())
-    return [s for s in order if s in result]
+    changed = True
+    while changed:
+        changed = False
+        for s in list(result):
+            for dep in SMART_DEPS.get(s, []):
+                if dep not in result:
+                    result.add(dep)
+                    changed = True
+    return [m for m in MODULES if m in result]
 
 
-def _read_table(conn: sqlite3.Connection, table: str) -> list[dict]:
+def resolve_reset(selected: list) -> list:
+    """وابستگی‌های cascade برای ریست را حل می‌کند."""
+    result = set(selected)
+    changed = True
+    while changed:
+        changed = False
+        for s in list(result):
+            for dep in RESET_CASCADE.get(s, []):
+                if dep not in result:
+                    result.add(dep)
+                    changed = True
+    return [m for m in MODULES if m in result]
+
+
+def _read_table(conn: sqlite3.Connection, table: str) -> list:
     try:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(f"SELECT * FROM {table};").fetchall()
+        rows = conn.execute(f"SELECT * FROM \"{table}\";").fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
 
 
-def _count_records(data: dict) -> int:
-    return sum(len(rows) for rows in data.values())
-
-
-def create_stbak(db_path: str, sections: list[str] | None = None,
-                 backup_mode: str = "full") -> bytes:
+def create_stbak(db_path: str, modules: list = None, progress_cb=None) -> bytes:
     """
-    ساخت فایل .stbak و برگرداندن bytes آن.
-    sections=None → بکاپ کامل
+    ساخت .stbak — اگه modules=None باشه کامله.
+    progress_cb(pct: int) برای آپدیت پیشرفت.
     """
-    if sections is None:
-        sections = list(ALL_SECTIONS.keys())
-        backup_mode = "full"
+    if modules is None:
+        selected = list(MODULES.keys())
+        mode = "full"
     else:
-        sections = resolve_sections(sections)
-        backup_mode = "custom"
+        selected = resolve_sections(modules)
+        mode = "custom"
 
     conn = sqlite3.connect(db_path, timeout=30)
     conn.execute("PRAGMA busy_timeout=30000;")
 
-    # خواندن داده‌ها
-    data: dict[str, dict[str, list]] = {}
-    for sec in sections:
+    data = {}
+    total = len(selected)
+    for i, mod in enumerate(selected):
         sec_data = {}
-        for table in ALL_SECTIONS[sec]["tables"]:
+        for table in MODULES[mod]["tables"]:
             sec_data[table] = _read_table(conn, table)
-        data[sec] = sec_data
+        data[mod] = sec_data
+        if progress_cb:
+            progress_cb(int(10 + (i + 1) / total * 70))
     conn.close()
 
-    # ساخت JSON داده‌ها
     data_json = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
-    checksum   = hashlib.sha256(data_json).hexdigest()
+    checksum  = hashlib.sha256(data_json).hexdigest()
+    total_rec = sum(len(r) for sd in data.values() for r in sd.values())
 
-    # Manifest
     manifest = {
-        "type":            "stockland_backup",
-        "backup_format":   "stbak",
-        "version":         STBAK_VERSION,
-        "system_version":  SYSTEM_VERSION,
+        "type": "stockland_backup", "backup_format": "stbak",
+        "version": STBAK_VERSION, "system_version": SYSTEM_VERSION,
         "database_version": DB_VERSION,
-        "created_at":      datetime.now().isoformat(timespec="seconds"),
-        "backup_mode":     backup_mode,
-        "sections":        sections,
-        "section_labels":  {s: SECTION_LABELS.get(s, s) for s in sections},
-        "records":         _count_records(data),
-        "checksum":        checksum,
-        "checksum_algo":   "sha256",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "backup_mode": mode, "modules": selected,
+        "records": total_rec, "checksum": checksum, "checksum_algo": "sha256",
     }
-    manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+    if progress_cb:
+        progress_cb(85)
 
-    # ZIP → .stbak bytes
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        zf.writestr("manifest.json", manifest_json)
-        zf.writestr("data.json",     data_json)
+        zf.writestr("manifest.json",
+                    json.dumps(manifest, ensure_ascii=False, indent=2).encode())
+        zf.writestr("data.json", data_json)
+
+    if progress_cb:
+        progress_cb(100)
     return buf.getvalue()
 
 
@@ -126,172 +177,111 @@ def stbak_filename(mode: str = "full") -> str:
     return f"stockland_backup_{ts}_{mode}.stbak"
 
 
-# ── Restore ──────────────────────────────────────────────────────────────────
-
 class StbakError(Exception):
     pass
 
 
 def validate_stbak(raw: bytes) -> dict:
-    """
-    اعتبارسنجی فایل .stbak — manifest + checksum.
-    Returns manifest dict if valid. Raises StbakError otherwise.
-    """
     try:
         buf = io.BytesIO(raw)
         if not zipfile.is_zipfile(buf):
-            raise StbakError("فایل ZIP معتبر نیست — احتمالاً فایل خراب است")
+            raise StbakError("فایل ZIP معتبر نیست")
         buf.seek(0)
         with zipfile.ZipFile(buf, "r") as zf:
             names = zf.namelist()
             if "manifest.json" not in names:
-                raise StbakError("فایل manifest.json داخل بکاپ یافت نشد")
+                raise StbakError("manifest.json یافت نشد")
             if "data.json" not in names:
-                raise StbakError("فایل data.json داخل بکاپ یافت نشد")
-            manifest  = json.loads(zf.read("manifest.json").decode("utf-8"))
+                raise StbakError("data.json یافت نشد")
+            manifest  = json.loads(zf.read("manifest.json").decode())
             data_json = zf.read("data.json")
     except StbakError:
         raise
     except Exception as ex:
         raise StbakError(f"خطا در خواندن فایل: {ex}")
 
-    # بررسی type
     if manifest.get("type") != "stockland_backup":
-        raise StbakError("این فایل متعلق به سیستم StockLand نیست")
-
-    # بررسی checksum
-    actual = hashlib.sha256(data_json).hexdigest()
-    if actual != manifest.get("checksum"):
-        raise StbakError("Checksum مطابقت ندارد — فایل بکاپ خراب یا دستکاری شده است")
-
-    # بررسی نسخه فرمت
-    fmt = manifest.get("version", "")
-    if fmt and fmt != STBAK_VERSION:
-        raise StbakError(f"نسخه فرمت {fmt} با نسخه فعلی {STBAK_VERSION} سازگار نیست")
-
+        raise StbakError("این فایل متعلق به StockLand نیست")
+    if hashlib.sha256(data_json).hexdigest() != manifest.get("checksum"):
+        raise StbakError("Checksum مطابقت ندارد — فایل خراب است")
     return manifest
 
 
-def restore_stbak(raw: bytes, db_path: str) -> dict:
-    """
-    بازیابی از .stbak.
-    Returns summary dict.
-    """
+def restore_stbak(raw: bytes, db_path: str, progress_cb=None) -> dict:
     manifest = validate_stbak(raw)
     buf = io.BytesIO(raw)
     with zipfile.ZipFile(buf, "r") as zf:
-        data: dict = json.loads(zf.read("data.json").decode("utf-8"))
+        data = json.loads(zf.read("data.json").decode())
 
     conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA busy_timeout=30000;")
     conn.execute("PRAGMA foreign_keys=OFF;")
-
-    restored = {}
-    errors   = []
-
+    restored, errors = {}, []
+    mods = list(data.items())
+    total = len(mods)
     try:
         with conn:
-            for sec, sec_data in data.items():
+            for i, (mod, sec_data) in enumerate(mods):
                 for table, rows in sec_data.items():
                     if not rows:
                         continue
                     try:
-                        # پاک کردن جدول قبل از درج
-                        conn.execute(f"DELETE FROM {table};")
-                        if rows:
-                            cols   = list(rows[0].keys())
-                            ph     = ", ".join("?" * len(cols))
-                            col_s  = ", ".join(f'"{c}"' for c in cols)
-                            sql    = f'INSERT OR REPLACE INTO {table} ({col_s}) VALUES ({ph});'
-                            conn.executemany(sql, [[r.get(c) for c in cols] for r in rows])
+                        conn.execute(f'DELETE FROM "{table}";')
+                        cols  = list(rows[0].keys())
+                        ph    = ",".join("?" * len(cols))
+                        col_s = ",".join(f'"{c}"' for c in cols)
+                        conn.executemany(
+                            f'INSERT OR REPLACE INTO "{table}" ({col_s}) VALUES ({ph});',
+                            [[r.get(c) for c in cols] for r in rows]
+                        )
                         restored[table] = len(rows)
                     except Exception as ex:
                         errors.append(f"{table}: {ex}")
+                if progress_cb:
+                    progress_cb(int(10 + (i + 1) / total * 85))
     finally:
         conn.close()
 
-    return {
-        "manifest": manifest,
-        "restored": restored,
-        "errors":   errors,
-        "total":    sum(restored.values()),
-    }
+    if progress_cb:
+        progress_cb(100)
+    return {"manifest": manifest, "restored": restored,
+            "errors": errors, "total": sum(restored.values())}
 
 
-# ── Factory Reset ─────────────────────────────────────────────────────────────
-
-RESET_SECTIONS = {
-    "users":          ["users"],
-    "categories":     ["categories"],
-    "products":       ["products", "product_feed"],
-    "orders":         ["orders", "pending_deliveries"],
-    "wallets":        ["wallets", "wallet_orders", "zarinpal_transactions"],
-    "tickets":        ["tickets", "ticket_messages"],
-    "partners":       ["partners"],
-    "discount_codes": ["discount_codes", "discount_usage"],
-    "referrals":      ["referrals"],
-    "logs":           ["admin_logs"],
-}
-
-RESET_LABELS = {
-    "users": "کاربران", "categories": "دسته‌بندی‌ها", "products": "محصولات + موجودی",
-    "orders": "سفارش‌ها", "wallets": "کیف‌پول", "tickets": "تیکت‌ها",
-    "partners": "همکاران", "discount_codes": "کدهای تخفیف",
-    "referrals": "معرفی", "logs": "لاگ‌ها",
-}
-
-# اگه یه section حذف بشه، اینا هم باید حذف بشن
-RESET_DEPS = {
-    "users":      ["orders", "wallets", "tickets", "partners", "referrals"],
-    "products":   ["orders", "product_feed"],
-    "categories": ["products"],
-}
-
-
-def resolve_reset_sections(selected: list[str]) -> list[str]:
-    result = set(selected)
-    for s in list(result):
-        for dep in RESET_DEPS.get(s, []):
-            result.add(dep)
-    return list(result)
-
-
-def factory_reset(db_path: str, sections: list[str] | None = None) -> dict:
-    """
-    ریست انتخابی یا کامل.
-    sections=None → ریست کامل
-    """
-    if sections is None:
-        sections = list(RESET_SECTIONS.keys())
+def factory_reset(db_path: str, modules: list = None, progress_cb=None) -> dict:
+    if modules is None:
+        selected = list(MODULES.keys())
     else:
-        sections = resolve_reset_sections(sections)
+        selected = resolve_reset(modules)
 
-    tables_to_clear = []
-    for sec in sections:
-        tables_to_clear.extend(RESET_SECTIONS.get(sec, []))
-    tables_to_clear = list(dict.fromkeys(tables_to_clear))  # dedup حفظ ترتیب
+    tables = []
+    for mod in selected:
+        tables.extend(MODULES.get(mod, {}).get("tables", []))
+    tables = list(dict.fromkeys(tables))
 
     conn = sqlite3.connect(db_path, timeout=30)
-    conn.execute("PRAGMA busy_timeout=30000;")
     conn.execute("PRAGMA foreign_keys=OFF;")
-    cleared = {}
-    errors  = []
+    cleared, errors = {}, []
+    total = len(tables)
     try:
         with conn:
-            for t in tables_to_clear:
+            for i, t in enumerate(tables):
                 try:
-                    cnt = conn.execute(f"SELECT COUNT(*) FROM {t};").fetchone()[0]
-                    conn.execute(f"DELETE FROM {t};")
+                    cnt = conn.execute(f'SELECT COUNT(*) FROM "{t}";').fetchone()[0]
+                    conn.execute(f'DELETE FROM "{t}";')
                     cleared[t] = cnt
                 except Exception as ex:
                     errors.append(f"{t}: {ex}")
+                if progress_cb:
+                    progress_cb(int(10 + (i + 1) / total * 85))
             try:
                 conn.execute("DELETE FROM sqlite_sequence WHERE name IN ({});".format(
-                    ",".join(f'"{t}"' for t in tables_to_clear)))
+                    ",".join(f'"{t}"' for t in tables)))
             except Exception:
                 pass
     finally:
         conn.close()
 
+    if progress_cb:
+        progress_cb(100)
     return {"cleared": cleared, "errors": errors,
             "total_deleted": sum(cleared.values())}
