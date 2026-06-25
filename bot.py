@@ -836,16 +836,26 @@ def _ticket_v2_handle_user_message(message) -> None:
         )
 
     # ─── نوتیف به ادمین — فقط اولین پیام از هر batch ─────────────────────
-    # اگه new_count==1 یعنی اولین پیام بعد از پاسخ ادمین — حتماً نوتیف بده
-    # اگه بیشتر از ۱ باشه — نوتیف نده (قبلاً داده شده)
     if new_count == 1:
+        # تشخیص نوع تیکت برای نمایش بهتر به ادمین
+        try:
+            _tk = ticket_get(int(ticket_id))
+            _ttype = (_tk["type"] if _tk and "type" in _tk.keys() else "support") or "support"
+        except Exception:
+            _ttype = "support"
+        type_label = {
+            "support": "🔵 پشتیبانی",
+            "product_setup": "🟢 راه‌اندازی محصول",
+            "partner_support": "🤝 همکاران",
+        }.get(_ttype, "🔵 پشتیبانی")
+
         panel_url = f"https://panel.stland.ir/admin/tickets/{ticket_id}"
         notif_kb = types.InlineKeyboardMarkup()
         notif_kb.add(types.InlineKeyboardButton("🌐 مشاهده در پنل", url=panel_url))
         try:
             bot.send_message(ADMIN_ID,
-                f"🔔 پیام جدید در تیکت <b>#{ticket_id}</b>\n"
-                f"کاربر: <code>{uid}</code>",
+                f"🔔 پیام جدید — {type_label}\n"
+                f"تیکت <b>#{ticket_id}</b> | کاربر: <code>{uid}</code>",
                 reply_markup=notif_kb, parse_mode="HTML")
         except Exception as ex:
             logger.error("Admin notification failed: %s", ex)
@@ -2921,14 +2931,29 @@ def cb_partner_support(call):
 
     if existing:
         tid = existing["id"]
+        try:
+            cur_cnt = int(existing["user_msg_count"] or 0)
+        except Exception:
+            cur_cnt = 0
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid}
+        if cur_cnt >= TICKET_MAX_USER_MSGS:
+            bot.send_message(call.message.chat.id,
+                f"💬 <b>گفتگوی همکاری #{tid}</b>\n\n"
+                "🔒 گفتگو در انتظار پاسخ پشتیبانی است.\n"
+                "پس از پاسخ، می‌توانید ادامه دهید.",
+                parse_mode="HTML")
+        else:
+            bot.send_message(call.message.chat.id,
+                f"💬 <b>ادامه گفتگوی همکاری #{tid}</b>\n\n"
+                "پیام خود را ارسال کنید.",
+                parse_mode="HTML")
     else:
         tid = ticket_create(uid, type_="partner_support")
-
-    user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid}
-    bot.send_message(call.message.chat.id,
-        f"💬 <b>چت با پشتیبان همکاران</b> (تیکت #{tid})\n\n"
-        "پیام خود را ارسال کنید. تیم پشتیبانی به‌زودی پاسخ می‌دهد.",
-        parse_mode="HTML")
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid}
+        bot.send_message(call.message.chat.id,
+            f"💬 <b>چت با پشتیبان همکاران</b> (تیکت #{tid})\n\n"
+            "پیام خود را ارسال کنید. تیم پشتیبانی به‌زودی پاسخ می‌دهد.",
+            parse_mode="HTML")
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_back")
