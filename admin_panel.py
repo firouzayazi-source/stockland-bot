@@ -27,11 +27,12 @@ router = APIRouter(prefix="/admin")
 
 # ── migrations at startup ────────────────────────────────────────────────────
 try:
-    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema
+    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema
     ensure_product_support_schema()
     ensure_discount_table()
     ensure_subscription_table()
     ensure_referral_schema()
+    ensure_user_extra_schema()
 except Exception:
     pass
 
@@ -4401,6 +4402,137 @@ async def order_return(request: Request, oid: int):
 
 # ─────────────────────────── Wallets ───────────────────────────────────────
 
+@router.get("/users/{uid}", response_class=HTMLResponse)
+async def user_detail(request: Request, uid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_user_full, get_user_orders, get_user_tickets, ensure_user_extra_schema
+    ensure_user_extra_schema()
+    user = get_user_full(uid)
+    if not user:
+        return _redir("/admin/users?flash=کاربر+یافت+نشد")
+    orders  = get_user_orders(uid, 10)
+    tickets = get_user_tickets(uid, 10)
+
+    is_partner = user.get("is_partner")
+    is_blocked = user.get("is_blocked", 0)
+    partner_badge = '<span class="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full">🤝 همکار</span>' if is_partner else ''
+    status_badge  = '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">مسدود</span>' if is_blocked else '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'
+
+    # خریدها
+    order_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-2 text-xs text-gray-400">#{o['id']}</td>
+      <td class="px-4 py-2 text-sm">{e(o['product_title'] or o['service'] or '—')}</td>
+      <td class="px-4 py-2 text-sm font-medium text-green-600">{int(o['amount'] or 0):,} ت</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{(o['created_at'] or '')[:16]}</td>
+    </tr>""" for o in orders)
+
+    # تیکت‌ها
+    ticket_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-2 text-xs"><a href="/admin/tickets/{t['id']}" class="text-indigo-600">#{t['id']}</a></td>
+      <td class="px-4 py-2 text-xs">{e((t['type'] if 'type' in t.keys() else '') or 'پشتیبانی')}</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{e((t['status'] or '')[:20])}</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{(t['updated_at'] or '')[:16]}</td>
+    </tr>""" for t in tickets)
+
+    note_val = e(user.get("admin_note", "") or "")
+    tags_val = e(user.get("tags", "") or "")
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← کاربران", "/admin/users", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">{e(user['full_name'] or 'کاربر')}</h1>
+      {partner_badge} {status_badge}
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-4 mb-6">
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{user.get('order_count',0)}</div><div class="text-xs text-gray-400 mt-1">تعداد خرید</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{int(user.get('balance',0)):,}</div><div class="text-xs text-gray-400 mt-1">کیف‌پول (ت)</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-gray-700">{len(tickets)}</div><div class="text-xs text-gray-400 mt-1">تیکت‌ها</div></div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-4">
+      <!-- اطلاعات پایه -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">اطلاعات پایه</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-2 rounded">{user['user_id']}</code></div>
+          <div class="flex justify-between"><span class="text-gray-400">یوزرنیم</span><span>{"@"+e(user['username']) if user['username'] else "—"}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(user['first_seen'] or '')[:10]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">آخرین فعالیت</span><span>{(user['last_seen'] or '')[:10]}</span></div>
+        </div>
+        <div class="mt-4 pt-4 border-t flex gap-2">
+          <a href="/admin/wallets?q={uid}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-3 py-1.5 text-xs">مدیریت کیف‌پول</a>
+          <form method="post" action="/admin/users/{uid}/toggle-block" class="inline">
+            <button class="btn-sm {'bg-green-50 text-green-700 border-green-200' if is_blocked else 'bg-red-50 text-red-600 border-red-200'} border rounded px-3 py-1.5 text-xs">
+              {'رفع مسدودی' if is_blocked else 'مسدود کردن'}
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- یادداشت و برچسب -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">یادداشت خصوصی مدیر</h2>
+        <form method="post" action="/admin/users/{uid}/note">
+          <textarea name="admin_note" rows="3" placeholder="یادداشت خصوصی درباره این کاربر..."
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3">{note_val}</textarea>
+          <label class="text-xs text-gray-500 block mb-1">برچسب‌ها (با کاما جدا کنید)</label>
+          <input type="text" name="tags" value="{tags_val}" placeholder="VIP، مشکوک، ..."
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3">
+          {_btn("ذخیره یادداشت", color="green")}
+        </form>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4">
+      <!-- خریدها -->
+      <div class="card overflow-hidden">
+        <div class="px-5 py-3 border-b bg-gray-50 font-medium text-sm text-gray-700">🛒 خریدهای اخیر</div>
+        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b"><th class="px-4 py-2">#</th><th class="px-4 py-2">محصول</th><th class="px-4 py-2">مبلغ</th><th class="px-4 py-2">تاریخ</th></tr></thead>
+          <tbody>{order_rows or "<tr><td colspan='4' class='text-center py-4 text-gray-400 text-xs'>خریدی ندارد</td></tr>"}</tbody>
+        </table></div>
+      </div>
+
+      <!-- تیکت‌ها -->
+      <div class="card overflow-hidden">
+        <div class="px-5 py-3 border-b bg-gray-50 font-medium text-sm text-gray-700">🎫 تیکت‌ها</div>
+        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b"><th class="px-4 py-2">#</th><th class="px-4 py-2">نوع</th><th class="px-4 py-2">وضعیت</th><th class="px-4 py-2">آپدیت</th></tr></thead>
+          <tbody>{ticket_rows or "<tr><td colspan='4' class='text-center py-4 text-gray-400 text-xs'>تیکتی ندارد</td></tr>"}</tbody>
+        </table></div>
+      </div>
+    </div>"""
+    return _layout(f"کاربر {uid}", body, adm, flash=flash)
+
+
+@router.post("/users/{uid}/note")
+async def user_save_note(request: Request, uid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    form = await request.form()
+    note = str(form.get("admin_note", "")).strip()
+    tags = str(form.get("tags", "")).strip()
+    from db import update_user_note
+    update_user_note(uid, note, tags)
+    _log(request, "ویرایش یادداشت کاربر", "کاربران", f"user:{uid}")
+    return _redir(f"/admin/users/{uid}?flash=یادداشت+ذخیره+شد")
+
+
+@router.post("/users/{uid}/toggle-block")
+async def user_toggle_block(request: Request, uid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import toggle_user_block
+    blocked = toggle_user_block(uid)
+    _log(request, "مسدود/رفع مسدودی کاربر", "کاربران", f"user:{uid} blocked:{blocked}")
+    return _redir(f"/admin/users/{uid}?flash={'کاربر+مسدود+شد' if blocked else 'مسدودی+رفع+شد'}")
+
+
 @router.get("/users", response_class=HTMLResponse)
 async def users_list(request: Request, q: str = "", sort: str = "last_seen", flash: str = ""):
     adm = _get_admin(request)
@@ -4415,7 +4547,8 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
         users = conn.execute(f"""
             SELECT u.*,
                    COALESCE(w.balance,0) AS balance,
-                   COUNT(DISTINCT o.id) AS orders
+                   COUNT(DISTINCT o.id) AS orders,
+                   (SELECT 1 FROM partners p WHERE p.tg_user_id=u.user_id AND p.status='approved' LIMIT 1) AS is_partner
             FROM users u
             LEFT JOIN wallets w ON w.user_id=u.user_id
             LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id
@@ -4435,15 +4568,27 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
 
     rows = ""
     for u in users:
+        try: is_partner = u["is_partner"]
+        except: is_partner = None
+        partner_badge = ' <span class="px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">همکار</span>' if is_partner else ""
+
+        try: blocked = u["is_blocked"]
+        except: blocked = 0
+        if blocked:
+            status_badge = '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">مسدود</span>'
+        else:
+            status_badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'
+
         rows += f"""<tr class="border-b hover:bg-gray-50">
           <td class="px-4 py-3"><code class="text-xs bg-gray-100 px-1.5 rounded">{u["user_id"]}</code></td>
-          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(u["full_name"] or "—")}</td>
+          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(u["full_name"] or "—")}{partner_badge}</td>
           <td class="px-4 py-3 text-xs text-gray-400">{"@"+e(u["username"]) if u["username"] else "—"}</td>
           <td class="px-4 py-3 text-xs text-gray-400">{(u["first_seen"] or "")[:10]}</td>
           <td class="px-4 py-3 text-xs text-gray-400">{(u["last_seen"] or "")[:10]}</td>
           <td class="px-4 py-3 text-sm font-bold text-gray-700">{u["orders"] or 0}</td>
           <td class="px-4 py-3 text-sm font-bold text-green-600">{int(u["balance"] or 0):,}</td>
-          <td class="px-4 py-3"><a href="/admin/wallets?q={u['user_id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">کیف‌پول</a></td>
+          <td class="px-4 py-3">{status_badge}</td>
+          <td class="px-4 py-3"><a href="/admin/users/{u['user_id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">پروفایل</a></td>
         </tr>"""
 
     body = f"""
@@ -4465,13 +4610,14 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
             <th class="px-4 py-3">{sort_link("user_id","ID")}</th>
             <th class="px-4 py-3">نام</th>
             <th class="px-4 py-3">یوزرنیم</th>
-            <th class="px-4 py-3">{sort_link("first_seen","اولین ورود")}</th>
+            <th class="px-4 py-3">{sort_link("first_seen","عضویت")}</th>
             <th class="px-4 py-3">{sort_link("last_seen","آخرین فعالیت")}</th>
             <th class="px-4 py-3">{sort_link("orders","خریدها")}</th>
             <th class="px-4 py-3">{sort_link("balance","کیف‌پول")}</th>
+            <th class="px-4 py-3">وضعیت</th>
             <th class="px-4 py-3"></th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='9' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
