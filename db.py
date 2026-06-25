@@ -2945,3 +2945,93 @@ def seller_approve_application(user_id: int) -> str:
     approve_partner(user_id)
     code = seller_activate(user_id)
     return code
+
+
+# ─── ستون‌های اضافی کاربران (یادداشت، برچسب، مسدودسازی) ──────────────────────
+
+def ensure_user_extra_schema():
+    conn = _get_connection()
+    try:
+        for col, default in [
+            ("admin_note", "TEXT DEFAULT ''"),
+            ("tags",       "TEXT DEFAULT ''"),
+            ("is_blocked", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {col} {default};")
+                conn.commit()
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+
+def get_user_full(user_id: int) -> dict | None:
+    ensure_user_extra_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("""
+            SELECT u.*,
+                   COALESCE(w.balance,0) AS balance,
+                   (SELECT COUNT(*) FROM orders o WHERE CAST(o.user_id AS INTEGER)=u.user_id AND o.status='active') AS order_count,
+                   (SELECT 1 FROM partners p WHERE p.tg_user_id=u.user_id AND p.status='approved' LIMIT 1) AS is_partner
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id=u.user_id
+            WHERE u.user_id=?;
+        """, (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_user_note(user_id: int, note: str, tags: str = None):
+    ensure_user_extra_schema()
+    conn = _get_connection()
+    try:
+        if tags is not None:
+            conn.execute("UPDATE users SET admin_note=?, tags=? WHERE user_id=?;", (note, tags, user_id))
+        else:
+            conn.execute("UPDATE users SET admin_note=? WHERE user_id=?;", (note, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def toggle_user_block(user_id: int) -> bool:
+    ensure_user_extra_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute("SELECT is_blocked FROM users WHERE user_id=?;", (user_id,)).fetchone()
+        new_val = 0 if (cur and cur[0]) else 1
+        conn.execute("UPDATE users SET is_blocked=? WHERE user_id=?;", (new_val, user_id))
+        conn.commit()
+        return bool(new_val)
+    finally:
+        conn.close()
+
+
+def get_user_orders(user_id: int, limit: int = 20) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT * FROM orders WHERE CAST(user_id AS INTEGER)=?
+            ORDER BY id DESC LIMIT ?;
+        """, (user_id, limit)).fetchall()
+    finally:
+        conn.close()
+
+
+def get_user_tickets(user_id: int, limit: int = 20) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT * FROM tickets WHERE user_id=?
+            ORDER BY id DESC LIMIT ?;
+        """, (user_id, limit)).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
