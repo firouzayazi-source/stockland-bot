@@ -3035,3 +3035,155 @@ def get_user_tickets(user_id: int, limit: int = 20) -> list:
         return []
     finally:
         conn.close()
+
+
+# ─── سیستم سطوح و تنظیمات همکاری ────────────────────────────────────────────
+
+def ensure_partner_system_schema():
+    """جداول سطوح همکاری + تنظیمات پورسانت."""
+    conn = _get_connection()
+    try:
+        # سطوح همکاری
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_tiers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                icon TEXT DEFAULT '🥉',
+                min_orders INTEGER DEFAULT 0,
+                sort_order INTEGER DEFAULT 0
+            );
+        """)
+        # تنظیمات پورسانت همکاری
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_commission (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                percent REAL DEFAULT 5.0,
+                min_order INTEGER DEFAULT 0,
+                max_payout INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+
+        # سطوح پیش‌فرض اگه خالی بود
+        cnt = conn.execute("SELECT COUNT(*) FROM partner_tiers;").fetchone()[0]
+        if cnt == 0:
+            defaults = [
+                ("برنز", "🥉", 0, 1),
+                ("نقره‌ای", "🥈", 10, 2),
+                ("طلایی", "🥇", 30, 3),
+                ("الماس", "💎", 70, 4),
+            ]
+            conn.executemany(
+                "INSERT INTO partner_tiers (name,icon,min_orders,sort_order) VALUES (?,?,?,?);",
+                defaults
+            )
+            conn.commit()
+
+        # تنظیمات پیش‌فرض
+        c2 = conn.execute("SELECT COUNT(*) FROM partner_commission;").fetchone()[0]
+        if c2 == 0:
+            conn.execute("INSERT INTO partner_commission (id,percent,min_order,max_payout,is_active) VALUES (1,5.0,0,0,1);")
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def get_partner_tiers() -> list:
+    ensure_partner_system_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM partner_tiers ORDER BY sort_order, min_orders;").fetchall()
+    finally:
+        conn.close()
+
+
+def save_partner_tier(tier_id, name, icon, min_orders):
+    ensure_partner_system_schema()
+    conn = _get_connection()
+    try:
+        if tier_id:
+            conn.execute("UPDATE partner_tiers SET name=?,icon=?,min_orders=? WHERE id=?;",
+                         (name, icon, min_orders, tier_id))
+        else:
+            mx = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM partner_tiers;").fetchone()[0]
+            conn.execute("INSERT INTO partner_tiers (name,icon,min_orders,sort_order) VALUES (?,?,?,?);",
+                         (name, icon, min_orders, mx))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_partner_tier(tier_id):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM partner_tiers WHERE id=?;", (tier_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_partner_commission() -> dict:
+    ensure_partner_system_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM partner_commission WHERE id=1;").fetchone()
+        return dict(row) if row else {"percent": 5.0, "min_order": 0, "max_payout": 0, "is_active": 1}
+    finally:
+        conn.close()
+
+
+def save_partner_commission(percent, min_order, max_payout, is_active):
+    ensure_partner_system_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("""UPDATE partner_commission
+            SET percent=?,min_order=?,max_payout=?,is_active=?,updated_at=datetime('now') WHERE id=1;""",
+            (percent, min_order, max_payout, is_active))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_partner_order_count(tg_user_id: int) -> int:
+    """تعداد خریدهای همکاری (با قیمت همکار)."""
+    conn = _get_connection()
+    try:
+        n = conn.execute("""
+            SELECT COUNT(*) FROM orders
+            WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';
+        """, (tg_user_id,)).fetchone()[0]
+        return int(n or 0)
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def get_partner_tier_for(order_count: int) -> dict:
+    """سطح فعلی بر اساس تعداد خرید."""
+    tiers = get_partner_tiers()
+    current = None
+    for t in tiers:
+        if order_count >= t["min_orders"]:
+            current = t
+    if current is None and tiers:
+        current = tiers[0]
+    return dict(current) if current else {"name": "برنز", "icon": "🥉", "min_orders": 0}
+
+
+def get_referral_stats_for(referrer_id: int) -> dict:
+    """آمار کلی زیرمجموعه‌های یک معرف."""
+    conn = _get_connection()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (referrer_id,)).fetchone()[0]
+        rewarded = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND rewarded=1;", (referrer_id,)).fetchone()[0]
+        total_reward = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE referrer_id=? AND rewarded=1;", (referrer_id,)).fetchone()[0]
+        return {"total": int(total or 0), "rewarded": int(rewarded or 0), "total_reward": int(total_reward or 0)}
+    except Exception:
+        return {"total": 0, "rewarded": 0, "total_reward": 0}
+    finally:
+        conn.close()
