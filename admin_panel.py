@@ -1884,23 +1884,29 @@ async def settings_delete_svc(request: Request, key: str = Form("")):
 import threading as _threading, uuid as _uuid, tempfile as _tempfile
 
 _JOB_DIR = "/tmp/stbak_jobs"
-os.makedirs(_JOB_DIR, exist_ok=True)
+try:
+    os.makedirs(_JOB_DIR, exist_ok=True)
+except Exception:
+    _JOB_DIR = "/tmp"
 
 
 def _job_write(job_id: str, data: dict):
-    import json as _j
-    path = f"{_JOB_DIR}/{job_id}.json"
-    tmp  = path + ".tmp"
-    with open(tmp, "w") as f:
-        _j.dump(data, f)
-    os.replace(tmp, path)
+    try:
+        import json as _j
+        path = f"{_JOB_DIR}/{job_id}.json"
+        tmp  = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _j.dump(data, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass  # بی‌صدا fail کن
 
 
 def _job_read(job_id: str) -> dict:
-    import json as _j
-    path = f"{_JOB_DIR}/{job_id}.json"
     try:
-        with open(path) as f:
+        import json as _j
+        path = f"{_JOB_DIR}/{job_id}.json"
+        with open(path, encoding="utf-8") as f:
             return _j.load(f)
     except Exception:
         return {"status": "not_found", "progress": 0}
@@ -1912,13 +1918,14 @@ def _job_start(fn, *args, **kwargs) -> str:
 
     def _worker():
         try:
-            def _cb(pct): _job_write(job_id, {"status": "running", "progress": pct, "message": "", "result": None})
+            def _cb(pct):
+                _job_write(job_id, {"status": "running", "progress": int(pct), "message": "", "result": None})
             result = fn(*args, progress_cb=_cb, **kwargs)
-            # for backup: result is bytes — save to temp file
             if isinstance(result, bytes):
-                tmp = f"{_JOB_DIR}/{job_id}.stbak"
-                with open(tmp, "wb") as f: f.write(result)
-                _job_write(job_id, {"status": "done", "progress": 100, "message": "", "result": {"file": tmp}})
+                fpath = f"{_JOB_DIR}/{job_id}.stbak"
+                with open(fpath, "wb") as f:
+                    f.write(result)
+                _job_write(job_id, {"status": "done", "progress": 100, "message": "", "result": {"file": fpath}})
             else:
                 _job_write(job_id, {"status": "done", "progress": 100, "message": "", "result": result})
         except Exception as ex:
@@ -2051,13 +2058,32 @@ async def database_page(request: Request, flash: str = ""):
     }}
 
     function poll(jobId, onDone) {{
+      var fake = 5, nf = 0;
       var t = setInterval(function() {{
         fetch('/admin/database/job/' + jobId)
           .then(function(r) {{ return r.json(); }})
           .then(function(d) {{
-            document.getElementById('ov-bar').style.width = (d.progress || 5) + '%';
+            if(d.status === 'not_found' || !d.status) {{
+              nf++;
+              fake = Math.min(fake + 3, 70);
+              document.getElementById('ov-bar').style.width = fake + '%';
+              if(nf > 24) {{
+                clearInterval(t);
+                document.getElementById('ov-icon').textContent = '❌';
+                document.getElementById('ov-title').textContent = 'خطا در اجرا';
+                document.getElementById('ov-msg').textContent = 'عملیات پاسخ نداد — لطفاً مجدد تلاش کنید';
+                document.getElementById('ov-bar').className = 'bg-red-500 h-2.5 rounded-full';
+                document.getElementById('ov-bar').style.width = '100%';
+                document.getElementById('ov-close').classList.remove('hidden');
+              }}
+              return;
+            }}
+            nf = 0;
+            fake = Math.max(fake, Math.min(d.progress || fake, 94));
+            document.getElementById('ov-bar').style.width = fake + '%';
             if(d.status === 'done') {{
               clearInterval(t);
+              document.getElementById('ov-bar').style.width = '100%';
               onDone(d);
             }} else if(d.status === 'error') {{
               clearInterval(t);
@@ -2068,7 +2094,7 @@ async def database_page(request: Request, flash: str = ""):
               document.getElementById('ov-bar').style.width = '100%';
               document.getElementById('ov-close').classList.remove('hidden');
             }}
-          }}).catch(function() {{}});
+          }}).catch(function() {{ nf++; }});
       }}, 500);
     }}
 
