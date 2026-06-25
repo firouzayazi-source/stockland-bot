@@ -1877,258 +1877,321 @@ async def settings_delete_svc(request: Request, key: str = Form("")):
 # ─── بکاپ / ریستور / ریست (فرمت اختصاصی .stbak) ─────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── Backup / Restore / Reset ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+import asyncio as _asyncio, uuid as _uuid
+_JOBS: dict = {}          # job_id → {status, progress, message, result}
+
+def _job_run(job_id: str, fn, *args, **kwargs):
+    """اجرای تابع در thread و ذخیره نتیجه."""
+    import threading
+    def _worker():
+        try:
+            _JOBS[job_id]["status"] = "running"
+            result = fn(*args, **kwargs)
+            _JOBS[job_id].update({"status":"done","progress":100,"result":result})
+        except Exception as ex:
+            _JOBS[job_id].update({"status":"error","message":str(ex)})
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 @router.get("/database", response_class=HTMLResponse)
 async def database_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "database")
     if guard: return guard
 
-    from stbak_engine import ALL_SECTIONS, SECTION_LABELS, RESET_LABELS
-    import os, glob
+    from stbak_engine import SECTION_LABELS, RESET_LABELS
 
-    # آخرین بکاپ خودکار
-    auto_dir = "/tmp/stockland_backups"
-    auto_files = sorted(glob.glob(f"{auto_dir}/auto_*.stbak"), reverse=True)[:5]
-    auto_rows = ""
-    for f in auto_files:
-        fname = os.path.basename(f)
-        sz    = os.path.getsize(f)
-        sz_s  = f"{sz//1024} KB" if sz < 1024*1024 else f"{sz//1024//1024} MB"
-        ts    = fname.replace("auto_","").replace(".stbak","")
-        auto_rows += f'''<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-sm text-gray-700 font-mono">{e(ts)}</td>
-          <td class="px-4 py-3 text-xs text-gray-500">{sz_s}</td>
-          <td class="px-4 py-3">
-            <a href="/admin/database/download/{e(fname)}"
-               class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">⬇ دانلود</a>
-          </td>
-        </tr>'''
+    def _checks(name, labels, checked=False):
+        return "".join(
+            f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50">'
+            f'<input type="checkbox" name="{name}" value="{k}"'
+            f'{" checked" if checked else ""} class="w-4 h-4 rounded">'
+            f'<span>{v}</span></label>'
+            for k,v in labels.items()
+        )
 
-    # checkboxes برای بکاپ سفارشی
-    section_checks = "".join(f'''
-        <label class="flex items-center gap-2 text-sm cursor-pointer p-2 rounded-lg hover:bg-gray-50">
-          <input type="checkbox" name="sections" value="{s}" checked
-            class="w-4 h-4 text-indigo-600 rounded" id="sec_{s}">
-          <span>{SECTION_LABELS.get(s,s)}</span>
-        </label>''' for s in ALL_SECTIONS.keys())
-
-    reset_checks = "".join(f'''
-        <label class="flex items-center gap-2 text-sm cursor-pointer p-2 rounded-lg hover:bg-gray-50">
-          <input type="checkbox" name="reset_sections" value="{s}"
-            class="w-4 h-4 text-red-500 rounded" id="rst_{s}">
-          <span>{RESET_LABELS.get(s,s)}</span>
-        </label>''' for s in RESET_LABELS.keys())
-
-    # auto_section پیش‌محاسبه
-    if auto_files:
-        auto_section = ('<div class="card overflow-hidden mb-5"><div class="px-5 py-3 border-b bg-gray-50 flex justify-between"><span class="font-medium text-gray-700">🕐 بکاپ‌های خودکار</span><span class="text-xs text-gray-400">آخرین ۵ بکاپ</span></div><div class="overflow-x-auto"><table class="w-full text-right min-w-max"><thead><tr class="text-xs text-gray-500 border-b bg-gray-50"><th class="px-4 py-3">زمان</th><th class="px-4 py-3">حجم</th><th class="px-4 py-3">دانلود</th></tr></thead><tbody>'
-            + auto_rows + '</tbody></table></div></div>')
-    else:
-        auto_section = ""
+    backup_checks = _checks("sections", SECTION_LABELS, checked=True)
+    reset_checks  = _checks("reset_sections", RESET_LABELS, checked=False)
 
     body = f"""
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold text-gray-800">💾 پشتیبان‌گیری و بازیابی</h1>
     </div>
 
-    <div class="grid md:grid-cols-2 gap-5 mb-5">
-      <!-- بکاپ کامل -->
-      <div class="card p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <span class="w-10 h-10 bg-indigo-100 text-indigo-700 rounded-xl flex items-center justify-center text-lg">📦</span>
-          <div><h2 class="font-bold text-gray-800">پشتیبان‌گیری کامل</h2>
-               <p class="text-xs text-gray-400">تمام داده‌های سیستم در یک فایل</p></div>
-        </div>
-        <a href="/admin/database/backup/full"
-           class="flex items-center justify-center gap-2 w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition">
-          ⬇ دانلود بکاپ کامل (.stbak)
-        </a>
+    <!-- ── پشتیبان‌گیری ──────────────────────────────────────────────── -->
+    <div class="card p-6 mb-4">
+      <div class="flex items-center gap-3 mb-5">
+        <span class="w-10 h-10 bg-indigo-100 text-indigo-700 rounded-xl flex items-center justify-center text-xl">📦</span>
+        <div><h2 class="font-bold text-gray-800 text-lg">پشتیبان‌گیری</h2>
+             <p class="text-xs text-gray-400">فرمت اختصاصی .stbak با checksum و manifest</p></div>
       </div>
-
-      <!-- بکاپ سفارشی -->
-      <div class="card p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <span class="w-10 h-10 bg-purple-100 text-purple-700 rounded-xl flex items-center justify-center text-lg">🎛</span>
-          <div><h2 class="font-bold text-gray-800">پشتیبان‌گیری سفارشی</h2>
-               <p class="text-xs text-gray-400">انتخاب بخش‌های موردنیاز</p></div>
+      <form id="backup-form" onsubmit="startJob(event,'backup')">
+        <label class="flex items-center gap-2 cursor-pointer mb-4 select-none">
+          <input type="checkbox" id="backup-custom-toggle" onchange="toggleCustom('backup')"
+            class="w-4 h-4 rounded text-indigo-600">
+          <span class="text-sm font-medium text-gray-700">انتخاب سفارشی</span>
+          <span class="text-xs text-gray-400">(پیش‌فرض: بکاپ کامل)</span>
+        </label>
+        <div id="backup-sections" class="hidden grid grid-cols-2 gap-1 bg-gray-50 rounded-xl p-3 mb-4 max-h-52 overflow-y-auto">
+          {backup_checks}
         </div>
-        <form method="post" action="/admin/database/backup/custom">
-          <div class="grid grid-cols-2 gap-1 mb-4 max-h-48 overflow-y-auto border border-gray-100 rounded-xl p-3">
-            {section_checks}
-          </div>
-          <button type="submit"
-            class="flex items-center justify-center gap-2 w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition">
-            ⬇ دانلود بکاپ سفارشی
-          </button>
-        </form>
-      </div>
+        <button type="submit"
+          class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition flex items-center justify-center gap-2">
+          ⬇ دریافت فایل بکاپ
+        </button>
+      </form>
     </div>
 
-    <!-- بازیابی -->
-    <div class="card p-6 mb-5">
-      <div class="flex items-center gap-3 mb-4">
-        <span class="w-10 h-10 bg-green-100 text-green-700 rounded-xl flex items-center justify-center text-lg">♻️</span>
-        <div><h2 class="font-bold text-gray-800">بازیابی از بکاپ</h2>
-             <p class="text-xs text-gray-400">فقط فایل‌های .stbak معتبر پذیرفته می‌شوند</p></div>
+    <!-- ── بازیابی ───────────────────────────────────────────────────── -->
+    <div class="card p-6 mb-4">
+      <div class="flex items-center gap-3 mb-5">
+        <span class="w-10 h-10 bg-green-100 text-green-700 rounded-xl flex items-center justify-center text-xl">♻️</span>
+        <div><h2 class="font-bold text-gray-800 text-lg">بازیابی پشتیبان</h2>
+             <p class="text-xs text-gray-400">فقط فایل‌های .stbak پذیرفته می‌شوند</p></div>
       </div>
-      <form method="post" action="/admin/database/restore" enctype="multipart/form-data">
-        <div class="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center mb-4">
+      <form id="restore-form" onsubmit="startRestore(event)">
+        <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center mb-4">
           <p class="text-sm text-gray-400 mb-2">فایل .stbak را انتخاب کنید</p>
-          <input type="file" name="backup_file" accept=".stbak" required
-            class="text-sm text-gray-600 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-green-50 file:text-green-700 hover:file:bg-green-100">
+          <input type="file" name="backup_file" id="restore-file" accept=".stbak" required
+            class="text-sm text-gray-600 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-green-50 file:text-green-700">
         </div>
-        <button type="submit" onclick="return confirm('⚠️ داده‌های موجود با بکاپ جایگزین می‌شوند. ادامه می‌دهید؟')"
-          class="flex items-center justify-center gap-2 w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-medium transition">
+        <button type="submit"
+          class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">
           ♻️ بازیابی پشتیبان
         </button>
       </form>
     </div>
 
-    <!-- بکاپ‌های خودکار -->
-    {auto_section}
-
-    <!-- ریست فکتوری -->
+    <!-- ── ریست سیستم ────────────────────────────────────────────────── -->
     <div class="card p-6 border-2 border-red-100">
-      <div class="flex items-center gap-3 mb-4">
-        <span class="w-10 h-10 bg-red-100 text-red-700 rounded-xl flex items-center justify-center text-lg">⚠️</span>
-        <div><h2 class="font-bold text-red-700">ریست فکتوری</h2>
+      <div class="flex items-center gap-3 mb-5">
+        <span class="w-10 h-10 bg-red-100 text-red-700 rounded-xl flex items-center justify-center text-xl">🗑</span>
+        <div><h2 class="font-bold text-red-700 text-lg">ریست سیستم</h2>
              <p class="text-xs text-red-400">این عملیات برگشت‌ناپذیر است</p></div>
       </div>
-      <div class="grid md:grid-cols-2 gap-4">
-        <div class="p-4 bg-red-50 rounded-xl">
-          <h3 class="text-sm font-bold text-red-700 mb-3">ریست کامل سیستم</h3>
-          <p class="text-xs text-red-400 mb-3">تمام داده‌ها پاک می‌شوند و سیستم به حالت اولیه برمی‌گردد.</p>
-          <form method="post" action="/admin/database/reset/full">
-            <button type="submit" onclick="return confirm('⛔ تمام داده‌ها حذف می‌شوند! آیا مطمئنید؟')"
-              class="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-medium">
-              🗑 ریست کامل
-            </button>
-          </form>
+      <form id="reset-form" onsubmit="startJob(event,'reset')">
+        <label class="flex items-center gap-2 cursor-pointer mb-4 select-none">
+          <input type="checkbox" id="reset-custom-toggle" onchange="toggleCustom('reset')"
+            class="w-4 h-4 rounded text-red-500">
+          <span class="text-sm font-medium text-gray-700">انتخاب سفارشی</span>
+          <span class="text-xs text-gray-400">(پیش‌فرض: ریست کامل)</span>
+        </label>
+        <div id="reset-sections" class="hidden grid grid-cols-2 gap-1 bg-red-50 rounded-xl p-3 mb-4 max-h-52 overflow-y-auto">
+          {reset_checks}
         </div>
-        <div class="p-4 bg-orange-50 rounded-xl">
-          <h3 class="text-sm font-bold text-orange-700 mb-3">ریست انتخابی</h3>
-          <form method="post" action="/admin/database/reset/selective">
-            <div class="grid grid-cols-2 gap-1 mb-3 max-h-36 overflow-y-auto">
-              {reset_checks}
-            </div>
-            <button type="submit" onclick="return confirm('بخش‌های انتخاب شده حذف می‌شوند. ادامه می‌دهید؟')"
-              class="w-full py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-medium">
-              🗑 ریست انتخابی
-            </button>
-          </form>
+        <button type="submit"
+          onclick="return confirm('⚠️ مطمئنید؟ این عملیات برگشت‌ناپذیر است.')"
+          class="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition">
+          🗑 اجرای ریست
+        </button>
+      </form>
+    </div>
+
+    <!-- ── Progress overlay ──────────────────────────────────────────── -->
+    <div id="progress-overlay" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div class="bg-white rounded-2xl p-8 w-80 text-center shadow-2xl">
+        <div class="text-4xl mb-4" id="progress-icon">⏳</div>
+        <h3 class="font-bold text-gray-800 mb-2" id="progress-title">در حال انجام...</h3>
+        <div class="w-full bg-gray-100 rounded-full h-2 mb-3">
+          <div id="progress-bar" class="bg-indigo-500 h-2 rounded-full transition-all duration-300" style="width:0%"></div>
         </div>
+        <p class="text-sm text-gray-500" id="progress-msg">لطفاً صبر کنید</p>
+        <button onclick="closeProgress()" id="progress-close" class="hidden mt-4 px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm">بستن</button>
       </div>
-    </div>"""
+    </div>
+
+    <script>
+    function toggleCustom(type) {{
+      var chk = document.getElementById(type+'-custom-toggle');
+      var box = document.getElementById(type+'-sections');
+      box.classList.toggle('hidden', !chk.checked);
+    }}
+
+    function showProgress(title) {{
+      document.getElementById('progress-overlay').classList.remove('hidden');
+      document.getElementById('progress-title').textContent = title;
+      document.getElementById('progress-icon').textContent = '⏳';
+      document.getElementById('progress-bar').style.width = '5%';
+      document.getElementById('progress-msg').textContent = 'در حال انجام...';
+      document.getElementById('progress-close').classList.add('hidden');
+    }}
+
+    function closeProgress() {{
+      document.getElementById('progress-overlay').classList.add('hidden');
+    }}
+
+    function pollJob(jobId, onDone) {{
+      var t = setInterval(function() {{
+        fetch('/admin/database/job/'+jobId)
+          .then(function(r){{return r.json();}})
+          .then(function(d) {{
+            document.getElementById('progress-bar').style.width = (d.progress||10)+'%';
+            if(d.status === 'done') {{
+              clearInterval(t);
+              document.getElementById('progress-bar').style.width = '100%';
+              onDone(d);
+            }} else if(d.status === 'error') {{
+              clearInterval(t);
+              document.getElementById('progress-icon').textContent = '❌';
+              document.getElementById('progress-title').textContent = 'خطا';
+              document.getElementById('progress-msg').textContent = d.message || 'خطای ناشناخته';
+              document.getElementById('progress-close').classList.remove('hidden');
+            }}
+          }});
+      }}, 600);
+    }}
+
+    function startJob(evt, type) {{
+      evt.preventDefault();
+      var form = evt.target;
+      var fd   = new FormData(form);
+      var url  = type==='backup' ? '/admin/database/backup/start' : '/admin/database/reset/start';
+      showProgress(type==='backup' ? 'در حال ساخت بکاپ...' : 'در حال ریست...');
+      fetch(url, {{method:'POST', body:fd}})
+        .then(function(r){{return r.json();}})
+        .then(function(d) {{
+          if(d.error) {{
+            document.getElementById('progress-icon').textContent='❌';
+            document.getElementById('progress-title').textContent='خطا';
+            document.getElementById('progress-msg').textContent=d.error;
+            document.getElementById('progress-close').classList.remove('hidden');
+            return;
+          }}
+          pollJob(d.job_id, function(res) {{
+            if(type==='backup') {{
+              document.getElementById('progress-icon').textContent='✅';
+              document.getElementById('progress-title').textContent='بکاپ آماده شد';
+              document.getElementById('progress-msg').textContent='فایل در حال دانلود...';
+              document.getElementById('progress-close').classList.remove('hidden');
+              window.location.href='/admin/database/backup/download/'+d.job_id;
+            }} else {{
+              document.getElementById('progress-icon').textContent='✅';
+              document.getElementById('progress-title').textContent='ریست انجام شد';
+              document.getElementById('progress-msg').textContent=(res.result&&res.result.total_deleted||0)+' رکورد حذف شد';
+              document.getElementById('progress-close').classList.remove('hidden');
+            }}
+          }});
+        }});
+    }}
+
+    function startRestore(evt) {{
+      evt.preventDefault();
+      var file = document.getElementById('restore-file').files[0];
+      if(!file) return;
+      if(!file.name.endsWith('.stbak')) {{
+        alert('فقط فایل .stbak مجاز است');
+        return;
+      }}
+      showProgress('در حال بازیابی...');
+      var fd = new FormData();
+      fd.append('backup_file', file);
+      fetch('/admin/database/restore/start', {{method:'POST', body:fd}})
+        .then(function(r){{return r.json();}})
+        .then(function(d) {{
+          if(d.error) {{
+            document.getElementById('progress-icon').textContent='❌';
+            document.getElementById('progress-title').textContent='خطا';
+            document.getElementById('progress-msg').textContent=d.error;
+            document.getElementById('progress-close').classList.remove('hidden');
+            return;
+          }}
+          pollJob(d.job_id, function(res) {{
+            document.getElementById('progress-icon').textContent='✅';
+            document.getElementById('progress-title').textContent='بازیابی انجام شد';
+            document.getElementById('progress-msg').textContent=(res.result&&res.result.total||0)+' رکورد بازیابی شد';
+            document.getElementById('progress-close').classList.remove('hidden');
+          }});
+        }});
+    }}
+    </script>"""
 
     return _layout("پشتیبان‌گیری", body, adm, flash=flash)
 
 
-@router.get("/database/backup/full")
-async def backup_full(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    from stbak_engine import create_stbak, stbak_filename
-    from fastapi.responses import Response as FResponse
-    raw = create_stbak(_DB_PATH())
-    fname = stbak_filename("full")
-    _log(request, "بکاپ کامل", "دیتابیس", fname)
-    return FResponse(content=raw, media_type="application/octet-stream",
-                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+@router.get("/database/job/{job_id}")
+async def job_status(request: Request, job_id: str):
+    from fastapi.responses import JSONResponse
+    job = _JOBS.get(job_id, {"status":"not_found","progress":0})
+    return JSONResponse(job)
 
 
-@router.post("/database/backup/custom")
-async def backup_custom(request: Request):
+@router.post("/database/backup/start")
+async def backup_start(request: Request):
+    from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    from stbak_engine import create_stbak, stbak_filename, resolve_sections
-    from fastapi.responses import Response as FResponse
+    if not adm: return JSONResponse({"error":"unauthorized"})
     form = await request.form()
-    sections = form.getlist("sections")
-    if not sections:
-        return _redir("/admin/database?flash=حداقل+یک+بخش+انتخاب+کنید")
-    sections = resolve_sections(sections)
-    raw   = create_stbak(_DB_PATH(), sections=sections, backup_mode="custom")
-    fname = stbak_filename("custom")
-    _log(request, "بکاپ سفارشی", "دیتابیس", f"{len(sections)} بخش")
-    return FResponse(content=raw, media_type="application/octet-stream",
-                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    sections_raw = form.getlist("sections")
+    sections = sections_raw if sections_raw else None
+    job_id = str(_uuid.uuid4())[:8]
+    _JOBS[job_id] = {"status":"pending","progress":5,"message":"","result":None}
+    from stbak_engine import create_stbak, resolve_sections
+    db = _DB_PATH()
+    def _do():
+        secs = resolve_sections(sections) if sections else None
+        return create_stbak(db, sections=secs)
+    _job_run(job_id, _do)
+    _log(request, "شروع بکاپ", "دیتابیس", f"job:{job_id}")
+    return JSONResponse({"job_id": job_id})
 
 
-@router.get("/database/download/{fname}")
-async def backup_download(request: Request, fname: str):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    import os
+@router.get("/database/backup/download/{job_id}")
+async def backup_download_job(request: Request, job_id: str):
     from fastapi.responses import Response as FResponse
-    path = f"/tmp/stockland_backups/{fname}"
-    if not os.path.exists(path) or not fname.endswith(".stbak"):
-        return _redir("/admin/database?flash=فایل+یافت+نشد")
-    raw = open(path, "rb").read()
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    job = _JOBS.get(job_id)
+    if not job or job.get("status") != "done":
+        return _redir("/admin/database?flash=بکاپ+هنوز+آماده+نشده")
+    raw   = job["result"]
+    mode  = "custom" if job.get("custom") else "full"
+    from stbak_engine import stbak_filename
+    fname = stbak_filename(mode)
     return FResponse(content=raw, media_type="application/octet-stream",
                      headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
-@router.post("/database/restore")
-async def database_restore(request: Request, backup_file: UploadFile = None):
+@router.post("/database/restore/start")
+async def restore_start(request: Request, backup_file: UploadFile = None):
+    from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    if not backup_file:
-        return _redir("/admin/database?flash=فایل+انتخاب+نشده")
-
-    fname = backup_file.filename or ""
-    if not fname.endswith(".stbak"):
-        return _redir("/admin/database?flash=فقط+فایل‌های+.stbak+معتبر+هستند")
-
+    if not adm: return JSONResponse({"error":"unauthorized"})
+    if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
+        return JSONResponse({"error":"فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
+    job_id = str(_uuid.uuid4())[:8]
+    _JOBS[job_id] = {"status":"pending","progress":5,"message":"","result":None}
     from stbak_engine import restore_stbak, StbakError
-    try:
-        result = restore_stbak(raw, _DB_PATH())
-    except StbakError as ex:
-        return _redir(f"/admin/database?flash=❌+{str(ex)[:80]}")
-    except Exception as ex:
-        return _redir(f"/admin/database?flash=خطا+در+بازیابی:+{str(ex)[:60]}")
-
-    errors = result.get("errors", [])
-    total  = result.get("total", 0)
-    mode   = result.get("manifest", {}).get("backup_mode", "?")
-    _log(request, "بازیابی بکاپ", "دیتابیس",
-         f"mode:{mode} records:{total} errors:{len(errors)}")
-    if errors:
-        return _redir(f"/admin/database?flash=بازیابی+شد+با+{len(errors)}+خطا:+{errors[0][:40]}")
-    return _redir(f"/admin/database?flash=✅+بازیابی+موفق+—+{total:,}+رکورد+بازیابی+شد")
+    db = _DB_PATH()
+    def _do():
+        return restore_stbak(raw, db)
+    _job_run(job_id, _do)
+    _log(request, "شروع بازیابی", "دیتابیس", f"job:{job_id}")
+    return JSONResponse({"job_id": job_id})
 
 
-@router.post("/database/reset/full")
-async def database_reset_full(request: Request):
+@router.post("/database/reset/start")
+async def reset_start(request: Request):
+    from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    from stbak_engine import factory_reset
-    result = factory_reset(_DB_PATH())
-    total  = result.get("total_deleted", 0)
-    _log(request, "ریست کامل", "دیتابیس", f"{total:,} رکورد حذف شد")
-    return _redir(f"/admin/database?flash=✅+ریست+کامل+انجام+شد+—+{total:,}+رکورد+حذف+شد")
-
-
-@router.post("/database/reset/selective")
-async def database_reset_selective(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
+    if not adm: return JSONResponse({"error":"unauthorized"})
     form = await request.form()
-    sections = form.getlist("reset_sections")
-    if not sections:
-        return _redir("/admin/database?flash=حداقل+یک+بخش+انتخاب+کنید")
+    sections_raw = form.getlist("reset_sections")
+    sections = sections_raw if sections_raw else None
+    job_id = str(_uuid.uuid4())[:8]
+    _JOBS[job_id] = {"status":"pending","progress":5,"message":"","result":None}
     from stbak_engine import factory_reset
-    result = factory_reset(_DB_PATH(), sections=sections)
-    total  = result.get("total_deleted", 0)
-    _log(request, "ریست انتخابی", "دیتابیس",
-         f"بخش‌ها: {', '.join(sections)} | {total:,} رکورد")
-    return _redir(f"/admin/database?flash=✅+ریست+انجام+شد+—+{total:,}+رکورد+حذف+شد")
+    db = _DB_PATH()
+    def _do():
+        return factory_reset(db, sections=sections)
+    _job_run(job_id, _do)
+    _log(request, "شروع ریست", "دیتابیس", f"job:{job_id} secs:{sections}")
+    return JSONResponse({"job_id": job_id})
 
 
 @router.get("/admins", response_class=HTMLResponse)
