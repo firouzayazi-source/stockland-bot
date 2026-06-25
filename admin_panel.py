@@ -1747,7 +1747,7 @@ async def settings_save_all(request: Request):
                 enabled = form.get(f"btn_{k}") is not None
                 val = "1" if enabled else "0"
                 conn.execute(
-                    "INSERT INTO ui_texts (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+                    "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now');",
                     (f"MAIN_BTN_ENABLED_{k}", val)
                 )
         else:
@@ -1764,7 +1764,7 @@ async def settings_save_all(request: Request):
                     conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
                 else:
                     conn.execute(
-                        "INSERT INTO ui_texts (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+                        "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now');",
                         (key, new_val)
                     )
         conn.commit()
