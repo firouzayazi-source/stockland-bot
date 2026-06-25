@@ -2027,16 +2027,16 @@ async def database_page(request: Request, flash: str = ""):
     </div>
 
     <!-- Progress overlay -->
-    <div id="overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center;padding:16px">
-      <div style="background:#fff;border-radius:20px;padding:40px 32px;width:100%;max-width:340px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3)">
-        <div style="font-size:48px;margin-bottom:16px" id="ov-icon">⏳</div>
-        <h3 style="font-weight:700;color:#1f2937;font-size:18px;margin:0 0 6px" id="ov-title">در حال انجام...</h3>
-        <p style="font-size:12px;color:#9ca3af;margin:0 0 20px" id="ov-msg">لطفاً صبر کنید</p>
-        <div style="direction:ltr;background:#f3f4f6;border-radius:999px;height:10px;overflow:hidden;margin-bottom:20px">
-          <div id="ov-bar" style="background:#6366f1;height:10px;border-radius:999px;width:5%;transition:width .4s ease"></div>
+    <div id="overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.6);z-index:99999">
+      <div id="ov-modal" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:20px;padding:36px 24px;width:calc(100% - 48px);max-width:340px;text-align:center;box-shadow:0 25px 80px rgba(0,0,0,.4)">
+        <div style="font-size:52px;margin-bottom:12px;line-height:1" id="ov-icon">⏳</div>
+        <h3 style="font-weight:700;color:#111827;font-size:17px;margin:0 0 6px 0;font-family:inherit" id="ov-title">در حال انجام...</h3>
+        <p style="font-size:12px;color:#6b7280;margin:0 0 18px 0" id="ov-msg">لطفاً صبر کنید</p>
+        <div style="direction:ltr;background:#e5e7eb;border-radius:999px;height:8px;overflow:hidden;margin-bottom:20px">
+          <div id="ov-bar" style="background:#6366f1;height:8px;border-radius:999px;width:5%;transition:width .5s ease"></div>
         </div>
         <button id="ov-close" onclick="document.getElementById('overlay').style.display='none'"
-          style="display:none;padding:10px 32px;background:#6366f1;color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer">
+          style="display:none;padding:11px 36px;background:#6366f1;color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">
           بستن
         </button>
       </div>
