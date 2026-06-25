@@ -1955,6 +1955,77 @@ async def database_page(request: Request, flash: str = ""):
     backup_checks = _chk("sections", checked=True)
     reset_checks  = _chk("reset_sections", checked=False)
 
+    _js = """
+    function toggle(id,chk){document.getElementById(id).classList.toggle('hidden',!chk.checked);}
+    var _busy=false;
+    function ovShow(t,sub){
+      document.getElementById('overlay').style.display='block';
+      document.getElementById('ov-icon').textContent='\u23f3';
+      document.getElementById('ov-title').textContent=t;
+      document.getElementById('ov-msg').textContent=sub||'';
+      document.getElementById('ov-close').style.display='none';
+      var b=document.getElementById('ov-bar');
+      b.style.transition='none';b.style.width='3%';b.style.background='#6366f1';
+      setTimeout(function(){b.style.transition='width 2s ease';b.style.width='88%';},80);
+    }
+    function ovResult(ok,t,msg){
+      document.getElementById('ov-icon').textContent=ok?'\u2705':'\u274c';
+      document.getElementById('ov-title').textContent=t;
+      document.getElementById('ov-msg').textContent=msg;
+      var b=document.getElementById('ov-bar');b.style.transition='width .3s';
+      b.style.width='100%';b.style.background=ok?'#22c55e':'#ef4444';
+      document.getElementById('ov-close').style.display='inline-block';
+    }
+    function getSelected(n){
+      return Array.from(document.querySelectorAll('input[name="'+n+'"]:checked')).map(function(i){return i.value;});
+    }
+    async function runJob(type){
+      if(_busy)return;_busy=true;
+      try{
+        if(type==='backup'){
+          ovShow('در حال ساخت بکاپ...','لطفاً صبر کنید');
+          var fd=new FormData();
+          if(document.getElementById('b-toggle').checked) getSelected('sections').forEach(function(v){fd.append('sections',v);});
+          else fd.append('full','1');
+          var r=await fetch('/admin/database/backup/full-sync',{method:'POST',body:fd});
+          if(!r.ok) throw new Error('خطای سرور: '+r.status);
+          var blob=await r.blob();
+          var cd=r.headers.get('Content-Disposition')||'';
+          var m=cd.match(/filename="([^"]+)"/);
+          var url=URL.createObjectURL(blob);
+          var a=document.createElement('a');a.href=url;a.download=m?m[1]:'backup.stbak';
+          document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+          ovResult(true,'بکاپ آماده شد','فایل دانلود شد');
+        }else{
+          ovShow('در حال ریست...','لطفاً صبر کنید');
+          var fd2=new FormData();
+          if(document.getElementById('r-toggle').checked) getSelected('reset_sections').forEach(function(v){fd2.append('reset_sections',v);});
+          else fd2.append('full','1');
+          var r2=await fetch('/admin/database/reset/sync',{method:'POST',body:fd2});
+          var d2=await r2.json();
+          if(d2.error) throw new Error(d2.error);
+          ovResult(true,'ریست انجام شد',(d2.total_deleted||0)+' رکورد حذف شد');
+        }
+      }catch(err){ovResult(false,'عملیات ناموفق',err.message||'خطا');}
+      finally{_busy=false;}
+    }
+    async function runRestore(){
+      if(_busy)return;
+      var file=document.getElementById('restore-file').files[0];
+      if(!file){alert('فایل انتخاب نشده');return;}
+      if(!file.name.endsWith('.stbak')){alert('فقط .stbak مجاز است');return;}
+      _busy=true;ovShow('در حال بازیابی...','لطفاً صبر کنید');
+      try{
+        var fd=new FormData();fd.append('backup_file',file);
+        var r=await fetch('/admin/database/restore/sync',{method:'POST',body:fd});
+        var d=await r.json();
+        if(d.error) throw new Error(d.error);
+        ovResult(true,'بازیابی موفق',(d.total||0)+' رکورد بازیابی شد');
+      }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
+      finally{_busy=false;}
+    }
+    """
+
     body = f"""
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold text-gray-800">💾 پشتیبان‌گیری و بازیابی</h1>
@@ -2043,147 +2114,67 @@ async def database_page(request: Request, flash: str = ""):
     </div>
 
     <script>
-    function toggle(id, chk) {{
-      document.getElementById(id).classList.toggle('hidden', !chk.checked);
-    }}
-
-    /* ── Overlay helpers ─────────────────────────────── */
-    var _running = false;
-
-    function ovShow(title, msg, barColor) {{
-      document.getElementById('overlay').style.display = 'block';
-      document.getElementById('ov-icon').textContent   = '⏳';
-      document.getElementById('ov-title').textContent  = title;
-      document.getElementById('ov-msg').textContent    = msg || 'لطفاً صبر کنید';
-      document.getElementById('ov-bar').style.width    = '5%';
-      document.getElementById('ov-bar').style.background = barColor || '#6366f1';
-      document.getElementById('ov-close').style.display = 'none';
-    }}
-
-    function ovDone(icon, title, msg, barColor) {{
-      document.getElementById('ov-icon').textContent    = icon;
-      document.getElementById('ov-title').textContent   = title;
-      document.getElementById('ov-msg').textContent     = msg;
-      document.getElementById('ov-bar').style.width     = '100%';
-      document.getElementById('ov-bar').style.background = barColor || '#22c55e';
-      document.getElementById('ov-close').style.display = 'inline-block';
-      _running = false;
-    }}
-
-    function ovClose() {{
-      document.getElementById('overlay').style.display = 'none';
-      _running = false;
-    }}
-
-    function ovProgress(pct) {{
-      document.getElementById('ov-bar').style.width = Math.min(pct, 94) + '%';
-    }}
-
-    function ovMsg(msg) {{
-      document.getElementById('ov-msg').textContent = msg;
-    }}
-
-    /* ── Poll job status ─────────────────────────────── */
-    function pollJob(jobId) {{
-      return new Promise(function(resolve, reject) {{
-        var fake = 10, nf = 0, maxNF = 30;
-        var t = setInterval(function() {{
-          fetch('/admin/database/job/' + jobId)
-            .then(function(r) {{ return r.json(); }})
-            .then(function(d) {{
-              if (!d || d.status === 'not_found') {{
-                nf++;
-                fake = Math.min(fake + 2, 75);
-                ovProgress(fake);
-                if (nf >= maxNF) {{ clearInterval(t); reject(new Error('timeout')); }}
-                return;
-              }}
-              nf = 0;
-              fake = Math.max(fake, Math.min(d.progress || fake, 94));
-              ovProgress(fake);
-              if (d.status === 'done')  {{ clearInterval(t); resolve(d); }}
-              if (d.status === 'error') {{ clearInterval(t); reject(new Error(d.message || 'خطای سرور')); }}
-            }})
-            .catch(function() {{ nf++; if(nf >= maxNF) {{ clearInterval(t); reject(new Error('network error')); }} }});
-        }}, 600);
-      }});
-    }}
-
-    function getSelected(name) {{
-      return Array.from(document.querySelectorAll('input[name="' + name + '"]:checked'))
-                  .map(function(i) {{ return i.value; }});
-    }}
-
-    /* ── Backup ──────────────────────────────────────── */
-    async function runJob(type) {{
-      if (_running) return;
-      _running = true;
-      var isBackup = type === 'backup';
-      var barClr   = isBackup ? '#6366f1' : '#ef4444';
-      ovShow(isBackup ? 'آماده‌سازی بکاپ...' : 'آماده‌سازی ریست...', 'در حال ارسال درخواست...', barClr);
-      try {{
-        var fd  = new FormData();
-        var url, custom;
-        if (isBackup) {{
-          url    = '/admin/database/backup/start';
-          custom = document.getElementById('b-toggle').checked;
-          if (custom) getSelected('sections').forEach(function(v) {{ fd.append('sections', v); }});
-          else         fd.append('full', '1');
-        }} else {{
-          url    = '/admin/database/reset/start';
-          custom = document.getElementById('r-toggle').checked;
-          if (custom) getSelected('reset_sections').forEach(function(v) {{ fd.append('reset_sections', v); }});
-          else         fd.append('full', '1');
-        }}
-        ovMsg(isBackup ? 'در حال ایجاد پشتیبان...' : 'در حال ریست سیستم...');
-        var resp = await fetch(url, {{ method: 'POST', body: fd }});
-        var data = await resp.json();
-        if (data.error) throw new Error(data.error);
-        var job = await pollJob(data.job_id);
-        if (isBackup) {{
-          ovDone('✅', 'پشتیبان آماده شد', 'در حال دانلود فایل...', '#22c55e');
-          setTimeout(function() {{
-            var a = document.createElement('a');
-            a.href = '/admin/database/backup/download/' + data.job_id;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          }}, 600);
-        }} else {{
-          var n = (job.result && job.result.total_deleted) || 0;
-          ovDone('✅', 'ریست انجام شد', n + ' رکورد حذف شد', '#22c55e');
-        }}
-      }} catch(err) {{
-        var msg = err.message === 'timeout' ? 'عملیات پاسخ نداد — دوباره تلاش کنید' : (err.message || 'خطای ناشناخته');
-        ovDone('❌', 'عملیات ناموفق', msg, '#ef4444');
-      }}
-    }}
-
-    /* ── Restore ─────────────────────────────────────── */
-    async function runRestore() {{
-      if (_running) return;
-      var file = document.getElementById('restore-file').files[0];
-      if (!file) {{ alert('فایل انتخاب نشده'); return; }}
-      if (!file.name.endsWith('.stbak')) {{ alert('فقط فایل .stbak مجاز است'); return; }}
-      _running = true;
-      ovShow('در حال بازیابی...', 'درحال آپلود فایل...', '#22c55e');
-      try {{
-        var fd = new FormData();
-        fd.append('backup_file', file);
-        ovMsg('در حال اعتبارسنجی فایل...');
-        var resp = await fetch('/admin/database/restore/start', {{ method: 'POST', body: fd }});
-        var data = await resp.json();
-        if (data.error) throw new Error(data.error);
-        ovMsg('در حال بازیابی اطلاعات...');
-        var job = await pollJob(data.job_id);
-        var n   = (job.result && job.result.total) || 0;
-        ovDone('✅', 'بازیابی موفق', n + ' رکورد بازیابی شد', '#22c55e');
-      }} catch(err) {{
-        var msg = err.message === 'timeout' ? 'عملیات پاسخ نداد — دوباره تلاش کنید' : (err.message || 'خطای ناشناخته');
-        ovDone('❌', 'بازیابی ناموفق', msg, '#ef4444');
-      }}
-    }}
+    {_js}
     </script>"""
 
     return _layout("پشتیبان‌گیری", body, adm, flash=flash)
+
+
+@router.post("/database/backup/full-sync")
+async def backup_full_sync(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    from fastapi.responses import Response as FResponse
+    from stbak_engine import create_stbak, stbak_filename, resolve_sections
+    form = await request.form()
+    is_full = form.get("full") == "1"
+    secs = None if is_full else (form.getlist("sections") or None)
+    if secs: secs = resolve_sections(secs)
+    raw   = create_stbak(_DB_PATH(), modules=secs)
+    fname = stbak_filename("full" if is_full else "custom")
+    _log(request, "بکاپ", "دیتابیس", fname)
+    return FResponse(content=raw, media_type="application/octet-stream",
+                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/database/restore/sync")
+async def restore_sync(request: Request, backup_file: UploadFile = None):
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
+        return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
+    raw = await backup_file.read()
+    from stbak_engine import restore_stbak, validate_stbak, StbakError
+    try:
+        validate_stbak(raw)
+        result = restore_stbak(raw, _DB_PATH())
+        _log(request, "بازیابی", "دیتابیس", f"{result['total']} رکورد")
+        return JSONResponse({"ok": True, "total": result["total"], "errors": result["errors"]})
+    except StbakError as ex:
+        return JSONResponse({"error": str(ex)})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:100]})
+
+
+@router.post("/database/reset/sync")
+async def reset_sync(request: Request):
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    form = await request.form()
+    is_full = form.get("full") == "1"
+    secs = None if is_full else (form.getlist("reset_sections") or None)
+    from stbak_engine import factory_reset
+    try:
+        result = factory_reset(_DB_PATH(), modules=secs)
+        _log(request, "ریست", "دیتابیس", f"{result['total_deleted']} رکورد")
+        return JSONResponse({"ok": True, "total_deleted": result["total_deleted"]})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:100]})
 
 
 @router.get("/database/job/{job_id}")
