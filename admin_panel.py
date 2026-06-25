@@ -1881,20 +1881,51 @@ async def settings_delete_svc(request: Request, key: str = Form("")):
 # ─── Backup / Restore / Reset ────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
-import asyncio as _asyncio, uuid as _uuid
-_JOBS: dict = {}          # job_id → {status, progress, message, result}
+import threading as _threading, uuid as _uuid, tempfile as _tempfile
 
-def _job_run(job_id: str, fn, *args, **kwargs):
-    """اجرای تابع در thread و ذخیره نتیجه."""
-    import threading
+_JOB_DIR = "/tmp/stbak_jobs"
+os.makedirs(_JOB_DIR, exist_ok=True)
+
+
+def _job_write(job_id: str, data: dict):
+    import json as _j
+    path = f"{_JOB_DIR}/{job_id}.json"
+    tmp  = path + ".tmp"
+    with open(tmp, "w") as f:
+        _j.dump(data, f)
+    os.replace(tmp, path)
+
+
+def _job_read(job_id: str) -> dict:
+    import json as _j
+    path = f"{_JOB_DIR}/{job_id}.json"
+    try:
+        with open(path) as f:
+            return _j.load(f)
+    except Exception:
+        return {"status": "not_found", "progress": 0}
+
+
+def _job_start(fn, *args, **kwargs) -> str:
+    job_id = str(_uuid.uuid4())[:8]
+    _job_write(job_id, {"status": "running", "progress": 5, "message": "", "result": None})
+
     def _worker():
         try:
-            _JOBS[job_id]["status"] = "running"
-            result = fn(*args, **kwargs)
-            _JOBS[job_id].update({"status":"done","progress":100,"result":result})
+            def _cb(pct): _job_write(job_id, {"status": "running", "progress": pct, "message": "", "result": None})
+            result = fn(*args, progress_cb=_cb, **kwargs)
+            # for backup: result is bytes — save to temp file
+            if isinstance(result, bytes):
+                tmp = f"{_JOB_DIR}/{job_id}.stbak"
+                with open(tmp, "wb") as f: f.write(result)
+                _job_write(job_id, {"status": "done", "progress": 100, "message": "", "result": {"file": tmp}})
+            else:
+                _job_write(job_id, {"status": "done", "progress": 100, "message": "", "result": result})
         except Exception as ex:
-            _JOBS[job_id].update({"status":"error","message":str(ex)})
-    threading.Thread(target=_worker, daemon=True).start()
+            _job_write(job_id, {"status": "error", "progress": 0, "message": str(ex), "result": None})
+
+    _threading.Thread(target=_worker, daemon=True).start()
+    return job_id
 
 
 @router.get("/database", response_class=HTMLResponse)
@@ -1903,207 +1934,227 @@ async def database_page(request: Request, flash: str = ""):
     guard = _require(adm, "database")
     if guard: return guard
 
-    from stbak_engine import SECTION_LABELS, RESET_LABELS
+    from stbak_engine import MODULES, SECTION_LABELS
 
-    def _checks(name, labels, checked=False):
+    def _chk(name, checked=True):
         return "".join(
-            f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50">'
+            f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50 transition">'
             f'<input type="checkbox" name="{name}" value="{k}"'
             f'{" checked" if checked else ""} class="w-4 h-4 rounded">'
-            f'<span>{v}</span></label>'
-            for k,v in labels.items()
+            f'<span>{v["label"]}</span></label>'
+            for k, v in MODULES.items()
         )
 
-    backup_checks = _checks("sections", SECTION_LABELS, checked=True)
-    reset_checks  = _checks("reset_sections", RESET_LABELS, checked=False)
+    backup_checks = _chk("sections", checked=True)
+    reset_checks  = _chk("reset_sections", checked=False)
 
     body = f"""
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold text-gray-800">💾 پشتیبان‌گیری و بازیابی</h1>
     </div>
 
-    <!-- ── پشتیبان‌گیری ──────────────────────────────────────────────── -->
+    <!-- پشتیبان‌گیری -->
     <div class="card p-6 mb-4">
       <div class="flex items-center gap-3 mb-5">
         <span class="w-10 h-10 bg-indigo-100 text-indigo-700 rounded-xl flex items-center justify-center text-xl">📦</span>
         <div><h2 class="font-bold text-gray-800 text-lg">پشتیبان‌گیری</h2>
-             <p class="text-xs text-gray-400">فرمت اختصاصی .stbak با checksum و manifest</p></div>
+             <p class="text-xs text-gray-400">فرمت اختصاصی .stbak — با checksum و manifest</p></div>
       </div>
-      <form id="backup-form" onsubmit="startJob(event,'backup')">
-        <label class="flex items-center gap-2 cursor-pointer mb-4 select-none">
-          <input type="checkbox" id="backup-custom-toggle" onchange="toggleCustom('backup')"
-            class="w-4 h-4 rounded text-indigo-600">
+      <label class="flex items-center gap-2 cursor-pointer mb-4 select-none p-3 bg-gray-50 rounded-xl">
+        <input type="checkbox" id="b-toggle" onchange="toggle('b-secs',this)"
+          class="w-4 h-4 rounded text-indigo-600">
+        <div>
           <span class="text-sm font-medium text-gray-700">انتخاب سفارشی</span>
-          <span class="text-xs text-gray-400">(پیش‌فرض: بکاپ کامل)</span>
-        </label>
-        <div id="backup-sections" class="hidden grid grid-cols-2 gap-1 bg-gray-50 rounded-xl p-3 mb-4 max-h-52 overflow-y-auto">
-          {backup_checks}
+          <span class="text-xs text-gray-400 block">پیش‌فرض: بکاپ کامل از همه بخش‌ها</span>
         </div>
-        <button type="submit"
-          class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition flex items-center justify-center gap-2">
-          ⬇ دریافت فایل بکاپ
-        </button>
-      </form>
+      </label>
+      <div id="b-secs" class="hidden grid grid-cols-2 gap-0.5 bg-white border border-gray-100 rounded-xl p-3 mb-4 max-h-56 overflow-y-auto">
+        {backup_checks}
+      </div>
+      <button onclick="runJob('backup')"
+        class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
+        ⬇ دریافت فایل بکاپ
+      </button>
     </div>
 
-    <!-- ── بازیابی ───────────────────────────────────────────────────── -->
+    <!-- بازیابی -->
     <div class="card p-6 mb-4">
       <div class="flex items-center gap-3 mb-5">
         <span class="w-10 h-10 bg-green-100 text-green-700 rounded-xl flex items-center justify-center text-xl">♻️</span>
         <div><h2 class="font-bold text-gray-800 text-lg">بازیابی پشتیبان</h2>
              <p class="text-xs text-gray-400">فقط فایل‌های .stbak پذیرفته می‌شوند</p></div>
       </div>
-      <form id="restore-form" onsubmit="startRestore(event)">
-        <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center mb-4">
-          <p class="text-sm text-gray-400 mb-2">فایل .stbak را انتخاب کنید</p>
-          <input type="file" name="backup_file" id="restore-file" accept=".stbak" required
-            class="text-sm text-gray-600 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-green-50 file:text-green-700">
-        </div>
-        <button type="submit"
-          class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">
-          ♻️ بازیابی پشتیبان
-        </button>
-      </form>
+      <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center mb-4">
+        <p class="text-sm text-gray-400 mb-3">فایل .stbak را انتخاب کنید</p>
+        <input type="file" id="restore-file" accept=".stbak"
+          class="text-sm text-gray-600 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-green-50 file:text-green-700">
+      </div>
+      <button onclick="runRestore()"
+        class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">
+        ♻️ بازیابی پشتیبان
+      </button>
     </div>
 
-    <!-- ── ریست سیستم ────────────────────────────────────────────────── -->
+    <!-- ریست -->
     <div class="card p-6 border-2 border-red-100">
       <div class="flex items-center gap-3 mb-5">
         <span class="w-10 h-10 bg-red-100 text-red-700 rounded-xl flex items-center justify-center text-xl">🗑</span>
         <div><h2 class="font-bold text-red-700 text-lg">ریست سیستم</h2>
              <p class="text-xs text-red-400">این عملیات برگشت‌ناپذیر است</p></div>
       </div>
-      <form id="reset-form" onsubmit="startJob(event,'reset')">
-        <label class="flex items-center gap-2 cursor-pointer mb-4 select-none">
-          <input type="checkbox" id="reset-custom-toggle" onchange="toggleCustom('reset')"
-            class="w-4 h-4 rounded text-red-500">
+      <label class="flex items-center gap-2 cursor-pointer mb-4 select-none p-3 bg-red-50 rounded-xl">
+        <input type="checkbox" id="r-toggle" onchange="toggle('r-secs',this)"
+          class="w-4 h-4 rounded text-red-500">
+        <div>
           <span class="text-sm font-medium text-gray-700">انتخاب سفارشی</span>
-          <span class="text-xs text-gray-400">(پیش‌فرض: ریست کامل)</span>
-        </label>
-        <div id="reset-sections" class="hidden grid grid-cols-2 gap-1 bg-red-50 rounded-xl p-3 mb-4 max-h-52 overflow-y-auto">
-          {reset_checks}
+          <span class="text-xs text-gray-400 block">پیش‌فرض: ریست کامل سیستم</span>
         </div>
-        <button type="submit"
-          onclick="return confirm('⚠️ مطمئنید؟ این عملیات برگشت‌ناپذیر است.')"
-          class="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition">
-          🗑 اجرای ریست
-        </button>
-      </form>
+      </label>
+      <div id="r-secs" class="hidden grid grid-cols-2 gap-0.5 bg-white border border-red-100 rounded-xl p-3 mb-4 max-h-56 overflow-y-auto">
+        {reset_checks}
+      </div>
+      <button onclick="if(confirm('⚠️ این عملیات برگشت‌ناپذیر است. ادامه می‌دهید؟')) runJob('reset')"
+        class="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition">
+        🗑 اجرای ریست
+      </button>
     </div>
 
-    <!-- ── Progress overlay ──────────────────────────────────────────── -->
-    <div id="progress-overlay" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div class="bg-white rounded-2xl p-8 w-80 text-center shadow-2xl">
-        <div class="text-4xl mb-4" id="progress-icon">⏳</div>
-        <h3 class="font-bold text-gray-800 mb-2" id="progress-title">در حال انجام...</h3>
-        <div class="w-full bg-gray-100 rounded-full h-2 mb-3">
-          <div id="progress-bar" class="bg-indigo-500 h-2 rounded-full transition-all duration-300" style="width:0%"></div>
+    <!-- Progress -->
+    <div id="overlay" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl p-8 w-full max-w-sm text-center shadow-2xl">
+        <div class="text-5xl mb-4" id="ov-icon">⏳</div>
+        <h3 class="font-bold text-gray-800 text-lg mb-1" id="ov-title">در حال انجام...</h3>
+        <p class="text-xs text-gray-400 mb-4" id="ov-msg">لطفاً صبر کنید</p>
+        <div class="w-full bg-gray-100 rounded-full h-2.5 mb-4">
+          <div id="ov-bar" class="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style="width:5%"></div>
         </div>
-        <p class="text-sm text-gray-500" id="progress-msg">لطفاً صبر کنید</p>
-        <button onclick="closeProgress()" id="progress-close" class="hidden mt-4 px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm">بستن</button>
+        <button onclick="document.getElementById('overlay').classList.add('hidden')"
+          id="ov-close" class="hidden px-8 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium">
+          بستن
+        </button>
       </div>
     </div>
 
     <script>
-    function toggleCustom(type) {{
-      var chk = document.getElementById(type+'-custom-toggle');
-      var box = document.getElementById(type+'-sections');
-      box.classList.toggle('hidden', !chk.checked);
+    function toggle(id, chk) {{
+      document.getElementById(id).classList.toggle('hidden', !chk.checked);
     }}
 
-    function showProgress(title) {{
-      document.getElementById('progress-overlay').classList.remove('hidden');
-      document.getElementById('progress-title').textContent = title;
-      document.getElementById('progress-icon').textContent = '⏳';
-      document.getElementById('progress-bar').style.width = '5%';
-      document.getElementById('progress-msg').textContent = 'در حال انجام...';
-      document.getElementById('progress-close').classList.add('hidden');
+    function showOverlay(title) {{
+      document.getElementById('overlay').classList.remove('hidden');
+      document.getElementById('ov-icon').textContent = '⏳';
+      document.getElementById('ov-title').textContent = title;
+      document.getElementById('ov-msg').textContent = 'در حال انجام...';
+      document.getElementById('ov-bar').style.width = '5%';
+      document.getElementById('ov-bar').className = 'bg-indigo-500 h-2.5 rounded-full transition-all duration-500';
+      document.getElementById('ov-close').classList.add('hidden');
     }}
 
-    function closeProgress() {{
-      document.getElementById('progress-overlay').classList.add('hidden');
-    }}
-
-    function pollJob(jobId, onDone) {{
+    function poll(jobId, onDone) {{
       var t = setInterval(function() {{
-        fetch('/admin/database/job/'+jobId)
-          .then(function(r){{return r.json();}})
+        fetch('/admin/database/job/' + jobId)
+          .then(function(r) {{ return r.json(); }})
           .then(function(d) {{
-            document.getElementById('progress-bar').style.width = (d.progress||10)+'%';
+            document.getElementById('ov-bar').style.width = (d.progress || 5) + '%';
             if(d.status === 'done') {{
               clearInterval(t);
-              document.getElementById('progress-bar').style.width = '100%';
               onDone(d);
             }} else if(d.status === 'error') {{
               clearInterval(t);
-              document.getElementById('progress-icon').textContent = '❌';
-              document.getElementById('progress-title').textContent = 'خطا';
-              document.getElementById('progress-msg').textContent = d.message || 'خطای ناشناخته';
-              document.getElementById('progress-close').classList.remove('hidden');
+              document.getElementById('ov-icon').textContent = '❌';
+              document.getElementById('ov-title').textContent = 'خطا';
+              document.getElementById('ov-msg').textContent = d.message || 'خطای ناشناخته';
+              document.getElementById('ov-bar').className = 'bg-red-500 h-2.5 rounded-full';
+              document.getElementById('ov-bar').style.width = '100%';
+              document.getElementById('ov-close').classList.remove('hidden');
             }}
-          }});
-      }}, 600);
+          }}).catch(function() {{}});
+      }}, 500);
     }}
 
-    function startJob(evt, type) {{
-      evt.preventDefault();
-      var form = evt.target;
-      var fd   = new FormData(form);
-      var url  = type==='backup' ? '/admin/database/backup/start' : '/admin/database/reset/start';
-      showProgress(type==='backup' ? 'در حال ساخت بکاپ...' : 'در حال ریست...');
-      fetch(url, {{method:'POST', body:fd}})
-        .then(function(r){{return r.json();}})
-        .then(function(d) {{
-          if(d.error) {{
-            document.getElementById('progress-icon').textContent='❌';
-            document.getElementById('progress-title').textContent='خطا';
-            document.getElementById('progress-msg').textContent=d.error;
-            document.getElementById('progress-close').classList.remove('hidden');
-            return;
-          }}
-          pollJob(d.job_id, function(res) {{
-            if(type==='backup') {{
-              document.getElementById('progress-icon').textContent='✅';
-              document.getElementById('progress-title').textContent='بکاپ آماده شد';
-              document.getElementById('progress-msg').textContent='فایل در حال دانلود...';
-              document.getElementById('progress-close').classList.remove('hidden');
-              window.location.href='/admin/database/backup/download/'+d.job_id;
-            }} else {{
-              document.getElementById('progress-icon').textContent='✅';
-              document.getElementById('progress-title').textContent='ریست انجام شد';
-              document.getElementById('progress-msg').textContent=(res.result&&res.result.total_deleted||0)+' رکورد حذف شد';
-              document.getElementById('progress-close').classList.remove('hidden');
-            }}
-          }});
-        }});
+    function getSelected(name) {{
+      return Array.from(document.querySelectorAll('input[name="'+name+'"]:checked')).map(function(i){{return i.value;}});
     }}
 
-    function startRestore(evt) {{
-      evt.preventDefault();
-      var file = document.getElementById('restore-file').files[0];
-      if(!file) return;
-      if(!file.name.endsWith('.stbak')) {{
-        alert('فقط فایل .stbak مجاز است');
-        return;
+    function runJob(type) {{
+      var fd = new FormData();
+      if(type === 'backup') {{
+        showOverlay('در حال ساخت بکاپ...');
+        var custom = document.getElementById('b-toggle').checked;
+        if(custom) getSelected('sections').forEach(function(v){{fd.append('sections',v);}});
+        else fd.append('full','1');
+        fetch('/admin/database/backup/start', {{method:'POST', body:fd}})
+          .then(function(r){{return r.json();}})
+          .then(function(d) {{
+            if(d.error) {{
+              document.getElementById('ov-icon').textContent='❌';
+              document.getElementById('ov-title').textContent='خطا';
+              document.getElementById('ov-msg').textContent=d.error;
+              document.getElementById('ov-close').classList.remove('hidden');
+              return;
+            }}
+            poll(d.job_id, function(res) {{
+              document.getElementById('ov-icon').textContent = '✅';
+              document.getElementById('ov-title').textContent = 'بکاپ آماده شد';
+              document.getElementById('ov-msg').textContent = 'فایل در حال دانلود...';
+              document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full';
+              document.getElementById('ov-close').classList.remove('hidden');
+              setTimeout(function(){{window.location.href='/admin/database/backup/download/'+d.job_id;}}, 400);
+            }});
+          }});
+      }} else {{
+        showOverlay('در حال ریست سیستم...');
+        document.getElementById('ov-bar').className = 'bg-red-500 h-2.5 rounded-full transition-all duration-500';
+        var custom = document.getElementById('r-toggle').checked;
+        if(custom) getSelected('reset_sections').forEach(function(v){{fd.append('reset_sections',v);}});
+        else fd.append('full','1');
+        fetch('/admin/database/reset/start', {{method:'POST', body:fd}})
+          .then(function(r){{return r.json();}})
+          .then(function(d) {{
+            if(d.error) {{
+              document.getElementById('ov-icon').textContent='❌';
+              document.getElementById('ov-title').textContent='خطا';
+              document.getElementById('ov-msg').textContent=d.error;
+              document.getElementById('ov-close').classList.remove('hidden');
+              return;
+            }}
+            poll(d.job_id, function(res) {{
+              var total = (res.result&&res.result.total_deleted)||0;
+              document.getElementById('ov-icon').textContent = '✅';
+              document.getElementById('ov-title').textContent = 'ریست انجام شد';
+              document.getElementById('ov-msg').textContent = total + ' رکورد حذف شد';
+              document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full';
+              document.getElementById('ov-close').classList.remove('hidden');
+            }});
+          }});
       }}
-      showProgress('در حال بازیابی...');
+    }}
+
+    function runRestore() {{
+      var file = document.getElementById('restore-file').files[0];
+      if(!file) {{ alert('فایل انتخاب نشده'); return; }}
+      if(!file.name.endsWith('.stbak')) {{ alert('فقط فایل .stbak مجاز است'); return; }}
+      showOverlay('در حال بازیابی...');
+      document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full transition-all duration-500';
       var fd = new FormData();
       fd.append('backup_file', file);
       fetch('/admin/database/restore/start', {{method:'POST', body:fd}})
         .then(function(r){{return r.json();}})
         .then(function(d) {{
           if(d.error) {{
-            document.getElementById('progress-icon').textContent='❌';
-            document.getElementById('progress-title').textContent='خطا';
-            document.getElementById('progress-msg').textContent=d.error;
-            document.getElementById('progress-close').classList.remove('hidden');
+            document.getElementById('ov-icon').textContent='❌';
+            document.getElementById('ov-title').textContent='خطا';
+            document.getElementById('ov-msg').textContent=d.error;
+            document.getElementById('ov-close').classList.remove('hidden');
             return;
           }}
-          pollJob(d.job_id, function(res) {{
-            document.getElementById('progress-icon').textContent='✅';
-            document.getElementById('progress-title').textContent='بازیابی انجام شد';
-            document.getElementById('progress-msg').textContent=(res.result&&res.result.total||0)+' رکورد بازیابی شد';
-            document.getElementById('progress-close').classList.remove('hidden');
+          poll(d.job_id, function(res) {{
+            var total = (res.result&&res.result.total)||0;
+            document.getElementById('ov-icon').textContent = '✅';
+            document.getElementById('ov-title').textContent = 'بازیابی انجام شد';
+            document.getElementById('ov-msg').textContent = total + ' رکورد بازیابی شد';
+            document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full';
+            document.getElementById('ov-close').classList.remove('hidden');
           }});
         }});
     }}
@@ -2115,27 +2166,21 @@ async def database_page(request: Request, flash: str = ""):
 @router.get("/database/job/{job_id}")
 async def job_status(request: Request, job_id: str):
     from fastapi.responses import JSONResponse
-    job = _JOBS.get(job_id, {"status":"not_found","progress":0})
-    return JSONResponse(job)
+    return JSONResponse(_job_read(job_id))
 
 
 @router.post("/database/backup/start")
 async def backup_start(request: Request):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    if not adm: return JSONResponse({"error":"unauthorized"})
+    if not adm: return JSONResponse({"error": "unauthorized"})
     form = await request.form()
-    sections_raw = form.getlist("sections")
-    sections = sections_raw if sections_raw else None
-    job_id = str(_uuid.uuid4())[:8]
-    _JOBS[job_id] = {"status":"pending","progress":5,"message":"","result":None}
-    from stbak_engine import create_stbak, resolve_sections
+    is_full = form.get("full") == "1"
+    sections = None if is_full else form.getlist("sections") or None
     db = _DB_PATH()
-    def _do():
-        secs = resolve_sections(sections) if sections else None
-        return create_stbak(db, sections=secs)
-    _job_run(job_id, _do)
-    _log(request, "شروع بکاپ", "دیتابیس", f"job:{job_id}")
+    from stbak_engine import create_stbak
+    job_id = _job_start(create_stbak, db, modules=sections)
+    _log(request, "شروع بکاپ", "دیتابیس", f"job:{job_id} mode:{'full' if is_full else 'custom'}")
     return JSONResponse({"job_id": job_id})
 
 
@@ -2145,13 +2190,15 @@ async def backup_download_job(request: Request, job_id: str):
     adm = _get_admin(request)
     guard = _require(adm, "database")
     if guard: return guard
-    job = _JOBS.get(job_id)
-    if not job or job.get("status") != "done":
+    job = _job_read(job_id)
+    if job.get("status") != "done":
         return _redir("/admin/database?flash=بکاپ+هنوز+آماده+نشده")
-    raw   = job["result"]
-    mode  = "custom" if job.get("custom") else "full"
+    fpath = job.get("result", {}).get("file")
+    if not fpath or not os.path.exists(fpath):
+        return _redir("/admin/database?flash=فایل+بکاپ+یافت+نشد")
+    raw = open(fpath, "rb").read()
     from stbak_engine import stbak_filename
-    fname = stbak_filename(mode)
+    fname = stbak_filename("full")
     return FResponse(content=raw, media_type="application/octet-stream",
                      headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
@@ -2160,17 +2207,17 @@ async def backup_download_job(request: Request, job_id: str):
 async def restore_start(request: Request, backup_file: UploadFile = None):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    if not adm: return JSONResponse({"error":"unauthorized"})
+    if not adm: return JSONResponse({"error": "unauthorized"})
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
-        return JSONResponse({"error":"فقط فایل .stbak مجاز است"})
+        return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    job_id = str(_uuid.uuid4())[:8]
-    _JOBS[job_id] = {"status":"pending","progress":5,"message":"","result":None}
-    from stbak_engine import restore_stbak, StbakError
-    db = _DB_PATH()
-    def _do():
-        return restore_stbak(raw, db)
-    _job_run(job_id, _do)
+    db  = _DB_PATH()
+    from stbak_engine import restore_stbak, validate_stbak, StbakError
+    try:
+        validate_stbak(raw)
+    except StbakError as ex:
+        return JSONResponse({"error": str(ex)})
+    job_id = _job_start(restore_stbak, raw, db)
     _log(request, "شروع بازیابی", "دیتابیس", f"job:{job_id}")
     return JSONResponse({"job_id": job_id})
 
@@ -2179,18 +2226,15 @@ async def restore_start(request: Request, backup_file: UploadFile = None):
 async def reset_start(request: Request):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    if not adm: return JSONResponse({"error":"unauthorized"})
+    if not adm: return JSONResponse({"error": "unauthorized"})
     form = await request.form()
-    sections_raw = form.getlist("reset_sections")
-    sections = sections_raw if sections_raw else None
-    job_id = str(_uuid.uuid4())[:8]
-    _JOBS[job_id] = {"status":"pending","progress":5,"message":"","result":None}
-    from stbak_engine import factory_reset
+    is_full = form.get("full") == "1"
+    sections = None if is_full else form.getlist("reset_sections") or None
     db = _DB_PATH()
-    def _do():
-        return factory_reset(db, sections=sections)
-    _job_run(job_id, _do)
-    _log(request, "شروع ریست", "دیتابیس", f"job:{job_id} secs:{sections}")
+    from stbak_engine import factory_reset
+    job_id = _job_start(factory_reset, db, modules=sections)
+    _log(request, "شروع ریست", "دیتابیس",
+         f"job:{job_id} mode:{'full' if is_full else 'custom'}")
     return JSONResponse({"job_id": job_id})
 
 
