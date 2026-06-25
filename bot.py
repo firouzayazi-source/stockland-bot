@@ -781,7 +781,8 @@ def _ticket_v2_handle_user_message(message) -> None:
         return
 
     # ─── بررسی واقعی بودن پیام ───────────────────────────────────────────
-    txt = (message.text or "").strip()
+    # متن یا caption (برای عکس/ویدیو)
+    txt = (message.text or message.caption or "").strip()
     if not _is_real_message(txt, message.content_type):
         bot.reply_to(message,
             "لطفاً پیام متنی یا عکس/فایل معتبر ارسال کنید.\n"
