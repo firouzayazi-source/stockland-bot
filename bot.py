@@ -2690,23 +2690,217 @@ def handle_partner_panel(message):
         return
 
     uid = message.from_user.id
-    if is_partner_approved(uid):
-        partner = get_partner_by_user_id(uid)
-        phone = partner[2] if partner else "-"
-        text = (
-            "پنل همکار 🤝\n\n"
-            f"وضعیت: ✅ تایید شده\n"
-            f"شماره ثبت‌شده: <b>{phone}</b>\n\n"
-            "از این لحظه قیمت‌های همکار (در صورت تعریف) برای شما نمایش داده می‌شود."
-        )
-        bot.send_message(message.chat.id, text)
-    else:
-        text = (
+    if not is_partner_approved(uid):
+        bot.send_message(message.chat.id,
             "پنل همکار 🤝\n\n"
             "شما هنوز به‌عنوان همکار تایید نشده‌اید.\n"
-            "برای ثبت درخواست از «درخواست نمایندگی 📝» استفاده کنید."
+            "برای ثبت درخواست از «درخواست نمایندگی 📝» استفاده کنید.")
+        return
+
+    _show_partner_dashboard(message.chat.id, uid)
+
+
+def _show_partner_dashboard(chat_id, uid):
+    """داشبورد کامل همکار با سطح، آمار و لینک معرفی."""
+    from db import (get_partner_order_count, get_partner_tier_for, get_partner_tiers,
+                    get_referral_stats_for, ensure_partner_system_schema)
+    ensure_partner_system_schema()
+
+    order_count = get_partner_order_count(uid)
+    tier        = get_partner_tier_for(order_count)
+    all_tiers   = get_partner_tiers()
+    ref_stats   = get_referral_stats_for(uid)
+
+    # سطح بعدی و پیشرفت
+    next_tier = None
+    for t_ in all_tiers:
+        if t_["min_orders"] > order_count:
+            next_tier = t_
+            break
+
+    if next_tier:
+        prev_min = tier.get("min_orders", 0)
+        span     = next_tier["min_orders"] - prev_min
+        done     = order_count - prev_min
+        pct      = int((done / span) * 100) if span > 0 else 0
+        filled   = int(pct / 10)
+        bar      = "▓" * filled + "░" * (10 - filled)
+        next_line = (
+            f"\n📈 پیشرفت تا {next_tier['icon']} {next_tier['name']}:\n"
+            f"<code>{bar}</code> {pct}%\n"
+            f"({next_tier['min_orders'] - order_count} خرید دیگر تا ارتقا)"
         )
-        bot.send_message(message.chat.id, text)
+    else:
+        next_line = "\n🎉 شما در بالاترین سطح هستید!"
+
+    # سود و صرفه‌جویی
+    conn = None
+    saving = profit = 0
+    try:
+        import sqlite3 as _sq
+        from config import DB_PATH as _DBP
+        conn = _sq.connect(_DBP)
+        # مجموع خریدهای همکاری
+        row = conn.execute("""
+            SELECT COALESCE(SUM(price),0) FROM orders
+            WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';
+        """, (uid,)).fetchone()
+        partner_total = int(row[0] or 0) if row else 0
+        profit = partner_total
+    except Exception:
+        partner_total = 0
+    finally:
+        if conn: conn.close()
+
+    text = (
+        f"🤝 <b>داشبورد همکار</b>\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n"
+        f"🛒 خریدهای همکاری: <b>{order_count}</b>\n"
+        f"💰 مجموع خرید: <b>{partner_total:,}</b> تومان"
+        f"{next_line}\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👥 <b>زیرمجموعه‌ها</b>\n"
+        f"معرفی‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
+    )
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🔗 لینک معرفی من", callback_data="partner_ref_link"),
+        types.InlineKeyboardButton("📊 خریدهای اخیر", callback_data="partner_recent")
+    )
+    kb.add(
+        types.InlineKeyboardButton("💼 کیف‌پول همکاری", callback_data="partner_wallet"),
+        types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support")
+    )
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
+def cb_partner_ref_link(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    from db import get_referral_stats_for, get_referral_settings
+    settings = get_referral_settings()
+    stats    = get_referral_stats_for(uid)
+    try:
+        bot_username = bot.get_me().username
+    except Exception:
+        bot_username = "your_bot"
+    link = f"https://t.me/{bot_username}?start=ref_{uid}"
+    reward = settings.get("reward_amount", 5000)
+
+    text = (
+        f"🔗 <b>لینک معرفی شما</b>\n\n"
+        f"کد معرفی: <code>{uid}</code>\n\n"
+        f"لینک اختصاصی:\n<code>{link}</code>\n\n"
+        f"💰 با هر معرفی موفق <b>{reward:,}</b> تومان پاداش بگیرید!\n\n"
+        f"📊 آمار شما:\n"
+        f"• کل معرفی‌ها: {stats['total']}\n"
+        f"• پاداش دریافتی: {stats['total_reward']:,} تومان"
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                          parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_recent")
+def cb_partner_recent(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    import sqlite3 as _sq
+    from config import DB_PATH as _DBP
+    conn = _sq.connect(_DBP)
+    conn.row_factory = _sq.Row
+    try:
+        orders = conn.execute("""
+            SELECT * FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner'
+            ORDER BY id DESC LIMIT 5;
+        """, (uid,)).fetchall()
+    except Exception:
+        orders = []
+    finally:
+        conn.close()
+
+    if orders:
+        lines = "\n\n".join(
+            f"🛒 {o['title']}\n💰 {int(o['price'] or 0):,} ت | {(o['created_at'] or '')[:10]}"
+            for o in orders
+        )
+        text = f"📊 <b>۵ خرید اخیر همکاری</b>\n\n{lines}"
+    else:
+        text = "📊 <b>خریدهای اخیر</b>\n\nهنوز خرید همکاری ندارید."
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                          parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_wallet")
+def cb_partner_wallet(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    # موجودی کیف‌پول معمولی فعلاً
+    from db import get_wallet_balance
+    try:
+        bal = get_wallet_balance(uid)
+    except Exception:
+        bal = 0
+    text = (
+        f"💼 <b>کیف‌پول همکاری</b>\n\n"
+        f"موجودی: <b>{int(bal):,}</b> تومان\n\n"
+        f"برای درخواست تسویه با پشتیبانی در تماس باشید."
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                          parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_support")
+def cb_partner_support(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    # باز کردن تیکت با نوع «همکاران»
+    from db import ticket_create, ticket_ensure_schema, ticket_get_open_support
+    ticket_ensure_schema()
+    # اگه تیکت همکاری باز داره، ادامه بده
+    existing = None
+    try:
+        import sqlite3 as _sq
+        from config import DB_PATH as _DBP
+        _c = _sq.connect(_DBP); _c.row_factory = _sq.Row
+        existing = _c.execute(
+            "SELECT * FROM tickets WHERE user_id=? AND type='partner_support' AND status!='closed' ORDER BY id DESC LIMIT 1;",
+            (uid,)
+        ).fetchone()
+        _c.close()
+    except Exception:
+        pass
+
+    if existing:
+        tid = existing["id"]
+    else:
+        tid = ticket_create(uid, type_="partner_support")
+
+    user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid}
+    bot.send_message(call.message.chat.id,
+        f"💬 <b>چت با پشتیبان همکاران</b> (تیکت #{tid})\n\n"
+        "پیام خود را ارسال کنید. تیم پشتیبانی به‌زودی پاسخ می‌دهد.",
+        parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_back")
+def cb_partner_back(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    _show_partner_dashboard(call.message.chat.id, uid)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_PARTNER_REQUEST"))
