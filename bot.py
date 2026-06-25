@@ -2823,6 +2823,9 @@ def _show_partner_dashboard(chat_id, uid):
         types.InlineKeyboardButton("💼 کیف‌پول همکاری", callback_data="partner_wallet"),
         types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support")
     )
+    kb.add(
+        types.InlineKeyboardButton("📖 راهنمای همکاری در فروش", callback_data="partner_guide")
+    )
     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
 
 
@@ -2907,6 +2910,22 @@ def cb_partner_wallet(call):
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
                           parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_guide")
+def cb_partner_guide(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    guide_text = t("PARTNER_GUIDE_TEXT",
+        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
+        "متن راهنما توسط مدیر تنظیم نشده است.\n"
+        "لطفاً با پشتیبانی تماس بگیرید.")
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.edit_message_text(
+        guide_text, call.message.chat.id, call.message.message_id,
+        parse_mode="HTML", reply_markup=kb
+    )
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_support")
