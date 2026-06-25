@@ -2026,17 +2026,17 @@ async def database_page(request: Request, flash: str = ""):
       </button>
     </div>
 
-    <!-- Progress -->
-    <div id="overlay" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-2xl p-8 w-full max-w-sm text-center shadow-2xl">
-        <div class="text-5xl mb-4" id="ov-icon">⏳</div>
-        <h3 class="font-bold text-gray-800 text-lg mb-1" id="ov-title">در حال انجام...</h3>
-        <p class="text-xs text-gray-400 mb-4" id="ov-msg">لطفاً صبر کنید</p>
-        <div style="direction:ltr" class="w-full bg-gray-100 rounded-full h-2.5 mb-4">
-          <div id="ov-bar" class="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style="width:5%"></div>
+    <!-- Progress overlay -->
+    <div id="overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#fff;border-radius:20px;padding:40px 32px;width:100%;max-width:340px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <div style="font-size:48px;margin-bottom:16px" id="ov-icon">⏳</div>
+        <h3 style="font-weight:700;color:#1f2937;font-size:18px;margin:0 0 6px" id="ov-title">در حال انجام...</h3>
+        <p style="font-size:12px;color:#9ca3af;margin:0 0 20px" id="ov-msg">لطفاً صبر کنید</p>
+        <div style="direction:ltr;background:#f3f4f6;border-radius:999px;height:10px;overflow:hidden;margin-bottom:20px">
+          <div id="ov-bar" style="background:#6366f1;height:10px;border-radius:999px;width:5%;transition:width .4s ease"></div>
         </div>
-        <button onclick="document.getElementById('overlay').classList.add('hidden')"
-          id="ov-close" class="hidden px-8 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium">
+        <button id="ov-close" onclick="document.getElementById('overlay').style.display='none'"
+          style="display:none;padding:10px 32px;background:#6366f1;color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer">
           بستن
         </button>
       </div>
@@ -2048,13 +2048,14 @@ async def database_page(request: Request, flash: str = ""):
     }}
 
     function showOverlay(title) {{
-      document.getElementById('overlay').classList.remove('hidden');
+      var ov = document.getElementById('overlay');
+      ov.style.display = 'flex';
       document.getElementById('ov-icon').textContent = '⏳';
       document.getElementById('ov-title').textContent = title;
-      document.getElementById('ov-msg').textContent = 'در حال انجام...';
+      document.getElementById('ov-msg').textContent = 'لطفاً صبر کنید';
       document.getElementById('ov-bar').style.width = '5%';
-      document.getElementById('ov-bar').className = 'bg-indigo-500 h-2.5 rounded-full transition-all duration-500';
-      document.getElementById('ov-close').classList.add('hidden');
+      document.getElementById('ov-bar').style.background = '#6366f1';
+      document.getElementById('ov-close').style.display = 'none';
     }}
 
     function poll(jobId, onDone) {{
@@ -2072,9 +2073,9 @@ async def database_page(request: Request, flash: str = ""):
                 document.getElementById('ov-icon').textContent = '❌';
                 document.getElementById('ov-title').textContent = 'خطا در اجرا';
                 document.getElementById('ov-msg').textContent = 'عملیات پاسخ نداد — لطفاً مجدد تلاش کنید';
-                document.getElementById('ov-bar').className = 'bg-red-500 h-2.5 rounded-full';
+                document.getElementById('ov-bar').style.background = '#ef4444';
                 document.getElementById('ov-bar').style.width = '100%';
-                document.getElementById('ov-close').classList.remove('hidden');
+                document.getElementById('ov-close').style.display = 'inline-block';
               }}
               return;
             }}
@@ -2090,9 +2091,9 @@ async def database_page(request: Request, flash: str = ""):
               document.getElementById('ov-icon').textContent = '❌';
               document.getElementById('ov-title').textContent = 'خطا';
               document.getElementById('ov-msg').textContent = d.message || 'خطای ناشناخته';
-              document.getElementById('ov-bar').className = 'bg-red-500 h-2.5 rounded-full';
+              document.getElementById('ov-bar').style.background = '#ef4444';
               document.getElementById('ov-bar').style.width = '100%';
-              document.getElementById('ov-close').classList.remove('hidden');
+              document.getElementById('ov-close').style.display = 'inline-block';
             }}
           }}).catch(function() {{ nf++; }});
       }}, 500);
@@ -2116,16 +2117,16 @@ async def database_page(request: Request, flash: str = ""):
               document.getElementById('ov-icon').textContent='❌';
               document.getElementById('ov-title').textContent='خطا';
               document.getElementById('ov-msg').textContent=d.error;
-              document.getElementById('ov-close').classList.remove('hidden');
+              document.getElementById('ov-close').style.display = 'inline-block';
               return;
             }}
             poll(d.job_id, function(res) {{
               document.getElementById('ov-bar').style.width = '100%';
-              document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full transition-all duration-500';
+              document.getElementById('ov-bar').style.background = '#22c55e';
               document.getElementById('ov-icon').textContent = '✅';
               document.getElementById('ov-title').textContent = 'بکاپ آماده شد!';
               document.getElementById('ov-msg').textContent = 'فایل در حال دانلود...';
-              document.getElementById('ov-close').classList.remove('hidden');
+              document.getElementById('ov-close').style.display = 'inline-block';
               setTimeout(function(){{
                 var a = document.createElement('a');
                 a.href = '/admin/database/backup/download/' + d.job_id;
@@ -2146,7 +2147,7 @@ async def database_page(request: Request, flash: str = ""):
               document.getElementById('ov-icon').textContent='❌';
               document.getElementById('ov-title').textContent='خطا';
               document.getElementById('ov-msg').textContent=d.error;
-              document.getElementById('ov-close').classList.remove('hidden');
+              document.getElementById('ov-close').style.display = 'inline-block';
               return;
             }}
             poll(d.job_id, function(res) {{
@@ -2154,8 +2155,8 @@ async def database_page(request: Request, flash: str = ""):
               document.getElementById('ov-icon').textContent = '✅';
               document.getElementById('ov-title').textContent = 'ریست انجام شد';
               document.getElementById('ov-msg').textContent = total + ' رکورد حذف شد';
-              document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full';
-              document.getElementById('ov-close').classList.remove('hidden');
+              document.getElementById('ov-bar').style.background = '#22c55e';
+              document.getElementById('ov-close').style.display = 'inline-block';
             }});
           }});
       }}
@@ -2166,7 +2167,7 @@ async def database_page(request: Request, flash: str = ""):
       if(!file) {{ alert('فایل انتخاب نشده'); return; }}
       if(!file.name.endsWith('.stbak')) {{ alert('فقط فایل .stbak مجاز است'); return; }}
       showOverlay('در حال بازیابی...');
-      document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full transition-all duration-500';
+      document.getElementById('ov-bar').style.background = '#22c55e';
       var fd = new FormData();
       fd.append('backup_file', file);
       fetch('/admin/database/restore/start', {{method:'POST', body:fd}})
@@ -2176,7 +2177,7 @@ async def database_page(request: Request, flash: str = ""):
             document.getElementById('ov-icon').textContent='❌';
             document.getElementById('ov-title').textContent='خطا';
             document.getElementById('ov-msg').textContent=d.error;
-            document.getElementById('ov-close').classList.remove('hidden');
+            document.getElementById('ov-close').style.display = 'inline-block';
             return;
           }}
           poll(d.job_id, function(res) {{
@@ -2184,8 +2185,8 @@ async def database_page(request: Request, flash: str = ""):
             document.getElementById('ov-icon').textContent = '✅';
             document.getElementById('ov-title').textContent = 'بازیابی انجام شد';
             document.getElementById('ov-msg').textContent = total + ' رکورد بازیابی شد';
-            document.getElementById('ov-bar').className = 'bg-green-500 h-2.5 rounded-full';
-            document.getElementById('ov-close').classList.remove('hidden');
+            document.getElementById('ov-bar').style.background = '#22c55e';
+            document.getElementById('ov-close').style.display = 'inline-block';
           }});
         }});
     }}
