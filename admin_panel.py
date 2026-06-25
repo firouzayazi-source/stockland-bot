@@ -2047,148 +2047,139 @@ async def database_page(request: Request, flash: str = ""):
       document.getElementById(id).classList.toggle('hidden', !chk.checked);
     }}
 
-    function showOverlay(title) {{
-      var ov = document.getElementById('overlay');
-      ov.style.display = 'flex';
-      document.getElementById('ov-icon').textContent = '⏳';
-      document.getElementById('ov-title').textContent = title;
-      document.getElementById('ov-msg').textContent = 'لطفاً صبر کنید';
-      document.getElementById('ov-bar').style.width = '5%';
-      document.getElementById('ov-bar').style.background = '#6366f1';
+    /* ── Overlay helpers ─────────────────────────────── */
+    var _running = false;
+
+    function ovShow(title, msg, barColor) {{
+      document.getElementById('overlay').style.display = 'block';
+      document.getElementById('ov-icon').textContent   = '⏳';
+      document.getElementById('ov-title').textContent  = title;
+      document.getElementById('ov-msg').textContent    = msg || 'لطفاً صبر کنید';
+      document.getElementById('ov-bar').style.width    = '5%';
+      document.getElementById('ov-bar').style.background = barColor || '#6366f1';
       document.getElementById('ov-close').style.display = 'none';
     }}
 
-    function poll(jobId, onDone) {{
-      var fake = 5, nf = 0;
-      var t = setInterval(function() {{
-        fetch('/admin/database/job/' + jobId)
-          .then(function(r) {{ return r.json(); }})
-          .then(function(d) {{
-            if(d.status === 'not_found' || !d.status) {{
-              nf++;
-              fake = Math.min(fake + 3, 70);
-              document.getElementById('ov-bar').style.width = fake + '%';
-              if(nf > 24) {{
-                clearInterval(t);
-                document.getElementById('ov-icon').textContent = '❌';
-                document.getElementById('ov-title').textContent = 'خطا در اجرا';
-                document.getElementById('ov-msg').textContent = 'عملیات پاسخ نداد — لطفاً مجدد تلاش کنید';
-                document.getElementById('ov-bar').style.background = '#ef4444';
-                document.getElementById('ov-bar').style.width = '100%';
-                document.getElementById('ov-close').style.display = 'inline-block';
+    function ovDone(icon, title, msg, barColor) {{
+      document.getElementById('ov-icon').textContent    = icon;
+      document.getElementById('ov-title').textContent   = title;
+      document.getElementById('ov-msg').textContent     = msg;
+      document.getElementById('ov-bar').style.width     = '100%';
+      document.getElementById('ov-bar').style.background = barColor || '#22c55e';
+      document.getElementById('ov-close').style.display = 'inline-block';
+      _running = false;
+    }}
+
+    function ovClose() {{
+      document.getElementById('overlay').style.display = 'none';
+      _running = false;
+    }}
+
+    function ovProgress(pct) {{
+      document.getElementById('ov-bar').style.width = Math.min(pct, 94) + '%';
+    }}
+
+    function ovMsg(msg) {{
+      document.getElementById('ov-msg').textContent = msg;
+    }}
+
+    /* ── Poll job status ─────────────────────────────── */
+    function pollJob(jobId) {{
+      return new Promise(function(resolve, reject) {{
+        var fake = 10, nf = 0, maxNF = 30;
+        var t = setInterval(function() {{
+          fetch('/admin/database/job/' + jobId)
+            .then(function(r) {{ return r.json(); }})
+            .then(function(d) {{
+              if (!d || d.status === 'not_found') {{
+                nf++;
+                fake = Math.min(fake + 2, 75);
+                ovProgress(fake);
+                if (nf >= maxNF) {{ clearInterval(t); reject(new Error('timeout')); }}
+                return;
               }}
-              return;
-            }}
-            nf = 0;
-            fake = Math.max(fake, Math.min(d.progress || fake, 94));
-            document.getElementById('ov-bar').style.width = fake + '%';
-            if(d.status === 'done') {{
-              clearInterval(t);
-              document.getElementById('ov-bar').style.width = '100%';
-              onDone(d);
-            }} else if(d.status === 'error') {{
-              clearInterval(t);
-              document.getElementById('ov-icon').textContent = '❌';
-              document.getElementById('ov-title').textContent = 'خطا';
-              document.getElementById('ov-msg').textContent = d.message || 'خطای ناشناخته';
-              document.getElementById('ov-bar').style.background = '#ef4444';
-              document.getElementById('ov-bar').style.width = '100%';
-              document.getElementById('ov-close').style.display = 'inline-block';
-            }}
-          }}).catch(function() {{ nf++; }});
-      }}, 500);
+              nf = 0;
+              fake = Math.max(fake, Math.min(d.progress || fake, 94));
+              ovProgress(fake);
+              if (d.status === 'done')  {{ clearInterval(t); resolve(d); }}
+              if (d.status === 'error') {{ clearInterval(t); reject(new Error(d.message || 'خطای سرور')); }}
+            }})
+            .catch(function() {{ nf++; if(nf >= maxNF) {{ clearInterval(t); reject(new Error('network error')); }} }});
+        }}, 600);
+      }});
     }}
 
     function getSelected(name) {{
-      return Array.from(document.querySelectorAll('input[name="'+name+'"]:checked')).map(function(i){{return i.value;}});
+      return Array.from(document.querySelectorAll('input[name="' + name + '"]:checked'))
+                  .map(function(i) {{ return i.value; }});
     }}
 
-    function runJob(type) {{
-      var fd = new FormData();
-      if(type === 'backup') {{
-        showOverlay('در حال ساخت بکاپ...');
-        var custom = document.getElementById('b-toggle').checked;
-        if(custom) getSelected('sections').forEach(function(v){{fd.append('sections',v);}});
-        else fd.append('full','1');
-        fetch('/admin/database/backup/start', {{method:'POST', body:fd}})
-          .then(function(r){{return r.json();}})
-          .then(function(d) {{
-            if(d.error) {{
-              document.getElementById('ov-icon').textContent='❌';
-              document.getElementById('ov-title').textContent='خطا';
-              document.getElementById('ov-msg').textContent=d.error;
-              document.getElementById('ov-close').style.display = 'inline-block';
-              return;
-            }}
-            poll(d.job_id, function(res) {{
-              document.getElementById('ov-bar').style.width = '100%';
-              document.getElementById('ov-bar').style.background = '#22c55e';
-              document.getElementById('ov-icon').textContent = '✅';
-              document.getElementById('ov-title').textContent = 'بکاپ آماده شد!';
-              document.getElementById('ov-msg').textContent = 'فایل در حال دانلود...';
-              document.getElementById('ov-close').style.display = 'inline-block';
-              setTimeout(function(){{
-                var a = document.createElement('a');
-                a.href = '/admin/database/backup/download/' + d.job_id;
-                a.click();
-              }}, 800);
-            }});
-          }});
-      }} else {{
-        showOverlay('در حال ریست سیستم...');
-        document.getElementById('ov-bar').className = 'bg-red-500 h-2.5 rounded-full transition-all duration-500';
-        var custom = document.getElementById('r-toggle').checked;
-        if(custom) getSelected('reset_sections').forEach(function(v){{fd.append('reset_sections',v);}});
-        else fd.append('full','1');
-        fetch('/admin/database/reset/start', {{method:'POST', body:fd}})
-          .then(function(r){{return r.json();}})
-          .then(function(d) {{
-            if(d.error) {{
-              document.getElementById('ov-icon').textContent='❌';
-              document.getElementById('ov-title').textContent='خطا';
-              document.getElementById('ov-msg').textContent=d.error;
-              document.getElementById('ov-close').style.display = 'inline-block';
-              return;
-            }}
-            poll(d.job_id, function(res) {{
-              var total = (res.result&&res.result.total_deleted)||0;
-              document.getElementById('ov-icon').textContent = '✅';
-              document.getElementById('ov-title').textContent = 'ریست انجام شد';
-              document.getElementById('ov-msg').textContent = total + ' رکورد حذف شد';
-              document.getElementById('ov-bar').style.background = '#22c55e';
-              document.getElementById('ov-close').style.display = 'inline-block';
-            }});
-          }});
+    /* ── Backup ──────────────────────────────────────── */
+    async function runJob(type) {{
+      if (_running) return;
+      _running = true;
+      var isBackup = type === 'backup';
+      var barClr   = isBackup ? '#6366f1' : '#ef4444';
+      ovShow(isBackup ? 'آماده‌سازی بکاپ...' : 'آماده‌سازی ریست...', 'در حال ارسال درخواست...', barClr);
+      try {{
+        var fd  = new FormData();
+        var url, custom;
+        if (isBackup) {{
+          url    = '/admin/database/backup/start';
+          custom = document.getElementById('b-toggle').checked;
+          if (custom) getSelected('sections').forEach(function(v) {{ fd.append('sections', v); }});
+          else         fd.append('full', '1');
+        }} else {{
+          url    = '/admin/database/reset/start';
+          custom = document.getElementById('r-toggle').checked;
+          if (custom) getSelected('reset_sections').forEach(function(v) {{ fd.append('reset_sections', v); }});
+          else         fd.append('full', '1');
+        }}
+        ovMsg(isBackup ? 'در حال ایجاد پشتیبان...' : 'در حال ریست سیستم...');
+        var resp = await fetch(url, {{ method: 'POST', body: fd }});
+        var data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        var job = await pollJob(data.job_id);
+        if (isBackup) {{
+          ovDone('✅', 'پشتیبان آماده شد', 'در حال دانلود فایل...', '#22c55e');
+          setTimeout(function() {{
+            var a = document.createElement('a');
+            a.href = '/admin/database/backup/download/' + data.job_id;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          }}, 600);
+        }} else {{
+          var n = (job.result && job.result.total_deleted) || 0;
+          ovDone('✅', 'ریست انجام شد', n + ' رکورد حذف شد', '#22c55e');
+        }}
+      }} catch(err) {{
+        var msg = err.message === 'timeout' ? 'عملیات پاسخ نداد — دوباره تلاش کنید' : (err.message || 'خطای ناشناخته');
+        ovDone('❌', 'عملیات ناموفق', msg, '#ef4444');
       }}
     }}
 
-    function runRestore() {{
+    /* ── Restore ─────────────────────────────────────── */
+    async function runRestore() {{
+      if (_running) return;
       var file = document.getElementById('restore-file').files[0];
-      if(!file) {{ alert('فایل انتخاب نشده'); return; }}
-      if(!file.name.endsWith('.stbak')) {{ alert('فقط فایل .stbak مجاز است'); return; }}
-      showOverlay('در حال بازیابی...');
-      document.getElementById('ov-bar').style.background = '#22c55e';
-      var fd = new FormData();
-      fd.append('backup_file', file);
-      fetch('/admin/database/restore/start', {{method:'POST', body:fd}})
-        .then(function(r){{return r.json();}})
-        .then(function(d) {{
-          if(d.error) {{
-            document.getElementById('ov-icon').textContent='❌';
-            document.getElementById('ov-title').textContent='خطا';
-            document.getElementById('ov-msg').textContent=d.error;
-            document.getElementById('ov-close').style.display = 'inline-block';
-            return;
-          }}
-          poll(d.job_id, function(res) {{
-            var total = (res.result&&res.result.total)||0;
-            document.getElementById('ov-icon').textContent = '✅';
-            document.getElementById('ov-title').textContent = 'بازیابی انجام شد';
-            document.getElementById('ov-msg').textContent = total + ' رکورد بازیابی شد';
-            document.getElementById('ov-bar').style.background = '#22c55e';
-            document.getElementById('ov-close').style.display = 'inline-block';
-          }});
-        }});
+      if (!file) {{ alert('فایل انتخاب نشده'); return; }}
+      if (!file.name.endsWith('.stbak')) {{ alert('فقط فایل .stbak مجاز است'); return; }}
+      _running = true;
+      ovShow('در حال بازیابی...', 'درحال آپلود فایل...', '#22c55e');
+      try {{
+        var fd = new FormData();
+        fd.append('backup_file', file);
+        ovMsg('در حال اعتبارسنجی فایل...');
+        var resp = await fetch('/admin/database/restore/start', {{ method: 'POST', body: fd }});
+        var data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        ovMsg('در حال بازیابی اطلاعات...');
+        var job = await pollJob(data.job_id);
+        var n   = (job.result && job.result.total) || 0;
+        ovDone('✅', 'بازیابی موفق', n + ' رکورد بازیابی شد', '#22c55e');
+      }} catch(err) {{
+        var msg = err.message === 'timeout' ? 'عملیات پاسخ نداد — دوباره تلاش کنید' : (err.message || 'خطای ناشناخته');
+        ovDone('❌', 'بازیابی ناموفق', msg, '#ef4444');
+      }}
     }}
     </script>"""
 
