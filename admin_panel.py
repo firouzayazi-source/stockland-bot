@@ -27,12 +27,13 @@ router = APIRouter(prefix="/admin")
 
 # ── migrations at startup ────────────────────────────────────────────────────
 try:
-    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema
+    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema, ensure_partner_system_schema
     ensure_product_support_schema()
     ensure_discount_table()
     ensure_subscription_table()
     ensure_referral_schema()
     ensure_user_extra_schema()
+    ensure_partner_system_schema()
 except Exception:
     pass
 
@@ -401,10 +402,9 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "orders")}
-            {nav_item("/admin/referrals", "users", "سیستم معرفی", "wallets")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
-            {nav_item("/admin/partners", "handshake", "همکاران", "partners", pending_partners)}
+            {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
@@ -3929,11 +3929,11 @@ async def discount_delete(request: Request, cid: int):
 
 @router.get("/referrals", response_class=HTMLResponse)
 async def referrals_page(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import ensure_referral_schema, get_referral_settings
-    ensure_referral_schema()
+    # ادغام شد در /admin/partners?tab=referrals
+    return _redir("/admin/partners?tab=referrals")
+
+
+async def _old_referrals_page_unused(request: Request, flash: str = ""):
     settings = get_referral_settings()
     conn = _db()
     try:
@@ -6008,66 +6008,268 @@ def _start_auto_backup_thread() -> None:
     _tg_logger.info("Scheduler started (backup:24h, low-stock:2h)")
 
 
-# ─────────────────────────── Partners ──────────────────────────────────────
+# ─────────────────────────── Partners (یکپارچه) ─────────────────────────────
 
 @router.get("/partners", response_class=HTMLResponse)
-async def partners_list(request: Request, status_filter: str="", flash: str=""):
+async def partners_list(request: Request, tab: str = "list", status_filter: str = "", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "partners")
     if guard: return guard
 
-    conn = _db()
-    try:
-        where = "WHERE status=?" if status_filter else ""
-        partners = conn.execute(f"SELECT * FROM partners {where} ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 100;",
-                                (status_filter,) if status_filter else ()).fetchall()
-    finally:
-        conn.close()
+    from db import (ensure_partner_system_schema, get_partner_tiers,
+                    get_partner_commission, ensure_referral_schema, get_referral_settings)
+    ensure_partner_system_schema()
+    ensure_referral_schema()
 
-    tabs = '<div class="flex gap-2 mb-4">' + "".join(
-        f'<a href="/admin/partners?status_filter={v}" class="px-4 py-2 rounded-lg border text-sm {"bg-indigo-600 text-white" if status_filter==v else "bg-white text-gray-600"}">{l}</a>'
-        for l, v in [("همه",""),("در انتظار","pending"),("تایید شده","approved"),("رد شده","rejected")]
-    ) + "</div>"
+    # تب‌های اصلی
+    tab_defs = [("list","👥 لیست همکاران"),("referrals","🔗 معرفی‌ها"),
+                ("tiers","🏆 سطوح"),("settings","⚙️ تنظیمات")]
+    tabs_html = '<div class="flex gap-2 mb-6 overflow-x-auto pb-1">' + "".join(
+        f'<a href="/admin/partners?tab={v}" class="px-4 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if tab==v else "bg-white text-gray-600"}">{l}</a>'
+        for v, l in tab_defs
+    ) + '</div>'
 
-    rows = ""
-    for p in partners:
-        st = p["status"] or "pending"
-        bc = {"pending":"yellow","approved":"green","rejected":"red"}.get(st,"gray")
-        bl = {"pending":"در انتظار","approved":"تایید","rejected":"رد شده"}.get(st,st)
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50 text-sm">
-          <td class="px-4 py-3 font-mono text-xs"><code>{e(p["tg_user_id"])}</code></td>
-          <td class="px-4 py-3">{e(p["full_name"])}</td>
-          <td class="px-4 py-3 text-gray-500">{e(p["phone"])}</td>
-          <td class="px-4 py-3 text-gray-400 text-xs">{e(p["city"])} | {e(p["shop_name"])}</td>
-          <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs rounded-full bg-{bc}-100 text-{bc}-700">{bl}</span></td>
-          <td class="px-4 py-3 flex gap-1">
-            {f'''<form method="post" action="/admin/partners/{p["tg_user_id"]}/approve">
-              <button class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">✅</button>
-            </form>
-            <form method="post" action="/admin/partners/{p["tg_user_id"]}/reject">
-              <button class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">❌</button>
-            </form>''' if st=="pending" else ""}
-          </td>
-        </tr>"""
+    content = ""
+
+    # ─── تب لیست همکاران ─────────────────────────────────────────────────
+    if tab == "list":
+        conn = _db()
+        try:
+            where = "WHERE status=?" if status_filter else ""
+            partners = conn.execute(
+                f"SELECT * FROM partners {where} ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 100;",
+                (status_filter,) if status_filter else ()
+            ).fetchall()
+        finally:
+            conn.close()
+
+        sub_tabs = '<div class="flex gap-2 mb-4">' + "".join(
+            f'<a href="/admin/partners?tab=list&status_filter={v}" class="px-3 py-1.5 rounded-lg border text-xs {"bg-amber-500 text-white" if status_filter==v else "bg-white text-gray-500"}">{l}</a>'
+            for l, v in [("همه",""),("در انتظار","pending"),("تایید","approved"),("رد","rejected")]
+        ) + '</div>'
+
+        rows = ""
+        for p in partners:
+            st = p["status"] or "pending"
+            bc = {"pending":"yellow","approved":"green","rejected":"red"}.get(st,"gray")
+            bl = {"pending":"در انتظار","approved":"تایید","rejected":"رد"}.get(st,st)
+            actions = ""
+            if st == "pending":
+                actions = f"""<form method="post" action="/admin/partners/{p['tg_user_id']}/approve" class="inline">
+                  <button class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">✅</button></form>
+                  <form method="post" action="/admin/partners/{p['tg_user_id']}/reject" class="inline">
+                  <button class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">❌</button></form>"""
+            rows += f"""<tr class="border-b hover:bg-gray-50 text-sm">
+              <td class="px-4 py-3 font-mono text-xs"><code>{e(p['tg_user_id'])}</code></td>
+              <td class="px-4 py-3">{e(p['full_name'])}</td>
+              <td class="px-4 py-3 text-gray-500">{e(p['phone'])}</td>
+              <td class="px-4 py-3 text-gray-400 text-xs">{e(p['city'])} | {e(p['shop_name'])}</td>
+              <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs rounded-full bg-{bc}-100 text-{bc}-700">{bl}</span></td>
+              <td class="px-4 py-3 flex gap-1">{actions}</td>
+            </tr>"""
+
+        content = f"""{sub_tabs}
+        <div class="card overflow-hidden"><div class="overflow-x-auto">
+          <table class="w-full text-right min-w-max">
+            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+              <th class="px-4 py-3">User ID</th><th class="px-4 py-3">نام</th>
+              <th class="px-4 py-3">شماره</th><th class="px-4 py-3">شهر/فروشگاه</th>
+              <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
+            </tr></thead>
+            <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"}</tbody>
+          </table>
+        </div></div>"""
+
+    # ─── تب معرفی‌ها (ادغام‌شده) ─────────────────────────────────────────
+    elif tab == "referrals":
+        ref_settings = get_referral_settings()
+        conn = _db()
+        try:
+            refs = conn.execute("""
+                SELECT r.*, u1.full_name as referrer_name, u2.full_name as referred_name
+                FROM referrals r
+                LEFT JOIN users u1 ON u1.user_id=r.referrer_id
+                LEFT JOIN users u2 ON u2.user_id=r.referred_id
+                ORDER BY r.id DESC LIMIT 200;
+            """).fetchall()
+            total     = conn.execute("SELECT COUNT(*) FROM referrals;").fetchone()[0]
+            rewarded  = conn.execute("SELECT COUNT(*) FROM referrals WHERE rewarded=1;").fetchone()[0]
+            total_pay = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;").fetchone()[0]
+        except Exception:
+            refs = []; total = rewarded = total_pay = 0
+        finally:
+            conn.close()
+
+        ref_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-3 text-xs text-gray-400">#{r['id']}</td>
+          <td class="px-4 py-3 text-sm">{e(r['referrer_name'] or str(r['referrer_id']))}</td>
+          <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
+          <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">منتظر خرید</span>'}</td>
+          <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+        </tr>""" for r in refs)
+
+        content = f"""
+        <div class="grid grid-cols-3 gap-4 mb-6">
+          <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total}</div><div class="text-xs text-gray-400 mt-1">کل معرفی‌ها</div></div>
+          <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{rewarded}</div><div class="text-xs text-gray-400 mt-1">پرداخت شده</div></div>
+          <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{int(total_pay):,}</div><div class="text-xs text-gray-400 mt-1">جمع پاداش (ت)</div></div>
+        </div>
+        <div class="card p-6 mb-6">
+          <h2 class="font-bold text-gray-700 mb-4">⚙️ تنظیمات معرفی</h2>
+          <form method="post" action="/admin/referrals/settings" class="flex flex-wrap gap-4 items-end">
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">مبلغ پاداش (تومان)</label>
+              {_input("reward_amount","",str(ref_settings.get("reward_amount",5000)),"number",True)}</div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
+              <select name="is_active">
+                <option value="1" {"selected" if ref_settings.get("is_active") else ""}>فعال</option>
+                <option value="0" {"" if ref_settings.get("is_active") else "selected"}>غیرفعال</option>
+              </select></div>
+            {_btn("ذخیره","",color="green")}
+          </form>
+        </div>
+        <div class="card overflow-hidden"><div class="overflow-x-auto">
+          <table class="w-full text-right min-w-max">
+            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+              <th class="px-4 py-3">#</th><th class="px-4 py-3">معرف</th><th class="px-4 py-3">کاربر جدید</th>
+              <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پاداش</th><th class="px-4 py-3">تاریخ</th>
+            </tr></thead>
+            <tbody>{ref_rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>معرفی‌ای ثبت نشده</td></tr>"}</tbody>
+          </table>
+        </div></div>"""
+
+    # ─── تب سطوح ─────────────────────────────────────────────────────────
+    elif tab == "tiers":
+        tiers = get_partner_tiers()
+        tier_rows = ""
+        for t in tiers:
+            tier_rows += f"""<tr class="border-b hover:bg-gray-50">
+              <td class="px-4 py-3 text-2xl">{e(t['icon'])}</td>
+              <td class="px-4 py-3 text-sm font-medium">{e(t['name'])}</td>
+              <td class="px-4 py-3 text-sm text-gray-600">{t['min_orders']} خرید</td>
+              <td class="px-4 py-3 flex gap-1">
+                <button onclick="editTier({t['id']},'{e(t['name'])}','{e(t['icon'])}',{t['min_orders']})" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
+                <form method="post" action="/admin/partners/tier/{t['id']}/delete" class="inline" onsubmit="return confirm('حذف این سطح؟')">
+                  <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded">حذف</button>
+                </form>
+              </td>
+            </tr>"""
+
+        content = f"""
+        <div class="card p-6 mb-4">
+          <h2 class="font-bold text-gray-700 mb-2">🏆 سطوح همکاری</h2>
+          <p class="text-xs text-gray-400 mb-4">ارتقا بر اساس تعداد خریدهای همکاری. سطوح را تنظیم کنید.</p>
+          <form method="post" action="/admin/partners/tier/save" class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end" id="tier-form">
+            <input type="hidden" name="tier_id" id="tier_id" value="">
+            <div><label class="text-xs text-gray-500 block mb-1">آیکون</label>
+              <input type="text" name="icon" id="tier_icon" value="🥉" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">نام سطح</label>
+              <input type="text" name="name" id="tier_name" placeholder="برنز" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">حداقل خرید</label>
+              <input type="number" name="min_orders" id="tier_min" value="0" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium">ذخیره سطح</button>
+          </form>
+          <button onclick="resetTierForm()" class="mt-2 text-xs text-gray-400 hover:text-gray-600">+ سطح جدید</button>
+        </div>
+        <div class="card overflow-hidden"><div class="overflow-x-auto">
+          <table class="w-full text-right min-w-max">
+            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+              <th class="px-4 py-3">آیکون</th><th class="px-4 py-3">سطح</th><th class="px-4 py-3">شرط ارتقا</th><th class="px-4 py-3">عملیات</th>
+            </tr></thead>
+            <tbody>{tier_rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
+          </table>
+        </div></div>
+        <script>
+        function editTier(id,name,icon,min){{
+          document.getElementById('tier_id').value=id;
+          document.getElementById('tier_name').value=name;
+          document.getElementById('tier_icon').value=icon;
+          document.getElementById('tier_min').value=min;
+          document.getElementById('tier-form').scrollIntoView({{behavior:'smooth'}});
+        }}
+        function resetTierForm(){{
+          document.getElementById('tier_id').value='';
+          document.getElementById('tier_name').value='';
+          document.getElementById('tier_icon').value='🥉';
+          document.getElementById('tier_min').value='0';
+        }}
+        </script>"""
+
+    # ─── تب تنظیمات پورسانت ──────────────────────────────────────────────
+    elif tab == "settings":
+        comm = get_partner_commission()
+        content = f"""
+        <div class="card p-6">
+          <h2 class="font-bold text-gray-700 mb-2">⚙️ تنظیمات پورسانت همکاری</h2>
+          <p class="text-xs text-gray-400 mb-5">پورسانتی که معرف از خرید زیرمجموعه دریافت می‌کند.</p>
+          <form method="post" action="/admin/partners/commission" class="space-y-4 max-w-md">
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">درصد پورسانت (٪)</label>
+              <input type="number" step="0.1" name="percent" value="{comm['percent']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ خرید (تومان)</label>
+              <input type="number" name="min_order" value="{comm['min_order']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              <span class="text-xs text-gray-400">۰ = بدون محدودیت</span></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف پورسانت هر خرید (تومان)</label>
+              <input type="number" name="max_payout" value="{comm['max_payout']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت سیستم پورسانت</label>
+              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <option value="1" {"selected" if comm['is_active'] else ""}>فعال</option>
+                <option value="0" {"" if comm['is_active'] else "selected"}>غیرفعال</option>
+              </select></div>
+            {_btn("ذخیره تنظیمات","",color="green")}
+          </form>
+        </div>"""
 
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-4">🤝 همکاران</h1>
-    {tabs}
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">User ID</th><th class="px-4 py-3">نام</th>
-            <th class="px-4 py-3">شماره</th><th class="px-4 py-3">شهر / فروشگاه</th>
-            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-
+    {tabs_html}
+    {content}"""
     return _layout("همکاران", body, adm, flash=flash)
+
+
+@router.post("/partners/tier/save")
+async def partner_tier_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    form = await request.form()
+    tid  = form.get("tier_id")
+    tid  = int(tid) if tid and str(tid).isdigit() else None
+    from db import save_partner_tier
+    save_partner_tier(tid, str(form.get("name","")).strip(),
+                      str(form.get("icon","🥉")).strip(),
+                      int(form.get("min_orders") or 0))
+    _log(request, "ذخیره سطح همکاری", "همکاران", str(form.get("name","")))
+    return _redir("/admin/partners?tab=tiers&flash=سطح+ذخیره+شد")
+
+
+@router.post("/partners/tier/{tid}/delete")
+async def partner_tier_delete(request: Request, tid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    from db import delete_partner_tier
+    delete_partner_tier(tid)
+    _log(request, "حذف سطح همکاری", "همکاران", f"tier:{tid}")
+    return _redir("/admin/partners?tab=tiers&flash=سطح+حذف+شد")
+
+
+@router.post("/partners/commission")
+async def partner_commission_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    form = await request.form()
+    from db import save_partner_commission
+    save_partner_commission(
+        float(form.get("percent") or 5.0),
+        int(form.get("min_order") or 0),
+        int(form.get("max_payout") or 0),
+        int(form.get("is_active") or 1)
+    )
+    _log(request, "تنظیم پورسانت همکاری", "همکاران", f"{form.get('percent')}%")
+    return _redir("/admin/partners?tab=settings&flash=تنظیمات+ذخیره+شد")
+
 
 @router.post("/partners/{uid}/approve")
 async def partner_approve(request: Request, uid: int):
@@ -6080,17 +6282,15 @@ async def partner_approve(request: Request, uid: int):
         conn.commit()
     finally:
         conn.close()
-    # اطلاع به کاربر
     try:
-        _tg_send(
-            int(uid),
+        _tg_send(int(uid),
             "✅ <b>درخواست نمایندگی شما تایید شد!</b>\n\n"
             "از این پس قیمت‌های ویژه همکار برای شما فعال است.\n"
-            "منوی «پنل همکار» در دسترس شماست. 🤝"
-        )
+            "منوی «پنل همکار» در دسترس شماست. 🤝")
     except Exception:
         pass
     return _redir("/admin/partners?flash=همکار+تایید+شد")
+
 
 @router.post("/partners/{uid}/reject")
 async def partner_reject(request: Request, uid: int):
@@ -6103,13 +6303,10 @@ async def partner_reject(request: Request, uid: int):
         conn.commit()
     finally:
         conn.close()
-    # اطلاع به کاربر
     try:
-        _tg_send(
-            int(uid),
+        _tg_send(int(uid),
             "❌ متأسفانه درخواست نمایندگی شما در این مرحله تأیید نشد.\n"
-            "در صورت سوال با پشتیبانی در تماس باشید."
-        )
+            "در صورت سوال با پشتیبانی در تماس باشید.")
     except Exception:
         pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
