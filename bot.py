@@ -680,20 +680,30 @@ def _support_ticket_start(chat_id: int, user_id: int) -> None:
 
 
 def _is_menu_or_system_button(text: str) -> bool:
-    """آیا متن یک دکمه منوی اصلی یا دسته‌بندی است؟"""
+    """آیا این پیام یک دکمه/دستور است که باید از چت خارج کند؟"""
     if not text:
         return False
     text = text.strip()
-    # دکمه‌های سیستمی
+
+    # ۱. هر دستوری که با / شروع شود (/start, /help, ...)
+    if text.startswith("/"):
+        return True
+
+    # ۲. دکمه‌های سیستمی منوی اصلی
     try:
-        for key in ("MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET", "MAIN_BTN_PARTNER_REQUEST",
-                    "MAIN_BTN_PARTNER_PANEL", "MAIN_BTN_GUIDE", "MAIN_BTN_SUPPORT",
-                    "MAIN_BTN_OTHER_PRODUCTS", "MAIN_BTN_BUY_APPLE_ID"):
-            if text == t(key, DEFAULT_UI_TEXTS.get(key, "")):
+        system_keys = (
+            "MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET", "MAIN_BTN_PARTNER_REQUEST",
+            "MAIN_BTN_PARTNER_PANEL", "MAIN_BTN_GUIDE", "MAIN_BTN_SUPPORT",
+            "MAIN_BTN_OTHER_PRODUCTS", "MAIN_BTN_BUY_APPLE_ID",
+        )
+        for key in system_keys:
+            val = t(key, DEFAULT_UI_TEXTS.get(key, ""))
+            if val and text == val:
                 return True
     except Exception:
         pass
-    # دکمه‌های دسته‌بندی (داینامیک)
+
+    # ۳. دکمه‌های دسته‌بندی (داینامیک)
     try:
         from db import get_root_categories
         for cat in get_root_categories(active_only=True):
@@ -703,24 +713,53 @@ def _is_menu_or_system_button(text: str) -> bool:
                 return True
     except Exception:
         pass
+
+    # ۴. دکمه‌های ثابت شناخته‌شده
+    known_buttons = (
+        "🔙 بازگشت", "🔙 بازگشت به منو", "❌ انصراف", "🏠 منوی اصلی",
+        "بازگشت", "انصراف", "منوی اصلی", "🛒 خرید", "📜 قوانین",
+    )
+    if text in known_buttons:
+        return True
+
+    return False
+
+
+def _exit_chat_if_needed(message) -> bool:
+    """
+    استاندارد سراسری: اگر کاربر وسط چت/تیکت کاری غیر از پیام‌دادن کرد،
+    خودکار از حالت چت خارج شود و پیام در تیکت ثبت نشود.
+    خروجی: True اگر از چت خارج شد (یعنی نباید ادامه داد).
+    """
+    uid = message.from_user.id
+    st  = user_states.get(uid, {})
+    if st.get("mode") != "ticket_v2":
+        return False  # اصلاً در حالت چت نیست
+
+    txt = message.text or ""
+
+    # حالت ۱: دکمه منو یا دستور → خروج + انتقال به handler مربوطه
+    if message.content_type == "text" and _is_menu_or_system_button(txt):
+        clear_user_state(uid)
+        try:
+            bot.process_new_messages([message])
+        except Exception:
+            pass
+        return True
+
     return False
 
 
 def _ticket_v2_handle_user_message(message) -> None:
     """handler اصلی پیام کاربر به تیکت."""
     uid = message.from_user.id
+
+    # ── استاندارد سراسری: اگر کاری غیر چت کرد، خودکار خارج شو ──────────────
+    if _exit_chat_if_needed(message):
+        return  # از چت خارج شد، پیام در تیکت ثبت نشد
+
     st = user_states.get(uid, {})
     ticket_id = st.get("ticket_id")
-
-    # مورد ۷: اگر کاربر وسط تیکت دکمه منو زد → لغو خودکار تیکت
-    if message.content_type == "text" and _is_menu_or_system_button(message.text):
-        clear_user_state(uid)
-        # پیام را به handler اصلی منو منتقل کن
-        try:
-            bot.process_new_messages([message])
-        except Exception:
-            pass
-        return
 
     if not ticket_id:
         clear_user_state(uid)
