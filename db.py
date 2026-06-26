@@ -2599,14 +2599,9 @@ def process_referral_reward(referred_id: int, order_id: int) -> dict:
         settings = conn.execute("SELECT * FROM referral_settings WHERE id=1;").fetchone()
         amount   = int(settings["reward_amount"] if settings else 5000)
 
-        # اضافه کردن به کیف‌پول معرف
-        existing = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (ref["referrer_id"],)).fetchone()
-        if existing:
-            conn.execute("UPDATE wallets SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?;",
-                         (amount, ref["referrer_id"]))
-        else:
-            conn.execute("INSERT INTO wallets (user_id, balance, updated_at) VALUES (?,?,datetime('now'));",
-                         (ref["referrer_id"], amount))
+        # اضافه کردن به کیف‌پول همکاری (نه کیف‌پول اصلی)
+        credit_partner_wallet(ref["referrer_id"], amount,
+                              note=f"پاداش معرفی — سفارش #{order_id}")
 
         conn.execute("""UPDATE referrals SET rewarded=1, reward_amount=?, first_order_id=?,
             rewarded_at=datetime('now') WHERE id=?;""", (amount, order_id, ref["id"]))
@@ -3185,5 +3180,250 @@ def get_referral_stats_for(referrer_id: int) -> dict:
         return {"total": int(total or 0), "rewarded": int(rewarded or 0), "total_reward": int(total_reward or 0)}
     except Exception:
         return {"total": 0, "rewarded": 0, "total_reward": 0}
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── کیف‌پول همکاری ────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_partner_wallet_schema():
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_wallets (
+                user_id   INTEGER PRIMARY KEY,
+                balance   INTEGER DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_transactions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                type       TEXT NOT NULL,
+                amount     INTEGER NOT NULL,
+                note       TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_payouts (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL,
+                amount       INTEGER NOT NULL,
+                status       TEXT DEFAULT 'pending',
+                admin_note   TEXT DEFAULT '',
+                created_at   TEXT DEFAULT (datetime('now')),
+                processed_at TEXT
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_payout_settings (
+                id            INTEGER PRIMARY KEY CHECK (id=1),
+                min_amount    INTEGER DEFAULT 50000,
+                max_amount    INTEGER DEFAULT 0,
+                max_per_month INTEGER DEFAULT 2,
+                is_active     INTEGER DEFAULT 1,
+                updated_at    TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+        # پیش‌فرض تنظیمات تسویه
+        cnt = conn.execute("SELECT COUNT(*) FROM partner_payout_settings;").fetchone()[0]
+        if cnt == 0:
+            conn.execute("INSERT INTO partner_payout_settings (id) VALUES (1);")
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def get_partner_wallet_balance(user_id: int) -> int:
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT balance FROM partner_wallets WHERE user_id=?;", (user_id,)).fetchone()
+        return int(row[0] or 0) if row else 0
+    finally:
+        conn.close()
+
+
+def credit_partner_wallet(user_id: int, amount: int, note: str = "") -> int:
+    """واریز پورسانت به کیف‌پول همکاری. Returns new balance."""
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    try:
+        existing = conn.execute("SELECT balance FROM partner_wallets WHERE user_id=?;", (user_id,)).fetchone()
+        if existing:
+            conn.execute("UPDATE partner_wallets SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?;",
+                         (amount, user_id))
+        else:
+            conn.execute("INSERT INTO partner_wallets (user_id, balance) VALUES (?,?);", (user_id, amount))
+        conn.execute("INSERT INTO partner_transactions (user_id, type, amount, note) VALUES (?,?,?,?);",
+                     (user_id, "credit", amount, note))
+        conn.commit()
+        row = conn.execute("SELECT balance FROM partner_wallets WHERE user_id=?;", (user_id,)).fetchone()
+        return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def transfer_partner_to_main(user_id: int, amount: int) -> dict:
+    """انتقال از کیف‌پول همکاری به کیف‌پول اصلی."""
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    try:
+        bal = conn.execute("SELECT balance FROM partner_wallets WHERE user_id=?;", (user_id,)).fetchone()
+        current = int(bal[0] or 0) if bal else 0
+        if current < amount:
+            return {"ok": False, "error": "موجودی کافی نیست"}
+        if amount <= 0:
+            return {"ok": False, "error": "مبلغ نامعتبر"}
+        # کسر از partner wallet
+        conn.execute("UPDATE partner_wallets SET balance=balance-?, updated_at=datetime('now') WHERE user_id=?;",
+                     (amount, user_id))
+        conn.execute("INSERT INTO partner_transactions (user_id,type,amount,note) VALUES (?,?,?,?);",
+                     (user_id, "transfer_out", amount, "انتقال به کیف‌پول اصلی"))
+        # واریز به کیف‌پول اصلی
+        existing = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (user_id,)).fetchone()
+        if existing:
+            conn.execute("UPDATE wallets SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?;",
+                         (amount, user_id))
+        else:
+            conn.execute("INSERT INTO wallets (user_id, balance, updated_at) VALUES (?,?,datetime('now'));",
+                         (user_id, amount))
+        conn.commit()
+        return {"ok": True, "transferred": amount}
+    finally:
+        conn.close()
+
+
+def get_partner_payout_settings() -> dict:
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM partner_payout_settings WHERE id=1;").fetchone()
+        if row:
+            return dict(row)
+        return {"min_amount": 50000, "max_amount": 0, "max_per_month": 2, "is_active": 1}
+    finally:
+        conn.close()
+
+
+def save_partner_payout_settings(min_amount, max_amount, max_per_month, is_active):
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("""UPDATE partner_payout_settings
+            SET min_amount=?, max_amount=?, max_per_month=?, is_active=?, updated_at=datetime('now')
+            WHERE id=1;""", (min_amount, max_amount, max_per_month, is_active))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def request_partner_payout(user_id: int, amount: int) -> dict:
+    """ثبت درخواست تسویه."""
+    ensure_partner_wallet_schema()
+    settings = get_partner_payout_settings()
+    if not settings.get("is_active"):
+        return {"ok": False, "error": "تسویه در حال حاضر غیرفعال است"}
+    bal = get_partner_wallet_balance(user_id)
+    if amount > bal:
+        return {"ok": False, "error": "موجودی کافی نیست"}
+    min_a = int(settings.get("min_amount") or 0)
+    max_a = int(settings.get("max_amount") or 0)
+    if min_a and amount < min_a:
+        return {"ok": False, "error": f"حداقل مبلغ تسویه {min_a:,} تومان است"}
+    if max_a and amount > max_a:
+        return {"ok": False, "error": f"حداکثر مبلغ تسویه {max_a:,} تومان است"}
+    # بررسی تعداد ماهانه
+    max_pm = int(settings.get("max_per_month") or 0)
+    if max_pm:
+        conn = _get_connection()
+        try:
+            cnt = conn.execute("""
+                SELECT COUNT(*) FROM partner_payouts
+                WHERE user_id=? AND status IN ('pending','approved')
+                AND strftime('%Y-%m', created_at)=strftime('%Y-%m','now');
+            """, (user_id,)).fetchone()[0]
+        finally:
+            conn.close()
+        if cnt >= max_pm:
+            return {"ok": False, "error": f"سقف {max_pm} درخواست در ماه تکمیل شده"}
+    conn = _get_connection()
+    try:
+        # کسر موقت از کیف‌پول
+        conn.execute("UPDATE partner_wallets SET balance=balance-?, updated_at=datetime('now') WHERE user_id=?;",
+                     (amount, user_id))
+        conn.execute("INSERT INTO partner_transactions (user_id,type,amount,note) VALUES (?,?,?,?);",
+                     (user_id, "payout_request", amount, "درخواست تسویه"))
+        conn.execute("INSERT INTO partner_payouts (user_id,amount,status) VALUES (?,?,'pending');",
+                     (user_id, amount))
+        conn.commit()
+        row = conn.execute("SELECT last_insert_rowid();").fetchone()
+        return {"ok": True, "payout_id": row[0]}
+    finally:
+        conn.close()
+
+
+def process_partner_payout(payout_id: int, approve: bool, admin_note: str = "") -> dict:
+    """تأیید یا رد تسویه توسط ادمین."""
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        pay = conn.execute("SELECT * FROM partner_payouts WHERE id=?;", (payout_id,)).fetchone()
+        if not pay:
+            return {"ok": False, "error": "درخواست یافت نشد"}
+        if pay["status"] != "pending":
+            return {"ok": False, "error": "درخواست قبلاً پردازش شده"}
+        new_status = "approved" if approve else "rejected"
+        conn.execute("""UPDATE partner_payouts SET status=?, admin_note=?, processed_at=datetime('now')
+            WHERE id=?;""", (new_status, admin_note, payout_id))
+        if not approve:
+            # رد شد → برگردان به کیف‌پول
+            conn.execute("UPDATE partner_wallets SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?;",
+                         (pay["amount"], pay["user_id"]))
+            conn.execute("INSERT INTO partner_transactions (user_id,type,amount,note) VALUES (?,?,?,?);",
+                         (pay["user_id"], "payout_rejected", pay["amount"], "رد تسویه — برگشت موجودی"))
+        conn.commit()
+        return {"ok": True, "user_id": pay["user_id"], "amount": pay["amount"], "approved": approve}
+    finally:
+        conn.close()
+
+
+def get_partner_transactions(user_id: int, limit: int = 20) -> list:
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""SELECT * FROM partner_transactions WHERE user_id=?
+            ORDER BY id DESC LIMIT ?;""", (user_id, limit)).fetchall()
+    finally:
+        conn.close()
+
+
+def get_partner_payouts(user_id: int = None, status: str = "", limit: int = 50) -> list:
+    ensure_partner_wallet_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        wheres, params = [], []
+        if user_id:
+            wheres.append("p.user_id=?"); params.append(user_id)
+        if status:
+            wheres.append("p.status=?"); params.append(status)
+        where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+        params.append(limit)
+        return conn.execute(f"""
+            SELECT p.*, u.full_name, u.username
+            FROM partner_payouts p
+            LEFT JOIN users u ON u.user_id=p.user_id
+            {where_sql}
+            ORDER BY p.id DESC LIMIT ?;
+        """, params).fetchall()
     finally:
         conn.close()
