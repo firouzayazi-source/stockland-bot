@@ -27,13 +27,14 @@ router = APIRouter(prefix="/admin")
 
 # ── migrations at startup ────────────────────────────────────────────────────
 try:
-    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema, ensure_partner_system_schema
+    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema, ensure_partner_system_schema, ensure_partner_wallet_schema
     ensure_product_support_schema()
     ensure_discount_table()
     ensure_subscription_table()
     ensure_referral_schema()
     ensure_user_extra_schema()
     ensure_partner_system_schema()
+    ensure_partner_wallet_schema()
 except Exception:
     pass
 
@@ -6023,7 +6024,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
 
     # تب‌های اصلی
     tab_defs = [("list","👥 لیست همکاران"),("referrals","🔗 معرفی‌ها"),
-                ("tiers","🏆 سطوح"),("settings","⚙️ تنظیمات")]
+                ("tiers","🏆 سطوح"),("payouts","📤 تسویه‌ها"),("settings","⚙️ تنظیمات")]
     tabs_html = '<div class="flex gap-2 mb-6 overflow-x-auto pb-1">' + "".join(
         f'<a href="/admin/partners?tab={v}" class="px-4 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if tab==v else "bg-white text-gray-600"}">{l}</a>'
         for v, l in tab_defs
@@ -6195,13 +6196,56 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
         }}
         </script>"""
 
+    # ─── تب تسویه‌ها ─────────────────────────────────────────────────────
+    elif tab == "payouts":
+        from db import get_partner_payouts, ensure_partner_wallet_schema, get_partner_payout_settings
+        ensure_partner_wallet_schema()
+        status_f = request.query_params.get("pstatus", "")
+        payouts = get_partner_payouts(status=status_f, limit=100)
+        pstats = '<div class="flex gap-2 mb-4 flex-wrap">' + "".join(
+            f'<a href="/admin/partners?tab=payouts&pstatus={v}" class="px-3 py-1.5 rounded-lg border text-xs {"bg-indigo-600 text-white" if status_f==v else "bg-white text-gray-500"}">{l}</a>'
+            for l,v in [("همه",""),("در انتظار","pending"),("تایید","approved"),("رد","rejected")]
+        ) + '</div>'
+        prows = ""
+        for p in payouts:
+            sc = {"pending":"yellow","approved":"green","rejected":"red"}.get(p["status"],"gray")
+            sl = {"pending":"در انتظار","approved":"تایید شد","rejected":"رد شد"}.get(p["status"],p["status"])
+            acts = ""
+            if p["status"] == "pending":
+                acts = f"""<form method="post" action="/admin/partners/payout/{p['id']}/approve" class="inline">
+                  <button class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded">✅ تایید</button></form>
+                  <form method="post" action="/admin/partners/payout/{p['id']}/reject" class="inline ml-1">
+                  <button class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded">❌ رد</button></form>"""
+            prows += f"""<tr class="border-b hover:bg-gray-50 text-sm">
+              <td class="px-4 py-3 text-xs text-gray-400">#{p['id']}</td>
+              <td class="px-4 py-3">{e(p['full_name'] or str(p['user_id']))}</td>
+              <td class="px-4 py-3 font-bold text-green-600">{int(p['amount']):,} ت</td>
+              <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
+              <td class="px-4 py-3 text-xs text-gray-400">{(p['created_at'] or '')[:10]}</td>
+              <td class="px-4 py-3">{acts}</td>
+            </tr>"""
+
+        content = f"""{pstats}
+        <div class="card overflow-hidden"><div class="overflow-x-auto">
+          <table class="w-full text-right min-w-max">
+            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+              <th class="px-4 py-3">#</th><th class="px-4 py-3">همکار</th>
+              <th class="px-4 py-3">مبلغ</th><th class="px-4 py-3">وضعیت</th>
+              <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">عملیات</th>
+            </tr></thead>
+            <tbody>{prows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"}</tbody>
+          </table>
+        </div></div>"""
+
     # ─── تب تنظیمات پورسانت ──────────────────────────────────────────────
     elif tab == "settings":
         comm = get_partner_commission()
+        from db import get_partner_payout_settings, ensure_partner_wallet_schema
+        ensure_partner_wallet_schema()
+        ps = get_partner_payout_settings()
         content = f"""
-        <div class="card p-6">
-          <h2 class="font-bold text-gray-700 mb-2">⚙️ تنظیمات پورسانت همکاری</h2>
-          <p class="text-xs text-gray-400 mb-5">پورسانتی که معرف از خرید زیرمجموعه دریافت می‌کند.</p>
+        <div class="card p-6 mb-4">
+          <h2 class="font-bold text-gray-700 mb-2">⚙️ تنظیمات پورسانت معرفی</h2>
           <form method="post" action="/admin/partners/commission" class="space-y-4 max-w-md">
             <div><label class="text-sm font-medium text-gray-700 block mb-1">درصد پورسانت (٪)</label>
               <input type="number" step="0.1" name="percent" value="{comm['percent']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
@@ -6216,7 +6260,26 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
                 <option value="1" {"selected" if comm['is_active'] else ""}>فعال</option>
                 <option value="0" {"" if comm['is_active'] else "selected"}>غیرفعال</option>
               </select></div>
-            {_btn("ذخیره تنظیمات","",color="green")}
+            {_btn("ذخیره پورسانت","",color="green")}
+          </form>
+        </div>
+        <div class="card p-6">
+          <h2 class="font-bold text-gray-700 mb-2">📤 تنظیمات تسویه</h2>
+          <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-md">
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ تسویه (تومان)</label>
+              <input type="number" name="min_amount" value="{ps.get('min_amount',50000)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ تسویه (تومان)</label>
+              <input type="number" name="max_amount" value="{ps.get('max_amount',0)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
+              <input type="number" name="max_per_month" value="{ps.get('max_per_month',2)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت تسویه</label>
+              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <option value="1" {"selected" if ps.get('is_active') else ""}>فعال</option>
+                <option value="0" {"" if ps.get('is_active') else "selected"}>غیرفعال</option>
+              </select></div>
+            {_btn("ذخیره تسویه","",color="indigo")}
           </form>
         </div>"""
 
@@ -6225,6 +6288,63 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
     {tabs_html}
     {content}"""
     return _layout("همکاران", body, adm, flash=flash)
+
+
+@router.post("/partners/payout-settings")
+async def partner_payout_settings_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    form = await request.form()
+    from db import save_partner_payout_settings
+    save_partner_payout_settings(
+        int(form.get("min_amount") or 50000),
+        int(form.get("max_amount") or 0),
+        int(form.get("max_per_month") or 2),
+        int(form.get("is_active") or 1),
+    )
+    _log(request, "تنظیمات تسویه", "همکاران", "updated")
+    return _redir("/admin/partners?tab=settings&flash=تنظیمات+تسویه+ذخیره+شد")
+
+
+@router.post("/partners/payout/{pid}/approve")
+async def partner_payout_approve(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    from db import process_partner_payout
+    result = process_partner_payout(pid, approve=True)
+    if result["ok"]:
+        uid = result["user_id"]
+        amt = result["amount"]
+        _log(request, "تایید تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
+        try:
+            _tg_send(uid,
+                f"✅ <b>درخواست تسویه شما تایید شد</b>\n\n"
+                f"مبلغ <b>{amt:,}</b> تومان پرداخت خواهد شد.")
+        except Exception:
+            pass
+    return _redir("/admin/partners?tab=payouts&flash=تسویه+تایید+شد")
+
+
+@router.post("/partners/payout/{pid}/reject")
+async def partner_payout_reject(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    from db import process_partner_payout
+    result = process_partner_payout(pid, approve=False)
+    if result["ok"]:
+        uid = result["user_id"]
+        amt = result["amount"]
+        _log(request, "رد تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
+        try:
+            _tg_send(uid,
+                f"❌ <b>درخواست تسویه رد شد</b>\n\n"
+                f"مبلغ <b>{amt:,}</b> تومان به کیف‌پول همکاری برگشت داده شد.")
+        except Exception:
+            pass
+    return _redir("/admin/partners?tab=payouts&flash=تسویه+رد+شد")
 
 
 @router.post("/partners/tier/save")
