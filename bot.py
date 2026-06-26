@@ -2895,21 +2895,141 @@ def cb_partner_recent(call):
 def cb_partner_wallet(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    # موجودی کیف‌پول معمولی فعلاً
-    from db import get_wallet_balance
-    try:
-        bal = get_wallet_balance(uid)
-    except Exception:
-        bal = 0
+    from db import get_partner_wallet_balance, get_partner_transactions, ensure_partner_wallet_schema
+    ensure_partner_wallet_schema()
+    bal = get_partner_wallet_balance(uid)
+    txns = get_partner_transactions(uid, 5)
+
+    type_map = {
+        "credit": "💚 واریز پورسانت",
+        "transfer_out": "🔄 انتقال به کیف‌پول اصلی",
+        "payout_request": "📤 درخواست تسویه",
+        "payout_rejected": "↩️ برگشت تسویه",
+    }
+    txn_lines = "\n".join(
+        f"{'+'if t['type'] in ('credit','payout_rejected') else '-'}"
+        f"{int(t['amount']):,} ت — {type_map.get(t['type'],t['type'])} ({(t['created_at'] or '')[:10]})"
+        for t in txns
+    ) if txns else "تراکنشی ثبت نشده"
+
     text = (
         f"💼 <b>کیف‌پول همکاری</b>\n\n"
-        f"موجودی: <b>{int(bal):,}</b> تومان\n\n"
-        f"برای درخواست تسویه با پشتیبانی در تماس باشید."
+        f"موجودی: <b>{bal:,}</b> تومان\n\n"
+        f"📋 <b>آخرین تراکنش‌ها:</b>\n{txn_lines}"
     )
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("🔄 انتقال به کیف‌پول اصلی", callback_data="partner_transfer"),
+        types.InlineKeyboardButton("📤 درخواست تسویه", callback_data="partner_payout"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
+    )
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
                           parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_transfer")
+def cb_partner_transfer(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    from db import get_partner_wallet_balance
+    bal = get_partner_wallet_balance(uid)
+    if bal <= 0:
+        bot.answer_callback_query(call.id, "موجودی کیف‌پول همکاری صفر است", show_alert=True)
+        return
+    user_states[uid] = {"mode": "partner_transfer", "max": bal}
+    bot.send_message(call.message.chat.id,
+        f"🔄 <b>انتقال به کیف‌پول اصلی</b>\n\n"
+        f"موجودی: <b>{bal:,}</b> تومان\n\n"
+        "مبلغ مورد نظر را وارد کنید (تومان):\n"
+        "(یا «همه» برای انتقال کل موجودی)",
+        parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_transfer")
+def handle_partner_transfer(message):
+    uid = message.from_user.id
+    if _exit_chat_if_needed(message):
+        return
+    st = user_states.pop(uid, {})
+    max_bal = st.get("max", 0)
+    txt = (message.text or "").strip()
+    if txt == "همه":
+        amount = max_bal
+    elif txt.isdigit():
+        amount = int(txt)
+    else:
+        bot.reply_to(message, "مبلغ نامعتبر. عدد وارد کنید.")
+        return
+    from db import transfer_partner_to_main
+    result = transfer_partner_to_main(uid, amount)
+    if result["ok"]:
+        bot.send_message(message.chat.id,
+            f"✅ <b>{amount:,}</b> تومان به کیف‌پول اصلی منتقل شد.",
+            parse_mode="HTML", reply_markup=main_menu(user_id=uid))
+    else:
+        bot.reply_to(message, f"❌ {result['error']}")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_payout")
+def cb_partner_payout(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    from db import get_partner_wallet_balance, get_partner_payout_settings, ensure_partner_wallet_schema
+    ensure_partner_wallet_schema()
+    settings = get_partner_payout_settings()
+    if not settings.get("is_active"):
+        bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
+        return
+    bal = get_partner_wallet_balance(uid)
+    min_a = int(settings.get("min_amount") or 0)
+    if bal < min_a:
+        bot.answer_callback_query(call.id,
+            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی شما: {bal:,} تومان",
+            show_alert=True)
+        return
+    max_a = int(settings.get("max_amount") or 0)
+    max_pm = int(settings.get("max_per_month") or 0)
+    user_states[uid] = {"mode": "partner_payout", "bal": bal}
+    text = (
+        f"📤 <b>درخواست تسویه</b>\n\n"
+        f"موجودی: <b>{bal:,}</b> تومان\n"
+        f"{'حداقل: '+format(min_a,',')+'تومان' if min_a else ''}\n"
+        f"{'حداکثر: '+format(max_a,',')+'تومان' if max_a else ''}\n"
+        f"{'سقف ماهانه: '+str(max_pm)+' درخواست' if max_pm else ''}\n\n"
+        "مبلغ درخواستی را وارد کنید:"
+    )
+    bot.send_message(call.message.chat.id, text, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_payout")
+def handle_partner_payout(message):
+    uid = message.from_user.id
+    if _exit_chat_if_needed(message):
+        return
+    st = user_states.pop(uid, {})
+    txt = (message.text or "").strip()
+    if not txt.isdigit():
+        bot.reply_to(message, "مبلغ نامعتبر. عدد وارد کنید.")
+        return
+    amount = int(txt)
+    from db import request_partner_payout
+    result = request_partner_payout(uid, amount)
+    if result["ok"]:
+        bot.send_message(message.chat.id,
+            f"✅ درخواست تسویه <b>{amount:,}</b> تومان ثبت شد.\n"
+            "پس از بررسی، نتیجه اعلام می‌شود.",
+            parse_mode="HTML", reply_markup=main_menu(user_id=uid))
+        try:
+            bot.send_message(ADMIN_ID,
+                f"📤 <b>درخواست تسویه همکار</b>\n"
+                f"کاربر: <code>{uid}</code>\n"
+                f"مبلغ: <b>{amount:,}</b> تومان\n\n"
+                f"برای بررسی: /admin → همکاران → تسویه‌ها",
+                parse_mode="HTML")
+        except Exception:
+            pass
+    else:
+        bot.reply_to(message, f"❌ {result['error']}")
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_guide")
