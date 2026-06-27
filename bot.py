@@ -2686,7 +2686,7 @@ def handle_wallet(message):
     bot.send_message(message.chat.id, text, reply_markup=wallet_inline_keyboard(), parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_MY_ORDERS"))
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "خریدهای من 🧾")))
 def handle_my_orders_menu(message):
     if not is_main_button_enabled("MAIN_BTN_MY_ORDERS"):
         bot.reply_to(message, t("MSG_BTN_DISABLED"))
