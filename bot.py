@@ -2696,19 +2696,27 @@ def handle_my_orders_menu(message):
 
 
 def _show_my_orders(chat_id, uid):
-    """نمایش ۵ خرید آخر با inline keyboard کشویی."""
+    """نمایش ۵ خرید آخر — لیست خطی + کلیک برای باز کردن محصول."""
     orders = get_recent_orders_by_user(uid, limit=5)
     if not orders:
         bot.send_message(chat_id, t("MSG_NO_ORDERS", "هنوز خریدی انجام نداده‌اید."))
         return
 
-    text = "🛒 <b>خریدهای من</b>\n\nبرای مشاهده محصول روی هر سفارش بزنید:"
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    for o in orders:
+    # متن لیست خطی
+    lines = ["🛒 <b>خریدهای من</b>\n"]
+    for i, o in enumerate(orders, 1):
         oid, title, price, created_at = o
         date_str = (created_at or "")[:10]
+        lines.append(f"{i}. {title} — {int(price):,} ت | {date_str}")
+    lines.append("\n👇 برای مشاهده محصول روی هر سفارش بزنید:")
+    text = "\n".join(lines)
+
+    # دکمه‌های inline
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for i, o in enumerate(orders, 1):
+        oid, title, price, created_at = o
         kb.add(types.InlineKeyboardButton(
-            f"📦 {title[:35]} — {int(price):,} ت | {date_str}",
+            f"📦 {i}. {title[:40]}",
             callback_data=f"order_detail_{oid}"
         ))
     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
@@ -2921,20 +2929,28 @@ def cb_partner_ref_link(call):
         bot_username = bot.get_me().username
     except Exception:
         bot_username = "your_bot"
-    link = f"https://t.me/{bot_username}?start=ref_{uid}"
+    link   = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = settings.get("reward_amount", 5000)
 
     text = (
-        f"🔗 <b>لینک معرفی شما</b>\n\n"
+        f"🔗 <b>لینک معرفی اختصاصی شما</b>\n\n"
         f"کد معرفی: <code>{uid}</code>\n\n"
-        f"لینک اختصاصی:\n<code>{link}</code>\n\n"
-        f"💰 با هر معرفی موفق <b>{reward:,}</b> تومان پاداش بگیرید!\n\n"
-        f"📊 آمار شما:\n"
-        f"• کل معرفی‌ها: {stats['total']}\n"
+        f"لینک (برای کپی ضربه بزنید):\n"
+        f"<code>{link}</code>\n\n"
+        f"💡 دوستتان را به این لینک هدایت کنید.\n"
+        f"با اولین خرید موفق، <b>{reward:,}</b> تومان پاداش دریافت می‌کنید!\n\n"
+        f"📊 آمار:\n"
+        f"• معرفی‌ها: {stats['total']}\n"
         f"• پاداش دریافتی: {stats['total_reward']:,} تومان"
     )
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton(
+            "🚀 ارسال لینک به دوستان",
+            url=f"https://t.me/share/url?url={link}&text=با+این+لینک+وارد+شو"
+        ),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back")
+    )
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
                           parse_mode="HTML", reply_markup=kb)
 
