@@ -216,25 +216,16 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     markup = types.InlineKeyboardMarkup()
 
+    # مستقیم به order summary — بدون صفحه واسط
     if wallet_balance >= eff_price:
-        markup.add(types.InlineKeyboardButton(
-            "💳 پرداخت با کیف پول",
-            callback_data=f"confirm_wallet_{category}_{pid}"
-        ))
+        _show_order_summary(chat_id, user_id, product, category, pid)
+        return
     elif 0 < wallet_balance < eff_price:
-        markup.add(types.InlineKeyboardButton(
-            "💳 پرداخت ترکیبی (کیف پول + درگاه)",
-            callback_data=f"confirm_wallet_{category}_{pid}"
-        ))
-        markup.add(types.InlineKeyboardButton(
-            "🌐 پرداخت کامل از درگاه",
-            callback_data=f"confirm_full_{category}_{pid}"
-        ))
+        _show_order_summary(chat_id, user_id, product, category, pid)
+        return
     else:
-        markup.add(types.InlineKeyboardButton(
-            "🌐 پرداخت از درگاه",
-            callback_data=f"confirm_full_{category}_{pid}"
-        ))
+        _show_order_summary(chat_id, user_id, product, category, pid)
+        return
 
     markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase"))
     markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
@@ -2751,9 +2742,16 @@ def cb_myord_detail(call):
         if not order:
             bot.answer_callback_query(call.id, "سفارش یافت نشد", show_alert=True)
             return
-        feed = conn.execute(
-            "SELECT data FROM product_feed WHERE order_id=? LIMIT 1;", (oid,)
-        ).fetchone()
+        # محتوا از product_feed با feed_id
+        feed = None
+        try:
+            fid = order["feed_id"]
+            if fid:
+                feed = conn.execute(
+                    "SELECT data FROM product_feed WHERE id=?;", (fid,)
+                ).fetchone()
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -2788,11 +2786,30 @@ def cb_myord_detail(call):
 def cb_myord_back(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
+    orders = get_recent_orders_by_user(int(uid), limit=5)
+    if not orders:
+        try:
+            bot.edit_message_text("🛒 هنوز خریدی انجام نداده‌اید.",
+                                  call.message.chat.id, call.message.message_id)
+        except Exception:
+            bot.send_message(call.message.chat.id, "🛒 هنوز خریدی انجام نداده‌اید.")
+        return
+    lines = ["🛒 <b>خریدهای من</b>\n"]
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for i, o in enumerate(orders, 1):
+        oid, title, price, created_at = o
+        date_str = (created_at or "")[:10]
+        lines.append(f"{i}. {title} — {int(price):,} ت | {date_str}")
+        kb.add(types.InlineKeyboardButton(
+            f"📦 {i}. {str(title)[:40]}", callback_data=f"myord_{oid}"
+        ))
+    lines.append("\n👇 برای مشاهده محصول روی هر سفارش بزنید:")
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.edit_message_text("\n".join(lines), call.message.chat.id,
+                              call.message.message_id, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        pass
-    _show_my_orders(call.message.chat.id, uid)
+        bot.send_message(call.message.chat.id, "\n".join(lines),
+                         parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_SUPPORT"))
@@ -2890,16 +2907,47 @@ def _show_partner_dashboard(chat_id, uid):
     finally:
         if conn: conn.close()
 
+    import sqlite3 as _sq2
+    from config import DB_PATH as _DBP2
+    partner_purchase_total = 0
+    sub_order_count = 0
+    sub_purchase_total = 0
+    try:
+        _conn2 = _sq2.connect(_DBP2)
+        row = _conn2.execute(
+            "SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
+            (uid,)
+        ).fetchone()
+        partner_purchase_total = int(row[1] or 0)
+        sub_ids = [r[0] for r in _conn2.execute(
+            "SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)
+        ).fetchall()]
+        if sub_ids:
+            ph = ",".join("?" * len(sub_ids))
+            row2 = _conn2.execute(
+                f"SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({ph});",
+                sub_ids
+            ).fetchone()
+            sub_order_count  = int(row2[0] or 0)
+            sub_purchase_total = int(row2[1] or 0)
+        _conn2.close()
+    except Exception:
+        pass
+
     text = (
         f"🤝 <b>داشبورد همکار</b>\n"
         f"━━━━━━━━━━━━━━━\n\n"
-        f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n"
-        f"🛒 خریدهای همکاری: <b>{order_count}</b>\n"
-        f"💰 مجموع خرید: <b>{partner_total:,}</b> تومان"
-        f"{next_line}\n\n"
+        f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n\n"
+        f"👤 <b>خریدهای خودم</b>\n"
+        f"• تعداد خرید همکاری: <b>{order_count}</b>\n"
+        f"• مجموع خرید: <b>{partner_purchase_total:,}</b> تومان\n\n"
         f"━━━━━━━━━━━━━━━\n"
         f"👥 <b>زیرمجموعه‌ها</b>\n"
-        f"معرفی‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
+        f"• معرفی‌ها: {ref_stats['total']} | فعال: {ref_stats['rewarded']}\n"
+        f"• تعداد خریدهای زیرمجموعه: <b>{sub_order_count}</b>\n"
+        f"• مجموع خرید زیرمجموعه: <b>{sub_purchase_total:,}</b> تومان\n"
+        f"• پورسانت دریافتی: <b>{ref_stats['total_reward']:,}</b> تومان"
+        f"{next_line}"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -3998,7 +4046,8 @@ def handle_callbacks(call: types.CallbackQuery):
     if data == "cancel_purchase":
         bot.answer_callback_query(call.id)
         clear_user_state(uid)
-        bot.send_message(call.message.chat.id, "خرید لغو شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
+        bot.send_message(call.message.chat.id, "خرید لغو شد.",
+                         reply_markup=main_menu(user_id=uid))
         return
 
     # ─── ناوبری دسته‌بندی داینامیک ────────────────────────────────────────
@@ -4068,7 +4117,7 @@ def handle_callbacks(call: types.CallbackQuery):
             if t_row:
                 clear_user_state(int(t_row["user_id"]))
                 try:
-                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
+                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu(user_id=int(t_row["user_id"])))
                 except Exception:
                     pass
         return
@@ -4201,12 +4250,14 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "back_main":
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"),
+                         reply_markup=main_menu(user_id=uid))
         return
 
     if data == "other_back":
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"),
+                         reply_markup=main_menu(user_id=uid))
         return
 
     if data == "admin_products_back":
