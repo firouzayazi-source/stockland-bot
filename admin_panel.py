@@ -3496,42 +3496,59 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
       {_card("تحویل‌شده", str(total-avail), "", "indigo")}
       {_card("برگشتی ↩️", str(returned_cnt), "بازگردانده‌شده", "red")}
     </div>
-    <div class="bg-white rounded-xl shadow p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-3">➕ افزودن موجودی</h2>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start">
-        <form method="post" action="/admin/feed/{pid}/upload" class="space-y-3">
-          <div class="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg">هر خط = یک آیتم | برای چندخطی: <code class="bg-gray-200 px-1 rounded">***</code> بین آیتم‌ها</div>
-          {_textarea("items", "آیتم‌ها را اینجا paste کنید...", rows=6)}
-          {_btn("افزودن متنی", color="green")}
-        </form>
-        <form method="post" action="/admin/feed/{pid}/bulk-upload" enctype="multipart/form-data"
-              style="background:var(--page-bg);border:2px dashed var(--border);border-radius:14px;padding:20px;text-align:center;min-width:200px">
-          <div style="font-size:28px;margin-bottom:8px">📁</div>
-          <div style="font-size:13px;font-weight:600;color:var(--text-main);margin-bottom:4px">آپلود فایل (CSV / TXT)</div>
-          <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px">هر خط یک آیتم</div>
+
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن موجودی</h2>
+
+      <!-- افزودن متنی -->
+      <form method="post" action="/admin/feed/{pid}/upload" class="mb-4">
+        <div class="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg mb-3">
+          هر خط = یک آیتم | برای چندخطی: <code class="bg-gray-200 px-1 rounded">***</code> بین آیتم‌ها
+        </div>
+        {_textarea("items", "آیتم‌ها را اینجا paste کنید...", rows=6)}
+        <div class="mt-3">{_btn("افزودن متنی", color="green")}</div>
+      </form>
+
+      <!-- آپلود فایل -->
+      <form method="post" action="/admin/feed/{pid}/bulk-upload" enctype="multipart/form-data">
+        <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center">
+          <div class="text-3xl mb-2">📁</div>
+          <div class="text-sm font-semibold text-gray-700 mb-1">آپلود فایل (CSV / TXT)</div>
+          <div class="text-xs text-gray-400 mb-4">هر خط یک آیتم</div>
           <input type="file" name="file" accept=".txt,.csv" required
-                 style="margin-bottom:12px;font-size:12px;min-height:unset;padding:6px">
-          <button type="submit" class="btn btn-primary" style="width:100%">آپلود</button>
-        </form>
-      </div>
+            class="block w-full text-sm text-gray-600 mb-4 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+          <button type="submit"
+            class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
+            ⬆ آپلود و افزودن
+          </button>
+        </div>
+      </form>
     </div>
-    <div class="bg-white rounded-xl shadow overflow-hidden">
-      <div class="px-5 py-3 border-b bg-gray-50 flex justify-between items-center">
+
+    <div class="card overflow-hidden">
+      <div class="px-5 py-3 border-b bg-gray-50 flex flex-wrap justify-between items-center gap-2">
         <span class="text-sm font-medium">لیست آیتم‌ها ({total})</span>
-        <form method="post" action="/admin/feed/{pid}/clear-delivered" onsubmit="return confirm('تحویل‌شده‌ها پاک شوند؟')">
-          <button class="text-xs text-red-400 hover:text-red-600">🗑 پاک‌سازی تحویل‌شده‌ها</button>
-        </form>
-        <form method="post" action="/admin/feed/{pid}/delete-all" onsubmit="return confirm('⚠️ همه {total} آیتم این محصول حذف شوند؟ این عمل برگشت‌پذیر نیست!')">
-          <button class="text-xs text-red-600 hover:text-red-800 font-bold">🗑🗑 حذف کل موجودی ({total})</button>
-        </form>
+        <div class="flex gap-2 flex-wrap">
+          <form method="post" action="/admin/feed/{pid}/clear-delivered" onsubmit="return confirm('تحویل‌شده‌ها پاک شوند؟')">
+            <button class="px-3 py-1.5 text-xs text-red-400 hover:text-red-600 border border-red-200 rounded-lg">🗑 پاک‌سازی تحویل‌شده‌ها</button>
+          </form>
+          <form method="post" action="/admin/feed/{pid}/delete-all" onsubmit="return confirm('⚠️ همه {total} آیتم حذف شوند؟')">
+            <button class="px-3 py-1.5 text-xs text-red-600 hover:text-red-800 font-bold border border-red-300 rounded-lg">🗑🗑 حذف کل موجودی ({total})</button>
+          </form>
+        </div>
       </div>
-      <table class="w-full text-right">
-        <thead><tr class="text-xs text-gray-500 border-b">
-          <th class="px-4 py-2">ID</th><th class="px-4 py-2">پیش‌نمایش</th>
-          <th class="px-4 py-2">وضعیت</th><th class="px-4 py-2">تاریخ</th><th></th>
-        </tr></thead>
-        <tbody>{items_html or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>آیتمی ثبت نشده</td></tr>"}</tbody>
-      </table>
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-3">ID</th>
+            <th class="px-4 py-3">پیش‌نمایش</th>
+            <th class="px-4 py-3">وضعیت</th>
+            <th class="px-4 py-3">تاریخ</th>
+            <th class="px-4 py-3"></th>
+          </tr></thead>
+          <tbody>{items_html or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>آیتمی ثبت نشده</td></tr>"}</tbody>
+        </table>
+      </div>
       {pager}
     </div>"""
 
