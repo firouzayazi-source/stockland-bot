@@ -3354,7 +3354,10 @@ def handle_help(message):
     bot.send_message(message.chat.id, text)
 
 
-@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
+@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and (
+    m.from_user.id in admin_states or
+    user_states.get(m.from_user.id, {}).get("mode") == "ticket_support"
+))
 def handle_admin_text(message):
     aid = message.from_user.id
 
