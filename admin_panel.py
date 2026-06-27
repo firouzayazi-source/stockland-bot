@@ -2031,6 +2031,53 @@ async def database_page(request: Request, flash: str = ""):
     if guard: return guard
 
     from stbak_engine import MODULES, SECTION_LABELS
+    import glob as _gl, os as _os
+
+    # لیست بکاپ‌های خودکار
+    _auto_dir = "/tmp/stockland_backups"
+    _auto_files = sorted(_gl.glob(f"{_auto_dir}/auto_*.stbak"), reverse=True)[:5]
+    _auto_rows = ""
+    for _f in _auto_files:
+        _fn  = _os.path.basename(_f)
+        _sz  = _os.path.getsize(_f)
+        _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
+        _ts  = _fn.replace("auto_","").replace(".stbak","")
+        try:
+            from datetime import datetime as _dt
+            _dto = _dt.strptime(_ts, "%Y%m%d_%H%M%S")
+            _tfa = _dto.strftime("%Y/%m/%d — %H:%M")
+        except Exception:
+            _tfa = _ts
+        _auto_rows += f"""<tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-3 text-sm">{_tfa}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">خودکار</td>
+          <td class="px-4 py-3 text-xs text-gray-500">{_szs}</td>
+          <td class="px-4 py-3">
+            <a href="/admin/database/download/{e(_fn)}"
+               class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">⬇ دانلود</a>
+          </td>
+        </tr>"""
+
+    _auto_section = ""
+    if _auto_files:
+        _auto_section = f"""<div class="card overflow-hidden mb-4">
+          <button onclick="var d=this.nextElementSibling;d.classList.toggle('hidden');this.querySelector('.arr').textContent=d.classList.contains('hidden')?'▼':'▲'"
+            class="w-full px-5 py-4 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition text-sm font-medium text-gray-700">
+            <span>🕐 بکاپ‌های خودکار <span class="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">{len(_auto_files)}</span></span>
+            <span class="arr">▼</span>
+          </button>
+          <div class="hidden overflow-x-auto">
+            <table class="w-full text-right min-w-max">
+              <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+                <th class="px-4 py-3">تاریخ و ساعت</th>
+                <th class="px-4 py-3">نوع</th>
+                <th class="px-4 py-3">حجم</th>
+                <th class="px-4 py-3">دانلود</th>
+              </tr></thead>
+              <tbody>{_auto_rows}</tbody>
+            </table>
+          </div>
+        </div>"""
 
     def _chk(name, checked=True):
         return "".join(
@@ -2143,6 +2190,9 @@ async def database_page(request: Request, flash: str = ""):
         ⬇ دریافت فایل بکاپ
       </button>
     </div>
+
+    <!-- بکاپ‌های خودکار -->
+    {_auto_section}
 
     <!-- بازیابی -->
     <div class="card p-6 mb-4">
@@ -5951,28 +6001,26 @@ _auto_backup_started = False
 
 
 def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه — حداکثر ۵ فایل نگه می‌داره."""
-    import os, shutil, glob
+    """بکاپ خودکار روزانه با فرمت .stbak — حداکثر ۵ فایل."""
+    import os, glob
     db_path = _env("DB_PATH")
     if not db_path or not os.path.exists(db_path):
         return
     os.makedirs(_BACKUP_DIR, exist_ok=True)
-    ts = _time.strftime("%Y%m%d_%H%M%S")
-    dst = f"{_BACKUP_DIR}/auto_{ts}.sqlite"
     try:
-        import sqlite3 as _sq
-        src_c = _sq.connect(db_path, timeout=30)
-        dst_c = _sq.connect(dst, timeout=30)
-        src_c.backup(dst_c)
-        dst_c.close()
-        src_c.close()
+        from stbak_engine import create_stbak
+        raw   = create_stbak(db_path)
+        ts    = _time.strftime("%Y%m%d_%H%M%S")
+        dst   = f"{_BACKUP_DIR}/auto_{ts}.stbak"
+        with open(dst, "wb") as f:
+            f.write(raw)
     except Exception as ex:
         _tg_logger.error("Auto-backup failed: %s", ex)
         return
 
-    # حذف بکاپ‌های قدیمی
-    all_backups = sorted(glob.glob(f"{_BACKUP_DIR}/auto_*.sqlite"))
-    while len(all_backups) > _MAX_BACKUPS:
+    # حذف بکاپ‌های قدیمی — فقط ۵ تا نگه دار
+    all_backups = sorted(glob.glob(f"{_BACKUP_DIR}/auto_*.stbak"))
+    while len(all_backups) > 5:
         try:
             os.remove(all_backups.pop(0))
         except Exception:
@@ -5987,22 +6035,32 @@ def _start_auto_backup_thread() -> None:
     _auto_backup_started = True
 
     def _runner():
-        check_counter = 0
+        import datetime as _dt
         while True:
-            _time.sleep(3600)  # هر ساعت
-            check_counter += 1
-            # بکاپ هر ۲۴ ساعت
-            if check_counter % 24 == 0:
-                try:
-                    _do_auto_backup()
-                except Exception as ex:
-                    _tg_logger.error("auto-backup error: %s", ex)
-            # بررسی موجودی هر ۲ ساعت
-            if check_counter % 2 == 0:
-                try:
-                    _notify_low_stock()
-                except Exception as ex:
-                    _tg_logger.error("low-stock check error: %s", ex)
+            now = _dt.datetime.now()
+            # محاسبه زمان باقی‌مانده تا ۴ صبح
+            target = now.replace(hour=4, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += _dt.timedelta(days=1)
+            sleep_secs = (target - now).total_seconds()
+            _time.sleep(sleep_secs)
+            try:
+                _do_auto_backup()
+            except Exception as ex:
+                _tg_logger.error("auto-backup error: %s", ex)
+
+    _threading.Thread(target=_runner, name="auto-backup", daemon=True).start()
+
+    # thread جداگانه برای بررسی موجودی (هر ۲ ساعت)
+    def _stock_runner():
+        while True:
+            _time.sleep(7200)
+            try:
+                _notify_low_stock()
+            except Exception as ex:
+                _tg_logger.error("low-stock check error: %s", ex)
+
+    _threading.Thread(target=_stock_runner, name="stock-check", daemon=True).start()
 
     t = _threading.Thread(target=_runner, daemon=True, name="auto-backup")
     t.start()
@@ -6403,10 +6461,25 @@ async def partner_approve(request: Request, uid: int):
     finally:
         conn.close()
     try:
-        _tg_send(int(uid),
-            "✅ <b>درخواست نمایندگی شما تایید شد!</b>\n\n"
-            "از این پس قیمت‌های ویژه همکار برای شما فعال است.\n"
-            "منوی «پنل همکار» در دسترس شماست. 🤝")
+        import json as _json, requests as _rq
+        token = _env("BOT_TOKEN","")
+        if token:
+            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
+                "chat_id": int(uid),
+                "text": "✅ <b>درخواست نمایندگی شما تایید شد!</b>\n\n"
+                        "از این پس قیمت‌های ویژه همکار برای شما فعال است.\n"
+                        "منوی پنل همکار در منوی زیر در دسترس شماست 🤝",
+                "parse_mode": "HTML",
+                "reply_markup": _json.dumps({
+                    "keyboard": [
+                        [{"text":"پنل همکار 🤝"}],
+                        [{"text":"خریدهای من 🧾"},{"text":"کیف پول 💰"}]
+                    ],
+                    "resize_keyboard": True
+                })
+            }, timeout=8)
+        else:
+            _tg_send(int(uid), "✅ درخواست نمایندگی تایید شد! منوی همکار فعال است.")
     except Exception:
         pass
     return _redir("/admin/partners?flash=همکار+تایید+شد")
