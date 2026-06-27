@@ -2686,51 +2686,59 @@ def handle_wallet(message):
     bot.send_message(message.chat.id, text, reply_markup=wallet_inline_keyboard(), parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "خریدهای من 🧾")))
+def _is_my_orders_button(txt: str) -> bool:
+    if not txt:
+        return False
+    txt = txt.strip()
+    candidates = {
+        t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "خریدهای من 🧾")).strip(),
+        "🧾 خریدهای من",
+        "خریدهای من 🧾",
+        "خریدهای من",
+    }
+    return txt in candidates or "خریدهای من" in txt
+
+
+@bot.message_handler(func=lambda m: _is_my_orders_button(m.text or ""))
 def handle_my_orders_menu(message):
     if not is_main_button_enabled("MAIN_BTN_MY_ORDERS"):
         bot.reply_to(message, t("MSG_BTN_DISABLED"))
         return
-    uid = message.from_user.id
-    _show_my_orders(message.chat.id, uid)
+    _show_my_orders(message.chat.id, message.from_user.id)
 
 
 def _show_my_orders(chat_id, uid):
     """نمایش ۵ خرید آخر — لیست خطی + کلیک برای باز کردن محصول."""
-    orders = get_recent_orders_by_user(uid, limit=5)
+    try:
+        orders = get_recent_orders_by_user(int(uid), limit=5)
+    except Exception as ex:
+        logger.error("my_orders fetch error: %s", ex)
+        orders = []
     if not orders:
-        bot.send_message(chat_id, t("MSG_NO_ORDERS", "هنوز خریدی انجام نداده‌اید."))
+        bot.send_message(chat_id, "🛒 هنوز خریدی انجام نداده‌اید.")
         return
-
-    # متن لیست خطی
     lines = ["🛒 <b>خریدهای من</b>\n"]
+    kb = types.InlineKeyboardMarkup(row_width=1)
     for i, o in enumerate(orders, 1):
         oid, title, price, created_at = o
         date_str = (created_at or "")[:10]
         lines.append(f"{i}. {title} — {int(price):,} ت | {date_str}")
-    lines.append("\n👇 برای مشاهده محصول روی هر سفارش بزنید:")
-    text = "\n".join(lines)
-
-    # دکمه‌های inline
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    for i, o in enumerate(orders, 1):
-        oid, title, price, created_at = o
         kb.add(types.InlineKeyboardButton(
-            f"📦 {i}. {title[:40]}",
-            callback_data=f"order_detail_{oid}"
+            f"📦 {i}. {str(title)[:40]}",
+            callback_data=f"myord_{oid}"
         ))
-    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+    lines.append("\n👇 برای مشاهده محصول روی هر سفارش بزنید:")
+    bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("order_detail_"))
-def cb_order_detail(call):
+@bot.callback_query_handler(func=lambda c: c.data.startswith("myord_"))
+def cb_myord_detail(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     try:
         oid = int(call.data.split("_")[-1])
     except ValueError:
         return
-
     import sqlite3 as _sq
     from config import DB_PATH as _DBP
     conn = _sq.connect(_DBP)
@@ -2738,55 +2746,46 @@ def cb_order_detail(call):
     try:
         order = conn.execute(
             "SELECT * FROM orders WHERE id=? AND CAST(user_id AS INTEGER)=?;",
-            (oid, uid)
+            (oid, int(uid))
         ).fetchone()
         if not order:
             bot.answer_callback_query(call.id, "سفارش یافت نشد", show_alert=True)
             return
-        # محتوای محصول از product_feed
         feed = conn.execute(
-            "SELECT data FROM product_feed WHERE order_id=? LIMIT 1;",
-            (oid,)
+            "SELECT data FROM product_feed WHERE order_id=? LIMIT 1;", (oid,)
         ).fetchone()
     finally:
         conn.close()
 
-    title     = order["title"] or "—"
-    price     = int(order["price"] or 0)
-    date_str  = (order["created_at"] or "")[:10]
+    title    = order["title"] or "—"
+    price    = int(order["price"] or 0)
+    date_str = (order["created_at"] or "")[:10]
     feed_data = feed["data"] if feed else None
 
     if feed_data:
-        text = (
-            f"📦 <b>سفارش #{oid}</b>\n\n"
-            f"محصول: {title}\n"
-            f"مبلغ: {price:,} تومان\n"
-            f"تاریخ: {date_str}\n\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"<code>{feed_data}</code>"
-        )
+        text = (f"📦 <b>سفارش #{oid}</b>\n\n"
+                f"محصول: {title}\n"
+                f"مبلغ: {price:,} تومان\n"
+                f"تاریخ: {date_str}\n\n"
+                f"━━━━━━━━━━━━━━━\n<code>{feed_data}</code>")
     else:
-        text = (
-            f"📦 <b>سفارش #{oid}</b>\n\n"
-            f"محصول: {title}\n"
-            f"مبلغ: {price:,} تومان\n"
-            f"تاریخ: {date_str}\n\n"
-            f"ℹ️ محتوای این سفارش توسط پشتیبانی تحویل داده می‌شود."
-        )
+        text = (f"📦 <b>سفارش #{oid}</b>\n\n"
+                f"محصول: {title}\n"
+                f"مبلغ: {price:,} تومان\n"
+                f"تاریخ: {date_str}\n\n"
+                f"ℹ️ محتوای این سفارش توسط پشتیبانی تحویل داده می‌شود.")
 
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 بازگشت به خریدها", callback_data="my_orders_back"))
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="myord_back"))
     try:
-        bot.edit_message_text(
-            text, call.message.chat.id, call.message.message_id,
-            parse_mode="HTML", reply_markup=kb
-        )
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                              parse_mode="HTML", reply_markup=kb)
     except Exception:
         bot.send_message(call.message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "my_orders_back")
-def cb_my_orders_back(call):
+@bot.callback_query_handler(func=lambda c: c.data == "myord_back")
+def cb_myord_back(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     try:
@@ -3360,6 +3359,11 @@ def handle_help(message):
 ))
 def handle_admin_text(message):
     aid = message.from_user.id
+
+    # دکمه‌های منوی اصلی هرگز توسط این handler گرفته نشوند
+    if _is_my_orders_button(message.text or ""):
+        _show_my_orders(message.chat.id, aid)
+        return
 
     # ─── اگه ادمین در حالت تیکت کاربر (تست) باشه → به handler تیکت برو ──
     user_st = user_states.get(aid, {})
