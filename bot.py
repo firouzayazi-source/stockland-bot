@@ -2786,30 +2786,12 @@ def cb_myord_detail(call):
 def cb_myord_back(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    orders = get_recent_orders_by_user(int(uid), limit=5)
-    if not orders:
-        try:
-            bot.edit_message_text("🛒 هنوز خریدی انجام نداده‌اید.",
-                                  call.message.chat.id, call.message.message_id)
-        except Exception:
-            bot.send_message(call.message.chat.id, "🛒 هنوز خریدی انجام نداده‌اید.")
-        return
-    lines = ["🛒 <b>خریدهای من</b>\n"]
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    for i, o in enumerate(orders, 1):
-        oid, title, price, created_at = o
-        date_str = (created_at or "")[:10]
-        lines.append(f"{i}. {title} — {int(price):,} ت | {date_str}")
-        kb.add(types.InlineKeyboardButton(
-            f"📦 {i}. {str(title)[:40]}", callback_data=f"myord_{oid}"
-        ))
-    lines.append("\n👇 برای مشاهده محصول روی هر سفارش بزنید:")
+    # حذف پیام قبلی و ارسال لیست جدید
     try:
-        bot.edit_message_text("\n".join(lines), call.message.chat.id,
-                              call.message.message_id, parse_mode="HTML", reply_markup=kb)
+        bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception:
-        bot.send_message(call.message.chat.id, "\n".join(lines),
-                         parse_mode="HTML", reply_markup=kb)
+        pass
+    _show_my_orders(call.message.chat.id, uid)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_SUPPORT"))
@@ -2907,46 +2889,12 @@ def _show_partner_dashboard(chat_id, uid):
     finally:
         if conn: conn.close()
 
-    import sqlite3 as _sq2
-    from config import DB_PATH as _DBP2
-    partner_purchase_total = 0
-    sub_order_count = 0
-    sub_purchase_total = 0
-    try:
-        _conn2 = _sq2.connect(_DBP2)
-        row = _conn2.execute(
-            "SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
-            (uid,)
-        ).fetchone()
-        partner_purchase_total = int(row[1] or 0)
-        sub_ids = [r[0] for r in _conn2.execute(
-            "SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)
-        ).fetchall()]
-        if sub_ids:
-            ph = ",".join("?" * len(sub_ids))
-            row2 = _conn2.execute(
-                f"SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({ph});",
-                sub_ids
-            ).fetchone()
-            sub_order_count  = int(row2[0] or 0)
-            sub_purchase_total = int(row2[1] or 0)
-        _conn2.close()
-    except Exception:
-        pass
-
     text = (
         f"🤝 <b>داشبورد همکار</b>\n"
         f"━━━━━━━━━━━━━━━\n\n"
-        f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n\n"
-        f"👤 <b>خریدهای خودم</b>\n"
-        f"• تعداد خرید همکاری: <b>{order_count}</b>\n"
-        f"• مجموع خرید: <b>{partner_purchase_total:,}</b> تومان\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"👥 <b>زیرمجموعه‌ها</b>\n"
-        f"• معرفی‌ها: {ref_stats['total']} | فعال: {ref_stats['rewarded']}\n"
-        f"• تعداد خریدهای زیرمجموعه: <b>{sub_order_count}</b>\n"
-        f"• مجموع خرید زیرمجموعه: <b>{sub_purchase_total:,}</b> تومان\n"
-        f"• پورسانت دریافتی: <b>{ref_stats['total_reward']:,}</b> تومان"
+        f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n"
+        f"🛒 خریدهای همکاری: <b>{order_count}</b>\n"
+        f"👥 معرفی‌های موفق: <b>{ref_stats['rewarded']}</b>"
         f"{next_line}"
     )
 
@@ -3008,41 +2956,38 @@ def cb_partner_sub_stats(call):
     bot.answer_callback_query(call.id)
     import sqlite3 as _sq
     from config import DB_PATH as _DBP
+    total_refs = active_refs = total_orders = total_purchase = total_reward = 0
     try:
         conn = _sq.connect(_DBP)
-        # تعداد زیرمجموعه‌ها
-        total_refs = conn.execute(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (uid,)
-        ).fetchone()[0]
-        # زیرمجموعه‌های فعال (خرید کردن)
-        active_refs = conn.execute(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND rewarded=1;", (uid,)
-        ).fetchone()[0]
-        # جمع کل خرید زیرمجموعه‌ها (کلی - بدون ID)
-        sub_ids = [r[0] for r in conn.execute(
-            "SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)
-        ).fetchall()]
-        total_purchase = 0
-        total_orders = 0
+        total_refs  = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (uid,)).fetchone()[0]
+        active_refs = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND rewarded=1;", (uid,)).fetchone()[0]
+        total_reward = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE referrer_id=? AND rewarded=1;", (uid,)).fetchone()[0]
+        sub_ids = [r[0] for r in conn.execute("SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)).fetchall()]
         if sub_ids:
-            placeholders = ",".join("?" * len(sub_ids))
-            row = conn.execute(
-                f"SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({placeholders});",
-                sub_ids
-            ).fetchone()
-            total_orders  = int(row[0] or 0)
+            ph = ",".join("?" * len(sub_ids))
+            row = conn.execute(f"SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({ph});", sub_ids).fetchone()
+            total_orders   = int(row[0] or 0)
             total_purchase = int(row[1] or 0)
         conn.close()
     except Exception:
-        total_refs = active_refs = total_orders = total_purchase = 0
+        pass
+
+    # نوار پیشرفت معرفی‌های موفق
+    pct   = int((active_refs / total_refs * 100) if total_refs else 0)
+    bar   = "▓" * (pct // 10) + "░" * (10 - pct // 10)
 
     text = (
-        f"📊 <b>آمار زیرمجموعه‌ها</b>\n\n"
-        f"👥 کل معرفی‌ها: <b>{total_refs}</b>\n"
-        f"✅ معرفی‌های فعال (خرید کرده): <b>{active_refs}</b>\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"🛒 تعداد کل خریدها: <b>{total_orders}</b>\n"
-        f"💰 مجموع خرید: <b>{total_purchase:,}</b> تومان"
+        f"📊 <b>آمار زیرمجموعه‌ها</b>\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"👥 <b>معرفی‌ها</b>\n"
+        f"• کل معرفی‌ها: <b>{total_refs}</b>\n"
+        f"• فعال (خرید کرده): <b>{active_refs}</b>\n"
+        f"<code>{bar}</code> {pct}% موفقیت\n\n"
+        f"🛒 <b>خریدها</b>\n"
+        f"• تعداد کل خرید: <b>{total_orders}</b>\n"
+        f"• مجموع خرید: <b>{total_purchase:,}</b> تومان\n\n"
+        f"💰 <b>پورسانت</b>\n"
+        f"• پاداش دریافتی: <b>{int(total_reward):,}</b> تومان"
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
