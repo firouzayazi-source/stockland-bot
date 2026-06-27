@@ -2722,7 +2722,18 @@ def _show_my_orders(chat_id, uid):
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("myord_"))
+@bot.callback_query_handler(func=lambda c: c.data == "myord_back")
+def cb_myord_back(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    _show_my_orders(call.message.chat.id, uid)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("myord_") and c.data != "myord_back")
 def cb_myord_detail(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
@@ -2780,18 +2791,6 @@ def cb_myord_detail(call):
                               parse_mode="HTML", reply_markup=kb)
     except Exception:
         bot.send_message(call.message.chat.id, text, parse_mode="HTML", reply_markup=kb)
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "myord_back")
-def cb_myord_back(call):
-    uid = call.from_user.id
-    bot.answer_callback_query(call.id)
-    # حذف پیام قبلی و ارسال لیست جدید
-    try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception:
-        pass
-    _show_my_orders(call.message.chat.id, uid)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_SUPPORT"))
