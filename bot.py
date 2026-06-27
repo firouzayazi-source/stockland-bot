@@ -1387,6 +1387,13 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
     if feed_item:
         feed_id, feed_data = feed_item
 
+        # ذخیره feed_id در orders برای «خریدهای من»
+        try:
+            from db import order_set_feed_id
+            order_set_feed_id(int(order_id), int(feed_id))
+        except Exception:
+            pass
+
         # تحویل عادی
         bot.send_message(
             call.message.chat.id,
