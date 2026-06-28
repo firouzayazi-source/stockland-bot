@@ -3314,9 +3314,9 @@ def cb_partner_wallet(call):
         "payout_rejected": "↩️ برگشت تسویه",
     }
     txn_lines = "\n".join(
-        f"{'+'if t['type'] in ('credit','payout_rejected') else '-'}"
-        f"{int(t['amount']):,} ت — {type_map.get(t['type'],t['type'])} ({(t['created_at'] or '')[:10]})"
-        for t in txns
+        f"{'+'if tx['type'] in ('credit','payout_rejected') else '-'}"
+        f"{int(tx['amount']):,} ت — {type_map.get(tx['type'],tx['type'])} ({(tx['created_at'] or '')[:10]})"
+        for tx in txns
     ) if txns else "تراکنشی ثبت نشده"
 
     text = (
