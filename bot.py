@@ -2926,6 +2926,7 @@ def _show_partner_dashboard(chat_id, uid):
     )
     kb.row(
         types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support"),
+        types.InlineKeyboardButton("📖 راهنما و قوانین", callback_data="partner_guide"),
     )
 
     # ارسال بنر سطح (اگه تنظیم شده)
@@ -3130,58 +3131,93 @@ def cb_pedit_field(call):
         f"✏️ <b>ویرایش {label}</b>\n\n{hint} را وارد کنید:",
         parse_mode="HTML")
 
-def _make_pedit_handler(mode_key, field_key, table, col, validator=None):
-    @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == mode_key)
-    def _handler(message):
-        uid = message.from_user.id
-        if _exit_chat_if_needed(message): return
-        val = (message.text or "").strip()
-        if validator:
-            val = validator(val)
-            if val is None:
-                bot.reply_to(message, "❌ مقدار وارد‌شده نامعتبر است. دوباره تلاش کنید:")
-                return
-        st = user_states.pop(uid, {})
-        # ذخیره
-        import sqlite3 as _sqe
-        from config import DB_PATH as _DBPe
-        from db import ensure_partner_bank_schema, ensure_partner_bank_address, get_partner_bank_info
-        ensure_partner_bank_schema(); ensure_partner_bank_address()
-        conn = _sqe.connect(_DBPe)
-        try:
-            if table == "partners":
-                conn.execute(f"UPDATE partners SET {col}=? WHERE tg_user_id=?;", (val, uid))
+def _pedit_save(uid, chat_id, table, col, val):
+    """ذخیره یه فیلد پروفایل همکار."""
+    import sqlite3 as _sqe
+    from config import DB_PATH as _DBPe
+    from db import ensure_partner_bank_schema, ensure_partner_bank_address, get_partner_bank_info
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+    conn = _sqe.connect(_DBPe)
+    try:
+        if table == "partners":
+            conn.execute(f"UPDATE partners SET {col}=? WHERE tg_user_id=?;", (val, uid))
+        else:
+            bank = get_partner_bank_info(uid)
+            if bank:
+                conn.execute(f"UPDATE partner_bank_info SET {col}=?,updated_at=datetime('now') WHERE user_id=?;", (val, uid))
             else:
-                bank = get_partner_bank_info(uid)
-                if bank:
-                    conn.execute(f"UPDATE partner_bank_info SET {col}=?,updated_at=datetime('now') WHERE user_id=?;", (val, uid))
-                else:
-                    conn.execute(f"INSERT OR REPLACE INTO partner_bank_info (user_id,{col}) VALUES (?,?);", (uid, val))
-            conn.commit()
-        finally:
-            conn.close()
-        bot.send_message(message.chat.id, "✅ ذخیره شد.")
-        _show_partner_profile(message.chat.id, uid)
-    return _handler
+                conn.execute(f"INSERT OR REPLACE INTO partner_bank_info (user_id,{col}) VALUES (?,?);", (uid, val))
+        conn.commit()
+    finally:
+        conn.close()
+    bot.send_message(chat_id, "✅ ذخیره شد.")
+    _show_partner_profile(chat_id, uid)
 
-def _card_validator(val):
-    v = val.replace("-","").replace(" ","")
-    return v if v.isdigit() and len(v)==16 else None
 
-def _iban_validator(val):
-    v = val.upper().replace(" ","")
-    if not v.startswith("IR"): v = "IR" + v
-    return v if len(v)==26 else None
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_name")
+def _ph_name(message):
+    uid=message.from_user.id
+    if _exit_chat_if_needed(message): return
+    val=(message.text or "").strip()
+    if not val: bot.reply_to(message,"نام نمی‌تواند خالی باشد:"); return
+    user_states.pop(uid,None)
+    _pedit_save(uid,message.chat.id,"partners","full_name",val)
 
-_make_pedit_handler("partner_name",     "name",     "partners",         "full_name")
-_make_pedit_handler("partner_shop",     "shop",     "partners",         "shop_name")
-_make_pedit_handler("partner_city",     "city",     "partners",         "city")
-_make_pedit_handler("partner_address",  "address",  "partner_bank_info","address")
-_make_pedit_handler("partner_card",     "card",     "partner_bank_info","card_number", _card_validator)
-_make_pedit_handler("partner_iban",     "iban",     "partner_bank_info","iban",        _iban_validator)
-_make_pedit_handler("partner_bankname", "bankname", "partner_bank_info","full_name")
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_shop")
+def _ph_shop(message):
+    uid=message.from_user.id
+    if _exit_chat_if_needed(message): return
+    val=(message.text or "").strip()
+    user_states.pop(uid,None)
+    _pedit_save(uid,message.chat.id,"partners","shop_name",val)
 
-@bot.callback_query_handler(func=lambda c: c.data == "partner_edit_bank")
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_city")
+def _ph_city(message):
+    uid=message.from_user.id
+    if _exit_chat_if_needed(message): return
+    val=(message.text or "").strip()
+    user_states.pop(uid,None)
+    _pedit_save(uid,message.chat.id,"partners","city",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_address")
+def _ph_address(message):
+    uid=message.from_user.id
+    if _exit_chat_if_needed(message): return
+    val=(message.text or "").strip()
+    user_states.pop(uid,None)
+    _pedit_save(uid,message.chat.id,"partner_bank_info","address",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_card")
+def _ph_card(message):
+    uid=message.from_user.id
+    if _exit_chat_if_needed(message): return
+    val=(message.text or "").replace("-","").replace(" ","").strip()
+    if not (val.isdigit() and len(val)==16):
+        bot.reply_to(message,"شماره کارت باید دقیقاً ۱۶ رقم باشد:"); return
+    user_states.pop(uid,None)
+    _pedit_save(uid,message.chat.id,"partner_bank_info","card_number",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_iban")
+def _ph_iban(message):
+    uid=message.from_user.id
+    if _exit_chat_if_needed(message): return
+    val=((message.text or "").strip().upper().replace(" ",""))
+    if not val.startswith("IR"): val="IR"+val
+    if len(val)!=26:
+        bot.reply_to(message,"شماره شبا باید ۲۴ رقم (بدون IR) باشد:"); return
+    user_states.pop(uid,None)
+    _pedit_save(uid,message.chat.id,"partner_bank_info","iban",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_bankname")
+def _ph_bankname(message):
+    uid=message.from_user.id
+    if _exit_chat_if_needed(message): return
+    val=(message.text or "").strip()
+    user_states.pop(uid,None)
+    _pedit_save(uid,message.chat.id,"partner_bank_info","full_name",val)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
 def cb_partner_ref_link(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
@@ -4243,20 +4279,21 @@ def handle_callbacks(call: types.CallbackQuery):
     data = call.data
     uid = call.from_user.id
 
-    # ─── خروج هوشمند از حالت چت با کلیک روی هر Inline Button ───────────────
-    st = user_states.get(uid, {})
-    mode = st.get("mode")
-    _CHAT_PERSISTENT_MODES = {"ticket_v2"}  # این‌ها با callback مرتبط هستن
-    _IGNORE_EXIT_FOR = {  # callback هایی که خودشون بخشی از flow هستن
-        "partner_ref_link","partner_sub_stats","partner_wallet","partner_support",
-        "partner_guide","partner_back","partner_transfer","partner_payout",
-        "partner_profile","myord_back","partner_full_stats","partner_products",
+    # خروج از حالت‌های انتظار ورودی (نه ticket که handler خودش داره)
+    _INPUT_MODES = {
+        "wallet_charge_amount", "partner_bank_name", "partner_bank_card",
+        "partner_bank_iban", "partner_transfer", "partner_payout",
+        "partner_name", "partner_shop", "partner_city", "partner_address",
+        "partner_card", "partner_iban", "partner_bankname",
     }
-    if mode and mode not in _CHAT_PERSISTENT_MODES and data not in _IGNORE_EXIT_FOR:
-        # کاربر وسط یه flow مرحله‌ای بود و inline button دیگه‌ای زد → reset
-        if not any(data.startswith(p) for p in ("myord_","cat_","back_","confirm_","enter_code_","do_pay_")):
-            clear_user_state(uid)
-    # ──────────────────────────────────────────────────────────────────────────
+    _FLOW_CALLBACKS = {  # callback هایی که بخشی از flow هستن — state رو پاک نکن
+        "partner_payout", "partner_transfer", "partner_wallet", "partner_support",
+        "partner_ref_link", "partner_sub_stats", "partner_profile", "partner_guide",
+        "partner_back", "partner_edit_bank",
+    }
+    st = user_states.get(uid, {})
+    if st.get("mode") in _INPUT_MODES and data not in _FLOW_CALLBACKS and not data.startswith("pedit_"):
+        clear_user_state(uid)
     # --- toggle active/inactive for other_services ---
     if data.startswith("toggle_other_"):
         if not ensure_admin(uid):
