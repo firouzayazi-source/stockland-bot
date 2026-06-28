@@ -712,24 +712,33 @@ def _is_menu_or_system_button(text: str) -> bool:
 
 def _exit_chat_if_needed(message) -> bool:
     """
-    استاندارد سراسری: اگر کاربر وسط چت/تیکت کاری غیر از پیام‌دادن کرد،
-    خودکار از حالت چت خارج شود و پیام در تیکت ثبت نشود.
-    خروجی: True اگر از چت خارج شد (یعنی نباید ادامه داد).
+    استاندارد سراسری: اگر کاربر در هر حالت چندمرحله‌ای
+    کاری غیر از ادامه همان گفتگو انجام داد، خودکار خارج شود.
+    Returns True اگر خارج شد.
     """
     uid = message.from_user.id
     st  = user_states.get(uid, {})
-    if st.get("mode") != "ticket_v2":
-        return False  # اصلاً در حالت چت نیست
+    mode = st.get("mode")
+    if not mode:
+        return False  # اصلاً در هیچ حالت چندمرحله‌ای نیست
 
     txt = message.text or ""
 
-    # حالت ۱: دکمه منو یا دستور → خروج + انتقال به handler مربوطه
+    # دستور یا دکمه منو → خروج از هر حالتی
     if message.content_type == "text" and _is_menu_or_system_button(txt):
         clear_user_state(uid)
-        try:
-            bot.process_new_messages([message])
-        except Exception:
-            pass
+        if mode == "ticket_v2":
+            # تیکت‌ها: پیام رو به handler اصلی منتقل کن
+            try:
+                bot.process_new_messages([message])
+            except Exception:
+                pass
+        else:
+            # بقیه حالت‌ها: فقط State پاک و re-dispatch
+            try:
+                bot.process_new_messages([message])
+            except Exception:
+                pass
         return True
 
     return False
@@ -2916,7 +2925,8 @@ def _show_partner_dashboard(chat_id, uid):
         types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support"),
     )
     kb.add(
-        types.InlineKeyboardButton("📖 راهنمای همکاری در فروش", callback_data="partner_guide"),
+        types.InlineKeyboardButton("👤 پروفایل همکار", callback_data="partner_profile"),
+        types.InlineKeyboardButton("📖 راهنما و قوانین", callback_data="partner_guide"),
     )
 
     # ارسال بنر سطح (اگه تنظیم شده)
@@ -3036,6 +3046,64 @@ def _show_partner_dashboard(chat_id, uid):
         except Exception:
             pass
     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_profile")
+def cb_partner_profile(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    from db import get_partner_bank_info, ensure_partner_bank_schema
+    ensure_partner_bank_schema()
+
+    # اطلاعات همکار از جدول partners
+    import sqlite3 as _sq3
+    from config import DB_PATH as _DBP3
+    partner = None
+    try:
+        _c = _sq3.connect(_DBP3)
+        _c.row_factory = _sq3.Row
+        partner = _c.execute("SELECT * FROM partners WHERE tg_user_id=?;", (uid,)).fetchone()
+        _c.close()
+    except Exception:
+        pass
+
+    bank = get_partner_bank_info(uid)
+
+    lines = ["👤 <b>پروفایل همکار</b>\n"]
+    if partner:
+        lines.append(f"👤 نام: {partner['full_name'] or '—'}")
+        lines.append(f"🏪 فروشگاه: {partner['shop_name'] or '—'}")
+        lines.append(f"🏙 شهر: {partner['city'] or '—'}")
+        lines.append(f"📱 موبایل: {partner['phone'] or '—'}")
+    lines.append("")
+    lines.append("💳 <b>اطلاعات بانکی</b>")
+    if bank:
+        lines.append(f"👤 صاحب حساب: {bank['full_name'] or '—'}")
+        lines.append(f"💳 کارت: <code>{bank['card_number'] or '—'}</code>")
+        lines.append(f"🏦 شبا: <code>{bank['iban'] or '—'}</code>")
+    else:
+        lines.append("ℹ️ اطلاعات بانکی ثبت نشده")
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("✏️ ویرایش اطلاعات بانکی", callback_data="partner_edit_bank"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
+    )
+    try:
+        bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id,
+                              parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        bot.send_message(call.message.chat.id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_edit_bank")
+def cb_partner_edit_bank(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    user_states[uid] = {"mode": "partner_bank_name", "after": "profile"}
+    bot.send_message(call.message.chat.id,
+        "✏️ <b>ویرایش اطلاعات بانکی</b>\n\nنام و نام خانوادگی صاحب حساب را وارد کنید:",
+        parse_mode="HTML")
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
@@ -3280,17 +3348,26 @@ def handle_partner_bank_iban(message):
     st = user_states.pop(uid, {})
     from db import save_partner_bank_info
     save_partner_bank_info(uid, st.get("bank_name",""), st.get("bank_card",""), iban)
+    after = st.get("after", "payout")
     bot.send_message(message.chat.id,
         f"✅ اطلاعات بانکی ذخیره شد:\n"
         f"👤 {st.get('bank_name')}\n"
         f"💳 {st.get('bank_card')}\n"
-        f"🏦 {iban}\n\n"
-        "حالا مبلغ درخواست تسویه را وارد کنید:",
+        f"🏦 {iban}",
         parse_mode="HTML")
-    from db import get_partner_wallet_balance, get_partner_payout_settings
-    bal      = get_partner_wallet_balance(uid)
-    settings = get_partner_payout_settings()
-    user_states[uid] = {"mode": "partner_payout", "bal": bal}
+    if after == "profile":
+        # برگشت به پروفایل
+        from db import get_partner_bank_info
+        bank = get_partner_bank_info(uid)
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+        bot.send_message(message.chat.id, "✅ پروفایل به‌روز شد.", reply_markup=kb)
+    else:
+        # ادامه درخواست تسویه
+        from db import get_partner_wallet_balance, get_partner_payout_settings
+        bal      = get_partner_wallet_balance(uid)
+        settings = get_partner_payout_settings()
+        user_states[uid] = {"mode": "partner_payout", "bal": bal}
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_payout")
@@ -4090,6 +4167,21 @@ def cb_admin_toggle_chat(call: types.CallbackQuery):
 def handle_callbacks(call: types.CallbackQuery):
     data = call.data
     uid = call.from_user.id
+
+    # ─── خروج هوشمند از حالت چت با کلیک روی هر Inline Button ───────────────
+    st = user_states.get(uid, {})
+    mode = st.get("mode")
+    _CHAT_PERSISTENT_MODES = {"ticket_v2"}  # این‌ها با callback مرتبط هستن
+    _IGNORE_EXIT_FOR = {  # callback هایی که خودشون بخشی از flow هستن
+        "partner_ref_link","partner_sub_stats","partner_wallet","partner_support",
+        "partner_guide","partner_back","partner_transfer","partner_payout",
+        "partner_profile","myord_back","partner_full_stats","partner_products",
+    }
+    if mode and mode not in _CHAT_PERSISTENT_MODES and data not in _IGNORE_EXIT_FOR:
+        # کاربر وسط یه flow مرحله‌ای بود و inline button دیگه‌ای زد → reset
+        if not any(data.startswith(p) for p in ("myord_","cat_","back_","confirm_","enter_code_","do_pay_")):
+            clear_user_state(uid)
+    # ──────────────────────────────────────────────────────────────────────────
     # --- toggle active/inactive for other_services ---
     if data.startswith("toggle_other_"):
         if not ensure_admin(uid):

@@ -73,8 +73,27 @@ DEFAULT_UI_TEXTS = {
     "MSG_PAYMENT_BTN":    "ورود به درگاه پرداخت 💳",
 
     # ─── سفارش‌ها ─────────────────────────────────────────────────────────
-    "MSG_NO_ORDERS":     "شما هنوز هیچ خریدی انجام نداده‌اید.",
-    "MSG_ORDERS_HEADER": "📋 آخرین خریدهای شما:",
+    "MSG_NO_ORDERS":            "شما هنوز هیچ خریدی انجام نداده‌اید.",
+    "MSG_ORDERS_HEADER":        "📋 آخرین خریدهای شما:",
+    "MSG_ORDER_CONFIRMED":      "✅ سفارش شما با موفقیت ثبت شد.",
+    "MSG_ORDER_DELIVERED":      "📦 محصول با موفقیت تحویل داده شد.",
+    "MSG_ORDER_SETUP_PENDING":  "⏳ سفارش شما در حال آماده‌سازی است. پشتیبانی به‌زودی با شما در تماس خواهد بود.",
+    "MSG_ORDER_RETURNED":       "↩️ سفارش برگشت داده شد و مبلغ به کیف پول واریز گردید.",
+    "MSG_STOCK_EMPTY":          "متأسفانه موجودی این محصول تمام شده است.",
+
+    # ─── پرداخت و کیف‌پول ────────────────────────────────────────────────
+    "MSG_PAYMENT_SUCCESS":      "✅ پرداخت موفق! سفارش شما ثبت شد.",
+    "MSG_PAYMENT_FAILED":       "❌ پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.",
+    "MSG_PAYMENT_PENDING":      "⏳ در حال بررسی پرداخت...",
+    "MSG_WALLET_CHARGED":       "✅ کیف پول شما شارژ شد.",
+    "MSG_WALLET_MIN_AMOUNT":    "حداقل مبلغ شارژ {min_amount} تومان است.",
+
+    # ─── کد تخفیف ────────────────────────────────────────────────────────
+    "MSG_DISCOUNT_ENTER":           "کد تخفیف خود را وارد کنید:",
+    "MSG_DISCOUNT_INVALID":         "❌ کد تخفیف نامعتبر است.",
+    "MSG_DISCOUNT_APPLIED":         "✅ کد تخفیف اعمال شد.",
+    "MSG_DISCOUNT_EXPIRED":         "❌ کد تخفیف منقضی شده است.",
+    "MSG_DISCOUNT_LIMIT_REACHED":   "❌ سقف استفاده از این کد تخفیف تمام شده است.",
 
     # ─── پشتیبانی و راهنما ────────────────────────────────────────────────
     "SUPPORT_TEXT":
@@ -209,6 +228,20 @@ TEXT_GROUPS = {
     ],
     "پشتیبانی و راهنما": [
         "SUPPORT_TEXT", "HELP_TEXT",
+    ],
+    "کیف‌پول و پرداخت": [
+        "MSG_WALLET_BALANCE", "MSG_WALLET_TOPUP_REQUEST", "MSG_WALLET_AMOUNT_REQUEST",
+        "MSG_WALLET_MIN_AMOUNT", "MSG_PAYMENT_PENDING", "MSG_PAYMENT_SUCCESS",
+        "MSG_PAYMENT_FAILED", "MSG_WALLET_CHARGED",
+    ],
+    "سفارش و خرید": [
+        "MSG_ORDER_SUMMARY", "MSG_ORDER_CONFIRMED", "MSG_ORDER_DELIVERED",
+        "MSG_ORDER_SETUP_PENDING", "MSG_NO_ORDERS", "MSG_ORDER_RETURNED",
+        "MSG_STOCK_EMPTY",
+    ],
+    "کد تخفیف": [
+        "MSG_DISCOUNT_ENTER", "MSG_DISCOUNT_INVALID", "MSG_DISCOUNT_APPLIED",
+        "MSG_DISCOUNT_EXPIRED", "MSG_DISCOUNT_LIMIT_REACHED",
     ],
     "همکاران": [
         "MSG_PARTNER_ALREADY", "MSG_PARTNER_PENDING",
