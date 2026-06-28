@@ -3585,13 +3585,14 @@ def ensure_partner_bank_schema():
                 iban        TEXT DEFAULT '',
                 updated_at  TEXT DEFAULT (datetime('now'))
             );
-            -- migration address
-            try:
-                conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
-            except:
-                pass
         """)
         conn.commit()
+        # migration: ستون آدرس
+        try:
+            conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
+            conn.commit()
+        except Exception:
+            pass
     finally:
         conn.close()
 

@@ -6550,17 +6550,17 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
                 <div class="flex gap-1 flex-wrap items-center">
                   <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},'{color}','{desc}')"
                     class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
-                  <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer" title="آپلود بنر">
-                    {'🖼 تعویض' if photo_id else '📷 آپلود'}
-                    <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
-                          enctype="multipart/form-data" class="hidden" id="bf{tr['id']}">
-                      <input type="file" name="banner_file" accept="image/*"
-                             onchange="document.getElementById('bf{tr['id']}').submit()">
-                    </form>
-                  </label>
-                  {f'<form method="post" action="/admin/partners/tier/{tr["id"]}/delete-banner" class="inline"><button class="px-2 py-1 text-xs bg-red-50 text-red-500 rounded" title="حذف بنر">🗑 بنر</button></form>' if photo_id else ''}
+                  <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
+                        enctype="multipart/form-data" id="bf{tr['id']}" style="display:inline">
+                    <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer border border-amber-200">
+                      {'🖼 تعویض بنر' if photo_id else '📷 آپلود بنر'}
+                      <input type="file" name="banner_file" accept="image/*" style="display:none"
+                             onchange="this.form.submit()">
+                    </label>
+                  </form>
+                  {f'<form method="post" action="/admin/partners/tier/{tr["id"]}/delete-banner" class="inline" onsubmit="return confirm(\'بنر حذف شود؟\')"><button class="px-2 py-1 text-xs bg-red-50 text-red-500 rounded border border-red-200">🗑 بنر</button></form>' if photo_id else ''}
                   <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف سطح؟')">
-                    <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded">حذف</button>
+                    <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded border border-red-200">حذف سطح</button>
                   </form>
                 </div>
               </td>

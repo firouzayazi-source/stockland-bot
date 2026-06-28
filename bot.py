@@ -3381,8 +3381,8 @@ def handle_partner_transfer(message):
 def cb_partner_payout(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    from db import get_partner_payout_settings, get_partner_wallet_balance, get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_wallet_schema
-    ensure_partner_bank_schema(); ensure_partner_wallet_schema()
+    from db import get_partner_payout_settings, get_partner_wallet_balance, get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_wallet_schema, ensure_payout_settings_extended
+    ensure_partner_bank_schema(); ensure_partner_wallet_schema(); ensure_payout_settings_extended()
     settings = get_partner_payout_settings()
     if not settings.get("is_active"):
         bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
