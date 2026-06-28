@@ -3406,44 +3406,45 @@ def handle_partner_transfer(message):
 @bot.callback_query_handler(func=lambda c: c.data == "partner_payout")
 def cb_partner_payout(call):
     uid = call.from_user.id
-    bot.answer_callback_query(call.id)
     from db import get_partner_payout_settings, get_partner_wallet_balance, get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_wallet_schema, ensure_payout_settings_extended
     ensure_partner_bank_schema(); ensure_partner_wallet_schema(); ensure_payout_settings_extended()
     settings = get_partner_payout_settings()
+
     if not settings.get("is_active"):
         bot.answer_callback_query(call.id, t("MSG_PAYOUT_DISABLED"), show_alert=True)
         return
-    bal     = get_partner_wallet_balance(uid)
-    min_a   = int(settings.get("min_amount") or 0)
+
+    bal   = get_partner_wallet_balance(uid)
+    min_a = int(settings.get("min_amount") or 0)
     if min_a and bal < min_a:
         bot.answer_callback_query(call.id,
-            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی: {bal:,} تومان",
+            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی فعلی: {bal:,} تومان",
             show_alert=True)
         return
+
     # اطلاعات بانکی
+    bot.answer_callback_query(call.id)
     bank = get_partner_bank_info(uid)
     if not bank:
-        # بار اول — جمع‌آوری اطلاعات بانکی
         user_states[uid] = {"mode": "partner_bank_name", "after": "payout"}
         bot.send_message(call.message.chat.id,
             "💳 <b>اولین درخواست تسویه</b>\n\n"
             "لطفاً اطلاعات بانکی خود را وارد کنید:\n\n"
-            "نام و نام خانوادگی صاحب حساب را بنویسید:",
+            f"{t('MSG_PAYOUT_BANK_NAME_REQ')}",
             parse_mode="HTML")
     else:
-        # اطلاعات بانکی موجود — مستقیم برو به مبلغ
         max_a  = int(settings.get("max_amount") or 0)
-        max_pm = int(settings.get("max_per_month") or 0)
         user_states[uid] = {"mode": "partner_payout", "bal": bal}
-        bot.send_message(call.message.chat.id,
+        text = (
             f"📤 <b>درخواست تسویه</b>\n\n"
             f"💳 کارت: <code>{bank['card_number']}</code>\n"
             f"👤 {bank['full_name']}\n\n"
             f"موجودی: <b>{bal:,}</b> تومان\n"
-            + (f"حداقل: {min_a:,} ت | " if min_a else "")
-            + (f"حداکثر: {max_a:,} ت\n" if max_a else "\n")
-            + t("MSG_PAYOUT_ENTER_AMOUNT"),
-            parse_mode="HTML")
+            + (f"حداقل: {min_a:,} ت\n" if min_a else "")
+            + (f"حداکثر: {max_a:,} ت\n" if max_a else "")
+            + f"\n{t('MSG_PAYOUT_ENTER_AMOUNT')}"
+        )
+        bot.send_message(call.message.chat.id, text, parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_name")
