@@ -375,17 +375,20 @@ def _layout(title: str, body: str, admin_info=None,
 
     # بارگذاری تم ذخیره‌شده مدیر
     saved_dark = ""
+    saved_classic = ""
     if admin_info:
         try:
             conn = _db()
-            row = conn.execute(
-                "SELECT value FROM admin_preferences WHERE admin_id=? AND key='dark_mode';",
+            rows = conn.execute(
+                "SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');",
                 (str(admin_info[0]),)
-            ).fetchone()
+            ).fetchall()
             conn.close()
-            saved_dark = row[0] if row else ""
+            prefs = {r[0]: r[1] for r in rows}
+            saved_dark = prefs.get("dark_mode", "")
+            saved_classic = prefs.get("classic_mode", "")
         except Exception:
-            saved_dark = ""
+            saved_dark = ""; saved_classic = ""
 
     flash_html = ""
     if flash:
@@ -443,7 +446,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
-            {nav_item("/admin/settings", "settings", "تنظیمات", "settings")}
+            {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
             {nav_item("/admin/logs", "activity", "گزارش فعالیت", "admins")}
@@ -470,7 +473,7 @@ def _layout(title: str, body: str, admin_info=None,
             <kbd>⌘ K</kbd>
           </div>
           <div class="topbar-actions">
-            <a href="/admin/settings" class="icon-button" aria-label="تنظیمات" title="تنظیمات"><i data-lucide="settings-2"></i></a>
+
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
             <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
             <a class="icon-button notification-button" href="/admin/partners?tab=payouts" aria-label="تسویه‌ها"><i data-lucide="banknote"></i><span id="payout-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
@@ -486,7 +489,7 @@ def _layout(title: str, body: str, admin_info=None,
     css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items())
 
     return HTMLResponse(f"""<!DOCTYPE html>
-<html lang="fa" dir="rtl" data-saved-dark="{saved_dark}">
+<html lang="fa" dir="rtl" data-saved-dark="{saved_dark}" data-saved-classic="{saved_classic}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -1053,8 +1056,10 @@ def _layout(title: str, body: str, admin_info=None,
   // بارگذاری تم ذخیره‌شده از سرور
   (function(){{
     var saved = document.documentElement.getAttribute('data-saved-dark');
-    if(saved==='1'){{ localStorage.setItem('sl-dark','1'); localStorage.setItem('sl-classic','0'); }}
-    else if(saved==='0'){{ localStorage.setItem('sl-dark','0'); }}
+    var savedC = document.documentElement.getAttribute('data-saved-classic');
+    if(savedC==='1'){{ localStorage.setItem('sl-classic','1'); localStorage.setItem('sl-dark','0'); }}
+    else if(saved==='1'){{ localStorage.setItem('sl-dark','1'); localStorage.setItem('sl-classic','0'); }}
+    else if(saved==='0'){{ localStorage.setItem('sl-dark','0'); localStorage.setItem('sl-classic','0'); }}
   }})();
   applyMode();
 
@@ -1558,7 +1563,7 @@ def _set_ui(conn, key: str, value: str) -> None:
     )
 
 @router.post("/settings/save-theme")
-async def save_theme_pref(request: Request, dark: str = "0"):
+async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0"):
     adm = _get_admin(request)
     if not adm:
         return JSONResponse({"ok": False})
@@ -1570,18 +1575,17 @@ async def save_theme_pref(request: Request, dark: str = "0"):
                 PRIMARY KEY (admin_id, key)
             );
         """)
-        conn.execute(
-            "INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
-            (str(adm[0]), "dark_mode", "1" if dark == "1" else "0")
-        )
-        conn.commit()
-        conn.close()
+        conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
+                     (str(adm[0]), "dark_mode", "1" if dark == "1" else "0"))
+        conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
+                     (str(adm[0]), "classic_mode", "1" if classic == "1" else "0"))
+        conn.commit(); conn.close()
     except Exception:
         pass
     return JSONResponse({"ok": True})
 
 
-@router.get("/settings", response_class=HTMLResponse)
+@router.get("/settings/panel", response_class=HTMLResponse)
 async def settings_hub(request: Request, flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
@@ -1597,39 +1601,44 @@ async def settings_hub(request: Request, flash: str = ""):
     except Exception:
         saved_dark = "0"
 
+    current_theme = "dark" if saved_dark == "1" else "day"
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-6">⚙️ تنظیمات</h1>
-
     <div class="grid md:grid-cols-2 gap-4">
-
-      <!-- حالت نمایش -->
       <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">🌙 حالت نمایش</h2>
-        <p class="text-sm text-gray-500 mb-4">حالت انتخاب‌شده برای این مدیر ذخیره می‌شود.</p>
-        <div class="flex gap-3">
-          <button onclick="localStorage.setItem('sl-dark','0');localStorage.setItem('sl-classic','0');document.body.classList.remove('sl-dark','dark-mode','sl-classic');fetch('/admin/settings/save-theme?dark=0',{{method:'POST'}});this.closest('.card').querySelector('.theme-status').textContent='☀️ روز'"
-            class="flex-1 py-3 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-sm font-medium hover:bg-amber-100">
-            ☀️ حالت روز
-          </button>
-          <button onclick="localStorage.setItem('sl-dark','1');localStorage.setItem('sl-classic','0');document.body.classList.add('sl-dark','dark-mode');document.body.classList.remove('sl-classic');fetch('/admin/settings/save-theme?dark=1',{{method:'POST'}});this.closest('.card').querySelector('.theme-status').textContent='🌙 شب'"
-            class="flex-1 py-3 bg-indigo-900 text-indigo-100 border border-indigo-700 rounded-xl text-sm font-medium hover:bg-indigo-800">
-            🌙 حالت شب
-          </button>
+        <h2 class="font-bold text-gray-700 mb-3">🌙 حالت نمایش</h2>
+        <p class="text-sm text-gray-500 mb-4">انتخاب شما ذخیره می‌شود و پس از ورود مجدد هم اعمال می‌شود.</p>
+        <div class="flex gap-2 mb-3">
+          <button onclick="setTheme('day')" class="flex-1 py-2.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-sm font-medium hover:bg-amber-100 transition">☀️ روز</button>
+          <button onclick="setTheme('dark')" class="flex-1 py-2.5 bg-gray-800 text-gray-100 border border-gray-600 rounded-lg text-sm font-medium hover:bg-gray-700 transition">🌙 شب</button>
+          <button onclick="setTheme('classic')" class="flex-1 py-2.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-sm font-medium hover:bg-blue-100 transition">💙 کلاسیک</button>
         </div>
-        <p class="text-xs text-gray-400 mt-3">وضعیت فعلی: <span class="theme-status">{'🌙 شب' if saved_dark=='1' else '☀️ روز'}</span></p>
+        <p class="text-xs text-gray-400">فعلی: <span id="cur-theme">{'🌙 شب' if saved_dark=='1' else '☀️ روز'}</span></p>
+        <script>
+        function setTheme(m){{
+          var labels={{'day':'☀️ روز','dark':'🌙 شب','classic':'💙 کلاسیک'}};
+          localStorage.setItem('sl-dark', m==='dark'?'1':'0');
+          localStorage.setItem('sl-classic', m==='classic'?'1':'0');
+          document.body.classList.toggle('sl-dark', m==='dark');
+          document.body.classList.toggle('dark-mode', m==='dark');
+          document.body.classList.toggle('sl-classic', m==='classic');
+          document.getElementById('cur-theme').textContent = labels[m];
+          fetch('/admin/settings/save-theme?dark='+(m==='dark'?'1':'0')+'&classic='+(m==='classic'?'1':'0'), {{method:'POST'}});
+        }}
+        </script>
       </div>
-
-      <!-- مدیریت متن‌ها -->
       <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">📝 مدیریت متن‌ها</h2>
+        <h2 class="font-bold text-gray-700 mb-3">📝 مدیریت متن‌ها</h2>
         <p class="text-sm text-gray-500 mb-4">ویرایش تمام متن‌ها و دکمه‌های ربات از یک محل.</p>
-        <a href="/admin/settings/texts" class="block w-full py-3 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl text-sm font-medium text-center hover:bg-indigo-100">
+        <a href="/admin/settings?group=" class="block w-full py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-sm font-medium text-center hover:bg-indigo-100 transition">
           رفتن به مدیریت متن‌ها ←
         </a>
       </div>
-
     </div>"""
     return _layout("تنظیمات", body, adm, flash=flash)
+
+
+@router.get("/settings", response_class=HTMLResponse)
 async def settings_get(request: Request, group: str = "", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
