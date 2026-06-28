@@ -4,10 +4,8 @@ from datetime import datetime, timedelta
 import random
 import string
 import requests
-import logging
 
 logger = logging.getLogger("inox_bot")
-import requests
 import telebot
 from telebot import types
 from telebot import apihelper
@@ -370,7 +368,6 @@ def _send_delivery_to_user(chat_id: int, order_id: int, pid: int, title: str, ef
 
     # ذخیره دائمی پیام تحویل برای امکان «برگشت» از پنل
     try:
-        import sqlite3 as _sq3
         from datetime import datetime as _dt2
         _c = _sq3.connect(DB_FULL_PATH)
         _c.execute(
@@ -487,7 +484,6 @@ def try_dispatch_pending_for_product(product_id: int, limit: int = 50) -> int:
 # نکته: Order ID با Feed ID فرق دارد. برای جلوگیری از سردرگمی، ارتباط feed_id <-> order_id را هم ذخیره می‌کنیم.
 def _ensure_delivery_table():
     try:
-        import sqlite3
         _conn = sqlite3.connect(DB_FULL_PATH)
         _conn.execute(
             """CREATE TABLE IF NOT EXISTS delivery_messages (
@@ -537,7 +533,6 @@ RAILWAY_PANEL = "https://stockland-bot-production.up.railway.app/admin"
 def _get_product_chat_enabled(product_id: int) -> int:
     """چک chat_enabled برای محصول."""
     try:
-        import sqlite3 as _sq3
         _c = _sq3.connect(DB_FULL_PATH)
         row = _c.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
         _c.close()
@@ -548,7 +543,6 @@ def _get_product_chat_enabled(product_id: int) -> int:
 
 def _set_product_chat_enabled(product_id: int, enabled: int) -> None:
     try:
-        import sqlite3 as _sq3
         _c = _sq3.connect(DB_FULL_PATH)
         _c.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
         _c.commit()
@@ -1236,9 +1230,7 @@ def start_product_payment(
 # ========= PRODUCTS UI =========
 
 
-import sqlite3
 from datetime import datetime
-import html
 
 def finalize_product_order(call, uid, product, category, eff_price, wallet_used=0):
 
@@ -1253,7 +1245,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             call.message.message_id,
             reply_markup=None
         )
-    except:
+    except Exception:
         pass
 
     # ----------------------------
@@ -1432,7 +1424,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                 f"محصول: {title} (#{pid})\n"
                 f"مبلغ: {eff_price:,} تومان"
             )
-        except:
+        except Exception:
             pass
 
 def send_products_menu(chat_id, category, admin_view=False, user_id=None):
@@ -2098,7 +2090,6 @@ def send_admin_categories(chat_id):
 def send_admin_product_detail(call_message, product, edit=False):
     pid = int(product[0])
     try:
-        import sqlite3
         _conn = sqlite3.connect(DB_FULL_PATH)
         _row = _conn.execute(
             'SELECT daily_limit_customer, daily_limit_partner FROM products WHERE id=?',
@@ -2280,7 +2271,6 @@ def admin_feed_panel_menu():
 
 
 def count_feed_items_global(delivered_filter: int | None, category_key: str | None = None):
-    import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
     cur = conn.cursor()
 
@@ -2306,7 +2296,6 @@ def count_feed_items_global(delivered_filter: int | None, category_key: str | No
 
 
 def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset: int = 0, category_key: str | None = None):
-    import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
     cur = conn.cursor()
 
@@ -2338,7 +2327,6 @@ def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset
 
 def get_feed_stats_by_category():
     """Return list of dicts: category, total, delivered, undelivered."""
-    import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
     cur = conn.cursor()
     cur.execute(
@@ -2540,7 +2528,6 @@ def send_admin_feed_panel_list(chat_id: int, page: int = 0, mode: int = 0, messa
         )
 
 def send_admin_feed_panel_view(chat_id: int, feed_id: int, page: int = 0, mode: int = 0, message_id: int | None = None, category_key: str | None = None):
-    import sqlite3
     fid = int(feed_id)
     conn = sqlite3.connect(DB_FULL_PATH)
     row = conn.execute(
@@ -2748,7 +2735,6 @@ def cb_myord_detail(call):
         oid = int(call.data.split("_")[-1])
     except ValueError:
         return
-    import sqlite3 as _sq
     from config import DB_PATH as _DBP
     conn = _sq.connect(_DBP)
     conn.row_factory = _sq.Row
@@ -2778,18 +2764,51 @@ def cb_myord_detail(call):
     date_str = (order["created_at"] or "")[:10]
     feed_data = feed["data"] if feed else None
 
+    # پاک‌سازی جداکننده‌های داخلی (*** و شناسه‌های سیستمی)
+    def _clean_feed(raw: str) -> str:
+        if not raw:
+            return raw
+        # تقسیم بر *** (چندخطی) و نگه‌داشتن فقط بخش اول اگه چندتایی بود
+        parts = [p.strip() for p in raw.split("***") if p.strip()]
+        return parts[0] if parts else raw.strip()
+
     if feed_data:
+        cleaned = _clean_feed(feed_data)
         text = (f"📦 <b>سفارش #{oid}</b>\n\n"
                 f"محصول: {title}\n"
                 f"مبلغ: {price:,} تومان\n"
                 f"تاریخ: {date_str}\n\n"
-                f"━━━━━━━━━━━━━━━\n<code>{feed_data}</code>")
+                f"━━━━━━━━━━━━━━━\n<code>{cleaned}</code>")
     else:
-        text = (f"📦 <b>سفارش #{oid}</b>\n\n"
-                f"محصول: {title}\n"
-                f"مبلغ: {price:,} تومان\n"
-                f"تاریخ: {date_str}\n\n"
-                f"ℹ️ محتوای این سفارش توسط پشتیبانی تحویل داده می‌شود.")
+        # محصول نیاز به راه‌اندازی — تیکت موجود بررسی شود
+        import sqlite3 as _sq2
+        from config import DB_PATH as _DBP2
+        setup_delivered = False
+        try:
+            _c = _sq2.connect(_DBP2)
+            ticket_row = _c.execute(
+                "SELECT status FROM tickets WHERE CAST(user_id AS INTEGER)=? "
+                "AND type='product_setup' ORDER BY id DESC LIMIT 1;",
+                (uid,)
+            ).fetchone()
+            if ticket_row and ticket_row[0] == "closed":
+                setup_delivered = True
+            _c.close()
+        except Exception:
+            pass
+
+        if setup_delivered:
+            text = (f"📦 <b>سفارش #{oid}</b>\n\n"
+                    f"محصول: {title}\n"
+                    f"مبلغ: {price:,} تومان\n"
+                    f"تاریخ: {date_str}\n\n"
+                    f"✅ این سفارش توسط پشتیبانی تحویل داده شده است.")
+        else:
+            text = (f"📦 <b>سفارش #{oid}</b>\n\n"
+                    f"محصول: {title}\n"
+                    f"مبلغ: {price:,} تومان\n"
+                    f"تاریخ: {date_str}\n\n"
+                    f"ℹ️ این سفارش در حال آماده‌سازی توسط پشتیبانی است.")
 
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="myord_back"))
@@ -2880,7 +2899,6 @@ def _show_partner_dashboard(chat_id, uid):
     conn = None
     saving = profit = 0
     try:
-        import sqlite3 as _sq
         from config import DB_PATH as _DBP
         conn = _sq.connect(_DBP)
         # مجموع خریدهای همکاری
@@ -2960,7 +2978,6 @@ def cb_partner_ref_link(call):
 def cb_partner_sub_stats(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    import sqlite3 as _sq
     from config import DB_PATH as _DBP
     total_refs = active_refs = total_orders = total_purchase = total_reward = 0
     try:
@@ -3146,16 +3163,66 @@ def handle_partner_payout(message):
 def cb_partner_guide(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    guide_text = t("PARTNER_GUIDE_TEXT",
-        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
-        "متن راهنما توسط مدیر تنظیم نشده است.\n"
-        "لطفاً با پشتیبانی تماس بگیرید.")
+
+    # بررسی اینکه مدیر متن دستی گذاشته یا داینامیک بسازیم
+    custom_text = t("PARTNER_GUIDE_TEXT", "")
+    if custom_text and "تنظیم نشده" not in custom_text:
+        guide_text = custom_text
+    else:
+        # ساخت راهنمای داینامیک از تنظیمات سیستم
+        from db import (get_partner_tiers, get_partner_commission,
+                        get_partner_payout_settings, get_referral_settings,
+                        ensure_partner_system_schema, ensure_partner_wallet_schema)
+        ensure_partner_system_schema(); ensure_partner_wallet_schema()
+        tiers    = get_partner_tiers()
+        comm     = get_partner_commission()
+        payout   = get_partner_payout_settings()
+        referral = get_referral_settings()
+
+        tier_lines = "\n".join(
+            f"  {tr['icon']} <b>{tr['name']}</b> — از {tr['min_orders']} خرید به بالا"
+            for tr in tiers
+        ) or "  (سطوح تنظیم نشده)"
+
+        comm_pct  = comm.get("percent", 0)
+        min_order = int(comm.get("min_order") or 0)
+        max_pay   = int(comm.get("max_payout") or 0)
+        min_pout  = int(payout.get("min_amount") or 0)
+        max_pout  = int(payout.get("max_amount") or 0)
+        max_pm    = int(payout.get("max_per_month") or 0)
+        ref_rew   = int(referral.get("reward_amount") or 0)
+
+        guide_text = (
+            f"📖 <b>راهنمای همکاری در فروش</b>\n"
+            f"━━━━━━━━━━━━━━━\n\n"
+            f"🛒 <b>نحوه خرید همکاری</b>\n"
+            f"پس از تأیید حساب همکاری، قیمت‌های ویژه همکار برای شما فعال می‌شود. "
+            f"خریدهای شما به‌صورت خودکار در سطح همکاری ثبت می‌شوند.\n\n"
+            f"🏆 <b>سطوح همکاری</b>\n{tier_lines}\n\n"
+            f"💰 <b>سیستم پورسانت معرفی</b>\n"
+            f"به ازای هر خرید موفق زیرمجموعه، <b>{comm_pct}٪</b> پورسانت دریافت می‌کنید."
+            + (f"\n• حداقل مبلغ خرید زیرمجموعه: <b>{min_order:,}</b> تومان" if min_order else "")
+            + (f"\n• سقف پورسانت هر خرید: <b>{max_pay:,}</b> تومان" if max_pay else "") +
+            f"\n\n🔗 <b>شرایط معرفی</b>\n"
+            f"با لینک اختصاصی خود کاربران جدید معرفی کنید. "
+            f"به ازای هر معرفی موفق <b>{ref_rew:,}</b> تومان به کیف‌پول همکاری واریز می‌شود.\n\n"
+            f"💼 <b>انتقال موجودی</b>\n"
+            f"موجودی کیف‌پول همکاری را می‌توانید به کیف‌پول اصلی منتقل کنید "
+            f"تا در خریدهای ربات استفاده شود.\n\n"
+            f"📤 <b>درخواست تسویه</b>\n"
+            + (f"• حداقل مبلغ: <b>{min_pout:,}</b> تومان\n" if min_pout else "")
+            + (f"• حداکثر مبلغ: <b>{max_pout:,}</b> تومان\n" if max_pout else "")
+            + (f"• سقف ماهانه: <b>{max_pm}</b> درخواست\n" if max_pm else "")
+            + f"• درخواست‌ها پس از بررسی تأیید یا رد می‌شوند."
+        )
+
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    bot.edit_message_text(
-        guide_text, call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=kb
-    )
+    try:
+        bot.edit_message_text(guide_text, call.message.chat.id, call.message.message_id,
+                              parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        bot.send_message(call.message.chat.id, guide_text, parse_mode="HTML", reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_support")
@@ -3168,7 +3235,6 @@ def cb_partner_support(call):
     # اگه تیکت همکاری باز داره، ادامه بده
     existing = None
     try:
-        import sqlite3 as _sq
         from config import DB_PATH as _DBP
         _c = _sq.connect(_DBP); _c.row_factory = _sq.Row
         existing = _c.execute(
@@ -3866,7 +3932,6 @@ def handle_callbacks(call: types.CallbackQuery):
             return
         service_key = data.replace("toggle_other_", "")
 
-        import sqlite3
         with sqlite3.connect(DB_PATH) as conn:
             cur = conn.cursor()
             cur.execute("""
@@ -4326,7 +4391,6 @@ def handle_callbacks(call: types.CallbackQuery):
             return
         # toggle delivered flag only (safely)
         try:
-            import sqlite3
             conn = sqlite3.connect(DB_FULL_PATH)
             cur = conn.cursor()
             cur.execute("SELECT delivered FROM product_feed WHERE id=?", (fid,))
@@ -4374,7 +4438,6 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, "فرمت نامعتبر", show_alert=True)
             return
         try:
-            import sqlite3
             conn = sqlite3.connect(DB_FULL_PATH)
             # اگر پیام تحویل برای این محصول ذخیره شده، قبل از حذف آیتم تلاش کن آن پیام را پاک کنی
             _info = _get_delivery_message(int(fid))
@@ -4595,7 +4658,6 @@ def handle_callbacks(call: types.CallbackQuery):
 
         skey = data.replace("admin_other_toggle_", "")
 
-        import sqlite3
         conn = sqlite3.connect(DB_PATH)
         row = conn.execute(
             "SELECT is_active FROM other_services WHERE service_key=?",
@@ -4713,7 +4775,6 @@ def handle_callbacks(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         row = list_feed_items(pid, None, limit=1, offset=0)
         try:
-            import sqlite3
             _conn = sqlite3.connect(DB_FULL_PATH)
             _r = _conn.execute(
                 "SELECT id, data, delivered, created_at FROM product_feed WHERE id=? AND product_id=?;",
@@ -4762,7 +4823,6 @@ def handle_callbacks(call: types.CallbackQuery):
         page = safe_int(_p[5]) or 0
         mode = safe_int(_p[6]) or 0
         try:
-            import sqlite3
             _conn = sqlite3.connect(DB_FULL_PATH)
             _r = _conn.execute("SELECT delivered FROM product_feed WHERE id=? AND product_id=?;", (int(feed_id), int(pid))).fetchone()
             _conn.close()
@@ -5087,7 +5147,6 @@ def handle_callbacks(call: types.CallbackQuery):
         return
         
 # ===== بررسی ادامه خرید بعد از شارژ =====
-        import sqlite3
 
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
