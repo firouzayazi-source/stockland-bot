@@ -3427,3 +3427,133 @@ def get_partner_payouts(user_id: int = None, status: str = "", limit: int = 50) 
         """, params).fetchall()
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── دفتر یادداشت مدیران ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_admin_notes_schema():
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_notes (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                author     TEXT NOT NULL,
+                text       TEXT NOT NULL,
+                status     TEXT DEFAULT 'open',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_note_replies (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_id    INTEGER NOT NULL,
+                author     TEXT NOT NULL,
+                text       TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_admin_notes(status: str = "") -> list:
+    ensure_admin_notes_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = "WHERE n.status=?" if status else ""
+        params = (status,) if status else ()
+        return conn.execute(f"""
+            SELECT n.*,
+                   (SELECT COUNT(*) FROM admin_note_replies r WHERE r.note_id=n.id) AS reply_count
+            FROM admin_notes n {where}
+            ORDER BY n.status='open' DESC, n.updated_at DESC;
+        """, params).fetchall()
+    finally:
+        conn.close()
+
+
+def get_admin_note(note_id: int) -> dict | None:
+    ensure_admin_notes_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        n = conn.execute("SELECT * FROM admin_notes WHERE id=?;", (note_id,)).fetchone()
+        if not n:
+            return None
+        replies = conn.execute(
+            "SELECT * FROM admin_note_replies WHERE note_id=? ORDER BY id;", (note_id,)
+        ).fetchall()
+        return {"note": dict(n), "replies": [dict(r) for r in replies]}
+    finally:
+        conn.close()
+
+
+def create_admin_note(author: str, text: str) -> int:
+    ensure_admin_notes_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute("INSERT INTO admin_notes (author, text) VALUES (?,?);", (author, text))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def add_admin_note_reply(note_id: int, author: str, text: str):
+    ensure_admin_notes_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("INSERT INTO admin_note_replies (note_id,author,text) VALUES (?,?,?);",
+                     (note_id, author, text))
+        conn.execute("UPDATE admin_notes SET updated_at=datetime('now') WHERE id=?;", (note_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def toggle_admin_note_status(note_id: int) -> str:
+    ensure_admin_notes_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute("SELECT status FROM admin_notes WHERE id=?;", (note_id,)).fetchone()
+        new_status = "done" if (cur and cur[0] == "open") else "open"
+        conn.execute("UPDATE admin_notes SET status=?,updated_at=datetime('now') WHERE id=?;",
+                     (new_status, note_id))
+        conn.commit()
+        return new_status
+    finally:
+        conn.close()
+
+
+def delete_admin_note(note_id: int):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM admin_note_replies WHERE note_id=?;", (note_id,))
+        conn.execute("DELETE FROM admin_notes WHERE id=?;", (note_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── ستون‌های اضافی partner_tiers ────────────────────────────────────────────
+
+def ensure_partner_tiers_extended():
+    conn = _get_connection()
+    try:
+        for col, default in [
+            ("commission_percent", "REAL DEFAULT 0"),
+            ("color",             "TEXT DEFAULT '#6B7280'"),
+            ("description",       "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE partner_tiers ADD COLUMN {col} {default};")
+                conn.commit()
+            except Exception:
+                pass
+    finally:
+        conn.close()
