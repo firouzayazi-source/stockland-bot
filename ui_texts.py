@@ -132,6 +132,78 @@ DEFAULT_UI_TEXTS = {
         "متن راهنمای همکاری توسط مدیر تنظیم نشده است.\n"
         "برای اطلاعات بیشتر با پشتیبانی در تماس باشید.",
 
+
+    # ─── دکمه‌های داشبورد همکار ────────────────────────────────────────────
+    "BTN_PARTNER_MY_SELLERS":   "👥 فروشندگان شما",
+    "BTN_PARTNER_PROFILE":      "👤 پروفایل",
+    "BTN_PARTNER_WALLET":       "💰 کیف‌پول همکاری",
+    "BTN_PARTNER_REF_LINK":     "🔗 لینک معرفی من",
+    "BTN_PARTNER_CHAT":         "💬 چت با پشتیبان",
+    "BTN_PARTNER_GUIDE":        "📖 راهنما و قوانین",
+
+    # ─── دکمه‌های کیف‌پول همکاری ─────────────────────────────────────────
+    "BTN_WALLET_TRANSFER":      "🔄 انتقال به کیف‌پول اصلی",
+    "BTN_WALLET_PAYOUT":        "📤 درخواست تسویه",
+
+    # ─── دکمه‌های پروفایل ────────────────────────────────────────────────
+    "BTN_EDIT_NAME":            "✏️ نام",
+    "BTN_EDIT_SHOP":            "✏️ فروشگاه",
+    "BTN_EDIT_CITY":            "✏️ شهر",
+    "BTN_EDIT_ADDRESS":         "✏️ آدرس",
+    "BTN_EDIT_CARD":            "✏️ کارت",
+    "BTN_EDIT_IBAN":            "✏️ شبا",
+    "BTN_EDIT_BANK_NAME":       "✏️ نام صاحب حساب",
+    "BTN_EDIT_BANK_INFO":       "✏️ ویرایش اطلاعات بانکی",
+    "BTN_SHARE_REF_LINK":       "🚀 ارسال لینک به دوستان",
+    "BTN_ORDER_BACK":           "🔙 بازگشت به خریدها",
+    "BTN_CLOSE_TICKET":         "❌ بستن مکالمه",
+
+    # ─── پیام‌های خریدهای من ─────────────────────────────────────────────
+    "MSG_MY_ORDERS_TITLE":
+        "🛒 <b>خریدهای من</b>",
+    "MSG_MY_ORDERS_HINT":
+        "👇 برای مشاهده محصول روی هر سفارش بزنید:",
+    "MSG_ORDER_DETAIL_SETUP":
+        "ℹ️ این سفارش در حال آماده‌سازی توسط پشتیبانی است.",
+    "MSG_ORDER_DETAIL_DONE":
+        "✅ این سفارش توسط پشتیبانی تحویل داده شده است.",
+
+    # ─── پیام‌های تیکت ───────────────────────────────────────────────────
+    "MSG_SUPPORT_OPEN":
+        "💬 <b>پشتیبانی</b>\n\nپیام خود را ارسال کنید. تیم ما در اسرع وقت پاسخ می‌دهد.",
+    "MSG_TICKET_CLOSED":
+        "این مکالمه بسته شده است.",
+    "MSG_TICKET_CLOSING":
+        "✅ مکالمه بسته شد.",
+
+    # ─── پیام‌های تسویه ──────────────────────────────────────────────────
+    "MSG_PAYOUT_REQUEST_TITLE": "📤 <b>درخواست تسویه</b>",
+    "MSG_PAYOUT_SAVED":
+        "✅ درخواست تسویه ثبت شد.\nپس از بررسی، نتیجه اعلام می‌شود.",
+    "MSG_PAYOUT_BANK_NAME_REQ": "نام و نام خانوادگی صاحب حساب را وارد کنید:",
+    "MSG_PAYOUT_CARD_REQ":      "شماره کارت (۱۶ رقم) را وارد کنید:",
+    "MSG_PAYOUT_IBAN_REQ":      "شماره شبا (با یا بدون IR) را وارد کنید:",
+    "MSG_PAYOUT_BANK_SAVED":    "✅ اطلاعات بانکی ذخیره شد.",
+    "MSG_PAYOUT_ENTER_AMOUNT":  "مبلغ درخواستی را وارد کنید:",
+    "MSG_PAYOUT_DISABLED":      "تسویه در حال حاضر غیرفعال است.",
+
+    # ─── پیام‌های انتقال کیف‌پول ─────────────────────────────────────────
+    "MSG_TRANSFER_EMPTY":       "موجودی کیف‌پول همکاری صفر است.",
+    "MSG_TRANSFER_SUCCESS":     "✅ {amount:,} تومان به کیف‌پول اصلی منتقل شد.",
+
+    # ─── پیام‌های داشبورد همکار ──────────────────────────────────────────
+    "MSG_PARTNER_DASHBOARD_TITLE": "🤝 <b>داشبورد همکار</b>",
+    "MSG_PARTNER_TOP_TIER":     "🎉 شما در بالاترین سطح هستید!",
+
+    # ─── پیام‌های پروفایل ────────────────────────────────────────────────
+    "MSG_PROFILE_TITLE":        "👤 <b>پروفایل همکار</b>",
+    "MSG_PROFILE_SAVED":        "✅ ذخیره شد.",
+    "MSG_SELLERS_TITLE":        "📊 <b>آمار زیرمجموعه‌ها</b>",
+
+    # ─── پیام‌های عمومی ──────────────────────────────────────────────────
+    "MSG_INVALID_INPUT":        "❌ مقدار وارد‌شده نامعتبر است. دوباره تلاش کنید:",
+    "MSG_BUY_CANCELLED":        "خرید لغو شد.",
+
     # ─── عناوین UI ────────────────────────────────────────────────────────
     "TXT_MAIN_MENU_TITLE":   "منوی اصلی",
     "TXT_SELECT_CATEGORY":   "لطفاً یکی از دسته‌بندی‌های زیر را انتخاب کنید:",
@@ -229,7 +301,41 @@ TEXT_GROUPS = {
     "پشتیبانی و راهنما": [
         "SUPPORT_TEXT", "HELP_TEXT",
     ],
-    "کیف‌پول و پرداخت": [
+    "دکمه‌های همکار": [
+        "BTN_PARTNER_MY_SELLERS", "BTN_PARTNER_PROFILE", "BTN_PARTNER_WALLET",
+        "BTN_PARTNER_REF_LINK", "BTN_PARTNER_CHAT", "BTN_PARTNER_GUIDE",
+        "BTN_WALLET_TRANSFER", "BTN_WALLET_PAYOUT", "BTN_SHARE_REF_LINK",
+        "BTN_EDIT_BANK_INFO",
+    ],
+    "دکمه‌های پروفایل": [
+        "BTN_EDIT_NAME", "BTN_EDIT_SHOP", "BTN_EDIT_CITY", "BTN_EDIT_ADDRESS",
+        "BTN_EDIT_CARD", "BTN_EDIT_IBAN", "BTN_EDIT_BANK_NAME",
+    ],
+    "دکمه‌های ناوبری": [
+        "TXT_BACK_BTN", "TXT_BACK_MAIN_BTN", "TXT_CANCEL_BTN",
+        "BTN_ORDER_BACK", "BTN_CLOSE_TICKET",
+    ],
+    "پیام‌های همکار": [
+        "MSG_PARTNER_DASHBOARD_TITLE", "MSG_PARTNER_TOP_TIER",
+        "MSG_PROFILE_TITLE", "MSG_PROFILE_SAVED", "MSG_SELLERS_TITLE",
+    ],
+    "پیام‌های تسویه": [
+        "MSG_PAYOUT_REQUEST_TITLE", "MSG_PAYOUT_SAVED", "MSG_PAYOUT_BANK_NAME_REQ",
+        "MSG_PAYOUT_CARD_REQ", "MSG_PAYOUT_IBAN_REQ", "MSG_PAYOUT_BANK_SAVED",
+        "MSG_PAYOUT_ENTER_AMOUNT", "MSG_PAYOUT_DISABLED",
+        "MSG_TRANSFER_EMPTY", "MSG_TRANSFER_SUCCESS",
+    ],
+    "پیام‌های خریدها": [
+        "MSG_MY_ORDERS_TITLE", "MSG_MY_ORDERS_HINT",
+        "MSG_ORDER_DETAIL_SETUP", "MSG_ORDER_DETAIL_DONE",
+    ],
+    "پیام‌های تیکت": [
+        "MSG_SUPPORT_OPEN", "MSG_TICKET_CLOSED", "MSG_TICKET_CLOSING",
+    ],
+    "پیام‌های عمومی": [
+        "MSG_INVALID_INPUT", "MSG_BUY_CANCELLED",
+    ],
+        "کیف‌پول و پرداخت": [
         "MSG_WALLET_BALANCE", "MSG_WALLET_TOPUP_REQUEST", "MSG_WALLET_AMOUNT_REQUEST",
         "MSG_WALLET_MIN_AMOUNT", "MSG_PAYMENT_PENDING", "MSG_PAYMENT_SUCCESS",
         "MSG_PAYMENT_FAILED", "MSG_WALLET_CHARGED",
