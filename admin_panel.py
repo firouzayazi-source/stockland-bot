@@ -6436,6 +6436,8 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <input type="color" name="color" id="tier_color" value="#6B7280" class="w-full h-10 border border-gray-200 rounded-lg px-1"></div>
             <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">توضیح</label>
               <input type="text" name="description" id="tier_desc" placeholder="توضیح این سطح..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">File ID عکس بنر (اختیاری)</label>
+              <input type="text" name="photo_file_id" id="tier_photo" placeholder="Telegram file_id" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
             <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium self-end">ذخیره سطح</button>
           </form>
           <button onclick="resetTierForm()" class="mt-2 text-xs text-gray-400 hover:text-gray-600">+ سطح جدید</button>
@@ -6641,16 +6643,17 @@ async def partner_tier_save(request: Request):
         comm   = float(form.get("commission_percent") or 0)
         color  = str(form.get("color","#6B7280")).strip()
         desc   = str(form.get("description","")).strip()
+        photo  = str(form.get("photo_file_id","")).strip()
         if tid:
             conn.execute("""UPDATE partner_tiers SET name=?,icon=?,min_orders=?,
-                commission_percent=?,color=?,description=? WHERE id=?;""",
-                (name, icon, min_o, comm, color, desc, tid))
+                commission_percent=?,color=?,description=?,photo_file_id=? WHERE id=?;""",
+                (name, icon, min_o, comm, color, desc, photo, tid))
         else:
             mx = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM partner_tiers;").fetchone()[0]
             conn.execute("""INSERT INTO partner_tiers
-                (name,icon,min_orders,commission_percent,color,description,sort_order)
-                VALUES (?,?,?,?,?,?,?);""",
-                (name, icon, min_o, comm, color, desc, mx))
+                (name,icon,min_orders,commission_percent,color,description,photo_file_id,sort_order)
+                VALUES (?,?,?,?,?,?,?,?);""",
+                (name, icon, min_o, comm, color, desc, photo, mx))
         conn.commit()
     finally:
         conn.close()

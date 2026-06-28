@@ -2863,78 +2863,189 @@ def handle_partner_panel(message):
 
 
 def _show_partner_dashboard(chat_id, uid):
-    """داشبورد کامل همکار با سطح، آمار و لینک معرفی."""
+    """داشبورد همکار — طراحی مدرن با آمار کامل."""
+    import sqlite3 as _sq2
     from db import (get_partner_order_count, get_partner_tier_for, get_partner_tiers,
-                    get_referral_stats_for, ensure_partner_system_schema)
+                    get_referral_stats_for, get_partner_wallet_balance,
+                    ensure_partner_system_schema, ensure_partner_wallet_schema)
     ensure_partner_system_schema()
+    ensure_partner_wallet_schema()
 
+    # داده‌های پایه
     order_count = get_partner_order_count(uid)
     tier        = get_partner_tier_for(order_count)
     all_tiers   = get_partner_tiers()
     ref_stats   = get_referral_stats_for(uid)
+    wallet_bal  = get_partner_wallet_balance(uid)
 
-    # سطح بعدی و پیشرفت
+    # نام کاربر
+    try:
+        from config import DB_PATH as _DBP2
+        _c = _sq2.connect(_DBP2)
+        _row = _c.execute("SELECT full_name FROM users WHERE user_id=?;", (uid,)).fetchone()
+        full_name = (_row[0] or "").split()[0] if _row and _row[0] else "همکار"
+        # آمار زیرمجموعه
+        sub_count = _c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (uid,)).fetchone()[0]
+        sub_ids = [r[0] for r in _c.execute("SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)).fetchall()]
+        total_sub_sales = 0
+        if sub_ids:
+            ph = ",".join("?" * len(sub_ids))
+            row = _c.execute(f"SELECT COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({ph});", sub_ids).fetchone()
+            total_sub_sales = int(row[0] or 0)
+        _c.close()
+    except Exception:
+        full_name = "همکار"
+        sub_count = ref_stats['total']
+        total_sub_sales = 0
+
+    # سطح بعدی
     next_tier = None
     for t_ in all_tiers:
         if t_["min_orders"] > order_count:
             next_tier = t_
             break
 
+    # نوار پیشرفت
     if next_tier:
         prev_min = tier.get("min_orders", 0)
-        span     = next_tier["min_orders"] - prev_min
-        done     = order_count - prev_min
-        pct      = int((done / span) * 100) if span > 0 else 0
-        filled   = int(pct / 10)
-        bar      = "▓" * filled + "░" * (10 - filled)
-        next_line = (
-            f"\n📈 پیشرفت تا {next_tier['icon']} {next_tier['name']}:\n"
-            f"<code>{bar}</code> {pct}%\n"
-            f"({next_tier['min_orders'] - order_count} خرید دیگر تا ارتقا)"
+        remaining = next_tier["min_orders"] - order_count
+        span = next_tier["min_orders"] - prev_min
+        pct  = int(((order_count - prev_min) / span) * 100) if span > 0 else 0
+        pct  = max(0, min(100, pct))
+        bars = round(pct / 10)
+        progress_bar = "●" * bars + "○" * (10 - bars)
+        upgrade_line = (
+            f"\n🏆 برای ارتقا به سطح <b>{next_tier['name']}</b>: "
+            f"<b>{remaining}</b> فروش دیگر نیاز دارید\n"
+            f"<code>{progress_bar}</code> {pct}%"
         )
     else:
-        next_line = "\n🎉 شما در بالاترین سطح هستید!"
+        upgrade_line = "\n🏆 <b>شما در بالاترین سطح هستید!</b>"
 
-    # سود و صرفه‌جویی
-    conn = None
-    saving = profit = 0
+    # عکس بنر سطح (اگه در تنظیمات باشه)
+    tier_photo_id = None
     try:
-        from config import DB_PATH as _DBP
-        conn = _sq.connect(_DBP)
-        # مجموع خریدهای همکاری
-        row = conn.execute("""
-            SELECT COALESCE(SUM(price),0) FROM orders
-            WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';
-        """, (uid,)).fetchone()
-        partner_total = int(row[0] or 0) if row else 0
-        profit = partner_total
+        tier_photo_id = tier.get("photo_file_id") or None
     except Exception:
-        partner_total = 0
-    finally:
-        if conn: conn.close()
+        pass
 
+    # ─── متن داشبورد ─────────────────────────────────────────────────
     text = (
-        f"🤝 <b>داشبورد همکار</b>\n"
-        f"━━━━━━━━━━━━━━━\n\n"
-        f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n"
-        f"🛒 خریدهای همکاری: <b>{order_count}</b>\n"
-        f"👥 معرفی‌های موفق: <b>{ref_stats['rewarded']}</b>"
-        f"{next_line}"
+        f"👋 سلام <b>{full_name}</b> عزیز\n"
+        f"سطح همکاری شما: <b>{tier['icon']} {tier['name']}</b>\n"
+        f"{'─' * 22}\n\n"
+        f"<b>📊 آمار شما</b>\n\n"
+        f"👥  فروشندگان شما\n"
+        f"    <b>{sub_count:,}</b> نفر\n\n"
+        f"📈  کل فروش شما\n"
+        f"    <b>{total_sub_sales:,}</b> تومان\n\n"
+        f"💰  پورسانت قابل برداشت\n"
+        f"    <b>{wallet_bal:,}</b> تومان\n"
+        f"{'─' * 22}"
+        f"{upgrade_line}"
     )
 
+    # ─── کیبورد ──────────────────────────────────────────────────────
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("🔗 لینک معرفی من", callback_data="partner_ref_link"),
-        types.InlineKeyboardButton("📊 آمار زیرمجموعه", callback_data="partner_sub_stats")
+        types.InlineKeyboardButton("👥 فروشندگان من", callback_data="partner_sub_stats"),
+        types.InlineKeyboardButton("📊 آمار و گزارش‌ها", callback_data="partner_full_stats"),
     )
     kb.add(
-        types.InlineKeyboardButton("💼 کیف‌پول همکاری", callback_data="partner_wallet"),
-        types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support")
+        types.InlineKeyboardButton("💰 برداشت پورسانت", callback_data="partner_wallet"),
+        types.InlineKeyboardButton("🛒 محصولات", callback_data="partner_products"),
     )
     kb.add(
-        types.InlineKeyboardButton("📖 راهنمای همکاری در فروش", callback_data="partner_guide")
+        types.InlineKeyboardButton("🎁 کد اختصاصی من", callback_data="partner_ref_link"),
+        types.InlineKeyboardButton("ℹ راهنما و قوانین", callback_data="partner_guide"),
     )
+    kb.add(
+        types.InlineKeyboardButton("📞 پشتیبانی", callback_data="partner_support"),
+    )
+
+    # ارسال با یا بدون عکس
+    if tier_photo_id:
+        try:
+            bot.send_photo(chat_id, tier_photo_id, caption=text,
+                           parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception:
+            pass
     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_full_stats")
+def cb_partner_full_stats(call):
+    """آمار کامل فروش همکار."""
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    import sqlite3 as _sq3
+    from db import get_partner_order_count, get_partner_wallet_balance
+    from config import DB_PATH as _DBP3
+    try:
+        conn = _sq3.connect(_DBP3)
+        # خریدهای خود همکار
+        own = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders "
+            "WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
+            (uid,)
+        ).fetchone()
+        own_count = int(own[0] or 0)
+        own_total = int(own[1] or 0)
+        # این ماه
+        this_month = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders "
+            "WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner' "
+            "AND strftime('%Y-%m', created_at)=strftime('%Y-%m','now');",
+            (uid,)
+        ).fetchone()
+        month_count = int(this_month[0] or 0)
+        month_total = int(this_month[1] or 0)
+        conn.close()
+    except Exception:
+        own_count = own_total = month_count = month_total = 0
+
+    wallet_bal = get_partner_wallet_balance(uid)
+
+    text = (
+        f"📊 <b>آمار کامل همکاری</b>\n"
+        f"{'─' * 22}\n\n"
+        f"<b>🛒 خریدهای خودم</b>\n"
+        f"• کل خریدها: <b>{own_count}</b> سفارش\n"
+        f"• مجموع خرید: <b>{own_total:,}</b> تومان\n"
+        f"• این ماه: <b>{month_count}</b> خرید | <b>{month_total:,}</b> ت\n\n"
+        f"<b>💰 کیف‌پول همکاری</b>\n"
+        f"• موجودی: <b>{wallet_bal:,}</b> تومان\n"
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                          parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_products")
+def cb_partner_products(call):
+    """نمایش محصولات به همکار."""
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    # بازگشت به منوی دسته‌بندی‌ها
+    from db import get_root_categories
+    cats = get_root_categories(active_only=True)
+    if not cats:
+        bot.send_message(call.message.chat.id, "محصولی موجود نیست.")
+        return
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for cat in cats:
+        emoji = (cat['emoji'] or '').strip()
+        label = f"{emoji} {cat['name']}".strip() if emoji else cat['name']
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"cat_{cat['id']}"))
+    bot.send_message(call.message.chat.id,
+        "🛒 <b>انتخاب محصول</b>\n\nدسته‌بندی مورد نظر را انتخاب کنید:",
+        parse_mode="HTML", reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
