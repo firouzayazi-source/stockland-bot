@@ -763,7 +763,7 @@ def _ticket_v2_handle_user_message(message) -> None:
     ticket = ticket_get(int(ticket_id))
     if not ticket or ticket["status"] == "closed":
         clear_user_state(uid)
-        bot.send_message(message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
+        bot.send_message(message.chat.id, t("MSG_TICKET_CLOSED"), reply_markup=main_menu(user_id=uid))
         return
 
     # ─── Anti-spam: سقف ۳ پیام واقعی متوالی ────────────────────────────────
@@ -2709,7 +2709,7 @@ def _show_my_orders(chat_id, uid):
         logger.error("my_orders fetch error: %s", ex)
         orders = []
     if not orders:
-        bot.send_message(chat_id, "🛒 هنوز خریدی انجام نداده‌اید.")
+        bot.send_message(chat_id, t("MSG_NO_ORDERS"))
         return
     lines = ["🛒 <b>خریدهای من</b>\n"]
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -2917,16 +2917,16 @@ def _show_partner_dashboard(chat_id, uid):
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
-        types.InlineKeyboardButton("👥 فروشندگان شما", callback_data="partner_sub_stats"),
-        types.InlineKeyboardButton("👤 پروفایل", callback_data="partner_profile"),
+        types.InlineKeyboardButton(t("BTN_PARTNER_MY_SELLERS"), callback_data="partner_sub_stats"),
+        types.InlineKeyboardButton(t("BTN_PARTNER_PROFILE"), callback_data="partner_profile"),
     )
     kb.row(
-        types.InlineKeyboardButton("💰 کیف‌پول همکاری", callback_data="partner_wallet"),
-        types.InlineKeyboardButton("🔗 لینک معرفی من", callback_data="partner_ref_link"),
+        types.InlineKeyboardButton(t("BTN_PARTNER_WALLET"), callback_data="partner_wallet"),
+        types.InlineKeyboardButton(t("BTN_PARTNER_REF_LINK"), callback_data="partner_ref_link"),
     )
     kb.row(
-        types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support"),
-        types.InlineKeyboardButton("📖 راهنما و قوانین", callback_data="partner_guide"),
+        types.InlineKeyboardButton(t("BTN_PARTNER_CHAT"), callback_data="partner_support"),
+        types.InlineKeyboardButton(t("BTN_PARTNER_GUIDE"), callback_data="partner_guide"),
     )
 
     # ارسال بنر سطح (اگه تنظیم شده)
@@ -3086,18 +3086,18 @@ def _show_partner_profile(chat_id, uid, edit_msg=None):
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
-        types.InlineKeyboardButton("✏️ نام", callback_data="pedit_name"),
-        types.InlineKeyboardButton("✏️ فروشگاه", callback_data="pedit_shop"),
+        types.InlineKeyboardButton(t("BTN_EDIT_NAME"), callback_data="pedit_name"),
+        types.InlineKeyboardButton(t("BTN_EDIT_SHOP"), callback_data="pedit_shop"),
     )
     kb.row(
-        types.InlineKeyboardButton("✏️ شهر", callback_data="pedit_city"),
-        types.InlineKeyboardButton("✏️ آدرس", callback_data="pedit_address"),
+        types.InlineKeyboardButton(t("BTN_EDIT_CITY"), callback_data="pedit_city"),
+        types.InlineKeyboardButton(t("BTN_EDIT_ADDRESS"), callback_data="pedit_address"),
     )
     kb.row(
-        types.InlineKeyboardButton("✏️ کارت", callback_data="pedit_card"),
-        types.InlineKeyboardButton("✏️ شبا", callback_data="pedit_iban"),
+        types.InlineKeyboardButton(t("BTN_EDIT_CARD"), callback_data="pedit_card"),
+        types.InlineKeyboardButton(t("BTN_EDIT_IBAN"), callback_data="pedit_iban"),
     )
-    kb.row(types.InlineKeyboardButton("✏️ نام صاحب حساب", callback_data="pedit_bankname"))
+    kb.row(types.InlineKeyboardButton(t("BTN_EDIT_BANK_NAME"), callback_data="pedit_bankname"))
     kb.row(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
 
     if edit_msg:
@@ -3150,7 +3150,7 @@ def _pedit_save(uid, chat_id, table, col, val):
         conn.commit()
     finally:
         conn.close()
-    bot.send_message(chat_id, "✅ ذخیره شد.")
+    bot.send_message(chat_id, t("MSG_PROFILE_SAVED"))
     _show_partner_profile(chat_id, uid)
 
 
@@ -3245,7 +3245,7 @@ def cb_partner_ref_link(call):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
         types.InlineKeyboardButton(
-            "🚀 ارسال لینک به دوستان",
+            t("BTN_SHARE_REF_LINK"),
             url=f"https://t.me/share/url?url={link}&text=با+این+لینک+وارد+شو"
         ),
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back")
@@ -3309,8 +3309,8 @@ def cb_partner_wallet(call):
 
     type_map = {
         "credit": "💚 واریز پورسانت",
-        "transfer_out": "🔄 انتقال به کیف‌پول اصلی",
-        "payout_request": "📤 درخواست تسویه",
+        "transfer_out": t("BTN_WALLET_TRANSFER"),
+        "payout_request": t("BTN_WALLET_PAYOUT"),
         "payout_rejected": "↩️ برگشت تسویه",
     }
     txn_lines = "\n".join(
@@ -3326,8 +3326,8 @@ def cb_partner_wallet(call):
     )
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
-        types.InlineKeyboardButton("🔄 انتقال به کیف‌پول اصلی", callback_data="partner_transfer"),
-        types.InlineKeyboardButton("📤 درخواست تسویه", callback_data="partner_payout"),
+        types.InlineKeyboardButton(t("BTN_WALLET_TRANSFER"), callback_data="partner_transfer"),
+        types.InlineKeyboardButton(t("BTN_WALLET_PAYOUT"), callback_data="partner_payout"),
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
     )
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
@@ -3341,7 +3341,7 @@ def cb_partner_transfer(call):
     from db import get_partner_wallet_balance
     bal = get_partner_wallet_balance(uid)
     if bal <= 0:
-        bot.answer_callback_query(call.id, "موجودی کیف‌پول همکاری صفر است", show_alert=True)
+        bot.answer_callback_query(call.id, t("MSG_TRANSFER_EMPTY"), show_alert=True)
         return
     user_states[uid] = {"mode": "partner_transfer", "max": bal}
     bot.send_message(call.message.chat.id,
@@ -3385,7 +3385,7 @@ def cb_partner_payout(call):
     ensure_partner_bank_schema(); ensure_partner_wallet_schema(); ensure_payout_settings_extended()
     settings = get_partner_payout_settings()
     if not settings.get("is_active"):
-        bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
+        bot.answer_callback_query(call.id, t("MSG_PAYOUT_DISABLED"), show_alert=True)
         return
     bal     = get_partner_wallet_balance(uid)
     min_a   = int(settings.get("min_amount") or 0)
@@ -3416,7 +3416,7 @@ def cb_partner_payout(call):
             f"موجودی: <b>{bal:,}</b> تومان\n"
             + (f"حداقل: {min_a:,} ت | " if min_a else "")
             + (f"حداکثر: {max_a:,} ت\n" if max_a else "\n")
-            + "مبلغ درخواستی را وارد کنید:",
+            + t("MSG_PAYOUT_ENTER_AMOUNT"),
             parse_mode="HTML")
 
 
@@ -3430,7 +3430,7 @@ def handle_partner_bank_name(message):
         return
     st = user_states.get(uid, {})
     user_states[uid] = {**st, "mode": "partner_bank_card", "bank_name": name}
-    bot.send_message(message.chat.id, "شماره کارت (۱۶ رقم) را وارد کنید:")
+    bot.send_message(message.chat.id, t("MSG_PAYOUT_CARD_REQ"))
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_card")
@@ -3443,7 +3443,7 @@ def handle_partner_bank_card(message):
         return
     st = user_states.get(uid, {})
     user_states[uid] = {**st, "mode": "partner_bank_iban", "bank_card": card}
-    bot.send_message(message.chat.id, "شماره شبا (با یا بدون IR) را وارد کنید:")
+    bot.send_message(message.chat.id, t("MSG_PAYOUT_IBAN_REQ"))
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_iban")
@@ -4431,7 +4431,7 @@ def handle_callbacks(call: types.CallbackQuery):
     if data == "cancel_purchase":
         bot.answer_callback_query(call.id)
         clear_user_state(uid)
-        bot.send_message(call.message.chat.id, "خرید لغو شد.",
+        bot.send_message(call.message.chat.id, t("MSG_BUY_CANCELLED"),
                          reply_markup=main_menu(user_id=uid))
         return
 
