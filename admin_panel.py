@@ -196,6 +196,16 @@ def _open_ticket_count() -> int:
         return 0
 
 
+def _pending_payout_count() -> int:
+    try:
+        conn = _db()
+        n = conn.execute("SELECT COUNT(*) FROM partner_payouts WHERE status='pending';").fetchone()[0]
+        conn.close()
+        return int(n or 0)
+    except Exception:
+        return 0
+
+
 def _pending_partner_count() -> int:
     try:
         conn = _db()
@@ -363,6 +373,20 @@ def _layout(title: str, body: str, admin_info=None,
 
     theme = _get_theme()
 
+    # بارگذاری تم ذخیره‌شده مدیر
+    saved_dark = ""
+    if admin_info:
+        try:
+            conn = _db()
+            row = conn.execute(
+                "SELECT value FROM admin_preferences WHERE admin_id=? AND key='dark_mode';",
+                (str(admin_info[0]),)
+            ).fetchone()
+            conn.close()
+            saved_dark = row[0] if row else ""
+        except Exception:
+            saved_dark = ""
+
     flash_html = ""
     if flash:
         icon = "circle-check" if flash_ok else "circle-alert"
@@ -446,10 +470,10 @@ def _layout(title: str, body: str, admin_info=None,
             <kbd>⌘ K</kbd>
           </div>
           <div class="topbar-actions">
-            <button id="classicToggle" class="icon-button" aria-label="حالت کلاسیک" onclick="toggleClassic()" title="حالت کلاسیک / تیره"><i data-lucide="sun"></i></button>
-            <button id="darkToggle" class="icon-button" aria-label="حالت شب" onclick="toggleDark()" title="حالت شب"><i data-lucide="moon"></i></button>
+            <a href="/admin/settings" class="icon-button" aria-label="تنظیمات" title="تنظیمات"><i data-lucide="settings-2"></i></a>
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
             <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
+            <a class="icon-button notification-button" href="/admin/partners?tab=payouts" aria-label="تسویه‌ها"><i data-lucide="banknote"></i><span id="payout-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
             <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
             <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
               <span class="profile-avatar"><i data-lucide="user-round"></i></span>
@@ -462,7 +486,7 @@ def _layout(title: str, body: str, admin_info=None,
     css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items())
 
     return HTMLResponse(f"""<!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-saved-dark="{saved_dark}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -1024,7 +1048,14 @@ def _layout(title: str, body: str, admin_info=None,
     localStorage.setItem('sl-dark', on?'0':'1');
     if(!on) localStorage.setItem('sl-classic','0');
     applyMode(); renderIcons();
+    fetch('/admin/settings/save-theme?dark='+(on?'0':'1'),{{method:'POST'}}).catch(function(){{}});
   }};
+  // بارگذاری تم ذخیره‌شده از سرور
+  (function(){{
+    var saved = document.documentElement.getAttribute('data-saved-dark');
+    if(saved==='1'){{ localStorage.setItem('sl-dark','1'); localStorage.setItem('sl-classic','0'); }}
+    else if(saved==='0'){{ localStorage.setItem('sl-dark','0'); }}
+  }})();
   applyMode();
 
   var search=document.getElementById('globalSearch');
@@ -1066,6 +1097,7 @@ def _layout(title: str, body: str, admin_info=None,
       updateBadge('ticket-badge-top', d.tickets||0);
       updateBadge('partner-badge-top', d.partners||0);
       updateBadge('notes-badge-top', d.notes||0);
+      updateBadge('payout-badge-top', d.payouts||0);
     }).catch(function(){});
   }, 12000);
   """}
@@ -1525,7 +1557,79 @@ def _set_ui(conn, key: str, value: str) -> None:
         (key, value, now),
     )
 
+@router.post("/settings/save-theme")
+async def save_theme_pref(request: Request, dark: str = "0"):
+    adm = _get_admin(request)
+    if not adm:
+        return JSONResponse({"ok": False})
+    try:
+        conn = _db()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_preferences (
+                admin_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT,
+                PRIMARY KEY (admin_id, key)
+            );
+        """)
+        conn.execute(
+            "INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
+            (str(adm[0]), "dark_mode", "1" if dark == "1" else "0")
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    return JSONResponse({"ok": True})
+
+
 @router.get("/settings", response_class=HTMLResponse)
+async def settings_hub(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+
+    # تم فعلی
+    saved_dark = ""
+    try:
+        conn = _db()
+        row = conn.execute("SELECT value FROM admin_preferences WHERE admin_id=? AND key='dark_mode';", (str(adm[0]),)).fetchone()
+        conn.close()
+        saved_dark = row[0] if row else "0"
+    except Exception:
+        saved_dark = "0"
+
+    body = f"""
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">⚙️ تنظیمات</h1>
+
+    <div class="grid md:grid-cols-2 gap-4">
+
+      <!-- حالت نمایش -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">🌙 حالت نمایش</h2>
+        <p class="text-sm text-gray-500 mb-4">حالت انتخاب‌شده برای این مدیر ذخیره می‌شود.</p>
+        <div class="flex gap-3">
+          <button onclick="localStorage.setItem('sl-dark','0');localStorage.setItem('sl-classic','0');document.body.classList.remove('sl-dark','dark-mode','sl-classic');fetch('/admin/settings/save-theme?dark=0',{{method:'POST'}});this.closest('.card').querySelector('.theme-status').textContent='☀️ روز'"
+            class="flex-1 py-3 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-sm font-medium hover:bg-amber-100">
+            ☀️ حالت روز
+          </button>
+          <button onclick="localStorage.setItem('sl-dark','1');localStorage.setItem('sl-classic','0');document.body.classList.add('sl-dark','dark-mode');document.body.classList.remove('sl-classic');fetch('/admin/settings/save-theme?dark=1',{{method:'POST'}});this.closest('.card').querySelector('.theme-status').textContent='🌙 شب'"
+            class="flex-1 py-3 bg-indigo-900 text-indigo-100 border border-indigo-700 rounded-xl text-sm font-medium hover:bg-indigo-800">
+            🌙 حالت شب
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mt-3">وضعیت فعلی: <span class="theme-status">{'🌙 شب' if saved_dark=='1' else '☀️ روز'}</span></p>
+      </div>
+
+      <!-- مدیریت متن‌ها -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">📝 مدیریت متن‌ها</h2>
+        <p class="text-sm text-gray-500 mb-4">ویرایش تمام متن‌ها و دکمه‌های ربات از یک محل.</p>
+        <a href="/admin/settings/texts" class="block w-full py-3 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl text-sm font-medium text-center hover:bg-indigo-100">
+          رفتن به مدیریت متن‌ها ←
+        </a>
+      </div>
+
+    </div>"""
+    return _layout("تنظیمات", body, adm, flash=flash)
 async def settings_get(request: Request, group: str = "", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
@@ -5776,10 +5880,15 @@ async def badges_json(request: Request):
         conn.close()
     except Exception:
         open_notes = 0
+    try:
+        pending_payouts = _pending_payout_count()
+    except Exception:
+        pending_payouts = 0
     return JSONResponse({
         "tickets": _open_ticket_count(),
         "partners": _pending_partner_count(),
         "notes": int(open_notes),
+        "payouts": pending_payouts,
     })
 
 
@@ -6646,7 +6755,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <td class="px-4 py-3 font-bold text-green-600">{int(p['amount']):,} ت</td>
               <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
               <td class="px-4 py-3 text-xs text-gray-400">{(p['created_at'] or '')[:10]}</td>
-              <td class="px-4 py-3">{acts}</td>
+              <td class="px-4 py-3">{acts}<a href="/admin/partners/payout/{p['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded mr-1">جزئیات</a></td>
             </tr>"""
 
         content = f"""{pstats}
@@ -6744,6 +6853,165 @@ async def partner_payout_settings_save(request: Request):
     })
     _log(request, "تنظیمات تسویه", "همکاران", "updated")
     return _redir("/admin/partners?tab=settings&flash=تنظیمات+تسویه+ذخیره+شد")
+
+
+@router.get("/partners/payout/{pid}", response_class=HTMLResponse)
+async def partner_payout_detail(request: Request, pid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+
+    from db import (ensure_partner_wallet_schema, ensure_partner_bank_schema,
+                    get_partner_bank_info, get_partner_wallet_balance,
+                    get_partner_payouts, ensure_partner_tiers_extended,
+                    get_partner_tier_for, get_partner_order_count)
+    ensure_partner_wallet_schema(); ensure_partner_bank_schema(); ensure_partner_tiers_extended()
+
+    conn = _db()
+    import sqlite3 as _sq3; conn.row_factory = _sq3.Row
+    try:
+        pay = conn.execute("""
+            SELECT p.*, u.full_name as u_name, u.username, u.first_seen, pr.phone, pr.shop_name, pr.city
+            FROM partner_payouts p
+            LEFT JOIN users u ON u.user_id=p.user_id
+            LEFT JOIN partners pr ON pr.tg_user_id=p.user_id
+            WHERE p.id=?;
+        """, (pid,)).fetchone()
+        if not pay:
+            return _redir("/admin/partners?tab=payouts&flash=درخواست+یافت+نشد")
+
+        uid = pay["user_id"]
+        # تاریخچه تسویه‌ها
+        prev_payouts = conn.execute("""
+            SELECT COUNT(*) as cnt, COALESCE(SUM(amount),0) as total
+            FROM partner_payouts WHERE user_id=? AND status='approved';
+        """, (uid,)).fetchone()
+        last_payout = conn.execute("""
+            SELECT created_at, amount FROM partner_payouts
+            WHERE user_id=? AND status='approved' ORDER BY id DESC LIMIT 1;
+        """, (uid,)).fetchone()
+        # مجموع پورسانت
+        total_commission = conn.execute(
+            "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE referrer_id=? AND rewarded=1;",
+            (uid,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    bank   = get_partner_bank_info(uid) or {}
+    bal    = get_partner_wallet_balance(uid)
+    order_cnt = get_partner_order_count(uid)
+    tier   = get_partner_tier_for(order_cnt)
+
+    sc = {"pending":"amber","approved":"green","rejected":"red"}.get(pay["status"],"gray")
+    sl = {"pending":"در انتظار","approved":"تأیید شد","rejected":"رد شد"}.get(pay["status"], pay["status"])
+
+    action_btns = ""
+    if pay["status"] == "pending":
+        action_btns = f"""
+        <div class="card p-6">
+          <h2 class="font-bold text-gray-700 mb-4">⚡ عملیات</h2>
+          <div class="flex gap-3 flex-wrap">
+            <form method="post" action="/admin/partners/payout/{pid}/approve">
+              <button class="px-6 py-2.5 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700">
+                ✅ تأیید و پرداخت
+              </button>
+            </form>
+            <button onclick="document.getElementById('reject-form').classList.toggle('hidden')"
+              class="px-6 py-2.5 bg-red-50 text-red-600 border border-red-200 rounded-xl text-sm font-bold hover:bg-red-100">
+              ❌ رد درخواست
+            </button>
+          </div>
+          <form method="post" action="/admin/partners/payout/{pid}/reject" id="reject-form" class="hidden mt-4">
+            <label class="text-sm font-medium text-gray-700 block mb-2">دلیل رد (نمایش به همکار):</label>
+            {_textarea("note","توضیح اختیاری...",rows=3)}
+            <div class="mt-3">
+              <button type="submit" class="px-5 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">
+                ثبت رد درخواست
+              </button>
+            </div>
+          </form>
+        </div>"""
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← تسویه‌ها", "/admin/partners?tab=payouts", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">درخواست تسویه #{pid}</h1>
+      <span class="px-3 py-1 text-sm bg-{sc}-100 text-{sc}-700 rounded-full font-medium">{sl}</span>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-4 mb-4">
+      <div class="card p-5 text-center border-t-4 border-green-400">
+        <div class="text-2xl font-bold text-green-600">{int(pay['amount']):,}</div>
+        <div class="text-xs text-gray-400 mt-1">مبلغ درخواست (تومان)</div>
+      </div>
+      <div class="card p-5 text-center border-t-4 border-blue-400">
+        <div class="text-2xl font-bold text-blue-600">{bal:,}</div>
+        <div class="text-xs text-gray-400 mt-1">موجودی کیف‌پول (تومان)</div>
+      </div>
+      <div class="card p-5 text-center border-t-4 border-purple-400">
+        <div class="text-2xl font-bold text-purple-600">{int(total_commission or 0):,}</div>
+        <div class="text-xs text-gray-400 mt-1">مجموع پورسانت دریافتی</div>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-4">
+      <!-- اطلاعات همکار -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">👤 اطلاعات همکار</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-gray-400">نام</span><span class="font-medium">{e(pay['u_name'] or '—')}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">فروشگاه</span><span>{e(pay['shop_name'] or '—')}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">شهر</span><span>{e(pay['city'] or '—')}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">موبایل</span><span>{e(pay['phone'] or '—')}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(pay['first_seen'] or '')[:10]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">سطح</span><span>{tier['icon']} {tier['name']}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-1.5 rounded">{uid}</code></div>
+        </div>
+        <div class="mt-3">
+          <a href="/admin/users/{uid}" class="text-xs text-indigo-600 hover:underline">مشاهده پروفایل کامل ↗</a>
+        </div>
+      </div>
+
+      <!-- اطلاعات بانکی -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">💳 اطلاعات بانکی</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-gray-400">صاحب حساب</span><span class="font-medium">{e(bank.get('full_name','—'))}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">شماره کارت</span><code class="text-xs bg-gray-100 px-2 py-0.5 rounded">{e(bank.get('card_number','—'))}</code></div>
+          <div class="flex justify-between"><span class="text-gray-400">شماره شبا</span><code class="text-xs bg-gray-100 px-2 py-0.5 rounded">{e(bank.get('iban','—'))}</code></div>
+        </div>
+        <div class="mt-4 p-3 bg-amber-50 rounded-lg text-xs text-amber-700">
+          ⚠️ قبل از تأیید، اطلاعات بانکی را تأیید کنید
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-6 mb-4">
+      <h2 class="font-bold text-gray-700 mb-4">📊 تاریخچه مالی</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <div class="text-center p-3 bg-gray-50 rounded-lg">
+          <div class="font-bold text-gray-700">{int(prev_payouts['cnt'] or 0)}</div>
+          <div class="text-xs text-gray-400">تسویه‌های موفق</div>
+        </div>
+        <div class="text-center p-3 bg-gray-50 rounded-lg">
+          <div class="font-bold text-gray-700">{int(prev_payouts['total'] or 0):,}</div>
+          <div class="text-xs text-gray-400">مجموع تسویه (ت)</div>
+        </div>
+        <div class="text-center p-3 bg-gray-50 rounded-lg">
+          <div class="font-bold text-gray-700">{(last_payout['created_at'] or '—')[:10] if last_payout else '—'}</div>
+          <div class="text-xs text-gray-400">آخرین تسویه</div>
+        </div>
+        <div class="text-center p-3 bg-gray-50 rounded-lg">
+          <div class="font-bold text-gray-700">{order_cnt}</div>
+          <div class="text-xs text-gray-400">تعداد خرید همکاری</div>
+        </div>
+      </div>
+    </div>
+
+    {action_btns}"""
+
+    return _layout(f"تسویه #{pid}", body, adm, flash=flash)
 
 
 @router.post("/partners/payout/{pid}/approve")
