@@ -449,6 +449,7 @@ def _layout(title: str, body: str, admin_info=None,
             <button id="darkToggle" class="icon-button" aria-label="حالت شب" onclick="toggleDark()" title="حالت شب"><i data-lucide="moon"></i></button>
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
             <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
+            <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
             <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
               <span class="profile-avatar"><i data-lucide="user-round"></i></span>
               <span class="profile-copy"><strong>{admin_label}</strong><small>مدیریت فروشگاه</small></span>
@@ -1063,6 +1064,7 @@ def _layout(title: str, body: str, admin_info=None,
     fetch('/admin/badges.json').then(function(r){return r.json();}).then(function(d){
       updateBadge('ticket-badge-top', d.tickets||0);
       updateBadge('partner-badge-top', d.partners||0);
+      updateBadge('notes-badge-top', d.notes||0);
     }).catch(function(){});
   }, 12000);
   """}
@@ -3471,14 +3473,29 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
         conn.close()
 
     pages = max((total+PAGE-1)//PAGE, 1)
+    # پیدا کردن تکراری‌ها برای نمایش برچسب
+    conn2 = _db()
+    try:
+        dup_data = set(
+            row[0] for row in conn2.execute("""
+                SELECT data FROM product_feed WHERE product_id=? AND delivered=0
+                GROUP BY data HAVING COUNT(*)>1;
+            """, (pid,)).fetchall()
+        )
+    except Exception:
+        dup_data = set()
+    finally:
+        conn2.close()
+
     items_html = ""
     for item in items:
         preview = str(item["data"] or "").splitlines()[0][:80] if item["data"] else "---"
         badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">تحویل‌شده</span>' if item["delivered"] else '<span class="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">موجود</span>'
+        dup_badge = ' <span class="px-1.5 py-0.5 text-xs bg-red-100 text-red-600 rounded-full font-bold">تکراری</span>' if (not item["delivered"] and item["data"] in dup_data) else ""
         items_html += f"""
         <tr class="border-b hover:bg-gray-50 text-sm">
           <td class="px-4 py-2 text-gray-400 font-mono">#{item["id"]}</td>
-          <td class="px-4 py-2 font-mono text-xs truncate max-w-xs">{e(preview)}</td>
+          <td class="px-4 py-2 font-mono text-xs truncate max-w-xs">{e(preview)}{dup_badge}</td>
           <td class="px-4 py-2">{badge}</td>
           <td class="px-4 py-2 text-gray-400 text-xs">{(item["created_at"] or "")[:10]}</td>
           <td class="px-4 py-2 flex gap-1">
@@ -3509,8 +3526,27 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
     <div class="card p-6 mb-6">
       <h2 class="font-bold text-gray-700 mb-4">➕ افزودن موجودی</h2>
 
+      <!-- اطلاعات حسابداری (مشترک) -->
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+        <h3 class="text-sm font-semibold text-amber-800 mb-3">📊 اطلاعات حسابداری (اختیاری)</h3>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div><label class="text-xs text-gray-600 block mb-1">قیمت خرید هر واحد (ت)</label>
+            <input type="number" id="acc_purchase" name="purchase_price" value="0"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+          <div><label class="text-xs text-gray-600 block mb-1">هزینه‌های جانبی (ت)</label>
+            <input type="number" id="acc_side" name="side_cost" value="0"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+          <div><label class="text-xs text-gray-600 block mb-1">یادداشت</label>
+            <input type="text" id="acc_notes" name="batch_notes" placeholder="مثلاً: خرید دوره‌ای"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+        </div>
+      </div>
+
       <!-- افزودن متنی -->
       <form method="post" action="/admin/feed/{pid}/upload" class="mb-4">
+        <input type="hidden" name="purchase_price" id="txt_pp" value="0">
+        <input type="hidden" name="side_cost" id="txt_sc" value="0">
+        <input type="hidden" name="batch_notes" id="txt_bn" value="">
         <div class="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg mb-3">
           هر خط = یک آیتم | برای چندخطی: <code class="bg-gray-200 px-1 rounded">***</code> بین آیتم‌ها
         </div>
@@ -3520,6 +3556,9 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
 
       <!-- آپلود فایل -->
       <form method="post" action="/admin/feed/{pid}/bulk-upload" enctype="multipart/form-data">
+        <input type="hidden" name="purchase_price" id="file_pp" value="0">
+        <input type="hidden" name="side_cost" id="file_sc" value="0">
+        <input type="hidden" name="batch_notes" id="file_bn" value="">
         <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center">
           <div class="text-3xl mb-2">📁</div>
           <div class="text-sm font-semibold text-gray-700 mb-1">آپلود فایل (CSV / TXT)</div>
@@ -3532,6 +3571,20 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
           </button>
         </div>
       </form>
+      <script>
+      // sync accounting fields to hidden inputs
+      function syncAcc(){{
+        var pp=document.getElementById('acc_purchase').value;
+        var sc=document.getElementById('acc_side').value;
+        var bn=document.getElementById('acc_notes').value;
+        ['txt_pp','file_pp'].forEach(id=>document.getElementById(id).value=pp);
+        ['txt_sc','file_sc'].forEach(id=>document.getElementById(id).value=sc);
+        ['txt_bn','file_bn'].forEach(id=>document.getElementById(id).value=bn);
+      }}
+      document.getElementById('acc_purchase').addEventListener('input',syncAcc);
+      document.getElementById('acc_side').addEventListener('input',syncAcc);
+      document.getElementById('acc_notes').addEventListener('input',syncAcc);
+      </script>
     </div>
 
     <div class="card overflow-hidden">
@@ -3564,7 +3617,8 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
     return _layout(f"موجودی #{pid}", body, adm, flash=flash)
 
 @router.post("/feed/{pid}/upload")
-async def feed_upload(request: Request, pid: int, items: str=Form("")):
+async def feed_upload(request: Request, pid: int, items: str=Form(""),
+                      purchase_price: int=Form(0), side_cost: int=Form(0), batch_notes: str=Form("")):
     adm = _get_admin(request)
     guard = _require(adm, "feed")
     if guard: return guard
@@ -3582,13 +3636,38 @@ async def feed_upload(request: Request, pid: int, items: str=Form("")):
     now = datetime.utcnow().isoformat()
     conn = _db()
     try:
+        # ثبت batch حسابداری اگه قیمت خرید داده شده
+        batch_id = None
+        if purchase_price > 0:
+            from db import create_feed_batch, link_batch_to_feed, ensure_feed_batch_schema
+            ensure_feed_batch_schema()
+            batch_id = create_feed_batch(pid, purchase_price, side_cost, len(blocks), batch_notes)
+
         conn.executemany("INSERT INTO product_feed (product_id,data,delivered,created_at) VALUES (?,?,0,?);",
                          [(pid, b, now) for b in blocks])
         conn.execute("INSERT INTO feed_alert_settings (product_id,threshold,last_notified_remaining,updated_at) VALUES (?,5,NULL,?) "
                      "ON CONFLICT(product_id) DO UPDATE SET last_notified_remaining=NULL, updated_at=excluded.updated_at;", (pid, now))
         conn.commit()
+
+        if batch_id:
+            from db import link_batch_to_feed
+            link_batch_to_feed(pid, batch_id, 0, len(blocks))
     finally:
         conn.close()
+
+    # بررسی تکراری
+    from db import add_feed_items as _check_dup
+    dup_count = 0
+    # (تکراری‌ها قبلاً ثبت شدن، فقط شمارش)
+    conn2 = _db()
+    try:
+        dup_count = sum(1 for b in blocks if conn2.execute(
+            "SELECT COUNT(*) FROM product_feed WHERE product_id=? AND data=? AND delivered=0;", (pid, b)
+        ).fetchone()[0] > 1)
+    except Exception:
+        pass
+    finally:
+        conn2.close()
 
     dispatched = 0
     try:
@@ -3598,8 +3677,11 @@ async def feed_upload(request: Request, pid: int, items: str=Form("")):
         pass
 
     msg = f"{len(blocks)}+آیتم+اضافه+شد"
-    if dispatched > 0:
+    if dup_count:
+        msg += f"+({dup_count}+تکراری)"
+    if dispatched:
         msg += f"+و+{dispatched}+سفارش+معلق+تحویل+داده+شد"
+    _log(request, f"افزودن {len(blocks)} آیتم به موجودی", "موجودی", f"product:{pid}")
     return _redir(f"/admin/feed/{pid}?flash={msg}")
 
 @router.post("/feed/{pid}/bulk-upload")
@@ -5682,14 +5764,21 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
 
 @router.get("/badges.json")
 async def badges_json(request: Request):
-    """شمارنده‌های real-time برای navbar (تیکت + همکار)."""
+    """شمارنده‌های real-time برای navbar."""
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     if not adm:
-        return JSONResponse({"tickets": 0, "partners": 0}, status_code=401)
+        return JSONResponse({"tickets": 0, "partners": 0, "notes": 0}, status_code=401)
+    try:
+        conn = _db()
+        open_notes = conn.execute("SELECT COUNT(*) FROM admin_notes WHERE status='open';").fetchone()[0]
+        conn.close()
+    except Exception:
+        open_notes = 0
     return JSONResponse({
         "tickets": _open_ticket_count(),
         "partners": _pending_partner_count(),
+        "notes": int(open_notes),
     })
 
 
@@ -6178,7 +6267,7 @@ async def admin_note_new_post(request: Request):
     if not text:
         return _redir("/admin/notes/new")
     from db import create_admin_note
-    author = adm.get("username") or adm.get("name") or "مدیر"
+    author = (adm[0] if adm else "مدیر")
     create_admin_note(author, text)
     _log(request, "ثبت یادداشت", "یادداشت‌ها", text[:40])
     return _redir("/admin/notes?flash=یادداشت+ثبت+شد")
@@ -6248,7 +6337,7 @@ async def admin_note_reply(request: Request, nid: int):
     text = str(form.get("text","")).strip()
     if text:
         from db import add_admin_note_reply
-        author = adm.get("username") or adm.get("name") or "مدیر"
+        author = (adm[0] if adm else "مدیر")
         add_admin_note_reply(nid, author, text)
     return _redir(f"/admin/notes/{nid}?flash=پاسخ+ثبت+شد")
 

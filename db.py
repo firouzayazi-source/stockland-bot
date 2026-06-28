@@ -808,26 +808,36 @@ def update_zarinpal_status(authority: str, new_status: str, expected_current: st
 
 def add_feed_items(product_id: int, items):
     """
-    چند آیتم (مثلا اپل آیدی) را برای یک محصول ثبت می‌کند.
-    هر خط یک آیتم است.
+    چند آیتم را برای یک محصول ثبت می‌کند.
+    تکراری‌ها ثبت می‌شوند اما flagged می‌شوند.
+    Returns: {"added": int, "duplicates": list}
     """
     if not items:
-        return 0
+        return {"added": 0, "duplicates": []}
 
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
-    cur = conn.cursor()
-    rows = [(product_id, item, 0, now) for item in items]
-    cur.executemany(
-        """
-        INSERT INTO product_feed (product_id, data, delivered, created_at)
-        VALUES (?, ?, ?, ?);
-        """,
-        rows,
-    )
-    conn.commit()
-    conn.close()
-    return len(rows)
+    try:
+        # پیدا کردن تکراری‌ها
+        duplicates = []
+        for item in items:
+            existing = conn.execute(
+                "SELECT id FROM product_feed WHERE product_id=? AND data=? AND delivered=0 LIMIT 1;",
+                (product_id, item)
+            ).fetchone()
+            if existing:
+                duplicates.append(item)
+
+        # ثبت همه (اعم از تکراری)
+        rows = [(product_id, item, 0, now) for item in items]
+        conn.executemany(
+            "INSERT INTO product_feed (product_id, data, delivered, created_at) VALUES (?, ?, ?, ?);",
+            rows,
+        )
+        conn.commit()
+        return {"added": len(rows), "duplicates": duplicates}
+    finally:
+        conn.close()
 
 
 def get_feed_stats(product_id: int):
@@ -3556,5 +3566,161 @@ def ensure_partner_tiers_extended():
                 conn.commit()
             except Exception:
                 pass
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── اطلاعات بانکی همکار ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_partner_bank_schema():
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS partner_bank_info (
+                user_id     INTEGER PRIMARY KEY,
+                full_name   TEXT DEFAULT '',
+                card_number TEXT DEFAULT '',
+                iban        TEXT DEFAULT '',
+                updated_at  TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_partner_bank_info(user_id: int) -> dict | None:
+    ensure_partner_bank_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM partner_bank_info WHERE user_id=?;", (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def save_partner_bank_info(user_id: int, full_name: str, card_number: str, iban: str):
+    ensure_partner_bank_schema()
+    conn = _get_connection()
+    try:
+        existing = conn.execute("SELECT user_id FROM partner_bank_info WHERE user_id=?;", (user_id,)).fetchone()
+        if existing:
+            conn.execute("UPDATE partner_bank_info SET full_name=?,card_number=?,iban=?,updated_at=datetime('now') WHERE user_id=?;",
+                         (full_name, card_number, iban, user_id))
+        else:
+            conn.execute("INSERT INTO partner_bank_info (user_id,full_name,card_number,iban) VALUES (?,?,?,?);",
+                         (user_id, full_name, card_number, iban))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── حسابداری موجودی (feed batch) ───────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_feed_batch_schema():
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS feed_batches (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id      INTEGER NOT NULL,
+                purchase_price  INTEGER DEFAULT 0,
+                side_cost       INTEGER DEFAULT 0,
+                item_count      INTEGER DEFAULT 0,
+                notes           TEXT DEFAULT '',
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        try:
+            conn.execute("ALTER TABLE product_feed ADD COLUMN batch_id INTEGER DEFAULT NULL;")
+        except Exception:
+            pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_feed_batch(product_id: int, purchase_price: int, side_cost: int, item_count: int, notes: str = "") -> int:
+    ensure_feed_batch_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO feed_batches (product_id,purchase_price,side_cost,item_count,notes) VALUES (?,?,?,?,?);",
+            (product_id, purchase_price, side_cost, item_count, notes)
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def link_batch_to_feed(product_id: int, batch_id: int, offset: int, count: int):
+    """لینک کردن آخرین count آیتم به batch_id."""
+    ensure_feed_batch_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            UPDATE product_feed SET batch_id=?
+            WHERE id IN (
+                SELECT id FROM product_feed
+                WHERE product_id=? AND batch_id IS NULL AND delivered=0
+                ORDER BY id DESC LIMIT ?
+            );
+        """, (batch_id, product_id, count))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_financial_report() -> dict:
+    """گزارش مالی کامل فروشگاه."""
+    conn = _get_connection()
+    try:
+        # مجموع فروش
+        total_sales = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active';"
+        ).fetchone()[0]
+        # مجموع هزینه خرید
+        total_purchase = conn.execute(
+            "SELECT COALESCE(SUM(fb.purchase_price * fb.item_count + fb.side_cost),0) FROM feed_batches fb;"
+        ).fetchone()[0]
+        # پورسانت پرداختی
+        total_commission = conn.execute(
+            "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;"
+        ).fetchone()[0]
+        # تسویه‌های تأیید شده
+        total_payouts = conn.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='approved';"
+        ).fetchone()[0]
+        # فروش مستقیم (غیر همکار)
+        direct_sales = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active' AND (buyer_type!='partner' OR buyer_type IS NULL);"
+        ).fetchone()[0]
+        # فروش همکاری
+        partner_sales = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active' AND buyer_type='partner';"
+        ).fetchone()[0]
+
+        gross_profit   = int(total_sales or 0) - int(total_purchase or 0)
+        net_profit     = gross_profit - int(total_commission or 0)
+
+        return {
+            "total_sales":       int(total_sales or 0),
+            "total_purchase":    int(total_purchase or 0),
+            "gross_profit":      gross_profit,
+            "net_profit":        net_profit,
+            "direct_sales":      int(direct_sales or 0),
+            "partner_sales":     int(partner_sales or 0),
+            "total_commission":  int(total_commission or 0),
+            "total_payouts":     int(total_payouts or 0),
+            "store_profit":      net_profit - int(total_payouts or 0),
+        }
+    except Exception:
+        return {}
     finally:
         conn.close()

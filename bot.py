@@ -527,7 +527,7 @@ from db import (
 )
 
 BOT_BASE_URL = os.getenv("BOT_WEBHOOK_URL", "").rstrip("/")
-RAILWAY_PANEL = "https://stockland-bot-production.up.railway.app/admin"
+PANEL_URL = "https://panel.stland.ir/admin"
 
 
 def _get_product_chat_enabled(product_id: int) -> int:
@@ -629,7 +629,7 @@ def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup
         types.InlineKeyboardButton("✏️ پاسخ از تلگرام", callback_data=f"ticket_v2_reply_{ticket_id}_{user_id}"),
         types.InlineKeyboardButton("🔒 بستن تیکت", callback_data=f"ticket_v2_admin_close_{ticket_id}"),
     )
-    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{RAILWAY_PANEL}/tickets/{ticket_id}"))
+    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{PANEL_URL}/tickets/{ticket_id}"))
     return kb
 
 
@@ -874,7 +874,7 @@ def handle_admin_command(message):
     uid = message.from_user.id
     if not ensure_admin(uid):
         return
-    panel_url = "https://stockland-bot-production.up.railway.app/admin/"
+    panel_url = "https://panel.stland.ir/admin/"
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
         types.InlineKeyboardButton("🌐 ورود به پنل مدیریت", url=panel_url),
@@ -3202,31 +3202,95 @@ def handle_partner_transfer(message):
 def cb_partner_payout(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    from db import get_partner_wallet_balance, get_partner_payout_settings, ensure_partner_wallet_schema
-    ensure_partner_wallet_schema()
+    from db import get_partner_payout_settings, get_partner_wallet_balance, get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_wallet_schema
+    ensure_partner_bank_schema(); ensure_partner_wallet_schema()
     settings = get_partner_payout_settings()
     if not settings.get("is_active"):
         bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
         return
-    bal = get_partner_wallet_balance(uid)
-    min_a = int(settings.get("min_amount") or 0)
-    if bal < min_a:
+    bal     = get_partner_wallet_balance(uid)
+    min_a   = int(settings.get("min_amount") or 0)
+    if min_a and bal < min_a:
         bot.answer_callback_query(call.id,
-            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی شما: {bal:,} تومان",
+            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی: {bal:,} تومان",
             show_alert=True)
         return
-    max_a = int(settings.get("max_amount") or 0)
-    max_pm = int(settings.get("max_per_month") or 0)
+    # اطلاعات بانکی
+    bank = get_partner_bank_info(uid)
+    if not bank:
+        # بار اول — جمع‌آوری اطلاعات بانکی
+        user_states[uid] = {"mode": "partner_bank_name", "after": "payout"}
+        bot.send_message(call.message.chat.id,
+            "💳 <b>اولین درخواست تسویه</b>\n\n"
+            "لطفاً اطلاعات بانکی خود را وارد کنید:\n\n"
+            "نام و نام خانوادگی صاحب حساب را بنویسید:",
+            parse_mode="HTML")
+    else:
+        # اطلاعات بانکی موجود — مستقیم برو به مبلغ
+        max_a  = int(settings.get("max_amount") or 0)
+        max_pm = int(settings.get("max_per_month") or 0)
+        user_states[uid] = {"mode": "partner_payout", "bal": bal}
+        bot.send_message(call.message.chat.id,
+            f"📤 <b>درخواست تسویه</b>\n\n"
+            f"💳 کارت: <code>{bank['card_number']}</code>\n"
+            f"👤 {bank['full_name']}\n\n"
+            f"موجودی: <b>{bal:,}</b> تومان\n"
+            + (f"حداقل: {min_a:,} ت | " if min_a else "")
+            + (f"حداکثر: {max_a:,} ت\n" if max_a else "\n")
+            + "مبلغ درخواستی را وارد کنید:",
+            parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_name")
+def handle_partner_bank_name(message):
+    uid = message.from_user.id
+    if _exit_chat_if_needed(message): return
+    name = (message.text or "").strip()
+    if len(name) < 3:
+        bot.reply_to(message, "نام وارد‌شده معتبر نیست. لطفاً نام کامل را وارد کنید:")
+        return
+    st = user_states.get(uid, {})
+    user_states[uid] = {**st, "mode": "partner_bank_card", "bank_name": name}
+    bot.send_message(message.chat.id, "شماره کارت (۱۶ رقم) را وارد کنید:")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_card")
+def handle_partner_bank_card(message):
+    uid = message.from_user.id
+    if _exit_chat_if_needed(message): return
+    card = (message.text or "").replace("-","").replace(" ","").strip()
+    if not card.isdigit() or len(card) != 16:
+        bot.reply_to(message, "شماره کارت باید ۱۶ رقم باشد:")
+        return
+    st = user_states.get(uid, {})
+    user_states[uid] = {**st, "mode": "partner_bank_iban", "bank_card": card}
+    bot.send_message(message.chat.id, "شماره شبا (با یا بدون IR) را وارد کنید:")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_iban")
+def handle_partner_bank_iban(message):
+    uid = message.from_user.id
+    if _exit_chat_if_needed(message): return
+    iban = (message.text or "").strip().upper().replace(" ","")
+    if not iban.startswith("IR"):
+        iban = "IR" + iban
+    if len(iban) != 26:
+        bot.reply_to(message, "شماره شبا باید ۲۴ رقم (بدون IR) باشد:")
+        return
+    st = user_states.pop(uid, {})
+    from db import save_partner_bank_info
+    save_partner_bank_info(uid, st.get("bank_name",""), st.get("bank_card",""), iban)
+    bot.send_message(message.chat.id,
+        f"✅ اطلاعات بانکی ذخیره شد:\n"
+        f"👤 {st.get('bank_name')}\n"
+        f"💳 {st.get('bank_card')}\n"
+        f"🏦 {iban}\n\n"
+        "حالا مبلغ درخواست تسویه را وارد کنید:",
+        parse_mode="HTML")
+    from db import get_partner_wallet_balance, get_partner_payout_settings
+    bal      = get_partner_wallet_balance(uid)
+    settings = get_partner_payout_settings()
     user_states[uid] = {"mode": "partner_payout", "bal": bal}
-    text = (
-        f"📤 <b>درخواست تسویه</b>\n\n"
-        f"موجودی: <b>{bal:,}</b> تومان\n"
-        f"{'حداقل: '+format(min_a,',')+'تومان' if min_a else ''}\n"
-        f"{'حداکثر: '+format(max_a,',')+'تومان' if max_a else ''}\n"
-        f"{'سقف ماهانه: '+str(max_pm)+' درخواست' if max_pm else ''}\n\n"
-        "مبلغ درخواستی را وارد کنید:"
-    )
-    bot.send_message(call.message.chat.id, text, parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_payout")
@@ -4390,7 +4454,7 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "admin_settings":
         bot.answer_callback_query(call.id)
-        panel_url = f"https://stockland-bot-production.up.railway.app/admin/settings"
+        panel_url = f"https://panel.stland.ir/admin/settings"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل تنظیمات", url=panel_url))
         bot.send_message(call.message.chat.id, "تنظیمات به پنل وب منتقل شده است:", reply_markup=kb)
@@ -4399,7 +4463,7 @@ def handle_callbacks(call: types.CallbackQuery):
     if data in ("admin_main_btn_manage", "admin_ui_main_buttons", "admin_ui_texts",
                 "admin_ui_captions", "admin_backup_menu"):
         bot.answer_callback_query(call.id)
-        panel_url = f"https://stockland-bot-production.up.railway.app/admin/"
+        panel_url = f"https://panel.stland.ir/admin/"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل مدیریت", url=panel_url))
         bot.send_message(call.message.chat.id, "این بخش به پنل وب منتقل شده:", reply_markup=kb)
@@ -4409,7 +4473,7 @@ def handle_callbacks(call: types.CallbackQuery):
             data in ("admin_export_backup", "admin_import_backup",
                      "admin_full_reset_1", "admin_full_reset_2", "admin_full_reset_do")):
         bot.answer_callback_query(call.id)
-        panel_url = "https://stockland-bot-production.up.railway.app/admin/"
+        panel_url = "https://panel.stland.ir/admin/"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 پنل مدیریت وب", url=panel_url))
         bot.send_message(call.message.chat.id, "این بخش از پنل وب مدیریت می‌شود:", reply_markup=kb)
