@@ -415,6 +415,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
+            {nav_item("/admin/reports", "bar-chart-2", "گزارش مالی", "wallets")}
             {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
@@ -6182,7 +6183,49 @@ def _start_auto_backup_thread() -> None:
     _tg_logger.info("Scheduler started (backup:24h, low-stock:2h)")
 
 
-# ─────────────────────────── Admin Notes (یادداشت مدیران) ─────────────────
+@router.get("/reports", response_class=HTMLResponse)
+async def financial_report(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_financial_report, ensure_feed_batch_schema
+    ensure_feed_batch_schema()
+    r = get_financial_report()
+
+    def _c(n): return f"{n:,}" if isinstance(n, int) else "۰"
+
+    body = f"""
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">📊 گزارش مالی</h1>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      {_card("مجموع فروش", _c(r.get("total_sales",0)), "تومان", "indigo")}
+      {_card("هزینه خرید", _c(r.get("total_purchase",0)), "تومان", "red")}
+      {_card("سود ناخالص", _c(r.get("gross_profit",0)), "تومان", "green")}
+      {_card("سود خالص", _c(r.get("net_profit",0)), "تومان", "emerald")}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      {_card("فروش مستقیم", _c(r.get("direct_sales",0)), "تومان", "blue")}
+      {_card("فروش همکاری", _c(r.get("partner_sales",0)), "تومان", "purple")}
+      {_card("پورسانت پرداختی", _c(r.get("total_commission",0)), "تومان", "amber")}
+      {_card("سود نهایی فروشگاه", _c(r.get("store_profit",0)), "تومان", "slate")}
+    </div>
+    <div class="card p-6">
+      <h2 class="font-bold text-gray-700 mb-4">📈 خلاصه حسابداری</h2>
+      <table class="w-full text-right text-sm">
+        <tbody>
+          {''.join(f'<tr class="border-b"><td class="py-2 text-gray-500">{k}</td><td class="py-2 font-bold text-gray-800">{_c(v)} تومان</td></tr>' for k,v in [
+            ("مجموع فروش", r.get("total_sales",0)),
+            ("− هزینه خرید موجودی", r.get("total_purchase",0)),
+            ("= سود ناخالص", r.get("gross_profit",0)),
+            ("− پورسانت معرفی", r.get("total_commission",0)),
+            ("= سود خالص", r.get("net_profit",0)),
+            ("− تسویه‌های پرداخت‌شده", r.get("total_payouts",0)),
+            ("= سود نهایی فروشگاه", r.get("store_profit",0)),
+          ])}
+        </tbody>
+      </table>
+      <p class="text-xs text-gray-400 mt-4">⚠️ هزینه خرید فقط برای موجودی‌هایی محاسبه می‌شود که با اطلاعات Batch ثبت شده‌اند.</p>
+    </div>"""
+    return _layout("گزارش مالی", body, adm, flash=flash)
 
 @router.get("/notes", response_class=HTMLResponse)
 async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
@@ -6504,18 +6547,19 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <td class="px-4 py-3 text-xs text-center">{has_banner}</td>
               <td class="px-4 py-3 text-xs text-gray-400">{desc[:30]}</td>
               <td class="px-4 py-3">
-                <div class="flex gap-1 flex-wrap">
+                <div class="flex gap-1 flex-wrap items-center">
                   <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},'{color}','{desc}')"
                     class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
-                  <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer">
-                    📷 بنر
+                  <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer" title="آپلود بنر">
+                    {'🖼 تعویض' if photo_id else '📷 آپلود'}
                     <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
                           enctype="multipart/form-data" class="hidden" id="bf{tr['id']}">
                       <input type="file" name="banner_file" accept="image/*"
                              onchange="document.getElementById('bf{tr['id']}').submit()">
                     </form>
                   </label>
-                  <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف؟')">
+                  {f'<form method="post" action="/admin/partners/tier/{tr["id"]}/delete-banner" class="inline"><button class="px-2 py-1 text-xs bg-red-50 text-red-500 rounded" title="حذف بنر">🗑 بنر</button></form>' if photo_id else ''}
+                  <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف سطح؟')">
                     <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded">حذف</button>
                   </form>
                 </div>
@@ -6645,20 +6689,30 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
         </div>
         <div class="card p-6">
           <h2 class="font-bold text-gray-700 mb-2">📤 تنظیمات تسویه</h2>
-          <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-md">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ تسویه (تومان)</label>
-              <input type="number" name="min_amount" value="{ps.get('min_amount',50000)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ تسویه (تومان)</label>
-              <input type="number" name="max_amount" value="{ps.get('max_amount',0)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
-              <input type="number" name="max_per_month" value="{ps.get('max_per_month',2)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
+          <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-2xl">
+            <div class="grid grid-cols-2 gap-4">
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ تسویه (تومان)</label>
+                <input type="number" name="min_amount" value="{ps.get('min_amount',50000)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ تسویه (تومان)</label>
+                <input type="number" name="max_amount" value="{ps.get('max_amount',0)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
+                <input type="number" name="max_per_month" value="{ps.get('max_per_month',2)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">مدت بررسی (ساعت)</label>
+                <input type="number" name="review_hours" value="{ps.get('review_hours',48)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            </div>
             <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت تسویه</label>
               <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
                 <option value="1" {"selected" if ps.get('is_active') else ""}>فعال</option>
                 <option value="0" {"" if ps.get('is_active') else "selected"}>غیرفعال</option>
               </select></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">متن راهنمای تسویه (نمایش به همکار)</label>
+              <textarea name="guide_text" rows="3" placeholder="شرایط و راهنمای تسویه..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{e(ps.get('guide_text',''))}</textarea></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام تأیید (به همکار)</label>
+              <input type="text" name="approval_message" value="{e(ps.get('approval_message',''))}" placeholder="درخواست تسویه شما تأیید و پرداخت می‌شود." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام رد (به همکار)</label>
+              <input type="text" name="rejection_message" value="{e(ps.get('rejection_message',''))}" placeholder="درخواست تسویه شما رد شد." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
             {_btn("ذخیره تسویه","",color="indigo")}
           </form>
         </div>"""
@@ -6676,13 +6730,18 @@ async def partner_payout_settings_save(request: Request):
     guard = _require(adm, "partners")
     if guard: return guard
     form = await request.form()
-    from db import save_partner_payout_settings
-    save_partner_payout_settings(
-        int(form.get("min_amount") or 50000),
-        int(form.get("max_amount") or 0),
-        int(form.get("max_per_month") or 2),
-        int(form.get("is_active") or 1),
-    )
+    from db import save_payout_settings_full, ensure_payout_settings_extended
+    ensure_payout_settings_extended()
+    save_payout_settings_full({
+        "min_amount":         int(form.get("min_amount") or 50000),
+        "max_amount":         int(form.get("max_amount") or 0),
+        "max_per_month":      int(form.get("max_per_month") or 2),
+        "is_active":          int(form.get("is_active") or 1),
+        "review_hours":       int(form.get("review_hours") or 48),
+        "guide_text":         str(form.get("guide_text","")).strip(),
+        "approval_message":   str(form.get("approval_message","")).strip(),
+        "rejection_message":  str(form.get("rejection_message","")).strip(),
+    })
     _log(request, "تنظیمات تسویه", "همکاران", "updated")
     return _redir("/admin/partners?tab=settings&flash=تنظیمات+تسویه+ذخیره+شد")
 
@@ -6692,19 +6751,18 @@ async def partner_payout_approve(request: Request, pid: int):
     adm = _get_admin(request)
     guard = _require(adm, "partners")
     if guard: return guard
-    from db import process_partner_payout
+    from db import process_partner_payout, get_payout_settings_full, ensure_payout_settings_extended
+    ensure_payout_settings_extended()
     result = process_partner_payout(pid, approve=True)
     if result["ok"]:
-        uid = result["user_id"]
-        amt = result["amount"]
-        _log(request, "تایید تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
-        try:
-            _tg_send(uid,
-                f"✅ <b>درخواست تسویه شما تایید شد</b>\n\n"
-                f"مبلغ <b>{amt:,}</b> تومان پرداخت خواهد شد.")
-        except Exception:
-            pass
-    return _redir("/admin/partners?tab=payouts&flash=تسویه+تایید+شد")
+        uid = result["user_id"]; amt = result["amount"]
+        ps = get_payout_settings_full()
+        hours = ps.get("review_hours", 48)
+        msg = ps.get("approval_message","") or f"✅ درخواست تسویه {amt:,} تومان تأیید شد و ظرف {hours} ساعت پرداخت می‌شود."
+        _log(request, "تأیید تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
+        try: _tg_send(uid, msg)
+        except Exception: pass
+    return _redir("/admin/partners?tab=payouts&flash=تسویه+تأیید+شد")
 
 
 @router.post("/partners/payout/{pid}/reject")
@@ -6712,19 +6770,36 @@ async def partner_payout_reject(request: Request, pid: int):
     adm = _get_admin(request)
     guard = _require(adm, "partners")
     if guard: return guard
-    from db import process_partner_payout
-    result = process_partner_payout(pid, approve=False)
+    from db import process_partner_payout, get_payout_settings_full, ensure_payout_settings_extended
+    ensure_payout_settings_extended()
+    form = await request.form()
+    note = str(form.get("note","")).strip()
+    result = process_partner_payout(pid, approve=False, admin_note=note)
     if result["ok"]:
-        uid = result["user_id"]
-        amt = result["amount"]
+        uid = result["user_id"]; amt = result["amount"]
+        ps = get_payout_settings_full()
+        msg = ps.get("rejection_message","") or f"❌ درخواست تسویه {amt:,} تومان رد شد."
+        if note: msg += f"\n\nدلیل: {note}"
+        msg += f"\n\nمبلغ به کیف‌پول همکاری برگشت داده شد."
         _log(request, "رد تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
-        try:
-            _tg_send(uid,
-                f"❌ <b>درخواست تسویه رد شد</b>\n\n"
-                f"مبلغ <b>{amt:,}</b> تومان به کیف‌پول همکاری برگشت داده شد.")
-        except Exception:
-            pass
+        try: _tg_send(uid, msg)
+        except Exception: pass
     return _redir("/admin/partners?tab=payouts&flash=تسویه+رد+شد")
+
+
+@router.post("/partners/tier/{tid}/delete-banner")
+async def partner_tier_delete_banner(request: Request, tid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("UPDATE partner_tiers SET photo_file_id='' WHERE id=?;", (tid,))
+        conn.commit()
+    finally:
+        conn.close()
+    _log(request, f"حذف بنر سطح #{tid}", "همکاران")
+    return _redir("/admin/partners?tab=tiers&flash=بنر+حذف+شد")
 
 
 @router.post("/partners/tier/{tid}/upload-banner")

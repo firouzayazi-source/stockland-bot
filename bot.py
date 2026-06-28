@@ -2916,17 +2916,16 @@ def _show_partner_dashboard(chat_id, uid):
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
+    kb.row(
+        types.InlineKeyboardButton("👥 فروشندگان شما", callback_data="partner_sub_stats"),
+        types.InlineKeyboardButton("👤 پروفایل", callback_data="partner_profile"),
+    )
+    kb.row(
+        types.InlineKeyboardButton("💰 کیف‌پول همکاری", callback_data="partner_wallet"),
         types.InlineKeyboardButton("🔗 لینک معرفی من", callback_data="partner_ref_link"),
-        types.InlineKeyboardButton("👥 فروشندگان من", callback_data="partner_sub_stats"),
     )
-    kb.add(
-        types.InlineKeyboardButton("💼 کیف‌پول همکاری", callback_data="partner_wallet"),
+    kb.row(
         types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support"),
-    )
-    kb.add(
-        types.InlineKeyboardButton("👤 پروفایل همکار", callback_data="partner_profile"),
-        types.InlineKeyboardButton("📖 راهنما و قوانین", callback_data="partner_guide"),
     )
 
     # ارسال بنر سطح (اگه تنظیم شده)
@@ -3052,61 +3051,137 @@ def _show_partner_dashboard(chat_id, uid):
 def cb_partner_profile(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    from db import get_partner_bank_info, ensure_partner_bank_schema
-    ensure_partner_bank_schema()
+    _show_partner_profile(call.message.chat.id, uid, edit_msg=call.message.message_id)
 
-    # اطلاعات همکار از جدول partners
-    import sqlite3 as _sq3
-    from config import DB_PATH as _DBP3
+
+def _show_partner_profile(chat_id, uid, edit_msg=None):
+    from db import get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_bank_address
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+    import sqlite3 as _sq4
+    from config import DB_PATH as _DBP4
     partner = None
     try:
-        _c = _sq3.connect(_DBP3)
-        _c.row_factory = _sq3.Row
+        _c = _sq4.connect(_DBP4); _c.row_factory = _sq4.Row
         partner = _c.execute("SELECT * FROM partners WHERE tg_user_id=?;", (uid,)).fetchone()
         _c.close()
     except Exception:
         pass
-
     bank = get_partner_bank_info(uid)
 
-    lines = ["👤 <b>پروفایل همکار</b>\n"]
-    if partner:
-        lines.append(f"👤 نام: {partner['full_name'] or '—'}")
-        lines.append(f"🏪 فروشگاه: {partner['shop_name'] or '—'}")
-        lines.append(f"🏙 شهر: {partner['city'] or '—'}")
-        lines.append(f"📱 موبایل: {partner['phone'] or '—'}")
-    lines.append("")
-    lines.append("💳 <b>اطلاعات بانکی</b>")
-    if bank:
-        lines.append(f"👤 صاحب حساب: {bank['full_name'] or '—'}")
-        lines.append(f"💳 کارت: <code>{bank['card_number'] or '—'}</code>")
-        lines.append(f"🏦 شبا: <code>{bank['iban'] or '—'}</code>")
-    else:
-        lines.append("ℹ️ اطلاعات بانکی ثبت نشده")
+    def _v(val): return val or "—"
 
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        types.InlineKeyboardButton("✏️ ویرایش اطلاعات بانکی", callback_data="partner_edit_bank"),
-        types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
+    text = (
+        f"👤 <b>پروفایل همکار</b>\n"
+        f"{'─'*20}\n\n"
+        f"<b>اطلاعات فروشگاه</b>\n"
+        f"👤 نام: {_v(partner['full_name'] if partner else None)}\n"
+        f"🏪 فروشگاه: {_v(partner['shop_name'] if partner else None)}\n"
+        f"🏙 شهر: {_v(partner['city'] if partner else None)}\n"
+        f"📍 آدرس: {_v(bank['address'] if bank else None)}\n\n"
+        f"<b>اطلاعات بانکی</b>\n"
+        f"👤 صاحب حساب: {_v(bank['full_name'] if bank else None)}\n"
+        f"💳 کارت: <code>{_v(bank['card_number'] if bank else None)}</code>\n"
+        f"🏦 شبا: <code>{_v(bank['iban'] if bank else None)}</code>"
     )
-    try:
-        bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id,
-                              parse_mode="HTML", reply_markup=kb)
-    except Exception:
-        bot.send_message(call.message.chat.id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("✏️ نام", callback_data="pedit_name"),
+        types.InlineKeyboardButton("✏️ فروشگاه", callback_data="pedit_shop"),
+    )
+    kb.row(
+        types.InlineKeyboardButton("✏️ شهر", callback_data="pedit_city"),
+        types.InlineKeyboardButton("✏️ آدرس", callback_data="pedit_address"),
+    )
+    kb.row(
+        types.InlineKeyboardButton("✏️ کارت", callback_data="pedit_card"),
+        types.InlineKeyboardButton("✏️ شبا", callback_data="pedit_iban"),
+    )
+    kb.row(types.InlineKeyboardButton("✏️ نام صاحب حساب", callback_data="pedit_bankname"))
+    kb.row(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+
+    if edit_msg:
+        try:
+            bot.edit_message_text(text, chat_id, edit_msg, parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "partner_edit_bank")
-def cb_partner_edit_bank(call):
+# ─── handler های ویرایش فیلدهای پروفایل ──────────────────────────────────
+
+_PEDIT_FIELDS = {
+    "pedit_name":     ("partner_name",    "نام و نام خانوادگی",    "نام"),
+    "pedit_shop":     ("partner_shop",    "نام فروشگاه",           "نام فروشگاه"),
+    "pedit_city":     ("partner_city",    "شهر",                   "شهر"),
+    "pedit_address":  ("partner_address", "آدرس",                  "آدرس کامل"),
+    "pedit_card":     ("partner_card",    "شماره کارت (۱۶ رقم)",   "۱۶ رقم بدون فاصله"),
+    "pedit_iban":     ("partner_iban",    "شماره شبا",             "با یا بدون IR"),
+    "pedit_bankname": ("partner_bankname","نام صاحب حساب",         "نام کامل"),
+}
+
+@bot.callback_query_handler(func=lambda c: c.data in _PEDIT_FIELDS)
+def cb_pedit_field(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    user_states[uid] = {"mode": "partner_bank_name", "after": "profile"}
+    mode, label, hint = _PEDIT_FIELDS[call.data]
+    user_states[uid] = {"mode": mode, "msg_id": call.message.message_id}
     bot.send_message(call.message.chat.id,
-        "✏️ <b>ویرایش اطلاعات بانکی</b>\n\nنام و نام خانوادگی صاحب حساب را وارد کنید:",
+        f"✏️ <b>ویرایش {label}</b>\n\n{hint} را وارد کنید:",
         parse_mode="HTML")
 
+def _make_pedit_handler(mode_key, field_key, table, col, validator=None):
+    @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == mode_key)
+    def _handler(message):
+        uid = message.from_user.id
+        if _exit_chat_if_needed(message): return
+        val = (message.text or "").strip()
+        if validator:
+            val = validator(val)
+            if val is None:
+                bot.reply_to(message, "❌ مقدار وارد‌شده نامعتبر است. دوباره تلاش کنید:")
+                return
+        st = user_states.pop(uid, {})
+        # ذخیره
+        import sqlite3 as _sqe
+        from config import DB_PATH as _DBPe
+        from db import ensure_partner_bank_schema, ensure_partner_bank_address, get_partner_bank_info
+        ensure_partner_bank_schema(); ensure_partner_bank_address()
+        conn = _sqe.connect(_DBPe)
+        try:
+            if table == "partners":
+                conn.execute(f"UPDATE partners SET {col}=? WHERE tg_user_id=?;", (val, uid))
+            else:
+                bank = get_partner_bank_info(uid)
+                if bank:
+                    conn.execute(f"UPDATE partner_bank_info SET {col}=?,updated_at=datetime('now') WHERE user_id=?;", (val, uid))
+                else:
+                    conn.execute(f"INSERT OR REPLACE INTO partner_bank_info (user_id,{col}) VALUES (?,?);", (uid, val))
+            conn.commit()
+        finally:
+            conn.close()
+        bot.send_message(message.chat.id, "✅ ذخیره شد.")
+        _show_partner_profile(message.chat.id, uid)
+    return _handler
 
-@bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
+def _card_validator(val):
+    v = val.replace("-","").replace(" ","")
+    return v if v.isdigit() and len(v)==16 else None
+
+def _iban_validator(val):
+    v = val.upper().replace(" ","")
+    if not v.startswith("IR"): v = "IR" + v
+    return v if len(v)==26 else None
+
+_make_pedit_handler("partner_name",     "name",     "partners",         "full_name")
+_make_pedit_handler("partner_shop",     "shop",     "partners",         "shop_name")
+_make_pedit_handler("partner_city",     "city",     "partners",         "city")
+_make_pedit_handler("partner_address",  "address",  "partner_bank_info","address")
+_make_pedit_handler("partner_card",     "card",     "partner_bank_info","card_number", _card_validator)
+_make_pedit_handler("partner_iban",     "iban",     "partner_bank_info","iban",        _iban_validator)
+_make_pedit_handler("partner_bankname", "bankname", "partner_bank_info","full_name")
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_edit_bank")
 def cb_partner_ref_link(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)

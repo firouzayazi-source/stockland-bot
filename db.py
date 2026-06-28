@@ -3585,6 +3585,11 @@ def ensure_partner_bank_schema():
                 iban        TEXT DEFAULT '',
                 updated_at  TEXT DEFAULT (datetime('now'))
             );
+            -- migration address
+            try:
+                conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
+            except:
+                pass
         """)
         conn.commit()
     finally:
@@ -3722,5 +3727,73 @@ def get_financial_report() -> dict:
         }
     except Exception:
         return {}
+    finally:
+        conn.close()
+
+
+# ─── migration آدرس در partner_bank_info ────────────────────────────────────
+
+def ensure_partner_bank_address():
+    conn = _get_connection()
+    try:
+        conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+# ─── تنظیمات تسویه — فیلدهای اضافی ────────────────────────────────────────
+
+def ensure_payout_settings_extended():
+    conn = _get_connection()
+    try:
+        for col, default in [
+            ("review_hours",        "INTEGER DEFAULT 48"),
+            ("guide_text",          "TEXT DEFAULT ''"),
+            ("approval_message",    "TEXT DEFAULT ''"),
+            ("rejection_message",   "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE partner_payout_settings ADD COLUMN {col} {default};")
+                conn.commit()
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+
+def get_payout_settings_full() -> dict:
+    ensure_payout_settings_extended()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM partner_payout_settings WHERE id=1;").fetchone()
+        if row:
+            return dict(row)
+        return {
+            "min_amount": 50000, "max_amount": 0, "max_per_month": 2,
+            "is_active": 1, "review_hours": 48,
+            "guide_text": "", "approval_message": "", "rejection_message": "",
+        }
+    finally:
+        conn.close()
+
+
+def save_payout_settings_full(data: dict):
+    ensure_payout_settings_extended()
+    conn = _get_connection()
+    try:
+        conn.execute("""UPDATE partner_payout_settings
+            SET min_amount=?, max_amount=?, max_per_month=?, is_active=?,
+                review_hours=?, guide_text=?, approval_message=?, rejection_message=?,
+                updated_at=datetime('now')
+            WHERE id=1;""",
+            (data.get("min_amount",50000), data.get("max_amount",0),
+             data.get("max_per_month",2), data.get("is_active",1),
+             data.get("review_hours",48), data.get("guide_text",""),
+             data.get("approval_message",""), data.get("rejection_message","")))
+        conn.commit()
     finally:
         conn.close()
