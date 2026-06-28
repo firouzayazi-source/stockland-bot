@@ -27,7 +27,7 @@ router = APIRouter(prefix="/admin")
 
 # ── migrations at startup ────────────────────────────────────────────────────
 try:
-    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema, ensure_partner_system_schema, ensure_partner_wallet_schema
+    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema, ensure_partner_system_schema, ensure_partner_wallet_schema, ensure_admin_notes_schema, ensure_partner_tiers_extended
     ensure_product_support_schema()
     ensure_discount_table()
     ensure_subscription_table()
@@ -35,6 +35,8 @@ try:
     ensure_user_extra_schema()
     ensure_partner_system_schema()
     ensure_partner_wallet_schema()
+    ensure_admin_notes_schema()
+    ensure_partner_tiers_extended()
 except Exception:
     pass
 
@@ -259,18 +261,24 @@ def _ensure_theme_table():
         conn.close()
 
 
-def _log(request: Request, action: str, section: str = "", details: str = "", admin_info=None):
+def _log(request: Request, action: str, section: str = "", details: str = "", admin_info=None, result: str = "ok"):
     """ثبت فعالیت ادمین — هیچ‌وقت exception نمی‌ده."""
     try:
         adm = admin_info or _get_admin(request)
         if not adm:
             return
-        ip = (request.client.host if request.client else "—")
+        ip   = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or (request.client.host if request.client else "—")
         name = adm[3] if len(adm) > 3 else f"admin#{adm[0]}"
         conn = _db()
+        # اضافه کردن ستون result اگه وجود نداشت
+        try:
+            conn.execute("ALTER TABLE admin_logs ADD COLUMN result TEXT DEFAULT 'ok';")
+            conn.commit()
+        except Exception:
+            pass
         conn.execute(
-            "INSERT INTO admin_logs (admin_id,admin_name,action,section,details,ip) VALUES (?,?,?,?,?,?);",
-            (adm[0], name, action, section, details[:500] if details else "", ip)
+            "INSERT INTO admin_logs (admin_id,admin_name,action,section,details,ip,result) VALUES (?,?,?,?,?,?,?);",
+            (adm[0], name, action, section, details[:500] if details else "", ip, result)
         )
         conn.commit()
         conn.close()
@@ -407,6 +415,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
+            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings", "settings", "تنظیمات", "settings")}
@@ -6084,7 +6093,175 @@ def _start_auto_backup_thread() -> None:
     _tg_logger.info("Scheduler started (backup:24h, low-stock:2h)")
 
 
-# ─────────────────────────── Partners (یکپارچه) ─────────────────────────────
+# ─────────────────────────── Admin Notes (یادداشت مدیران) ─────────────────
+
+@router.get("/notes", response_class=HTMLResponse)
+async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_admin_notes, ensure_admin_notes_schema
+    ensure_admin_notes_schema()
+    notes = get_admin_notes(status)
+
+    filter_tabs = '<div class="flex gap-2 mb-4">' + "".join(
+        f'<a href="/admin/notes?status={v}" class="px-3 py-1.5 rounded-lg border text-xs {"bg-indigo-600 text-white" if status==v else "bg-white text-gray-500"}">{l}</a>'
+        for l,v in [("همه",""),("باز","open"),("انجام شد","done")]
+    ) + '</div>'
+
+    rows = ""
+    for n in notes:
+        sc = "green" if n["status"] == "done" else "amber"
+        sl = "✅ انجام شد" if n["status"] == "done" else "🔵 باز"
+        rows += f"""<tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-3 text-xs text-gray-400">#{n['id']}</td>
+          <td class="px-4 py-3 text-sm font-medium">{e(n['author'])}</td>
+          <td class="px-4 py-3 text-sm">{e((n['text'] or '')[:60])}{'...' if len(n['text'] or '')>60 else ''}</td>
+          <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
+          <td class="px-4 py-3 text-xs text-gray-400">{(n['created_at'] or '')[:16]}</td>
+          <td class="px-4 py-3 text-xs text-indigo-500">{n['reply_count']} پاسخ</td>
+          <td class="px-4 py-3 flex gap-1">
+            <a href="/admin/notes/{n['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">مشاهده</a>
+            <form method="post" action="/admin/notes/{n['id']}/toggle" class="inline">
+              <button class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">{'رفع انجام' if n['status']=='done' else '✅ انجام شد'}</button>
+            </form>
+          </td>
+        </tr>"""
+
+    body = f"""
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-gray-800">📝 یادداشت مدیران</h1>
+      <a href="/admin/notes/new" class="btn-sm bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm">+ یادداشت جدید</a>
+    </div>
+    {filter_tabs}
+    <div class="card overflow-hidden"><div class="overflow-x-auto">
+      <table class="w-full text-right min-w-max">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-4 py-3">#</th><th class="px-4 py-3">نویسنده</th>
+          <th class="px-4 py-3">متن</th><th class="px-4 py-3">وضعیت</th>
+          <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">پاسخ</th>
+          <th class="px-4 py-3">عملیات</th>
+        </tr></thead>
+        <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>یادداشتی ثبت نشده</td></tr>"}</tbody>
+      </table>
+    </div></div>"""
+    return _layout("یادداشت مدیران", body, adm, flash=flash)
+
+
+@router.get("/notes/new", response_class=HTMLResponse)
+async def admin_note_new_get(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← یادداشت‌ها", "/admin/notes", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">📝 یادداشت جدید</h1>
+    </div>
+    <div class="card p-6 max-w-xl">
+      <form method="post" action="/admin/notes/new" class="space-y-4">
+        <div><label class="text-sm font-medium text-gray-700 block mb-1">متن یادداشت</label>
+          {_textarea("text","یادداشت خود را بنویسید...",rows=6)}</div>
+        {_btn("ثبت یادداشت","",color="indigo")}
+      </form>
+    </div>"""
+    return _layout("یادداشت جدید", body, adm)
+
+
+@router.post("/notes/new")
+async def admin_note_new_post(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    form = await request.form()
+    text = str(form.get("text","")).strip()
+    if not text:
+        return _redir("/admin/notes/new")
+    from db import create_admin_note
+    author = adm.get("username") or adm.get("name") or "مدیر"
+    create_admin_note(author, text)
+    _log(request, "ثبت یادداشت", "یادداشت‌ها", text[:40])
+    return _redir("/admin/notes?flash=یادداشت+ثبت+شد")
+
+
+@router.get("/notes/{nid}", response_class=HTMLResponse)
+async def admin_note_detail(request: Request, nid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_admin_note
+    data = get_admin_note(nid)
+    if not data:
+        return _redir("/admin/notes")
+    note = data["note"]
+    replies = data["replies"]
+
+    reply_rows = "".join(f"""<div class="p-4 bg-gray-50 rounded-lg mb-2">
+      <div class="flex justify-between text-xs text-gray-400 mb-1">
+        <span class="font-medium text-gray-700">{e(r['author'])}</span>
+        <span>{(r['created_at'] or '')[:16]}</span>
+      </div>
+      <p class="text-sm text-gray-800">{e(r['text'])}</p>
+    </div>""" for r in replies)
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← یادداشت‌ها", "/admin/notes", "slate", small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">📝 یادداشت #{nid}</h1>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="card p-6">
+        <div class="flex justify-between items-start mb-4">
+          <div>
+            <div class="text-sm font-medium text-gray-700">{e(note['author'])}</div>
+            <div class="text-xs text-gray-400">{(note['created_at'] or '')[:16]}</div>
+          </div>
+          <span class="px-2 py-1 text-xs rounded-full {'bg-green-100 text-green-700' if note['status']=='done' else 'bg-amber-100 text-amber-700'}">
+            {'✅ انجام شد' if note['status']=='done' else '🔵 باز'}
+          </span>
+        </div>
+        <p class="text-sm text-gray-800 whitespace-pre-wrap mb-4">{e(note['text'])}</p>
+        <form method="post" action="/admin/notes/{nid}/toggle">
+          <button class="px-3 py-1.5 text-xs border rounded-lg {'bg-gray-100' if note['status']=='done' else 'bg-green-50 text-green-700 border-green-200'}">
+            {'↩ بازگشایی' if note['status']=='done' else '✅ علامت انجام'}
+          </button>
+        </form>
+      </div>
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-3">💬 پاسخ‌ها</h2>
+        <div class="mb-4 max-h-64 overflow-y-auto">{reply_rows or '<p class="text-sm text-gray-400">پاسخی ثبت نشده</p>'}</div>
+        <form method="post" action="/admin/notes/{nid}/reply">
+          {_textarea("text","پاسخ شما...",rows=3)}
+          <div class="mt-2">{_btn("ثبت پاسخ","",color="indigo",small=True)}</div>
+        </form>
+      </div>
+    </div>"""
+    return _layout(f"یادداشت #{nid}", body, adm, flash=flash)
+
+
+@router.post("/notes/{nid}/reply")
+async def admin_note_reply(request: Request, nid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    form = await request.form()
+    text = str(form.get("text","")).strip()
+    if text:
+        from db import add_admin_note_reply
+        author = adm.get("username") or adm.get("name") or "مدیر"
+        add_admin_note_reply(nid, author, text)
+    return _redir(f"/admin/notes/{nid}?flash=پاسخ+ثبت+شد")
+
+
+@router.post("/notes/{nid}/toggle")
+async def admin_note_toggle(request: Request, nid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import toggle_admin_note_status
+    new_status = toggle_admin_note_status(nid)
+    _log(request, f"تغییر وضعیت یادداشت به {new_status}", "یادداشت‌ها", f"#{nid}")
+    return _redir(f"/admin/notes/{nid}")
 
 @router.get("/partners", response_class=HTMLResponse)
 async def partners_list(request: Request, tab: str = "list", status_filter: str = "", flash: str = ""):
@@ -6214,18 +6391,29 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           </table>
         </div></div>"""
 
-    # ─── تب سطوح ─────────────────────────────────────────────────────────
     elif tab == "tiers":
+        from db import get_partner_tiers, ensure_partner_tiers_extended
+        ensure_partner_tiers_extended()
         tiers = get_partner_tiers()
         tier_rows = ""
-        for t in tiers:
+        for tr in tiers:
+            try: commission = tr['commission_percent'] or 0
+            except Exception: commission = 0
+            try: color = tr['color'] or '#6B7280'
+            except Exception: color = '#6B7280'
+            try: desc = e(tr['description'] or '')
+            except Exception: desc = ''
             tier_rows += f"""<tr class="border-b hover:bg-gray-50">
-              <td class="px-4 py-3 text-2xl">{e(t['icon'])}</td>
-              <td class="px-4 py-3 text-sm font-medium">{e(t['name'])}</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{t['min_orders']} خرید</td>
+              <td class="px-4 py-3 text-2xl">{e(tr['icon'])}</td>
+              <td class="px-4 py-3 text-sm font-medium">{e(tr['name'])}</td>
+              <td class="px-4 py-3 text-sm text-gray-600">{tr['min_orders']} خرید</td>
+              <td class="px-4 py-3 text-sm text-gray-600">{commission}٪</td>
+              <td class="px-4 py-3"><span style="background:{color};width:20px;height:20px;display:inline-block;border-radius:4px"></span></td>
+              <td class="px-4 py-3 text-xs text-gray-400">{desc[:30]}</td>
               <td class="px-4 py-3 flex gap-1">
-                <button onclick="editTier({t['id']},'{e(t['name'])}','{e(t['icon'])}',{t['min_orders']})" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
-                <form method="post" action="/admin/partners/tier/{t['id']}/delete" class="inline" onsubmit="return confirm('حذف این سطح؟')">
+                <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},'{color}','{desc}')"
+                  class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
+                <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف؟')">
                   <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded">حذف</button>
                 </form>
               </td>
@@ -6234,7 +6422,6 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
         content = f"""
         <div class="card p-6 mb-4">
           <h2 class="font-bold text-gray-700 mb-2">🏆 سطوح همکاری</h2>
-          <p class="text-xs text-gray-400 mb-4">ارتقا بر اساس تعداد خریدهای همکاری. سطوح را تنظیم کنید.</p>
           <form method="post" action="/admin/partners/tier/save" class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end" id="tier-form">
             <input type="hidden" name="tier_id" id="tier_id" value="">
             <div><label class="text-xs text-gray-500 block mb-1">آیکون</label>
@@ -6243,24 +6430,34 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <input type="text" name="name" id="tier_name" placeholder="برنز" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
             <div><label class="text-xs text-gray-500 block mb-1">حداقل خرید</label>
               <input type="number" name="min_orders" id="tier_min" value="0" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium">ذخیره سطح</button>
+            <div><label class="text-xs text-gray-500 block mb-1">پورسانت اضافه (٪)</label>
+              <input type="number" step="0.1" name="commission_percent" id="tier_comm" value="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">رنگ</label>
+              <input type="color" name="color" id="tier_color" value="#6B7280" class="w-full h-10 border border-gray-200 rounded-lg px-1"></div>
+            <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">توضیح</label>
+              <input type="text" name="description" id="tier_desc" placeholder="توضیح این سطح..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium self-end">ذخیره سطح</button>
           </form>
           <button onclick="resetTierForm()" class="mt-2 text-xs text-gray-400 hover:text-gray-600">+ سطح جدید</button>
         </div>
         <div class="card overflow-hidden"><div class="overflow-x-auto">
           <table class="w-full text-right min-w-max">
             <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">آیکون</th><th class="px-4 py-3">سطح</th><th class="px-4 py-3">شرط ارتقا</th><th class="px-4 py-3">عملیات</th>
+              <th class="px-4 py-3">آیکون</th><th class="px-4 py-3">سطح</th><th class="px-4 py-3">شرط ارتقا</th>
+              <th class="px-4 py-3">پورسانت</th><th class="px-4 py-3">رنگ</th><th class="px-4 py-3">توضیح</th><th class="px-4 py-3">عملیات</th>
             </tr></thead>
-            <tbody>{tier_rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
+            <tbody>{tier_rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
           </table>
         </div></div>
         <script>
-        function editTier(id,name,icon,min){{
+        function editTier(id,name,icon,min,comm,color,desc){{
           document.getElementById('tier_id').value=id;
           document.getElementById('tier_name').value=name;
           document.getElementById('tier_icon').value=icon;
           document.getElementById('tier_min').value=min;
+          document.getElementById('tier_comm').value=comm;
+          document.getElementById('tier_color').value=color;
+          document.getElementById('tier_desc').value=desc;
           document.getElementById('tier-form').scrollIntoView({{behavior:'smooth'}});
         }}
         function resetTierForm(){{
@@ -6268,6 +6465,9 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           document.getElementById('tier_name').value='';
           document.getElementById('tier_icon').value='🥉';
           document.getElementById('tier_min').value='0';
+          document.getElementById('tier_comm').value='0';
+          document.getElementById('tier_color').value='#6B7280';
+          document.getElementById('tier_desc').value='';
         }}
         </script>"""
 
@@ -6430,11 +6630,31 @@ async def partner_tier_save(request: Request):
     form = await request.form()
     tid  = form.get("tier_id")
     tid  = int(tid) if tid and str(tid).isdigit() else None
-    from db import save_partner_tier
-    save_partner_tier(tid, str(form.get("name","")).strip(),
-                      str(form.get("icon","🥉")).strip(),
-                      int(form.get("min_orders") or 0))
-    _log(request, "ذخیره سطح همکاری", "همکاران", str(form.get("name","")))
+    from db import save_partner_tier, ensure_partner_tiers_extended
+    ensure_partner_tiers_extended()
+    # ذخیره با فیلدهای جدید
+    conn = _db()
+    try:
+        name   = str(form.get("name","")).strip()
+        icon   = str(form.get("icon","🥉")).strip()
+        min_o  = int(form.get("min_orders") or 0)
+        comm   = float(form.get("commission_percent") or 0)
+        color  = str(form.get("color","#6B7280")).strip()
+        desc   = str(form.get("description","")).strip()
+        if tid:
+            conn.execute("""UPDATE partner_tiers SET name=?,icon=?,min_orders=?,
+                commission_percent=?,color=?,description=? WHERE id=?;""",
+                (name, icon, min_o, comm, color, desc, tid))
+        else:
+            mx = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM partner_tiers;").fetchone()[0]
+            conn.execute("""INSERT INTO partner_tiers
+                (name,icon,min_orders,commission_percent,color,description,sort_order)
+                VALUES (?,?,?,?,?,?,?);""",
+                (name, icon, min_o, comm, color, desc, mx))
+        conn.commit()
+    finally:
+        conn.close()
+    _log(request, "ذخیره سطح همکاری", "همکاران", name)
     return _redir("/admin/partners?tab=tiers&flash=سطح+ذخیره+شد")
 
 
