@@ -2782,12 +2782,13 @@ def cb_myord_detail(call):
         return parts[0] if parts else raw.strip()
 
     if feed_data:
-        cleaned = _clean_feed(feed_data)
+        import html as _html
+        safe_feed = _html.escape(str(feed_data))
         text = (f"📦 <b>سفارش #{oid}</b>\n\n"
                 f"محصول: {title}\n"
                 f"مبلغ: {price:,} تومان\n"
                 f"تاریخ: {date_str}\n\n"
-                f"━━━━━━━━━━━━━━━\n<code>{cleaned}</code>")
+                f"━━━━━━━━━━━━━━━\n<code>{safe_feed}</code>")
     else:
         # محصول نیاز به راه‌اندازی — تیکت موجود بررسی شود
         import sqlite3 as _sq2
@@ -2869,6 +2870,34 @@ def handle_partner_panel(message):
         return
 
     _show_partner_dashboard(message.chat.id, uid)
+
+
+def _partner_edit(call, text, kb):
+    """
+    helper برای edit پیام‌های پنل همکار.
+    اگه پیام عکس (بنر سطح) بود → caption رو edit کن یا پیام جدید بفرست.
+    """
+    cid  = call.message.chat.id
+    mid  = call.message.message_id
+    # اول text edit امتحان کن
+    try:
+        bot.edit_message_text(text, cid, mid, parse_mode="HTML", reply_markup=kb)
+        return
+    except Exception:
+        pass
+    # شاید photo بود → caption
+    try:
+        bot.edit_message_caption(caption=text, chat_id=cid, message_id=mid,
+                                 parse_mode="HTML", reply_markup=kb)
+        return
+    except Exception:
+        pass
+    # آخر: پیام جدید
+    try:
+        bot.delete_message(cid, mid)
+    except Exception:
+        pass
+    bot.send_message(cid, text, parse_mode="HTML", reply_markup=kb)
 
 
 def _show_partner_dashboard(chat_id, uid):
@@ -3250,8 +3279,7 @@ def cb_partner_ref_link(call):
         ),
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back")
     )
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                          parse_mode="HTML", reply_markup=kb)
+    _partner_edit(call, text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_sub_stats")
@@ -3294,8 +3322,7 @@ def cb_partner_sub_stats(call):
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                          parse_mode="HTML", reply_markup=kb)
+    _partner_edit(call, text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_wallet")
@@ -3330,8 +3357,7 @@ def cb_partner_wallet(call):
         types.InlineKeyboardButton(t("BTN_WALLET_PAYOUT"), callback_data="partner_payout"),
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
     )
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                          parse_mode="HTML", reply_markup=kb)
+    _partner_edit(call, text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_transfer")
