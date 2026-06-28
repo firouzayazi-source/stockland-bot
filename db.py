@@ -3549,6 +3549,7 @@ def ensure_partner_tiers_extended():
             ("commission_percent", "REAL DEFAULT 0"),
             ("color",             "TEXT DEFAULT '#6B7280'"),
             ("description",       "TEXT DEFAULT ''"),
+            ("photo_file_id",     "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE partner_tiers ADD COLUMN {col} {default};")
