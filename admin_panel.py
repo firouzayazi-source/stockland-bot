@@ -6403,19 +6403,33 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
             except Exception: color = '#6B7280'
             try: desc = e(tr['description'] or '')
             except Exception: desc = ''
+            try: photo_id = tr['photo_file_id'] or ''
+            except Exception: photo_id = ''
+            has_banner = '✅' if photo_id else '—'
             tier_rows += f"""<tr class="border-b hover:bg-gray-50">
               <td class="px-4 py-3 text-2xl">{e(tr['icon'])}</td>
               <td class="px-4 py-3 text-sm font-medium">{e(tr['name'])}</td>
               <td class="px-4 py-3 text-sm text-gray-600">{tr['min_orders']} خرید</td>
               <td class="px-4 py-3 text-sm text-gray-600">{commission}٪</td>
               <td class="px-4 py-3"><span style="background:{color};width:20px;height:20px;display:inline-block;border-radius:4px"></span></td>
+              <td class="px-4 py-3 text-xs text-center">{has_banner}</td>
               <td class="px-4 py-3 text-xs text-gray-400">{desc[:30]}</td>
-              <td class="px-4 py-3 flex gap-1">
-                <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},'{color}','{desc}')"
-                  class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
-                <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف؟')">
-                  <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded">حذف</button>
-                </form>
+              <td class="px-4 py-3">
+                <div class="flex gap-1 flex-wrap">
+                  <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},'{color}','{desc}')"
+                    class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
+                  <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer">
+                    📷 بنر
+                    <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
+                          enctype="multipart/form-data" class="hidden" id="bf{tr['id']}">
+                      <input type="file" name="banner_file" accept="image/*"
+                             onchange="document.getElementById('bf{tr['id']}').submit()">
+                    </form>
+                  </label>
+                  <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف؟')">
+                    <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded">حذف</button>
+                  </form>
+                </div>
               </td>
             </tr>"""
 
@@ -6446,9 +6460,9 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           <table class="w-full text-right min-w-max">
             <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
               <th class="px-4 py-3">آیکون</th><th class="px-4 py-3">سطح</th><th class="px-4 py-3">شرط ارتقا</th>
-              <th class="px-4 py-3">پورسانت</th><th class="px-4 py-3">رنگ</th><th class="px-4 py-3">توضیح</th><th class="px-4 py-3">عملیات</th>
+              <th class="px-4 py-3">پورسانت</th><th class="px-4 py-3">رنگ</th><th class="px-4 py-3">بنر</th><th class="px-4 py-3">توضیح</th><th class="px-4 py-3">عملیات</th>
             </tr></thead>
-            <tbody>{tier_rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
+            <tbody>{tier_rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
           </table>
         </div></div>
         <script>
@@ -6622,6 +6636,44 @@ async def partner_payout_reject(request: Request, pid: int):
         except Exception:
             pass
     return _redir("/admin/partners?tab=payouts&flash=تسویه+رد+شد")
+
+
+@router.post("/partners/tier/{tid}/upload-banner")
+async def partner_tier_upload_banner(request: Request, tid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    form = await request.form()
+    file = form.get("banner_file")
+    if not file or not file.filename:
+        return _redir(f"/admin/partners?tab=tiers&flash=فایلی+انتخاب+نشد")
+    file_bytes = await file.read()
+    # آپلود به تلگرام و دریافت file_id
+    try:
+        import requests as _req
+        token = _env("BOT_TOKEN", "")
+        admin_tg = _env("ADMIN_ID", "")
+        if not token or not admin_tg:
+            raise ValueError("BOT_TOKEN or ADMIN_ID not set")
+        resp = _req.post(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            data={"chat_id": admin_tg, "caption": f"بنر سطح #{tid}"},
+            files={"photo": (file.filename, file_bytes, file.content_type or "image/jpeg")},
+            timeout=15
+        )
+        result = resp.json()
+        if not result.get("ok"):
+            raise ValueError(result.get("description", "upload failed"))
+        photo_id = result["result"]["photo"][-1]["file_id"]
+        # ذخیره
+        conn = _db()
+        conn.execute("UPDATE partner_tiers SET photo_file_id=? WHERE id=?;", (photo_id, tid))
+        conn.commit()
+        conn.close()
+        _log(request, f"آپلود بنر سطح #{tid}", "همکاران", photo_id[:20])
+        return _redir(f"/admin/partners?tab=tiers&flash=بنر+آپلود+شد")
+    except Exception as ex:
+        return _redir(f"/admin/partners?tab=tiers&flash=خطا:+{str(ex)[:40]}")
 
 
 @router.post("/partners/tier/save")
