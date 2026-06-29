@@ -3874,10 +3874,18 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             f"SELECT COUNT(*) FROM orders o WHERE status='active'{where_order};"
         ).fetchone()[0]
 
-        # هزینه خرید از batches
-        cost_q = f"SELECT COALESCE(SUM(fb.purchase_price * fb.item_count + fb.side_cost),0) FROM feed_batches fb WHERE 1=1{where_batch};"
+        # هزینه خرید — فقط برای آیتم‌های تحویل‌شده (sold)
         try:
-            total_cost = conn.execute(cost_q).fetchone()[0]
+            total_cost = conn.execute("""
+                SELECT COALESCE(SUM(
+                    CASE WHEN fb.item_count > 0
+                    THEN (fb.purchase_price + CAST(fb.side_cost AS REAL)/fb.item_count)
+                    ELSE fb.purchase_price END
+                ), 0)
+                FROM product_feed pf
+                JOIN feed_batches fb ON pf.batch_id = fb.id
+                WHERE pf.delivered = 1;
+            """).fetchone()[0]
         except Exception:
             total_cost = 0
 

@@ -527,7 +527,7 @@ from db import (
 )
 
 BOT_BASE_URL = os.getenv("BOT_WEBHOOK_URL", "").rstrip("/")
-RAILWAY_PANEL = "https://stockland-bot-production.up.railway.app/admin"
+PANEL_URL = "https://panel.stland.ir/admin"
 
 
 def _get_product_chat_enabled(product_id: int) -> int:
@@ -631,7 +631,7 @@ def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup
         types.InlineKeyboardButton("✏️ پاسخ از تلگرام", callback_data=f"ticket_v2_reply_{ticket_id}_{user_id}"),
         types.InlineKeyboardButton("🔒 بستن تیکت", callback_data=f"ticket_v2_admin_close_{ticket_id}"),
     )
-    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{RAILWAY_PANEL}/tickets/{ticket_id}"))
+    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{PANEL_URL}/tickets/{ticket_id}"))
     return kb
 
 
@@ -876,7 +876,7 @@ def handle_admin_command(message):
     uid = message.from_user.id
     if not ensure_admin(uid):
         return
-    panel_url = "https://stockland-bot-production.up.railway.app/admin/"
+    panel_url = "https://panel.stland.ir/admin/"
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
         types.InlineKeyboardButton("🌐 ورود به پنل مدیریت", url=panel_url),
@@ -1487,28 +1487,54 @@ def _get_eff_price(product, uid):
 
 
 def _show_order_summary(chat_id, uid, product, category, pid):
-    """نمایش خلاصه سفارش — با یا بدون کد تخفیف."""
+    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی."""
     title     = product[2]
     base      = _get_eff_price(product, uid)
     state     = user_states.get(uid, {})
     discount  = int(state.get("applied_discount", 0))
     code_name = state.get("applied_code", "")
     final     = max(0, base - discount)
+    wallet_bal = get_wallet_balance(uid)
 
     lines = [f"🛒 <b>{title}</b>\n"]
     lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
     if discount > 0:
         lines.append(f"🎟 کد تخفیف: <code>{code_name}</code>")
         lines.append(f"💸 تخفیف: <b>−{discount:,}</b> تومان")
-        lines.append(f"\n💰 مبلغ قابل پرداخت:\n<b>{final:,}</b> تومان")
-    else:
-        lines.append(f"\n💰 مبلغ قابل پرداخت:\n<b>{final:,}</b> تومان")
+    lines.append(f"\n💰 مبلغ قابل پرداخت: <b>{final:,}</b> تومان")
+    if 0 < wallet_bal < final:
+        lines.append(f"👛 موجودی کیف‌پول: <b>{wallet_bal:,}</b> تومان")
+        lines.append(f"💳 باقیمانده از درگاه: <b>{final - wallet_bal:,}</b> تومان")
 
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton(
-        f"💳 پرداخت — {final:,} تومان",
-        callback_data=f"do_pay_{category}_{pid}"
-    ))
+
+    if wallet_bal >= final:
+        # پرداخت کامل از کیف‌پول
+        kb.add(types.InlineKeyboardButton(
+            f"💳 پرداخت با کیف‌پول — {final:,} تومان",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
+        kb.add(types.InlineKeyboardButton(
+            "🌐 پرداخت از درگاه",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
+    elif 0 < wallet_bal < final:
+        # پرداخت ترکیبی
+        kb.add(types.InlineKeyboardButton(
+            f"💳 پرداخت ترکیبی (کیف‌پول + {final-wallet_bal:,} ت از درگاه)",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
+        kb.add(types.InlineKeyboardButton(
+            f"🌐 پرداخت کامل از درگاه — {final:,} تومان",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
+    else:
+        # فقط درگاه
+        kb.add(types.InlineKeyboardButton(
+            f"🌐 پرداخت از درگاه — {final:,} تومان",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
+
     if discount > 0:
         kb.row(
             types.InlineKeyboardButton("🔄 تغییر کد", callback_data=f"enter_code_{category}_{pid}"),
@@ -1520,7 +1546,6 @@ def _show_order_summary(chat_id, uid, product, category, pid):
             callback_data=f"enter_code_{category}_{pid}"
         ))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_purchase"))
-
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
@@ -4475,7 +4500,7 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "admin_settings":
         bot.answer_callback_query(call.id)
-        panel_url = f"https://stockland-bot-production.up.railway.app/admin/settings"
+        panel_url = f"https://panel.stland.ir/admin/settings"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل تنظیمات", url=panel_url))
         bot.send_message(call.message.chat.id, "تنظیمات به پنل وب منتقل شده است:", reply_markup=kb)
@@ -4484,7 +4509,7 @@ def handle_callbacks(call: types.CallbackQuery):
     if data in ("admin_main_btn_manage", "admin_ui_main_buttons", "admin_ui_texts",
                 "admin_ui_captions", "admin_backup_menu"):
         bot.answer_callback_query(call.id)
-        panel_url = f"https://stockland-bot-production.up.railway.app/admin/"
+        panel_url = f"https://panel.stland.ir/admin/"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل مدیریت", url=panel_url))
         bot.send_message(call.message.chat.id, "این بخش به پنل وب منتقل شده:", reply_markup=kb)
@@ -4494,7 +4519,7 @@ def handle_callbacks(call: types.CallbackQuery):
             data in ("admin_export_backup", "admin_import_backup",
                      "admin_full_reset_1", "admin_full_reset_2", "admin_full_reset_do")):
         bot.answer_callback_query(call.id)
-        panel_url = "https://stockland-bot-production.up.railway.app/admin/"
+        panel_url = "https://panel.stland.ir/admin/"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 پنل مدیریت وب", url=panel_url))
         bot.send_message(call.message.chat.id, "این بخش از پنل وب مدیریت می‌شود:", reply_markup=kb)
