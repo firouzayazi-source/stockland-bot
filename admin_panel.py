@@ -2218,6 +2218,8 @@ async def database_page(request: Request, flash: str = ""):
         _sz = _os.path.getsize(_f)
         _szs = f"{_sz//1024} KB"
         _restore_options += f'<option value="{e(_fn)}">{_label} ({_szs})</option>'
+
+    def _chk(name, checked=True):
         mods_html = "".join(
             f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50 transition">'
             f'<input type="checkbox" name="{name}" value="{k}"'
@@ -2225,7 +2227,6 @@ async def database_page(request: Request, flash: str = ""):
             f'<span>{v["label"]}</span></label>'
             for k, v in MODULES.items()
         )
-        # چک‌باکس حسابداری مجزا
         acc_chk = (f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-red-50 transition col-span-2 border-t border-dashed border-red-100 mt-1">'
                    f'<input type="checkbox" name="{name}" value="__accounting__"'
                    f'{" checked" if checked else ""} class="w-4 h-4 rounded text-red-500">'
