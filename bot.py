@@ -208,52 +208,9 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
                 return
 
     wallet_balance = get_wallet_balance(user_id) if user_id else 0
-    text = (
-        f"نام سرویس: <b>{title}</b>\n"
-        f"قیمت: <b>{eff_price:,}</b> تومان\n\n"
-        f"{description or 'بدون توضیحات'}"
-    )
 
-    markup = types.InlineKeyboardMarkup()
-
-    if wallet_balance >= eff_price:
-        markup.add(types.InlineKeyboardButton(
-            "💳 پرداخت با کیف پول",
-            callback_data=f"confirm_wallet_{category}_{pid}"
-        ))
-    elif 0 < wallet_balance < eff_price:
-        markup.add(types.InlineKeyboardButton(
-            "💳 پرداخت ترکیبی (کیف پول + درگاه)",
-            callback_data=f"confirm_wallet_{category}_{pid}"
-        ))
-        markup.add(types.InlineKeyboardButton(
-            "🌐 پرداخت کامل از درگاه",
-            callback_data=f"confirm_full_{category}_{pid}"
-        ))
-    else:
-        markup.add(types.InlineKeyboardButton(
-            "🌐 پرداخت از درگاه",
-            callback_data=f"confirm_full_{category}_{pid}"
-        ))
-
-    markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase"))
-    markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
-
-    # اطلاع‌رسانی موجودی — فقط برای محصولات معمولی (نه setup)
-    try:
-        from db import count_feed_items, get_product_support_flag as _gpf
-        is_setup = _gpf(int(pid))
-        if not is_setup:
-            avail = count_feed_items(int(pid), delivered=False)
-            if avail == 0:
-                markup.add(types.InlineKeyboardButton(
-                    "🔔 اطلاع بده وقتی موجود شد",
-                    callback_data=f"notify_stock_{pid}"
-                ))
-    except Exception:
-        pass
-
-    bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
+    # مستقیم به خلاصه سفارش (بدون صفحه واسط)
+    _show_order_summary(chat_id, user_id, product, category, pid)
 
 
 
@@ -3104,8 +3061,7 @@ def cb_partner_ref_link(call):
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                          parse_mode="HTML", reply_markup=kb)
+    _partner_edit(call, text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_sub_stats")
@@ -3152,8 +3108,7 @@ def cb_partner_sub_stats(call):
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                          parse_mode="HTML", reply_markup=kb)
+    _partner_edit(call, text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_wallet")
@@ -3303,10 +3258,7 @@ def cb_partner_guide(call):
         "لطفاً با پشتیبانی تماس بگیرید.")
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    bot.edit_message_text(
-        guide_text, call.message.chat.id, call.message.message_id,
-        parse_mode="HTML", reply_markup=kb
-    )
+    _partner_edit(call, guide_text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_support")
