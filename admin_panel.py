@@ -1845,6 +1845,7 @@ async def settings_hub(request: Request, flash: str = ""):
         </div>
       </div>
     </div>"""
+    return _layout("تنظیمات", body, adm, flash=flash)
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -4060,8 +4061,9 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
       <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
         <h3 class="text-sm font-semibold text-amber-800 mb-3">📊 اطلاعات حسابداری (اختیاری)</h3>
         <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <div><label class="text-xs text-gray-600 block mb-1">قیمت خرید هر واحد (ت)</label>
-            <input type="number" id="acc_purchase" name="purchase_price" value="0"
+          <div><label class="text-xs text-gray-600 block mb-1">قیمت خرید هر واحد (ت) <span class="text-red-500">*</span></label>
+            <input type="number" id="acc_purchase" name="purchase_price" value="0" min="0"
+              class="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm bg-amber-50" placeholder="اجباری">
               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
           <div><label class="text-xs text-gray-600 block mb-1">هزینه‌های جانبی (ت)</label>
             <input type="number" id="acc_side" name="side_cost" value="0"
