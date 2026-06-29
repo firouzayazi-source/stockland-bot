@@ -2205,13 +2205,19 @@ async def database_page(request: Request, flash: str = ""):
         </div>"""
 
     def _chk(name, checked=True):
-        return "".join(
+        mods_html = "".join(
             f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50 transition">'
             f'<input type="checkbox" name="{name}" value="{k}"'
             f'{" checked" if checked else ""} class="w-4 h-4 rounded">'
             f'<span>{v["label"]}</span></label>'
             for k, v in MODULES.items()
         )
+        # چک‌باکس حسابداری مجزا
+        acc_chk = (f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-red-50 transition col-span-2 border-t border-dashed border-red-100 mt-1">'
+                   f'<input type="checkbox" name="{name}" value="__accounting__"'
+                   f'{" checked" if checked else ""} class="w-4 h-4 rounded text-red-500">'
+                   f'<span class="text-red-600 font-medium">💰 داده‌های حسابداری (هزینه‌ها + قیمت خرید)</span></label>')
+        return mods_html + acc_chk
 
     backup_checks = _chk("sections", checked=True)
     reset_checks  = _chk("reset_sections", checked=False)
@@ -2431,12 +2437,30 @@ async def reset_sync(request: Request):
     if guard: return JSONResponse({"error": "unauthorized"})
     form = await request.form()
     is_full = form.get("full") == "1"
-    secs = None if is_full else (form.getlist("reset_sections") or None)
+    all_secs = form.getlist("reset_sections") or []
+
+    # جداسازی حسابداری از بقیه
+    reset_accounting = is_full or "__accounting__" in all_secs
+    secs = None if is_full else ([s for s in all_secs if s != "__accounting__"] or None)
+
     from stbak_engine import factory_reset
+    total_deleted = 0
     try:
         result = factory_reset(_DB_PATH(), modules=secs)
-        _log(request, "ریست", "دیتابیس", f"{result['total_deleted']} رکورد")
-        return JSONResponse({"ok": True, "total_deleted": result["total_deleted"]})
+        total_deleted += result["total_deleted"]
+        # ریست حسابداری
+        if reset_accounting:
+            conn = _db()
+            try:
+                conn.execute("DELETE FROM expenses;")
+                try: conn.execute("DELETE FROM feed_batches;")
+                except Exception: pass
+                conn.commit()
+                total_deleted += 1
+            finally:
+                conn.close()
+        _log(request, "ریست", "دیتابیس", f"{total_deleted} رکورد")
+        return JSONResponse({"ok": True, "total_deleted": total_deleted})
     except Exception as ex:
         return JSONResponse({"error": str(ex)[:100]})
 
@@ -3704,7 +3728,7 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
     <div class="card overflow-hidden">
       <div class="px-5 py-3 border-b bg-gray-50 flex flex-wrap justify-between items-center gap-2">
         <span class="text-sm font-medium">لیست آیتم‌ها ({total})</span>
-        <div class="flex gap-2 flex-wrap">
+        <div class="flex gap-2 overflow-x-auto pb-1">
           <form method="post" action="/admin/feed/{pid}/clear-delivered" onsubmit="return confirm('تحویل‌شده‌ها پاک شوند؟')">
             <button class="px-3 py-1.5 text-xs text-red-400 hover:text-red-600 border border-red-200 rounded-lg">🗑 پاک‌سازی تحویل‌شده‌ها</button>
           </form>
@@ -6455,9 +6479,7 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
         <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
         <a href="/admin/accounting/products" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
         <a href="/admin/accounting/partners" class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
-        <form method="post" action="/admin/accounting/reset-costs" onsubmit="return confirm('هزینه‌ها و قیمت‌های خرید پاک شوند؟')">
-          <button class="px-3 py-1.5 text-sm bg-red-50 text-red-500 border border-red-200 rounded-lg">🗑 ریست محاسبات</button>
-        </form>
+
       </div>
     </div>
     {{filter_html}}
@@ -6517,22 +6539,6 @@ def _acbar(label, value, total, color):
       <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
       <div class="h-2 bg-gray-100 rounded-full"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
 
-
-@router.post("/accounting/reset-costs")
-async def accounting_reset_costs(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("DELETE FROM expenses;")
-        try: conn.execute("DELETE FROM feed_batches;")
-        except Exception: pass
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "ریست داده‌های حسابداری", "حسابداری", "expenses+feed_batches cleared")
-    return _redir("/admin/accounting?flash=داده‌های+هزینه+و+قیمت+خرید+پاک+شدند")
 
 
 @router.get("/accounting/expenses", response_class=HTMLResponse)
