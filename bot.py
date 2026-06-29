@@ -4822,7 +4822,15 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, "تایید شد" if ok else "یافت نشد", show_alert=True)
             if ok:
                 try:
-                    bot.send_message(target_uid, "✅ درخواست نمایندگی شما تایید شد. قیمت همکار برای شما فعال است.")
+                    # فقط keyboard رو آپدیت کن — دکمه همکاری تبدیل به پنل همکار
+                    new_kb = main_menu(user_id=target_uid)
+                    bot.send_message(
+                        target_uid,
+                        t("MSG_PARTNER_APPROVED",
+                          "✅ تبریک! درخواست همکاری شما تأیید شد.\n"
+                          "قیمت ویژه همکار برای شما فعال است."),
+                        reply_markup=new_kb
+                    )
                 except Exception:
                     pass
         else:
