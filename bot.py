@@ -209,6 +209,36 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     wallet_balance = get_wallet_balance(user_id) if user_id else 0
 
+    # امتیاز محصول
+    rating_text = ""
+    try:
+        from db import get_product_rating, ensure_ratings_schema
+        ensure_ratings_schema()
+        r = get_product_rating(int(pid))
+        if r["count"] > 0:
+            stars = "⭐️" * round(r["avg"]) + f"  {r['avg']}/5"
+            rating_text = f"\n{stars} ({r['count']} نظر)"
+    except Exception:
+        pass
+
+    # FAQ
+    faq_text = ""
+    try:
+        faq_text = _build_faq_text(int(pid))
+    except Exception:
+        pass
+
+    # ضمانت
+    guarantee = _build_guarantee_text()
+
+    text = (
+        f"نام سرویس: <b>{title}</b>{rating_text}\n"
+        f"قیمت: <b>{eff_price:,}</b> تومان\n\n"
+        f"{description or 'بدون توضیحات'}"
+        f"{faq_text}"
+        f"{guarantee}"
+    )
+
     # مستقیم به خلاصه سفارش (بدون صفحه واسط)
     _show_order_summary(chat_id, user_id, product, category, pid)
 
@@ -1364,6 +1394,11 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             f"<code>{html.escape(str(feed_data))}</code>",
             parse_mode="HTML"
         )
+        # ارسال درخواست امتیازدهی
+        try:
+            _send_rating_request(call.message.chat.id, uid, order_id, pid, title)
+        except Exception:
+            pass
         try:
             bot.send_message(ADMIN_ID,
                 f"📦 تحویل فوری\nOrder: #{order_id} | User: {uid}\n{title} — {eff_price:,} ت")
@@ -3952,6 +3987,126 @@ def cb_admin_toggle_chat(call: types.CallbackQuery):
                 send_admin_product_detail(call.message, product)
             except Exception:
                 pass
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── فاز ۱: امتیازدهی ────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _send_rating_request(chat_id: int, uid: int, order_id: int, pid: int, title: str):
+    """ارسال درخواست امتیازدهی ۳۰ ثانیه بعد از تحویل."""
+    import threading as _th
+    def _delayed():
+        import time as _t; _t.sleep(30)
+        from db import has_rated_order
+        if has_rated_order(order_id):
+            return
+        kb = types.InlineKeyboardMarkup(row_width=5)
+        kb.add(*[types.InlineKeyboardButton(
+            s, callback_data=f"rate_{order_id}_{pid}_{i}"
+        ) for i, s in enumerate(["⭐️1","⭐️2","⭐️3","⭐️4","⭐️5"], 1)])
+        kb.add(types.InlineKeyboardButton("بعداً", callback_data=f"rate_skip_{order_id}"))
+        try:
+            bot.send_message(chat_id,
+                f"🌟 <b>نظر شما مهمه!</b>\n\n"
+                f"از خرید «{title}» راضی بودید؟\n"
+                f"یه امتیاز بدید (چند ثانیه وقت می‌بره):",
+                parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
+    _th.Thread(target=_delayed, daemon=True).start()
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rate_") and not c.data.startswith("rate_skip_"))
+def cb_rating(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        _, order_id, pid, rating = call.data.split("_")
+        order_id = int(order_id); pid = int(pid); rating = int(rating)
+    except Exception:
+        return
+    from db import save_rating, has_rated_order
+    if has_rated_order(order_id):
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception: pass
+        return
+    stars = "⭐️" * rating
+    # ذخیره امتیاز
+    if save_rating(uid, order_id, pid, rating):
+        if rating >= 4:
+            # امتیاز بالا — پیام تشکر
+            try:
+                bot.edit_message_text(
+                    f"✅ ممنون از نظر شما!\n{stars}\n\nخوشحالیم که راضی بودید 🙏",
+                    call.message.chat.id, call.message.message_id, parse_mode="HTML"
+                )
+            except Exception: pass
+        else:
+            # امتیاز پایین — بپرس چرا
+            user_states[uid] = {"mode": "rating_comment", "order_id": order_id, "pid": pid, "rating": rating}
+            try:
+                bot.edit_message_text(
+                    f"{stars} ثبت شد. می‌خوایم بهتر بشیم!\n\n"
+                    f"اگه مشکلی داشتید بنویسید (یا /skip بزنید):",
+                    call.message.chat.id, call.message.message_id, parse_mode="HTML"
+                )
+            except Exception: pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rate_skip_"))
+def cb_rating_skip(call):
+    bot.answer_callback_query(call.id)
+    try: bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception: pass
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "rating_comment")
+def handle_rating_comment(message):
+    uid = message.from_user.id
+    st = user_states.pop(uid, {})
+    comment = (message.text or "").strip()
+    if comment and comment != "/skip":
+        from db import save_rating
+        # آپدیت کامنت
+        try:
+            import sqlite3 as _sqr
+            from config import DB_PATH as _DBPR
+            conn = _sqr.connect(_DBPR)
+            conn.execute("UPDATE product_ratings SET comment=? WHERE order_id=?;",
+                         (comment, st["order_id"]))
+            conn.commit(); conn.close()
+        except Exception: pass
+        # اطلاع به ادمین
+        try:
+            bot.send_message(ADMIN_ID,
+                f"⭐️ نظر جدید (امتیاز {st['rating']})\n"
+                f"Product #{st['pid']}\n"
+                f"کامنت: {comment}")
+        except Exception: pass
+    bot.reply_to(message, "✅ نظر شما ثبت شد. ممنون از بازخوردتون 🙏")
+
+
+# ─── نمایش FAQ در محصول ──────────────────────────────────────────────────────
+
+def _build_faq_text(pid: int) -> str:
+    """ساخت متن FAQ برای محصول."""
+    from db import get_product_faqs
+    faqs = get_product_faqs(pid)
+    if not faqs:
+        return ""
+    lines = ["\n\n❓ <b>سوالات متداول</b>"]
+    for i, f in enumerate(faqs, 1):
+        lines.append(f"\n<b>{i}. {f['question']}</b>\n{f['answer']}")
+    return "\n".join(lines)
+
+
+def _build_guarantee_text() -> str:
+    """متن ضمانت بازگشت وجه."""
+    return t("MSG_GUARANTEE_TEXT",
+        "\n\n🛡 <b>ضمانت بازگشت وجه</b>\n"
+        "در صورت هرگونه مشکل، ظرف ۲۴ ساعت وجه بازگشت داده می‌شود.")
 
 
 @bot.callback_query_handler(func=lambda c: True)

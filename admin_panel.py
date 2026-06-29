@@ -3429,6 +3429,108 @@ async def product_new_post(request: Request,
         conn.close()
     return _redir("/admin/products?flash=محصول+اضافه+شد")
 
+@router.get("/products/{pid}/faqs", response_class=HTMLResponse)
+async def product_faqs_page(request: Request, pid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+    from db import get_product_faqs, get_product_ratings_list, get_product_rating, ensure_faq_schema, ensure_ratings_schema
+    ensure_faq_schema(); ensure_ratings_schema()
+    conn = _db()
+    try:
+        prod = conn.execute("SELECT title FROM products WHERE id=?;", (pid,)).fetchone()
+    finally:
+        conn.close()
+    if not prod:
+        return _redir("/admin/products")
+    faqs = get_product_faqs(pid)
+    ratings = get_product_ratings_list(pid, 20)
+    rstat = get_product_rating(pid)
+
+    faq_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
+      <td class="px-4 py-3 text-sm font-medium">{e(f['question'])}</td>
+      <td class="px-4 py-3 text-sm text-gray-500">{e(f['answer'][:60])}...</td>
+      <td class="px-4 py-3">
+        <form method="post" action="/admin/products/{pid}/faqs/{f['id']}/delete" onsubmit="return confirm('حذف؟')">
+          <button class="text-xs text-red-400 hover:text-red-600">حذف</button>
+        </form>
+      </td>
+    </tr>""" for f in faqs) or "<tr><td colspan='3' class='text-center py-4 text-gray-400'>سوالی ثبت نشده</td></tr>"
+
+    rating_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
+      <td class="px-3 py-2">{"⭐️"*r['rating']}</td>
+      <td class="px-3 py-2">{e(r['full_name'] or '—')}</td>
+      <td class="px-3 py-2 text-gray-500">{e(r['comment'] or '—')}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+    </tr>""" for r in ratings) or "<tr><td colspan='4' class='text-center py-4 text-gray-400'>نظری ثبت نشده</td></tr>"
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← محصولات", "/admin/products", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">📦 {e(prod[0])}</h1>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-6">
+      <!-- FAQ -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">❓ سوالات متداول</h2>
+        <form method="post" action="/admin/products/{pid}/faqs/new" class="space-y-3 mb-4">
+          <input type="text" name="question" placeholder="سوال..." required
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          {_textarea("answer", "جواب...", rows=3)}
+          {_btn("افزودن سوال","",color="indigo",small=True)}
+        </form>
+        <div class="overflow-x-auto"><table class="w-full text-right text-sm">
+          <thead><tr class="text-xs text-gray-500 border-b">
+            <th class="px-4 py-2">سوال</th><th class="px-4 py-2">جواب</th><th></th>
+          </tr></thead>
+          <tbody>{faq_rows}</tbody>
+        </table></div>
+      </div>
+
+      <!-- امتیازها -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-2">⭐️ نظرات کاربران</h2>
+        <div class="text-3xl font-bold text-amber-500 mb-1">{rstat['avg']}/5</div>
+        <div class="text-xs text-gray-400 mb-4">{rstat['count']} نظر ثبت‌شده</div>
+        <div class="overflow-x-auto"><table class="w-full text-right">
+          <thead><tr class="text-xs text-gray-500 border-b">
+            <th class="px-3 py-2">امتیاز</th><th class="px-3 py-2">کاربر</th>
+            <th class="px-3 py-2">نظر</th><th class="px-3 py-2">تاریخ</th>
+          </tr></thead>
+          <tbody>{rating_rows}</tbody>
+        </table></div>
+      </div>
+    </div>"""
+    return _layout(f"FAQ — {prod[0]}", body, adm, flash=flash)
+
+
+@router.post("/products/{pid}/faqs/new")
+async def product_faq_new(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+    from db import add_product_faq, ensure_faq_schema
+    ensure_faq_schema()
+    form = await request.form()
+    q = str(form.get("question","")).strip()
+    a = str(form.get("answer","")).strip()
+    if q and a:
+        add_product_faq(pid, q, a)
+        _log(request, "افزودن FAQ", "محصولات", f"product:{pid}")
+    return _redir(f"/admin/products/{pid}/faqs?flash=سوال+اضافه+شد")
+
+
+@router.post("/products/{pid}/faqs/{fid}/delete")
+async def product_faq_delete(request: Request, pid: int, fid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "products")
+    if guard: return guard
+    from db import delete_product_faq
+    delete_product_faq(fid)
+    return _redir(f"/admin/products/{pid}/faqs?flash=حذف+شد")
+
+
 @router.get("/products/{pid}", response_class=HTMLResponse)
 async def product_edit_get(request: Request, pid: int, flash: str = ""):
     adm = _get_admin(request)
@@ -3505,6 +3607,7 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
           <div class="text-3xl font-bold text-indigo-700">{int(feed["a"] or 0)}</div>
           <div class="text-xs text-gray-400 mb-3">از {int(feed["t"] or 0)} کل</div>
           {_btn("مدیریت موجودی →", f"/admin/feed/{pid}", "teal")}
+          {_btn("❓ FAQ و نظرات", f"/admin/products/{pid}/faqs", "amber")}
         </div>
         <div class="bg-white rounded-xl shadow p-5 space-y-2">
           <form method="post" action="/admin/products/{pid}/toggle">
