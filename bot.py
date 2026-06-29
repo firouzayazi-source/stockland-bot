@@ -1749,35 +1749,9 @@ def handle_confirm_full(call):
     partner_ok    = is_partner_approved(uid)
     eff_price     = partner_price if (partner_ok and partner_price) else price
 
-    # تخفیف اعمال شده؟
-    discount  = user_states.get(uid, {}).get("applied_discount", 0)
+    # تخفیف اعمال شده از _show_order_summary
+    discount  = int(user_states.get(uid, {}).get("applied_discount", 0))
     eff_price = max(0, eff_price - discount)
-
-    # کد تخفیف هنوز پرسیده نشده؟
-    if not discount and not user_states.get(uid, {}).get("discount_asked"):
-        st = user_states.setdefault(uid, {})
-        st["discount_asked"] = True
-        st["pending_cb"]     = call.data
-        st["pid"]            = pid
-        st["category"]       = category
-        st["eff_price"]      = eff_price
-
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton(
-            f"✅ ادامه بدون تخفیف — {eff_price:,} تومان",
-            callback_data=f"pay_nodiscount_full_{category}_{pid_str}"
-        ))
-        bot.send_message(
-            call.message.chat.id,
-            f"🛒 <b>{title}</b>\n"
-            f"💰 مبلغ: <b>{eff_price:,}</b> تومان\n\n"
-            "🎟 اگر کد تخفیف دارید همین الان ارسال کنید.\n"
-            "در غیر این صورت دکمه زیر را بزنید:",
-            parse_mode="HTML", reply_markup=kb
-        )
-        bot.register_next_step_handler(call.message, _process_discount_code)
-        bot.answer_callback_query(call.id)
-        return
 
     # پاک کردن state
     user_states.pop(uid, None)
@@ -1825,39 +1799,13 @@ def handle_confirm_wallet(call):
     partner_ok = is_partner_approved(uid)
     eff_price = partner_price if (partner_ok and partner_price) else price
 
-    # تخفیف اعمال شده؟
-    discount = user_states.get(uid, {}).get("applied_discount", 0)
+    # تخفیف اعمال شده از _show_order_summary
+    discount = int(user_states.get(uid, {}).get("applied_discount", 0))
     eff_price = max(0, eff_price - discount)
 
-    # اگه تخفیف هنوز پرسیده نشده → قبل از پرداخت کد بخواه
-    if not discount and not user_states.get(uid, {}).get("discount_asked"):
-        st = user_states.setdefault(uid, {})
-        st["discount_asked"] = True
-        st["pending_cb"] = call.data
-        st["pid"] = pid
-        st["category"] = category
-        st["eff_price"] = eff_price
-
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton(
-            f"✅ ادامه بدون تخفیف — {eff_price:,} تومان",
-            callback_data=f"pay_nodiscount_{category}_{pid_str}"
-        ))
-        bot.send_message(
-            call.message.chat.id,
-            f"🛒 <b>{title}</b>\n"
-            f"💰 مبلغ: <b>{eff_price:,}</b> تومان\n\n"
-            "🎟 اگر کد تخفیف دارید همین الان ارسال کنید.\n"
-            "در غیر این صورت دکمه زیر را بزنید:",
-            parse_mode="HTML", reply_markup=kb
-        )
-        bot.register_next_step_handler(call.message, _process_discount_code)
-        bot.answer_callback_query(call.id)
-        return
-
-    # پاک کردن state
-    user_states.pop(uid, None)
-
+    # پاک کردن state (discount حفظ می‌شه تا finalize)
+    st = user_states.pop(uid, {})
+    wallet_used = 0
     wallet_balance = get_wallet_balance(uid)
     if wallet_balance >= eff_price:
         finalize_product_order(call, uid, product, category, eff_price)
