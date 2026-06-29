@@ -4221,3 +4221,89 @@ def delete_product_faq(faq_id: int):
         conn.commit()
     finally:
         conn.close()
+
+
+# ─── Maintenance Mode ─────────────────────────────────────────────────────────
+
+def get_maintenance_mode() -> bool:
+    conn = _get_connection()
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
+            (key TEXT PRIMARY KEY, value TEXT);""")
+        row = conn.execute("SELECT value FROM bot_config WHERE key='maintenance';").fetchone()
+        return row and row[0] == "1"
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def set_maintenance_mode(enabled: bool):
+    conn = _get_connection()
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
+            (key TEXT PRIMARY KEY, value TEXT);""")
+        conn.execute("INSERT OR REPLACE INTO bot_config (key,value) VALUES ('maintenance',?);",
+                     ("1" if enabled else "0",))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── رسیدهای کارت‌به‌کارت ────────────────────────────────────────────────────
+
+def ensure_card_receipts_schema():
+    conn = _get_connection()
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS card_receipts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL,
+            amount      INTEGER NOT NULL,
+            file_id     TEXT NOT NULL,
+            status      TEXT DEFAULT 'pending',
+            admin_note  TEXT DEFAULT '',
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+        );""")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_card_receipt(user_id: int, amount: int, file_id: str) -> int:
+    ensure_card_receipts_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO card_receipts (user_id,amount,file_id) VALUES (?,?,?);",
+            (user_id, amount, file_id))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_card_receipts(status: str = "pending") -> list:
+    ensure_card_receipts_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = f"WHERE r.status='{status}'" if status else ""
+        return [dict(r) for r in conn.execute(f"""
+            SELECT r.*, u.full_name, u.username
+            FROM card_receipts r
+            LEFT JOIN users u ON u.user_id=r.user_id
+            {where} ORDER BY r.id DESC LIMIT 100;
+        """).fetchall()]
+    finally:
+        conn.close()
+
+
+def update_card_receipt(rid: int, status: str, note: str = ""):
+    conn = _get_connection()
+    try:
+        conn.execute("""UPDATE card_receipts SET status=?,admin_note=?,updated_at=datetime('now')
+            WHERE id=?;""", (status, note, rid))
+        conn.commit()
+    finally:
+        conn.close()

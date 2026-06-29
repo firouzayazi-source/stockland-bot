@@ -888,6 +888,39 @@ def handle_admin_command(message):
     bot.send_message(uid, "🛍 پنل مدیریت استوک لند:", reply_markup=kb)
 
 
+MAINTENANCE_MSG = (
+    "🚧 ربات در حال بروزرسانی است.\n"
+    "به‌زودی با امکانات جدید بازخواهیم گشت.\n"
+    "از شکیبایی شما سپاسگزاریم. ❤️"
+)
+
+@bot.message_handler(func=lambda m: _check_maintenance(m), content_types=["text","photo","document","voice","video"])
+def maintenance_blocker(message):
+    bot.send_message(message.chat.id, MAINTENANCE_MSG)
+
+@bot.callback_query_handler(func=lambda c: _check_maintenance_cb(c))
+def maintenance_blocker_cb(call):
+    bot.answer_callback_query(call.id, "🚧 ربات در حال بروزرسانی است.", show_alert=True)
+
+def _check_maintenance(message) -> bool:
+    try:
+        if message.from_user.id == ADMIN_ID:
+            return False
+        from db import get_maintenance_mode
+        return get_maintenance_mode()
+    except Exception:
+        return False
+
+def _check_maintenance_cb(call) -> bool:
+    try:
+        if call.from_user.id == ADMIN_ID:
+            return False
+        from db import get_maintenance_mode
+        return get_maintenance_mode()
+    except Exception:
+        return False
+
+
 @bot.message_handler(commands=["start"])
 def handle_start(message):
     init_db(DB_PATH)
@@ -5377,15 +5410,83 @@ def handle_callbacks(call: types.CallbackQuery):
 
 
 @bot.message_handler(
-    func=lambda m: user_states.get(m.from_user.id, {}).get("mode")
-    == "card2card_receipt",
-    content_types=["text"],
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt",
+    content_types=["photo"]
 )
-def handle_card2card_text(message):
-    bot.reply_to(
-        message,
-        "در حال حاضر فقط عکس رسید کارت به کارت را ارسال کنید. برای لغو از دکمه ❌ انصراف استفاده کنید.",
-    )
+def handle_card2card_photo(message):
+    uid = message.from_user.id
+    st  = user_states.pop(uid, {})
+    amount = int(st.get("amount", 0))
+    file_id = message.photo[-1].file_id
+
+    from db import save_card_receipt, ensure_card_receipts_schema
+    ensure_card_receipts_schema()
+    rid = save_card_receipt(uid, amount, file_id)
+
+    bot.reply_to(message,
+        "✅ رسید شما ثبت شد.\n"
+        f"شناسه پیگیری: <code>#{rid}</code>\n"
+        "پس از بررسی توسط پشتیبانی، کیف پول شما شارژ می‌شود.",
+        parse_mode="HTML")
+
+    # ارسال به ادمین
+    try:
+        from db import get_user
+        user = get_user(uid)
+        name = user["full_name"] if user else str(uid)
+        bot.send_photo(
+            ADMIN_ID, file_id,
+            caption=(
+                f"💳 <b>رسید کارت‌به‌کارت جدید</b>\n"
+                f"شناسه: #{rid}\n"
+                f"کاربر: {name} (<code>{uid}</code>)\n"
+                f"مبلغ: <b>{amount:,}</b> تومان\n\n"
+                f"تأیید: /approve_receipt_{rid}\n"
+                f"رد: /reject_receipt_{rid}"
+            ),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+
+@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
+                     (m.text or "").startswith("/approve_receipt_"))
+def handle_approve_receipt(message):
+    rid = int((message.text or "").replace("/approve_receipt_", "").strip())
+    from db import update_card_receipt, get_card_receipts
+    from db import get_wallet_balance, add_wallet_balance
+    receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
+    if not receipts:
+        bot.reply_to(message, "رسید یافت نشد یا قبلاً بررسی شده."); return
+    r = receipts[0]
+    update_card_receipt(rid, "approved", "تأیید توسط ادمین")
+    add_wallet_balance(r["user_id"], r["amount"])
+    bot.reply_to(message, f"✅ رسید #{rid} تأیید شد. {r['amount']:,} تومان به کیف پول افزوده شد.")
+    try:
+        bot.send_message(r["user_id"],
+            f"✅ پرداخت شما تأیید شد!\n"
+            f"مبلغ <b>{r['amount']:,}</b> تومان به کیف پول شما اضافه شد.",
+            parse_mode="HTML")
+    except Exception: pass
+
+
+@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
+                     (m.text or "").startswith("/reject_receipt_"))
+def handle_reject_receipt(message):
+    rid = int((message.text or "").replace("/reject_receipt_", "").strip())
+    from db import update_card_receipt, get_card_receipts
+    receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
+    if not receipts:
+        bot.reply_to(message, "رسید یافت نشد یا قبلاً بررسی شده."); return
+    r = receipts[0]
+    update_card_receipt(rid, "rejected", "رد توسط ادمین")
+    bot.reply_to(message, f"❌ رسید #{rid} رد شد.")
+    try:
+        bot.send_message(r["user_id"],
+            "❌ متأسفانه رسید پرداخت شما تأیید نشد.\n"
+            "لطفاً با پشتیبانی تماس بگیرید.")
+    except Exception: pass
 
 
 # ========= MAIN =========
