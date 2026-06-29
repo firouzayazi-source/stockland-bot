@@ -4076,3 +4076,139 @@ def add_expense_category(name: str):
         conn.execute("INSERT OR IGNORE INTO expense_categories (name) VALUES (?);", (name,))
         conn.commit()
     finally: conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── فاز ۱: امتیازدهی + FAQ ──────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_ratings_schema():
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_ratings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                order_id    INTEGER NOT NULL,
+                product_id  INTEGER NOT NULL,
+                rating      INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                comment     TEXT DEFAULT '',
+                created_at  TEXT DEFAULT (datetime('now')),
+                UNIQUE(order_id)
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_rating(user_id: int, order_id: int, product_id: int, rating: int, comment: str = "") -> bool:
+    ensure_ratings_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("""INSERT OR IGNORE INTO product_ratings
+            (user_id, order_id, product_id, rating, comment) VALUES (?,?,?,?,?);""",
+            (user_id, order_id, product_id, rating, comment))
+        conn.commit()
+        return conn.execute("SELECT changes();").fetchone()[0] > 0
+    finally:
+        conn.close()
+
+
+def get_product_rating(product_id: int) -> dict:
+    """میانگین امتیاز و تعداد نظرات یک محصول."""
+    ensure_ratings_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("""
+            SELECT COUNT(*) as cnt, ROUND(AVG(rating),1) as avg
+            FROM product_ratings WHERE product_id=?;
+        """, (product_id,)).fetchone()
+        return {"count": int(row[0] or 0), "avg": float(row[1] or 0)}
+    finally:
+        conn.close()
+
+
+def get_product_ratings_list(product_id: int, limit: int = 20) -> list:
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("""
+            SELECT pr.rating, pr.comment, pr.created_at, u.full_name
+            FROM product_ratings pr
+            LEFT JOIN users u ON u.user_id=pr.user_id
+            WHERE pr.product_id=? ORDER BY pr.id DESC LIMIT ?;
+        """, (product_id, limit)).fetchall()]
+    finally:
+        conn.close()
+
+
+def has_rated_order(order_id: int) -> bool:
+    ensure_ratings_schema()
+    conn = _get_connection()
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM product_ratings WHERE order_id=?;", (order_id,)
+        ).fetchone()[0] > 0
+    finally:
+        conn.close()
+
+
+# ─── FAQ ─────────────────────────────────────────────────────────────────────
+
+def ensure_faq_schema():
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_faqs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id  INTEGER NOT NULL,
+                question    TEXT NOT NULL,
+                answer      TEXT NOT NULL,
+                sort_order  INTEGER DEFAULT 0,
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_product_faqs(product_id: int) -> list:
+    ensure_faq_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM product_faqs WHERE product_id=? ORDER BY sort_order, id;",
+            (product_id,)
+        ).fetchall()]
+    finally:
+        conn.close()
+
+
+def add_product_faq(product_id: int, question: str, answer: str) -> int:
+    ensure_faq_schema()
+    conn = _get_connection()
+    try:
+        mx = conn.execute(
+            "SELECT COALESCE(MAX(sort_order),0)+1 FROM product_faqs WHERE product_id=?;",
+            (product_id,)
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO product_faqs (product_id,question,answer,sort_order) VALUES (?,?,?,?);",
+            (product_id, question, answer, mx)
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_product_faq(faq_id: int):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM product_faqs WHERE id=?;", (faq_id,))
+        conn.commit()
+    finally:
+        conn.close()
