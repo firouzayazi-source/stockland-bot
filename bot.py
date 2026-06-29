@@ -3059,7 +3059,11 @@ def cb_partner_ref_link(call):
         f"• کل معرفی‌ها: {stats['total']}\n"
         f"• پاداش دریافتی: {stats['total_reward']:,} تومان"
     )
-    kb = types.InlineKeyboardMarkup()
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton(
+        "📤 ارسال لینک به دوستان",
+        switch_inline_query=f"با این لینک ثبت‌نام کن!\n{link}"
+    ))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
     _partner_edit(call, text, kb)
 
