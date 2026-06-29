@@ -1,0 +1,16 @@
+[Unit]
+Description=Robuser Internal API
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Robuser
+EnvironmentFile=/etc/robuser.env
+ExecStart=/opt/Robuser/venv/bin/python /opt/Robuser/services/internal_api.py
+Restart=always
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

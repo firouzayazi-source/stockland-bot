@@ -1,0 +1,175 @@
+from telebot import types
+from db import get_root_categories, get_subcategories, get_category_products, is_partner_approved
+
+
+# ─── منوی اصلی (Reply Keyboard) ─────────────────────────────────────────────
+
+def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
+    """منوی اصلی داینامیک — دسته‌های ریشه از DB + دکمه‌های سیستمی"""
+    from ui_texts import t, is_main_button_enabled, DEFAULT_UI_TEXTS
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+
+    # دکمه‌های دسته‌بندی (داینامیک از DB)
+    root_cats = get_root_categories(active_only=True)
+    if root_cats:
+        cat_buttons = []
+        for cat in root_cats:
+            emoji = (cat["emoji"] or "").strip()
+            label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+            cat_buttons.append(types.KeyboardButton(label))
+        for i in range(0, len(cat_buttons), 2):
+            if i + 1 < len(cat_buttons):
+                kb.row(cat_buttons[i], cat_buttons[i + 1])
+            else:
+                kb.row(cat_buttons[i])
+
+    sys_row1 = []
+    if is_main_button_enabled("MAIN_BTN_MY_ORDERS"):
+        sys_row1.append(types.KeyboardButton(t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "خریدهای من 🧾"))))
+    if is_main_button_enabled("MAIN_BTN_WALLET"):
+        sys_row1.append(types.KeyboardButton(t("MAIN_BTN_WALLET", DEFAULT_UI_TEXTS.get("MAIN_BTN_WALLET", "کیف پول 💰"))))
+    if sys_row1:
+        kb.row(*sys_row1)
+
+    # همکار یا درخواست نمایندگی
+    partner_btn = None
+    if user_id and is_partner_approved(int(user_id)):
+        if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
+            partner_btn = types.KeyboardButton(t("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "پنل همکار 🤝")))
+    else:
+        if is_main_button_enabled("MAIN_BTN_PARTNER_REQUEST"):
+            partner_btn = types.KeyboardButton(t("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "درخواست نمایندگی 📝")))
+    if partner_btn:
+        kb.row(partner_btn)
+
+    sys_row2 = []
+    is_partner = user_id and is_partner_approved(int(user_id))
+    if is_main_button_enabled("MAIN_BTN_GUIDE"):
+        sys_row2.append(types.KeyboardButton(t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "راهنما 🔑"))))
+    # پشتیبانی فقط برای کاربران عادی — همکاران از پنل همکار چت می‌کنن
+    if not is_partner and is_main_button_enabled("MAIN_BTN_SUPPORT"):
+        sys_row2.append(types.KeyboardButton(t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "پشتیبانی 👨‍💻"))))
+    if sys_row2:
+        kb.row(*sys_row2)
+
+    return kb
+
+
+# ─── نمایش محتوای یک دسته (Inline) ─────────────────────────────────────────
+
+def category_inline_keyboard(cat_id: int, user_id: int = None) -> types.InlineKeyboardMarkup:
+    """نمایش زیردسته‌ها یا محصولات یک دسته"""
+    from db import get_category, get_subcategories, get_category_products
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    cat = get_category(cat_id)
+    if not cat:
+        return kb
+
+    subcats = get_subcategories(cat_id, active_only=True)
+
+    if subcats:
+        for sub in subcats:
+            emoji = (sub["emoji"] or "").strip()
+            label = f"{emoji} {sub['name']}".strip() if emoji else sub["name"]
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"cat_{sub['id']}"))
+    else:
+        products = get_category_products(cat_id, active_only=True)
+        if not products:
+            kb.add(types.InlineKeyboardButton("محصولی موجود نیست", callback_data="noop"))
+        else:
+            partner_ok = user_id and is_partner_approved(int(user_id))
+            for p in products:
+                pp = p["partner_price"]
+                eff = pp if (partner_ok and pp) else p["price"]
+                label = f"{p['title']} | {int(eff):,} تومان"
+                kb.add(types.InlineKeyboardButton(label, callback_data=f"cat_{cat_id}_p_{p['id']}"))
+
+    # دکمه بازگشت
+    if cat["parent_id"]:
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=f"cat_{cat['parent_id']}"))
+    else:
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت به منو", callback_data="back_main"))
+
+    return kb
+
+
+# ─── کیف پول ────────────────────────────────────────────────────────────────
+
+def wallet_inline_keyboard():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ شارژ حساب", callback_data="wallet_charge"))
+    return kb
+
+
+# ─── منوی ادمین (Inline) ────────────────────────────────────────────────────
+
+def admin_main_inline():
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🧾 مدیریت محصولات", callback_data="admin_products"),
+        types.InlineKeyboardButton("📦 مدیریت موجودی", callback_data="admin_feed_panel"),
+        types.InlineKeyboardButton("💰 مدیریت کیف پول", callback_data="admin_wallet"),
+        types.InlineKeyboardButton("📊 آمار کلی", callback_data="admin_stats"),
+        types.InlineKeyboardButton("📦 آخرین سفارش‌ها", callback_data="admin_payments"),
+        types.InlineKeyboardButton("🤝 درخواست‌های همکار", callback_data="admin_partner_requests"),
+        types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"),
+    )
+    return kb
+
+
+def admin_settings_menu():
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("🧩 متن دکمه‌ها و پیام‌ها", callback_data="admin_settings"),
+        types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back"),
+    )
+    return kb
+
+
+def admin_main_btn_manage_menu():
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for key in MAIN_BUTTON_KEYS:
+        enabled = is_main_button_enabled(key)
+        label = ("✅ " if enabled else "❌ ") + t(key)
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"admin_main_btn_toggle_{key}"))
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_settings"))
+    return kb
+
+
+def admin_ui_list_menu(keys: list[tuple[str, str]]):
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for k, d in keys:
+        label = t(k, d)
+        if len(label) > 60:
+            label = label[:57] + "..."
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"admin_ui_edit_{k}"))
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_settings"))
+    return kb
+
+
+# ─── توابع قدیمی (backward compat) ──────────────────────────────────────────
+
+def other_products_menu():
+    """backward compat — استفاده از category_inline_keyboard توصیه می‌شه"""
+    from db import get_root_categories
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    cats = get_root_categories(active_only=True)
+    for cat in cats:
+        emoji = (cat["emoji"] or "").strip()
+        label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"cat_{cat['id']}"))
+    return kb
+
+
+def admin_other_products_menu():
+    """backward compat"""
+    from db import get_root_categories
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    cats = get_root_categories(active_only=False)
+    for cat in cats:
+        emoji = (cat["emoji"] or "").strip()
+        label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"admin_cat_{cat['id']}"))
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_products"))
+    return kb
