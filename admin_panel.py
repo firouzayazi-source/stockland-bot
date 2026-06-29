@@ -442,6 +442,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
+            {nav_item("/admin/receipts", "credit-card", "رسیدهای کارت", "wallets")}
             {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "wallets")}
             {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
@@ -1585,6 +1586,159 @@ async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0")
     return JSONResponse({"ok": True})
 
 
+@router.get("/receipts", response_class=HTMLResponse)
+async def card_receipts_page(request: Request, status: str = "pending", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_card_receipts, ensure_card_receipts_schema
+    ensure_card_receipts_schema()
+    receipts = get_card_receipts(status)
+
+    tabs = ''.join(
+        f'<a href="/admin/receipts?status={s}" class="px-3 py-1.5 rounded-lg text-xs border '
+        f'{"bg-indigo-600 text-white" if status==s else "bg-white text-gray-500"}">{l}</a>'
+        for s, l in [("pending","⏳ در انتظار"),("approved","✅ تأیید شده"),("rejected","❌ رد شده"),("","همه")]
+    )
+
+    rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
+      <td class="px-3 py-3 text-xs text-gray-400">#{r['id']}</td>
+      <td class="px-3 py-3">{e(r['full_name'] or r['username'] or str(r['user_id']))}</td>
+      <td class="px-3 py-3 font-bold text-green-600">{int(r['amount'] or 0):,}</td>
+      <td class="px-3 py-3">
+        <a href="/admin/receipts/{r['id']}/view" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده رسید</a>
+      </td>
+      <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs
+        {'bg-amber-100 text-amber-700' if r['status']=='pending' else 'bg-green-100 text-green-700' if r['status']=='approved' else 'bg-red-100 text-red-600'}">
+        {'⏳' if r['status']=='pending' else '✅' if r['status']=='approved' else '❌'}
+      </span></td>
+      <td class="px-3 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:16]}</td>
+      {'<td class="px-3 py-3 flex gap-1"><form method="post" action="/admin/receipts/' + str(r["id"]) + '/approve"><button class="px-2 py-1 bg-green-600 text-white rounded text-xs">✅ تأیید</button></form><form method="post" action="/admin/receipts/' + str(r["id"]) + '/reject"><button class="px-2 py-1 bg-red-50 text-red-600 border border-red-200 rounded text-xs">❌ رد</button></form></td>' if r['status']=='pending' else '<td></td>'}
+    </tr>""" for r in receipts) or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>رسیدی یافت نشد</td></tr>"
+
+    body = f"""
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">💳 رسیدهای کارت‌به‌کارت</h1>
+    <div class="flex gap-2 mb-4">{tabs}</div>
+    <div class="card overflow-hidden"><div class="overflow-x-auto">
+      <table class="w-full text-right min-w-max">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-3 py-2">#</th><th class="px-3 py-2">کاربر</th>
+          <th class="px-3 py-2">مبلغ (ت)</th><th class="px-3 py-2">رسید</th>
+          <th class="px-3 py-2">وضعیت</th><th class="px-3 py-2">تاریخ</th><th></th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div></div>"""
+    return _layout("رسیدهای کارت", body, adm, flash=flash)
+
+
+@router.get("/receipts/{rid}/view", response_class=HTMLResponse)
+async def receipt_view(request: Request, rid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_card_receipts
+    all_r = [r for r in get_card_receipts("") if r["id"] == rid]
+    if not all_r:
+        return _redir("/admin/receipts?flash=رسید+یافت+نشد")
+    r = all_r[0]
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← رسیدها", "/admin/receipts", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">رسید #{rid}</h1>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="card p-5">
+        <h2 class="font-bold text-gray-700 mb-3">اطلاعات پرداخت</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-gray-400">کاربر</span><span>{e(r['full_name'] or str(r['user_id']))}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span class="font-bold text-green-600">{int(r['amount']):,} تومان</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{r['status']}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">تاریخ</span><span>{(r['created_at'] or '')[:16]}</span></div>
+        </div>
+        {'''<div class="flex gap-2 mt-4">
+          <form method="post" action="/admin/receipts/''' + str(rid) + '''/approve">
+            <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm">✅ تأیید و شارژ کیف‌پول</button>
+          </form>
+          <form method="post" action="/admin/receipts/''' + str(rid) + '''/reject">
+            <button class="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm">❌ رد</button>
+          </form>
+        </div>''' if r['status']=='pending' else ''}
+      </div>
+      <div class="card p-5 text-center">
+        <h2 class="font-bold text-gray-700 mb-3">تصویر رسید</h2>
+        <img src="/admin/receipts/{rid}/image" alt="رسید" class="max-w-full rounded-xl border border-gray-200">
+      </div>
+    </div>"""
+    return _layout(f"رسید #{rid}", body, adm)
+
+
+@router.get("/receipts/{rid}/image")
+async def receipt_image(request: Request, rid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_card_receipts
+    all_r = [r for r in get_card_receipts("") if r["id"] == rid]
+    if not all_r:
+        from fastapi.responses import Response
+        return Response("not found", 404)
+    r = all_r[0]
+    try:
+        import requests as _req
+        token = _env("BOT_TOKEN","")
+        file_info = _req.get(f"https://api.telegram.org/bot{token}/getFile?file_id={r['file_id']}").json()
+        file_path = file_info["result"]["file_path"]
+        img = _req.get(f"https://api.telegram.org/file/bot{token}/{file_path}").content
+        from fastapi.responses import Response
+        return Response(img, media_type="image/jpeg")
+    except Exception:
+        from fastapi.responses import Response
+        return Response("error", 500)
+
+
+@router.post("/receipts/{rid}/approve")
+async def receipt_approve(request: Request, rid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_card_receipts, update_card_receipt
+    all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
+    if not all_r:
+        return _redir("/admin/receipts?flash=رسید+یافت+نشد")
+    r = all_r[0]
+    from db import add_wallet_balance
+    update_card_receipt(rid, "approved", "تأیید ادمین")
+    add_wallet_balance(r["user_id"], r["amount"])
+    _log(request, f"تأیید رسید #{rid}", "کیف‌پول", f"user:{r['user_id']} amount:{r['amount']}")
+    try:
+        _tg_send(r["user_id"],
+            f"✅ پرداخت شما تأیید شد!\n"
+            f"مبلغ <b>{int(r['amount']):,}</b> تومان به کیف پول شما اضافه شد.")
+    except Exception: pass
+    return _redir(f"/admin/receipts?flash=رسید+تأیید+شد")
+
+
+@router.post("/receipts/{rid}/reject")
+async def receipt_reject(request: Request, rid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_card_receipts, update_card_receipt
+    all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
+    if not all_r:
+        return _redir("/admin/receipts?flash=رسید+یافت+نشد")
+    r = all_r[0]
+    update_card_receipt(rid, "rejected", "رد ادمین")
+    _log(request, f"رد رسید #{rid}", "کیف‌پول", f"user:{r['user_id']}")
+    try:
+        _tg_send(r["user_id"],
+            "❌ متأسفانه رسید پرداخت شما تأیید نشد.\n"
+            "لطفاً با پشتیبانی تماس بگیرید.")
+    except Exception: pass
+    return _redir(f"/admin/receipts?flash=رسید+رد+شد")
+
+
 @router.get("/settings/panel", response_class=HTMLResponse)
 async def settings_hub(request: Request, flash: str = ""):
     adm = _get_admin(request)
@@ -1634,8 +1788,21 @@ async def settings_hub(request: Request, flash: str = ""):
           رفتن به مدیریت متن‌ها ←
         </a>
       </div>
+      <!-- حالت تعمیرات -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-3">🚧 حالت تعمیرات</h2>
+        <p class="text-sm text-gray-500 mb-4">وقتی فعاله، فقط ادمین می‌تونه ربات رو استفاده کنه.</p>
+        {'<div class="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 font-medium">⚠️ ربات الان در حالت تعمیرات است</div>' if __import__("db").get_maintenance_mode() else '<div class="mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">✅ ربات فعال است</div>'}
+        <div class="flex gap-3">
+          <form method="post" action="/admin/settings/maintenance?enable=1">
+            <button class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">🚧 فعال‌کردن تعمیرات</button>
+          </form>
+          <form method="post" action="/admin/settings/maintenance?enable=0">
+            <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">✅ بازگشایی ربات</button>
+          </form>
+        </div>
+      </div>
     </div>"""
-    return _layout("تنظیمات", body, adm, flash=flash)
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -1792,6 +1959,19 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
     </script>"""
 
     return _layout("تنظیمات", body, adm, flash=flash)
+
+
+@router.post("/settings/maintenance")
+async def settings_maintenance(request: Request, enable: str = "0"):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import set_maintenance_mode
+    on = enable == "1"
+    set_maintenance_mode(on)
+    _log(request, "حالت تعمیرات", "تنظیمات", "فعال" if on else "غیرفعال")
+    msg = "تعمیرات+فعال+شد" if on else "ربات+فعال+شد"
+    return _redir(f"/admin/settings/panel?flash={msg}")
 
 
 def _settings_action_bar():
