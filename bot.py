@@ -214,16 +214,25 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     markup = types.InlineKeyboardMarkup()
 
-    # مستقیم به order summary — بدون صفحه واسط
     if wallet_balance >= eff_price:
-        _show_order_summary(chat_id, user_id, product, category, pid)
-        return
+        markup.add(types.InlineKeyboardButton(
+            "💳 پرداخت با کیف پول",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
     elif 0 < wallet_balance < eff_price:
-        _show_order_summary(chat_id, user_id, product, category, pid)
-        return
+        markup.add(types.InlineKeyboardButton(
+            "💳 پرداخت ترکیبی (کیف پول + درگاه)",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
+        markup.add(types.InlineKeyboardButton(
+            "🌐 پرداخت کامل از درگاه",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
     else:
-        _show_order_summary(chat_id, user_id, product, category, pid)
-        return
+        markup.add(types.InlineKeyboardButton(
+            "🌐 پرداخت از درگاه",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
 
     markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cancel_purchase"))
     markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
