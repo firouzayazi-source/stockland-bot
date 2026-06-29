@@ -2204,7 +2204,20 @@ async def database_page(request: Request, flash: str = ""):
           </div>
         </div>"""
 
-    def _chk(name, checked=True):
+    # لیست بکاپ‌های خودکار برای dropdown بازیابی
+    _restore_options = ""
+    for _f in _auto_files:
+        _fn = _os.path.basename(_f)
+        _ts = _fn.replace("auto_","").replace(".stbak","")
+        try:
+            from datetime import datetime as _dt2
+            _dto = _dt2.strptime(_ts, "%Y%m%d_%H%M%S")
+            _label = _dto.strftime("%Y/%m/%d — %H:%M")
+        except Exception:
+            _label = _ts
+        _sz = _os.path.getsize(_f)
+        _szs = f"{_sz//1024} KB"
+        _restore_options += f'<option value="{e(_fn)}">{_label} ({_szs})</option>'
         mods_html = "".join(
             f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50 transition">'
             f'<input type="checkbox" name="{name}" value="{k}"'
@@ -2276,6 +2289,17 @@ async def database_page(request: Request, flash: str = ""):
       }catch(err){ovResult(false,'عملیات ناموفق',err.message||'خطا');}
       finally{_busy=false;}
     }
+    async function runAutoRestore(){
+      var sel=document.getElementById('auto-restore-select');
+      if(!sel||!sel.value){alert('یک بکاپ انتخاب کنید');return;}
+      if(!confirm('⚠️ این عملیات داده‌های فعلی را با بکاپ جایگزین می‌کند. ادامه؟'))return;
+      ovShow('بازیابی بکاپ خودکار','در حال بازیابی...');
+      var fd=new FormData(); fd.append('filename',sel.value);
+      var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
+      var d=await r.json();
+      if(d.ok){ovDone('✅','بازیابی موفق','بکاپ با موفقیت بازیابی شد');}
+      else{ovDone('❌','خطا',d.error||'مشکلی پیش آمد');}
+    }
     async function runRestore(){
       if(_busy)return;
       var file=document.getElementById('restore-file').files[0];
@@ -2332,6 +2356,23 @@ async def database_page(request: Request, flash: str = ""):
         <div><h2 class="font-bold text-gray-800 text-lg">بازیابی پشتیبان</h2>
              <p class="text-xs text-gray-400">فقط فایل‌های .stbak پذیرفته می‌شوند</p></div>
       </div>
+
+      {f'''<!-- بکاپ‌های خودکار موجود -->
+      <div class="mb-4">
+        <label class="text-sm font-medium text-gray-700 block mb-2">🕐 بازیابی از بکاپ خودکار</label>
+        <div class="flex gap-2">
+          <select id="auto-restore-select" class="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white">
+            <option value="">انتخاب بکاپ خودکار...</option>
+            {_restore_options}
+          </select>
+          <button onclick="runAutoRestore()"
+            class="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition whitespace-nowrap">
+            ♻️ بازیابی
+          </button>
+        </div>
+      </div>
+      <div class="border-t border-gray-100 my-4"><p class="text-xs text-gray-400 text-center mt-3">یا بارگذاری فایل دستی</p></div>''' if _restore_options else ''}
+
       <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center mb-4">
         <p class="text-sm text-gray-400 mb-3">فایل .stbak را انتخاب کنید</p>
         <input type="file" id="restore-file" accept=".stbak"
@@ -2339,7 +2380,7 @@ async def database_page(request: Request, flash: str = ""):
       </div>
       <button onclick="runRestore()"
         class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">
-        ♻️ بازیابی پشتیبان
+        ♻️ بازیابی از فایل
       </button>
     </div>
 
@@ -2406,6 +2447,31 @@ async def backup_full_sync(request: Request):
     _log(request, "بکاپ", "دیتابیس", fname)
     return FResponse(content=raw, media_type="application/octet-stream",
                      headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/database/restore-auto")
+async def restore_auto(request: Request):
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    form = await request.form()
+    filename = str(form.get("filename","")).strip()
+    if not filename or ".." in filename or "/" in filename:
+        return JSONResponse({"error": "فایل نامعتبر"})
+    import os
+    path = f"/tmp/stockland_backups/{filename}"
+    if not os.path.exists(path):
+        return JSONResponse({"error": "فایل یافت نشد"})
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        from stbak_engine import restore_stbak
+        restore_stbak(raw, _DB_PATH())
+        _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename)
+        return JSONResponse({"ok": True})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:100]})
 
 
 @router.post("/database/restore/sync")
