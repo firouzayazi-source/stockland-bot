@@ -1549,48 +1549,6 @@ def _show_order_summary(chat_id, uid, product, category, pid):
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_full_"))
-def handle_confirm_full(call):
-    parts = call.data.split("_")
-    if len(parts) < 4:
-        bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True); return
-    pid_str  = parts[-1]
-    category = "_".join(parts[2:-1])
-    if not pid_str.isdigit():
-        bot.answer_callback_query(call.id, "شناسه نامعتبر", show_alert=True); return
-    pid = int(pid_str); uid = call.from_user.id
-    product = get_product_by_id(pid)
-    if not product:
-        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True); return
-    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
-    if exceeded:
-        bot.answer_callback_query(call.id, f"سقف روزانه ({limit_val}) تکمیل شد", show_alert=True); return
-    # ذخیره نوع پرداخت در state
-    user_states.setdefault(uid, {})["pay_type"] = "full"
-    _show_order_summary(call.message.chat.id, uid, product, category, pid)
-    bot.answer_callback_query(call.id)
-
-
-#======================== confirm_wallet =====================
-@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_wallet_"))
-def handle_confirm_wallet(call):
-    parts = call.data.split("_")
-    if len(parts) < 4:
-        bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True); return
-    pid_str  = parts[-1]
-    category = "_".join(parts[2:-1])
-    if not pid_str.isdigit():
-        bot.answer_callback_query(call.id, "شناسه نامعتبر", show_alert=True); return
-    pid = int(pid_str); uid = call.from_user.id
-    product = get_product_by_id(pid)
-    if not product:
-        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True); return
-    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
-    if exceeded:
-        bot.answer_callback_query(call.id, f"سقف روزانه ({limit_val}) تکمیل شد", show_alert=True); return
-    user_states.setdefault(uid, {})["pay_type"] = "wallet"
-    _show_order_summary(call.message.chat.id, uid, product, category, pid)
-    bot.answer_callback_query(call.id)
 
 
 # ─── ورود کد تخفیف ──────────────────────────────────────────────────────────
