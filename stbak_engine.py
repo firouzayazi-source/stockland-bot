@@ -12,7 +12,10 @@ DB_VERSION     = "1.0"
 MODULES = {
     "settings": {
         "label": "⚙️ تنظیمات سیستم",
-        "tables": ["ui_texts_custom", "other_services", "feed_alert_settings"],
+        "tables": [
+            "ui_texts_custom", "ui_texts", "other_services",
+            "feed_alert_settings", "panel_theme", "admin_preferences",
+        ],
         "deps": [],
     },
     "users": {
@@ -32,7 +35,7 @@ MODULES = {
     },
     "products": {
         "label": "📦 محصولات",
-        "tables": ["products", "product_feed", "stock_subscriptions"],
+        "tables": ["products", "product_feed", "stock_subscriptions", "feed_batches"],
         "deps": ["categories"],
     },
     "orders": {
@@ -47,7 +50,13 @@ MODULES = {
     },
     "partners": {
         "label": "🤝 همکاران",
-        "tables": ["partners"],
+        "tables": [
+            "partners",
+            "partner_tiers", "partner_commission",
+            "partner_wallets", "partner_transactions",
+            "partner_payouts", "partner_payout_settings",
+            "partner_bank_info",
+        ],
         "deps": ["users"],
     },
     "discounts": {
@@ -59,6 +68,11 @@ MODULES = {
         "label": "👤 معرفی کاربران",
         "tables": ["referrals", "referral_settings"],
         "deps": ["users"],
+    },
+    "notes": {
+        "label": "📝 یادداشت مدیران",
+        "tables": ["admin_notes", "admin_note_replies"],
+        "deps": [],
     },
     "logs": {
         "label": "📋 لاگ‌ها",
@@ -80,6 +94,7 @@ RESET_CASCADE = {
     "users":      ["wallets", "orders", "tickets", "partners", "referrals"],
     "categories": ["products"],
     "products":   ["orders"],
+    "partners":   [],  # partner data is self-contained
 }
 
 
