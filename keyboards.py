@@ -46,8 +46,8 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     is_partner = user_id and is_partner_approved(int(user_id))
     if is_main_button_enabled("MAIN_BTN_GUIDE"):
         sys_row2.append(types.KeyboardButton(t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "راهنما 🔑"))))
-    # پشتیبانی فقط برای کاربران عادی — همکاران از پنل همکار چت می‌کنن
-    if not is_partner and is_main_button_enabled("MAIN_BTN_SUPPORT"):
+    # پشتیبانی برای همه — همکار از طریق منوی پنل همکار هم می‌تونه چت کنه
+    if is_main_button_enabled("MAIN_BTN_SUPPORT"):
         sys_row2.append(types.KeyboardButton(t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "پشتیبانی 👨‍💻"))))
     if sys_row2:
         kb.row(*sys_row2)
