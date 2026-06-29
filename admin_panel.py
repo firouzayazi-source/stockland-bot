@@ -4864,7 +4864,121 @@ async def order_return(request: Request, oid: int):
     _log(request, "برگشت سفارش", "سفارش‌ها",
          f"سفارش #{oid} | محصول: {product_action} | کیف‌پول: {wallet_action} | علت: {reason} | {note[:80]}")
 
-    return _redir(f"/admin/orders?flash=سفارش+{oid}+برگشت+داده+شد")
+    # redirect به صفحه ارسال مجدد
+    return _redir(f"/admin/orders/{oid}/resend?flash=برگشت+ثبت+شد")
+
+
+@router.get("/orders/{oid}/resend", response_class=HTMLResponse)
+async def order_resend_page(request: Request, oid: int, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    conn = _db()
+    import sqlite3 as _sq_rsnd; conn.row_factory = _sq_rsnd.Row
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
+        if not order:
+            return _redir("/admin/orders?flash=سفارش+یافت+نشد")
+        order = dict(order)
+        # موجودی محصول مشابه
+        feed_items = conn.execute("""
+            SELECT pf.id, pf.data, p.title
+            FROM product_feed pf
+            JOIN products p ON p.id=pf.product_id
+            WHERE p.title=? AND pf.delivered=0
+            ORDER BY pf.id LIMIT 5;
+        """, (order['title'],)).fetchall()
+    finally:
+        conn.close()
+
+    items_opts = "".join(
+        f'<option value="{f["id"]}">{f["id"]} — {str(f["data"] or "")[:50]}</option>'
+        for f in feed_items
+    )
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← سفارش‌ها", "/admin/orders", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">♻️ ارسال مجدد سفارش #{oid}</h1>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">📦 اطلاعات سفارش</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-gray-400">محصول</span><span>{e(order['title'])}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{order['status']}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">کاربر</span><code>{order['user_id']}</code></div>
+          <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span>{int(order['price'] or 0):,} تومان</span></div>
+        </div>
+      </div>
+
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">🔄 ارسال محصول جدید (معاوضه)</h2>
+        {f"""<form method="post" action="/admin/orders/{oid}/resend">
+          <div class="mb-3">
+            <label class="text-sm font-medium text-gray-700 block mb-1">انتخاب آیتم از موجودی</label>
+            <select name="feed_id" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              <option value="">انتخاب کنید...</option>
+              {items_opts}
+            </select>
+          </div>
+          <div class="mb-4">
+            <label class="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" name="notify_user" value="1" checked>
+              اطلاع‌رسانی به کاربر
+            </label>
+          </div>
+          {_btn("ارسال محصول جدید","",color="green")}
+        </form>""" if items_opts else '<p class="text-red-500 text-sm">موجودی در دسترس نیست</p>'}
+      </div>
+    </div>"""
+    return _layout(f"ارسال مجدد #{oid}", body, adm, flash=flash)
+
+
+@router.post("/orders/{oid}/resend")
+async def order_resend_post(request: Request, oid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    form = await request.form()
+    feed_id = int(form.get("feed_id") or 0)
+    notify  = form.get("notify_user") == "1"
+    if not feed_id:
+        return _redir(f"/admin/orders/{oid}/resend?flash=آیتم+انتخاب+نشد")
+
+    conn = _db()
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
+        feed  = conn.execute("SELECT * FROM product_feed WHERE id=? AND delivered=0;", (feed_id,)).fetchone()
+        if not order or not feed:
+            return _redir(f"/admin/orders/{oid}/resend?flash=خطا:+داده+یافت+نشد")
+
+        user_id = int(order["user_id"])
+        title   = order["title"]
+        data    = feed["data"]
+
+        # علامت‌گذاری feed به عنوان تحویل‌شده
+        conn.execute("UPDATE product_feed SET delivered=1, order_id=?, delivered_at=datetime('now') WHERE id=?;",
+                     (oid, feed_id))
+        # آپدیت order با feed_id جدید
+        conn.execute("UPDATE orders SET feed_id=?, status='active' WHERE id=?;", (feed_id, oid))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # ارسال به کاربر
+    if notify:
+        try:
+            import html as _html
+            _tg_send(user_id,
+                f"📦 محصول جدید برای سفارش #{oid} ارسال شد:\n\n"
+                f"<code>{_html.escape(str(data))}</code>")
+        except Exception:
+            pass
+
+    _log(request, "ارسال مجدد", "سفارش‌ها", f"سفارش #{oid} | feed_item:{feed_id}")
+    return _redir(f"/admin/orders?flash=محصول+جدید+برای+سفارش+{oid}+ارسال+شد")
 
 
 # ─────────────────────────── Wallets ───────────────────────────────────────
