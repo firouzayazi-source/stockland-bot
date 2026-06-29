@@ -3999,6 +3999,12 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
     if guard: return guard
     if not file or not file.filename:
         return _redir(f"/admin/feed/{pid}?flash=فایلی+انتخاب+نشد")
+    # خواندن batch cost از form
+    form = await request.form()
+    purchase_price = int(form.get("purchase_price") or 0)
+    side_cost      = int(form.get("side_cost") or 0)
+    batch_notes    = str(form.get("batch_notes") or "").strip()
+
     try:
         raw = await file.read()
         text = raw.decode("utf-8", errors="ignore")
@@ -4006,23 +4012,18 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
         return _redir(f"/admin/feed/{pid}?flash=خطا+در+خواندن+فایل")
 
     # پشتیبانی از دو فرمت:
-    # ۱) هر خط یک آیتم (TXT/CSV ساده)
-    # ۲) آیتم‌های چندخطی با *** جدا شده
     items = []
     if "***" in text:
-        # فرمت چندخطی: هر *** یک جداکننده است
         parts = text.split("***")
         for part in parts:
             item = part.strip()
             if item and item not in ("", "\n"):
                 items.append(item)
     else:
-        # فرمت تک‌خطی: هر خط یک آیتم
         for line in text.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            # CSV: اولین ستون رو بگیر
             item = line.split(",")[0].strip()
             if item:
                 items.append(item)
@@ -4037,6 +4038,12 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
             [(pid, item) for item in items]
         )
         conn.commit()
+        # ثبت batch حسابداری
+        if purchase_price > 0:
+            from db import create_feed_batch, link_batch_to_feed, ensure_feed_batch_schema
+            ensure_feed_batch_schema()
+            batch_id = create_feed_batch(pid, purchase_price, side_cost, len(items), batch_notes)
+            link_batch_to_feed(pid, batch_id, 0, len(items))
     finally:
         conn.close()
 
