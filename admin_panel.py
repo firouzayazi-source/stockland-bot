@@ -442,8 +442,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
-            {nav_item("/admin/reports", "bar-chart-2", "گزارش مالی", "wallets")}
-            {nav_item("/admin/accounting", "calculator", "حسابداری", "wallets")}
+            {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "wallets")}
             {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
@@ -6351,8 +6350,45 @@ async def financial_report(request: Request, flash: str = ""):
 # ─── حسابداری (Light Accounting) ─────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _to_jalali(greg_str: str) -> str:
+    """تبدیل تاریخ میلادی به شمسی."""
+    try:
+        from datetime import date as _d
+        y, m, d = map(int, greg_str.split('-'))
+        # الگوریتم ساده تبدیل
+        g_y = y - 1600; g_m = m - 1; g_d = d - 1
+        g_d_no = 365*g_y + (g_y+3)//4 - (g_y+99)//100 + (g_y+399)//400
+        for i in range(g_m):
+            g_d_no += [31,28+1 if (y%4==0 and y%100!=0) or y%400==0 else 28,31,30,31,30,31,31,30,31,30,31][i]
+        g_d_no += g_d
+        j_d_no = g_d_no - 79
+        j_np = j_d_no // 12053; j_d_no %= 12053
+        jy = 979 + 33*j_np + 4*(j_d_no//1461); j_d_no %= 1461
+        if j_d_no >= 366:
+            jy += (j_d_no-1)//365; j_d_no = (j_d_no-1)%365
+        for i,v in enumerate([31,31,31,31,31,31,30,30,30,30,30,29]):
+            if j_d_no >= v: j_d_no -= v
+            else: jm = i+1; jd = j_d_no+1; break
+        return f"{jy}/{jm:02d}/{jd:02d}"
+    except Exception:
+        return greg_str
+
+
+def _month_start() -> str:
+    from datetime import date, timedelta
+    d = date.today(); return d.replace(day=1).isoformat()
+
+
+def _week_start() -> str:
+    from datetime import date, timedelta
+    d = date.today(); return (d - timedelta(days=d.weekday())).isoformat()
+
+
 @router.get("/accounting", response_class=HTMLResponse)
-async def accounting_dashboard(request: Request, df: str = "", dt: str = "", flash: str = ""):
+async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_g: str = "", dt_g: str = "", flash: str = ""):
+    # df_g/dt_g are Gregorian equivalents of Jalali df/dt
+    if df_g: df = df_g
+    if dt_g: dt = dt_g
     adm = _get_admin(request)
     guard = _require(adm, "wallets")
     if guard: return guard
@@ -6360,15 +6396,57 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", fla
     ensure_accounting_schema()
     kpis = get_accounting_kpis(df, dt)
     def _m(n): return f"{int(n):,}"
+    today_g = __import__('datetime').date.today().isoformat()
+    df = df or today_g; dt = dt or today_g
     filter_html = f"""
-    <form method="get" class="flex flex-wrap gap-2 items-end mb-6">
-      <div><label class="text-xs text-gray-500 block mb-1">از تاریخ</label>
-        <input type="date" name="df" value="{df}" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-      <div><label class="text-xs text-gray-500 block mb-1">تا تاریخ</label>
-        <input type="date" name="dt" value="{dt}" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">فیلتر</button>
-      <a href="/admin/accounting" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm">ریست</a>
-    </form>"""
+    <form method="get" class="flex gap-2 items-center mb-6 flex-wrap">
+      <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
+        <span class="text-xs text-gray-400 whitespace-nowrap">از:</span>
+        <input type="text" name="df" id="df" value="{_to_jalali(df)}" placeholder="۱۴۰۴/۰۱/۰۱"
+          class="w-28 text-sm outline-none" autocomplete="off" onchange="syncGreg(this,'df_g')">
+        <input type="hidden" name="df_g" id="df_g" value="{df}">
+      </div>
+      <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
+        <span class="text-xs text-gray-400 whitespace-nowrap">تا:</span>
+        <input type="text" name="dt" id="dt" value="{_to_jalali(dt)}" placeholder="۱۴۰۴/۰۱/۳۱"
+          class="w-28 text-sm outline-none" autocomplete="off" onchange="syncGreg(this,'dt_g')">
+        <input type="hidden" name="dt_g" id="dt_g" value="{dt}">
+      </div>
+      <div class="flex gap-1">
+        <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium">فیلتر</button>
+        <a href="/admin/accounting" class="px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs">امروز</a>
+        <a href="/admin/accounting?df=&dt=" class="px-3 py-1.5 bg-gray-50 text-gray-400 rounded-lg text-xs">همه</a>
+      </div>
+      <div class="flex gap-1">
+        <a href="/admin/accounting?df={_month_start()}&dt={today_g}" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">این ماه</a>
+        <a href="/admin/accounting?df={_week_start()}&dt={today_g}" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">این هفته</a>
+        <a href="/admin/accounting?df=&dt=" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">کل</a>
+      </div>
+    </form>
+    <script>
+    function jalaliToGregorian(jy,jm,jd){{
+      var gy,gm,gd,g_d_no,j_d_no,j_np,i,jy2=jy-979,jm2=jm-1,jd2=jd-1;
+      j_d_no=365*jy2+(~~(jy2/33))*8+(~~((jy2%33+3)/4));
+      for(i=0;i<jm2;++i) j_d_no+=([31,31,31,31,31,31,30,30,30,30,30,29])[i];
+      j_d_no+=jd2;
+      g_d_no=j_d_no+79;
+      gy=1600+(~~(g_d_no/36524.25))*100; g_d_no%=36524.25;
+      if(g_d_no>=36160.75){{gy+=100;g_d_no-=36160.75;}}
+      gy+=~~(g_d_no/365.25); g_d_no%=365.25;
+      gm=~~((g_d_no+16.5)/30.6001)+1;
+      gd=~~(g_d_no+16.5)-~~(30.6001*gm)+1;
+      if(gm>12){{++gy;gm-=12;}}
+      return [gy,gm,gd];
+    }}
+    function syncGreg(inp,hiddenId){{
+      var v=inp.value.trim().replace(/[۰-۹]/g,function(c){{return String.fromCharCode(c.charCodeAt(0)-1728);}});
+      var p=v.split('/'); if(p.length===3){{
+        var r=jalaliToGregorian(+p[0],+p[1],+p[2]);
+        var g=r[0]+'-'+(r[1]<10?'0'+r[1]:r[1])+'-'+(r[2]<10?'0'+r[2]:r[2]);
+        document.getElementById(hiddenId).value=g;
+      }}
+    }}
+    </script>"""
     body = f"""
     <div class="flex items-center justify-between mb-4">
       <h1 class="text-2xl font-bold text-gray-800">💰 حسابداری</h1>
@@ -6377,6 +6455,9 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", fla
         <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
         <a href="/admin/accounting/products" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
         <a href="/admin/accounting/partners" class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
+        <form method="post" action="/admin/accounting/reset-costs" onsubmit="return confirm('هزینه‌ها و قیمت‌های خرید پاک شوند؟')">
+          <button class="px-3 py-1.5 text-sm bg-red-50 text-red-500 border border-red-200 rounded-lg">🗑 ریست محاسبات</button>
+        </form>
       </div>
     </div>
     {{filter_html}}
@@ -6435,6 +6516,23 @@ def _acbar(label, value, total, color):
     return f"""<div><div class="flex justify-between text-xs text-gray-500 mb-1">
       <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
       <div class="h-2 bg-gray-100 rounded-full"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
+
+
+@router.post("/accounting/reset-costs")
+async def accounting_reset_costs(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("DELETE FROM expenses;")
+        try: conn.execute("DELETE FROM feed_batches;")
+        except Exception: pass
+        conn.commit()
+    finally:
+        conn.close()
+    _log(request, "ریست داده‌های حسابداری", "حسابداری", "expenses+feed_batches cleared")
+    return _redir("/admin/accounting?flash=داده‌های+هزینه+و+قیمت+خرید+پاک+شدند")
 
 
 @router.get("/accounting/expenses", response_class=HTMLResponse)
