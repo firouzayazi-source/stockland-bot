@@ -443,6 +443,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
             {nav_item("/admin/reports", "bar-chart-2", "گزارش مالی", "wallets")}
+            {nav_item("/admin/accounting", "calculator", "حسابداری", "wallets")}
             {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
@@ -6344,6 +6345,363 @@ async def financial_report(request: Request, flash: str = ""):
       <p class="text-xs text-gray-400 mt-4">⚠️ هزینه خرید فقط برای موجودی‌هایی محاسبه می‌شود که با اطلاعات Batch ثبت شده‌اند.</p>
     </div>"""
     return _layout("گزارش مالی", body, adm, flash=flash)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── حسابداری (Light Accounting) ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/accounting", response_class=HTMLResponse)
+async def accounting_dashboard(request: Request, df: str = "", dt: str = "", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_accounting_kpis, ensure_accounting_schema
+    ensure_accounting_schema()
+    kpis = get_accounting_kpis(df, dt)
+    def _m(n): return f"{int(n):,}"
+    filter_html = f"""
+    <form method="get" class="flex flex-wrap gap-2 items-end mb-6">
+      <div><label class="text-xs text-gray-500 block mb-1">از تاریخ</label>
+        <input type="date" name="df" value="{df}" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+      <div><label class="text-xs text-gray-500 block mb-1">تا تاریخ</label>
+        <input type="date" name="dt" value="{dt}" class="border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">فیلتر</button>
+      <a href="/admin/accounting" class="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm">ریست</a>
+    </form>"""
+    body = f"""
+    <div class="flex items-center justify-between mb-4">
+      <h1 class="text-2xl font-bold text-gray-800">💰 حسابداری</h1>
+      <div class="flex gap-2 flex-wrap">
+        <a href="/admin/accounting/expenses" class="px-3 py-1.5 text-sm bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">📋 هزینه‌ها</a>
+        <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
+        <a href="/admin/accounting/products" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
+        <a href="/admin/accounting/partners" class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
+      </div>
+    </div>
+    {{filter_html}}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {_card("فروش امروز",_m(kpis["today_sales"]),"تومان","blue")}
+      {_card("فروش این ماه",_m(kpis["month_sales"]),"تومان","indigo")}
+      {_card("مجموع فروش",_m(kpis["total_sales"]),"تومان","slate")}
+      {_card("تعداد سفارش",_m(kpis["total_orders"]),"سفارش","gray")}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {_card("سود ناخالص",_m(kpis["gross_profit"]),"تومان","green")}
+      {_card("سود خالص",_m(kpis["net_profit"]),"تومان","emerald")}
+      {_card("مجموع هزینه‌ها",_m(kpis["total_expenses"]),"تومان","red")}
+      {_card("پورسانت پرداختی",_m(kpis["total_commission"]),"تومان","amber")}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      {_card("هزینه خرید کالا",_m(kpis["total_cost"]),"تومان","orange")}
+      {_card("موجودی انبار",_m(kpis["stock_count"]),"آیتم","slate")}
+      {_card("تسویه انجام‌شده",str(kpis["payout_count"]),"مورد","purple")}
+      {_card("میانگین سود/سفارش",_m(kpis["avg_profit"]),"تومان","teal")}
+    </div>
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-4">📊 خلاصه سود و زیان</h2>
+      <div class="space-y-3">
+        {_acbar("فروش کل",kpis["total_sales"],kpis["total_sales"],"bg-blue-400")}
+        {_acbar("هزینه خرید",kpis["total_cost"],kpis["total_sales"],"bg-red-400")}
+        {_acbar("پورسانت",kpis["total_commission"],kpis["total_sales"],"bg-amber-400")}
+        {_acbar("هزینه‌ها",kpis["total_expenses"],kpis["total_sales"],"bg-orange-400")}
+        {_acbar("سود خالص",kpis["net_profit"],kpis["total_sales"],"bg-emerald-500")}
+      </div>
+    </div>
+    <div class="card p-6">
+      <h2 class="font-bold text-gray-700 mb-4">📈 تحلیل سود</h2>
+      <div class="grid md:grid-cols-3 gap-4">
+        <div class="bg-gray-50 rounded-lg p-4 text-center">
+          <div class="text-xs text-gray-400 mb-1">حاشیه سود</div>
+          <div class="text-3xl font-bold text-emerald-600">{kpis["margin_pct"]}٪</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-4 text-center">
+          <div class="text-xs text-gray-400 mb-1">میانگین سود هر سفارش</div>
+          <div class="text-2xl font-bold text-indigo-600">{_m(kpis["avg_profit"])} ت</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-4 text-center">
+          <div class="text-xs text-gray-400 mb-1">نسبت هزینه به فروش</div>
+          <div class="text-2xl font-bold text-red-500">
+            {round((kpis["total_expenses"]+kpis["total_cost"])/kpis["total_sales"]*100,1) if kpis["total_sales"] else 0}٪
+          </div>
+        </div>
+      </div>
+    </div>"""
+    return _layout("حسابداری", body.replace("{filter_html}", filter_html), adm, flash=flash)
+
+
+def _acbar(label, value, total, color):
+    pct = max(0, min(100, int(value/total*100) if total>0 else 0))
+    return f"""<div><div class="flex justify-between text-xs text-gray-500 mb-1">
+      <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
+      <div class="h-2 bg-gray-100 rounded-full"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
+
+
+@router.get("/accounting/expenses", response_class=HTMLResponse)
+async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str="", flash: str=""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_expenses, get_expense_categories, ensure_accounting_schema
+    ensure_accounting_schema()
+    cats = get_expense_categories()
+    expenses = get_expenses(df, dt, cat)
+    total = sum(ex["amount"] for ex in expenses)
+    cat_opts = "".join(f'<option value="{c}" {"selected" if cat==c else ""}>{c}</option>' for c in cats)
+    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
+      <td class="px-3 py-2 text-xs text-gray-400">{ex["expense_date"]}</td>
+      <td class="px-3 py-2 font-medium">{e(ex["title"])}</td>
+      <td class="px-3 py-2"><span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-xs">{e(ex["category"])}</span></td>
+      <td class="px-3 py-2 font-bold text-red-600">{int(ex["amount"]):,}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{e((ex["description"] or "")[:30])}</td>
+      <td class="px-3 py-2"><form method="post" action="/admin/accounting/expenses/{ex["id"]}/delete" onsubmit="return confirm(\'حذف؟\')"><button class="text-xs text-red-400 hover:text-red-600">حذف</button></form></td>
+    </tr>''' for ex in expenses) or "<tr><td colspan='6' class='text-center py-6 text-gray-400'>هزینه‌ای ثبت نشده</td></tr>"
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">📋 هزینه‌ها</h1>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mb-6">
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-4">+ ثبت هزینه جدید</h2>
+        <form method="post" action="/admin/accounting/expenses/new" class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="text-xs block mb-1">عنوان</label><input type="text" name="title" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs block mb-1">مبلغ (تومان)</label><input type="number" name="amount" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs block mb-1">دسته</label><select name="category" class="w-full border rounded-lg px-3 py-2 text-sm"><option value="">انتخاب...</option>{cat_opts}</select></div>
+            <div><label class="text-xs block mb-1">تاریخ</label><input type="date" name="expense_date" class="w-full border rounded-lg px-3 py-2 text-sm"></div>
+          </div>
+          <input type="text" name="description" placeholder="توضیحات (اختیاری)" class="w-full border rounded-lg px-3 py-2 text-sm">
+          {_btn("ثبت هزینه","",color="red",small=True)}
+        </form>
+      </div>
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-3">+ دسته‌بندی جدید</h2>
+        <form method="post" action="/admin/accounting/categories/new" class="flex gap-2 mb-4">
+          <input type="text" name="name" placeholder="نام دسته" class="flex-1 border rounded-lg px-3 py-2 text-sm">
+          {_btn("اضافه","",color="indigo",small=True)}
+        </form>
+        <div class="flex flex-wrap gap-1">{" ".join(f'<span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">{c}</span>' for c in cats)}</div>
+      </div>
+    </div>
+    <div class="card overflow-hidden">
+      <div class="px-4 py-3 bg-gray-50 border-b flex flex-wrap justify-between items-center gap-2">
+        <form method="get" class="flex gap-2 flex-wrap">
+          <input type="date" name="df" value="{df}" class="border rounded px-2 py-1 text-xs">
+          <input type="date" name="dt" value="{dt}" class="border rounded px-2 py-1 text-xs">
+          <select name="cat" class="border rounded px-2 py-1 text-xs"><option value="">همه</option>{cat_opts}</select>
+          <button class="px-3 py-1 bg-indigo-600 text-white rounded text-xs">فیلتر</button>
+        </form>
+        <div class="flex gap-2 items-center">
+          <span class="text-sm font-bold text-red-600">جمع: {total:,} ت</span>
+          <a href="/admin/accounting/expenses/export?df={df}&dt={dt}&cat={cat}" class="px-3 py-1 bg-green-50 text-green-700 border border-green-200 rounded text-xs">⬇ Excel</a>
+        </div>
+      </div>
+      <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">عنوان</th><th class="px-3 py-2">دسته</th>
+          <th class="px-3 py-2">مبلغ</th><th class="px-3 py-2">توضیح</th><th></th>
+        </tr></thead><tbody>{rows}</tbody>
+      </table></div>
+    </div>"""
+    return _layout("هزینه‌ها", body, adm, flash=flash)
+
+
+@router.post("/accounting/expenses/new")
+async def accounting_expense_new(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import create_expense, ensure_accounting_schema
+    ensure_accounting_schema()
+    form = await request.form()
+    eid = create_expense(str(form.get("title","")).strip(), str(form.get("category","سایر")),
+                         int(form.get("amount") or 0), str(form.get("expense_date","")),
+                         str(form.get("description","")))
+    _log(request, "ثبت هزینه", "حسابداری", f"id:{eid}")
+    return _redir("/admin/accounting/expenses?flash=هزینه+ثبت+شد")
+
+
+@router.post("/accounting/expenses/{eid}/delete")
+async def accounting_expense_delete(request: Request, eid: int):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import delete_expense; delete_expense(eid)
+    _log(request, "حذف هزینه", "حسابداری", f"id:{eid}")
+    return _redir("/admin/accounting/expenses?flash=حذف+شد")
+
+
+@router.post("/accounting/categories/new")
+async def accounting_category_new(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import add_expense_category
+    form = await request.form(); name = str(form.get("name","")).strip()
+    if name: add_expense_category(name)
+    return _redir("/admin/accounting/expenses?flash=دسته+اضافه+شد")
+
+
+@router.get("/accounting/cashflow", response_class=HTMLResponse)
+async def accounting_cashflow(request: Request, df: str="", dt: str=""):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_cashflow, ensure_accounting_schema; ensure_accounting_schema()
+    rows_data = get_cashflow(df, dt, 200)
+    tc = {"فروش":"green","شارژ کیف‌پول":"blue","هزینه":"red","پورسانت":"amber"}
+    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
+      <td class="px-3 py-2 text-xs text-gray-400">{r["created_at"][:16]}</td>
+      <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs bg-{tc.get(r["type"],"gray")}-100 text-{tc.get(r["type"],"gray")}-700">{r["type"]}</span></td>
+      <td class="px-3 py-2 text-xs">{str(r["description"] or "")[:40]}</td>
+      <td class="px-3 py-2 font-bold {"text-green-600" if r["direction"]=="income" else "text-red-500"}">{"+" if r["direction"]=="income" else "-"}{int(r["amount"] or 0):,}</td>
+    </tr>''' for r in rows_data)
+    body = f"""<div class="flex items-center gap-3 mb-6">
+      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">🔄 گردش مالی</h1>
+    </div>
+    <form method="get" class="flex gap-2 mb-4 flex-wrap">
+      <input type="date" name="df" value="{df}" class="border rounded-lg px-3 py-2 text-sm">
+      <input type="date" name="dt" value="{dt}" class="border rounded-lg px-3 py-2 text-sm">
+      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">فیلتر</button>
+      <a href="/admin/accounting/cashflow/export?df={df}&dt={dt}" class="px-3 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm">⬇ Excel</a>
+    </form>
+    <div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+      <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+        <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">نوع</th><th class="px-3 py-2">توضیح</th><th class="px-3 py-2">مبلغ</th>
+      </tr></thead><tbody>{rows or "<tr><td colspan='4' class='text-center py-6 text-gray-400'>رکوردی یافت نشد</td></tr>"}</tbody>
+    </table></div></div>"""
+    return _layout("گردش مالی", body, adm)
+
+
+@router.get("/accounting/products", response_class=HTMLResponse)
+async def accounting_products(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_product_accounting
+    prods = get_product_accounting(50)
+    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
+      <td class="px-3 py-2 font-medium">{e(p["title"])}</td>
+      <td class="px-3 py-2 text-center">{p["sale_count"]}</td>
+      <td class="px-3 py-2 text-green-600">{int(p["total_revenue"] or 0):,}</td>
+      <td class="px-3 py-2">{int(p["avg_cost"] or 0):,}</td>
+      <td class="px-3 py-2">{int(p["last_cost"] or 0):,}</td>
+      <td class="px-3 py-2 font-bold text-emerald-600">{int(p["total_revenue"] or 0) - int(p["avg_cost"] or 0)*max(int(p["sale_count"] or 1),1):,}</td>
+      <td class="px-3 py-2 text-center">{p["stock"]}</td>
+    </tr>''' for p in prods)
+    body = f"""<div class="flex items-center gap-3 mb-6">
+      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">📦 گزارش محصولات</h1>
+      <a href="/admin/accounting/products/export" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg mr-auto">⬇ Excel</a>
+    </div>
+    <div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+      <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+        <th class="px-3 py-2">محصول</th><th class="px-3 py-2 text-center">فروش</th><th class="px-3 py-2">درآمد</th>
+        <th class="px-3 py-2">میانگین خرید</th><th class="px-3 py-2">آخرین خرید</th><th class="px-3 py-2">سود</th><th class="px-3 py-2">موجودی</th>
+      </tr></thead><tbody>{rows or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>داده‌ای یافت نشد</td></tr>"}</tbody>
+    </table></div></div>"""
+    return _layout("گزارش محصولات", body, adm)
+
+
+@router.get("/accounting/partners", response_class=HTMLResponse)
+async def accounting_partners_report(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_partner_accounting
+    partners = get_partner_accounting(50)
+    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
+      <td class="px-3 py-2 font-medium">{e(p["full_name"] or p["username"] or str(p["user_id"]))}</td>
+      <td class="px-3 py-2 text-center">{p["sale_count"]}</td>
+      <td class="px-3 py-2 text-green-600">{int(p["total_sales"] or 0):,}</td>
+      <td class="px-3 py-2 text-amber-600">{int(p["commission_paid"] or 0):,}</td>
+      <td class="px-3 py-2 font-bold text-emerald-600">{int(p["total_sales"] or 0)-int(p["commission_paid"] or 0):,}</td>
+    </tr>''' for p in partners)
+    body = f"""<div class="flex items-center gap-3 mb-6">
+      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">🤝 گزارش همکاران</h1>
+      <a href="/admin/accounting/partners/export" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg mr-auto">⬇ Excel</a>
+    </div>
+    <div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+      <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+        <th class="px-3 py-2">همکار</th><th class="px-3 py-2 text-center">فروش</th>
+        <th class="px-3 py-2">مجموع فروش</th><th class="px-3 py-2">پورسانت</th><th class="px-3 py-2">سود فروشگاه</th>
+      </tr></thead><tbody>{rows or "<tr><td colspan='5' class='text-center py-6 text-gray-400'>داده‌ای یافت نشد</td></tr>"}</tbody>
+    </table></div></div>"""
+    return _layout("گزارش همکاران", body, adm)
+
+
+@router.get("/accounting/expenses/export")
+async def export_expenses(request: Request, df: str="", dt: str="", cat: str=""):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_expenses; import io as _io
+    data = get_expenses(df, dt, cat, 10000)
+    try:
+        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="هزینه‌ها"
+        ws.append(["تاریخ","عنوان","دسته","مبلغ","توضیح"])
+        for r in data: ws.append([r["expense_date"],r["title"],r["category"],r["amount"],r["description"]])
+        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":"attachment; filename=expenses.xlsx"})
+    except Exception:
+        from fastapi.responses import PlainTextResponse
+        csv = "تاریخ,عنوان,دسته,مبلغ\n"+"\n".join(f"{r['expense_date']},{r['title']},{r['category']},{r['amount']}" for r in data)
+        return PlainTextResponse(csv, headers={"Content-Disposition":"attachment; filename=expenses.csv"})
+
+
+@router.get("/accounting/cashflow/export")
+async def export_cashflow(request: Request, df: str="", dt: str=""):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_cashflow; import io as _io; data = get_cashflow(df, dt, 10000)
+    try:
+        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="گردش مالی"
+        ws.append(["تاریخ","نوع","توضیح","مبلغ","جهت"])
+        for r in data: ws.append([r["created_at"],r["type"],r["description"],r["amount"],r["direction"]])
+        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":"attachment; filename=cashflow.xlsx"})
+    except Exception:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("تاریخ,نوع,مبلغ\n", headers={"Content-Disposition":"attachment; filename=cashflow.csv"})
+
+
+@router.get("/accounting/products/export")
+async def export_products_report(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_product_accounting; import io as _io; data = get_product_accounting(1000)
+    try:
+        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="محصولات"
+        ws.append(["محصول","تعداد فروش","درآمد","میانگین خرید","آخرین خرید","موجودی"])
+        for p in data: ws.append([p["title"],p["sale_count"],p["total_revenue"],p["avg_cost"],p["last_cost"],p["stock"]])
+        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":"attachment; filename=products.xlsx"})
+    except Exception:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("محصول,فروش,درآمد\n", headers={"Content-Disposition":"attachment; filename=products.csv"})
+
+
+@router.get("/accounting/partners/export")
+async def export_partners_report(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import get_partner_accounting; import io as _io; data = get_partner_accounting(1000)
+    try:
+        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="همکاران"
+        ws.append(["همکار","فروش","درآمد","پورسانت","سود فروشگاه"])
+        for p in data:
+            name = p["full_name"] or p["username"] or str(p["user_id"])
+            ws.append([name,p["sale_count"],p["total_sales"],p["commission_paid"],int(p["total_sales"] or 0)-int(p["commission_paid"] or 0)])
+        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":"attachment; filename=partners.xlsx"})
+    except Exception:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("همکار,فروش\n", headers={"Content-Disposition":"attachment; filename=partners.csv"})
+
 
 @router.get("/notes", response_class=HTMLResponse)
 async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
