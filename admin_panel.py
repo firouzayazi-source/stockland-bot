@@ -442,7 +442,6 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/users", "users", "کاربران", "wallets")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
-            {nav_item("/admin/receipts", "credit-card", "رسیدهای کارت", "wallets")}
             {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "wallets")}
             {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
@@ -1616,6 +1615,42 @@ async def card_receipts_page(request: Request, status: str = "pending", flash: s
       {'<td class="px-3 py-3 flex gap-1"><form method="post" action="/admin/receipts/' + str(r["id"]) + '/approve"><button class="px-2 py-1 bg-green-600 text-white rounded text-xs">✅ تأیید</button></form><form method="post" action="/admin/receipts/' + str(r["id"]) + '/reject"><button class="px-2 py-1 bg-red-50 text-red-600 border border-red-200 rounded text-xs">❌ رد</button></form></td>' if r['status']=='pending' else '<td></td>'}
     </tr>""" for r in receipts) or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>رسیدی یافت نشد</td></tr>"
 
+    # اگه تب کارت‌به‌کارت انتخاب شده
+    if type_filter == "card2card":
+        from db import get_card_receipts
+        receipts_data = get_card_receipts("")
+        status_label = {"pending":"⏳ در انتظار","approved":"✅ تأیید","rejected":"❌ رد"}
+        status_class  = {"pending":"bg-amber-100 text-amber-700","approved":"bg-green-100 text-green-700","rejected":"bg-red-100 text-red-600"}
+        r_rows = ""
+        for r in receipts_data:
+            sl  = status_label.get(r["status"], r["status"])
+            sc  = status_class.get(r["status"], "bg-gray-100 text-gray-600")
+            name = e(str(r.get("full_name","") or r.get("username","") or str(r["user_id"])))
+            r_rows += f"""<tr class="border-b hover:bg-gray-50 text-sm">
+              <td class="px-3 py-3 text-xs text-gray-400">#{r["id"]}</td>
+              <td class="px-3 py-3">{name}</td>
+              <td class="px-3 py-3 font-bold text-green-600">{int(r.get("amount") or 0):,}</td>
+              <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs {sc}">{sl}</span></td>
+              <td class="px-3 py-3 text-xs text-gray-400">{(r.get("created_at") or "")[:16]}</td>
+              <td class="px-3 py-3"><a href="/admin/receipts/{r["id"]}/view" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده و مدیریت</a></td>
+            </tr>"""
+        if not r_rows:
+            r_rows = "<tr><td colspan='6' class='text-center py-6 text-gray-400'>رسیدی ثبت نشده</td></tr>"
+        body = f"""
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">💳 رسیدهای کارت‌به‌کارت</h1>
+        {type_tabs}
+        <div class="card overflow-hidden"><div class="overflow-x-auto">
+          <table class="w-full text-right min-w-max">
+            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+              <th class="px-3 py-2">#</th><th class="px-3 py-2">کاربر</th>
+              <th class="px-3 py-2">مبلغ (ت)</th><th class="px-3 py-2">وضعیت</th>
+              <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">عملیات</th>
+            </tr></thead>
+            <tbody>{r_rows}</tbody>
+          </table>
+        </div></div>"""
+        return _layout("تیکت‌ها", body, adm, flash=flash)
+
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-4">💳 رسیدهای کارت‌به‌کارت</h1>
     <div class="flex gap-2 mb-4">{tabs}</div>
@@ -1656,14 +1691,17 @@ async def receipt_view(request: Request, rid: int):
           <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{r['status']}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">تاریخ</span><span>{(r['created_at'] or '')[:16]}</span></div>
         </div>
-        {'''<div class="flex gap-2 mt-4">
-          <form method="post" action="/admin/receipts/''' + str(rid) + '''/approve">
-            <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm">✅ تأیید و شارژ کیف‌پول</button>
+        {'''<div class="mt-4 space-y-3">
+          <label class="text-sm font-medium text-gray-700 block">مبلغ تأیید شده (تومان)</label>
+          <form method="post" action="/admin/receipts/''' + str(rid) + '''/approve" class="flex gap-2">
+            <input type="number" name="confirmed_amount" value="''' + str(int(r['amount'])) + '''" required
+              class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="مبلغ واقعی واریز شده">
+            <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium whitespace-nowrap">✅ تأیید و شارژ</button>
           </form>
           <form method="post" action="/admin/receipts/''' + str(rid) + '''/reject">
-            <button class="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm">❌ رد</button>
+            <button class="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm w-full">❌ رد درخواست</button>
           </form>
-        </div>''' if r['status']=='pending' else ''}
+        </div>''' if r['status']=='pending' else '<p class="mt-3 text-sm text-gray-400">این رسید قبلاً بررسی شده است.</p>'}
       </div>
       <div class="card p-5 text-center">
         <h2 class="font-bold text-gray-700 mb-3">تصویر رسید</h2>
@@ -1702,21 +1740,25 @@ async def receipt_approve(request: Request, rid: int):
     adm = _get_admin(request)
     guard = _require(adm, "wallets")
     if guard: return guard
-    from db import get_card_receipts, update_card_receipt
+    form = await request.form()
+    confirmed_amount = int(form.get("confirmed_amount") or 0)
+    from db import get_card_receipts, update_card_receipt, add_wallet_balance
     all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
     if not all_r:
-        return _redir("/admin/receipts?flash=رسید+یافت+نشد")
+        return _redir("/admin/tickets?type_filter=card2card&flash=رسید+یافت+نشد")
     r = all_r[0]
-    from db import add_wallet_balance
-    update_card_receipt(rid, "approved", "تأیید ادمین")
-    add_wallet_balance(r["user_id"], r["amount"])
-    _log(request, f"تأیید رسید #{rid}", "کیف‌پول", f"user:{r['user_id']} amount:{r['amount']}")
+    # از مبلغ وارد شده استفاده کن، اگه نبود از مبلغ اصلی
+    amount = confirmed_amount if confirmed_amount > 0 else int(r["amount"] or 0)
+    update_card_receipt(rid, "approved", f"تأیید ادمین — مبلغ: {amount:,}")
+    add_wallet_balance(r["user_id"], amount)
+    _log(request, f"تأیید رسید #{rid}", "کیف‌پول", f"user:{r['user_id']} amount:{amount:,}")
     try:
         _tg_send(r["user_id"],
             f"✅ پرداخت شما تأیید شد!\n"
-            f"مبلغ <b>{int(r['amount']):,}</b> تومان به کیف پول شما اضافه شد.")
-    except Exception: pass
-    return _redir(f"/admin/receipts?flash=رسید+تأیید+شد")
+            f"مبلغ <b>{amount:,}</b> تومان به کیف پول شما اضافه شد.")
+    except Exception:
+        pass
+    return _redir(f"/admin/tickets?type_filter=card2card&flash=رسید+{rid}+تأیید+شد")
 
 
 @router.post("/receipts/{rid}/reject")
@@ -1736,7 +1778,7 @@ async def receipt_reject(request: Request, rid: int):
             "❌ متأسفانه رسید پرداخت شما تأیید نشد.\n"
             "لطفاً با پشتیبانی تماس بگیرید.")
     except Exception: pass
-    return _redir(f"/admin/receipts?flash=رسید+رد+شد")
+    return _redir(f"/admin/tickets?type_filter=card2card&flash=رسید+{rid}+رد+شد")
 
 
 @router.get("/settings/panel", response_class=HTMLResponse)
@@ -5819,11 +5861,21 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         return f"?status_filter={sf}&type_filter={tf}"
 
     type_tabs = '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'
+    # شمارش رسیدهای کارت‌به‌کارت در انتظار
+    try:
+        from db import get_card_receipts, ensure_card_receipts_schema
+        ensure_card_receipts_schema()
+        card_pending = len(get_card_receipts("pending"))
+    except Exception:
+        card_pending = 0
+    type_counts["card2card"] = card_pending
+
     for lbl, val, cnt in [
-        ("همه", "", sum(type_counts.values())),
+        ("همه", "", sum(v for k,v in type_counts.items() if k != "card2card")),
         ("🔵 پشتیبانی", "support", type_counts["support"]),
         ("🟢 راه‌اندازی", "product_setup", type_counts["product_setup"]),
         ("🤝 همکاران", "partner_support", type_counts["partner_support"]),
+        ("💳 کارت‌به‌کارت", "card2card", type_counts["card2card"]),
     ]:
         active = type_filter == val
         bg = "var(--primary)" if active else "var(--card-bg)"
