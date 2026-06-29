@@ -3798,3 +3798,281 @@ def save_payout_settings_full(data: dict):
         conn.commit()
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── سیستم حسابداری (Light Accounting) ──────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def ensure_accounting_schema():
+    """ساخت جداول حسابداری."""
+    conn = _get_connection()
+    try:
+        # هزینه‌ها
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                title       TEXT NOT NULL,
+                category    TEXT DEFAULT 'سایر',
+                amount      INTEGER NOT NULL DEFAULT 0,
+                expense_date TEXT DEFAULT (date('now')),
+                description TEXT DEFAULT '',
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        # دسته‌بندی هزینه‌ها
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expense_categories (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                name  TEXT UNIQUE NOT NULL
+            );
+        """)
+        # دسته‌های پیش‌فرض
+        defaults = ['تبلیغات','سرور و هاست','دامنه','حقوق','اینترنت','تجهیزات','مالیات','سایر']
+        for cat in defaults:
+            try:
+                conn.execute("INSERT OR IGNORE INTO expense_categories (name) VALUES (?);", (cat,))
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
+    """محاسبه KPI های اصلی حسابداری."""
+    conn = _get_connection()
+    try:
+        where_order = ""
+        where_batch = ""
+        params = []
+        if date_from:
+            where_order += f" AND date(o.created_at) >= '{date_from}'"
+            where_batch  += f" AND date(fb.created_at) >= '{date_from}'"
+        if date_to:
+            where_order += f" AND date(o.created_at) <= '{date_to}'"
+            where_batch  += f" AND date(fb.created_at) <= '{date_to}'"
+
+        # فروش کل
+        total_sales = conn.execute(
+            f"SELECT COALESCE(SUM(price),0) FROM orders o WHERE status='active'{where_order};"
+        ).fetchone()[0]
+
+        # فروش امروز
+        today_sales = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active' AND date(created_at)=date('now');"
+        ).fetchone()[0]
+
+        # فروش این ماه
+        month_sales = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active' AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now');"
+        ).fetchone()[0]
+
+        # تعداد سفارش
+        total_orders = conn.execute(
+            f"SELECT COUNT(*) FROM orders o WHERE status='active'{where_order};"
+        ).fetchone()[0]
+
+        # هزینه خرید از batches
+        cost_q = f"SELECT COALESCE(SUM(fb.purchase_price * fb.item_count + fb.side_cost),0) FROM feed_batches fb WHERE 1=1{where_batch};"
+        try:
+            total_cost = conn.execute(cost_q).fetchone()[0]
+        except Exception:
+            total_cost = 0
+
+        # پورسانت پرداختی
+        commission_q = "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1"
+        if date_from:
+            commission_q += f" AND date(rewarded_at)>='{date_from}'" if 'rewarded_at' in [r[1] for r in conn.execute("PRAGMA table_info(referrals);").fetchall()] else ""
+        total_commission = conn.execute(commission_q + ";").fetchone()[0]
+
+        # هزینه‌های ثبت‌شده
+        exp_q = "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE 1=1"
+        if date_from: exp_q += f" AND expense_date>='{date_from}'"
+        if date_to:   exp_q += f" AND expense_date<='{date_to}'"
+        total_expenses = conn.execute(exp_q + ";").fetchone()[0]
+
+        # تسویه‌های انجام شده
+        try:
+            payouts_done = conn.execute("SELECT COUNT(*), COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='approved';").fetchone()
+            payout_count = int(payouts_done[0] or 0)
+            payout_total = int(payouts_done[1] or 0)
+        except Exception:
+            payout_count = payout_total = 0
+
+        # موجودی انبار
+        try:
+            stock_count = conn.execute("SELECT COUNT(*) FROM product_feed WHERE delivered=0;").fetchone()[0]
+        except Exception:
+            stock_count = 0
+
+        gross_profit = int(total_sales or 0) - int(total_cost or 0)
+        net_profit   = gross_profit - int(total_commission or 0) - int(total_expenses or 0)
+
+        avg_profit = int(net_profit / total_orders) if total_orders else 0
+        margin_pct = round((net_profit / total_sales) * 100, 1) if total_sales else 0
+
+        return {
+            "today_sales":       int(today_sales or 0),
+            "month_sales":       int(month_sales or 0),
+            "total_sales":       int(total_sales or 0),
+            "total_orders":      int(total_orders or 0),
+            "total_cost":        int(total_cost or 0),
+            "total_commission":  int(total_commission or 0),
+            "total_expenses":    int(total_expenses or 0),
+            "gross_profit":      gross_profit,
+            "net_profit":        net_profit,
+            "payout_count":      payout_count,
+            "payout_total":      payout_total,
+            "stock_count":       int(stock_count or 0),
+            "avg_profit":        avg_profit,
+            "margin_pct":        margin_pct,
+        }
+    finally:
+        conn.close()
+
+
+def get_product_accounting(limit: int = 20) -> list:
+    """گزارش حسابداری به تفکیک محصول."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT
+                p.id, p.title,
+                COUNT(o.id)              AS sale_count,
+                COALESCE(SUM(o.price),0) AS total_revenue,
+                COALESCE((
+                    SELECT AVG(fb.purchase_price) FROM feed_batches fb WHERE fb.product_id=p.id
+                ),0)                     AS avg_cost,
+                COALESCE((
+                    SELECT fb.purchase_price FROM feed_batches fb WHERE fb.product_id=p.id ORDER BY fb.id DESC LIMIT 1
+                ),0)                     AS last_cost,
+                COALESCE((
+                    SELECT COUNT(*) FROM product_feed pf WHERE pf.product_id=p.id AND pf.delivered=0
+                ),0)                     AS stock
+            FROM products p
+            LEFT JOIN orders o ON o.title=p.title AND o.status='active'
+            GROUP BY p.id
+            ORDER BY total_revenue DESC
+            LIMIT ?;
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_partner_accounting(limit: int = 20) -> list:
+    """گزارش حسابداری به تفکیک همکار."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT
+                u.user_id, u.full_name, u.username,
+                COUNT(o.id)              AS sale_count,
+                COALESCE(SUM(o.price),0) AS total_sales,
+                COALESCE((
+                    SELECT SUM(r.reward_amount) FROM referrals r
+                    WHERE r.referrer_id=u.user_id AND r.rewarded=1
+                ),0)                     AS commission_paid
+            FROM users u
+            JOIN partners pt ON pt.tg_user_id=u.user_id AND pt.status='approved'
+            LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id AND o.status='active' AND o.buyer_type='partner'
+            GROUP BY u.user_id
+            ORDER BY total_sales DESC
+            LIMIT ?;
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_cashflow(date_from: str = "", date_to: str = "", limit: int = 100) -> list:
+    """گردش مالی — همه رویدادهای مالی."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        where = "WHERE 1=1"
+        if date_from: where += f" AND date(created_at)>='{date_from}'"
+        if date_to:   where += f" AND date(created_at)<='{date_to}'"
+        rows = conn.execute(f"""
+            SELECT * FROM (
+                SELECT created_at, 'فروش' as type, title as description,
+                       price as amount, 'income' as direction
+                FROM orders WHERE status='active'
+                UNION ALL
+                SELECT created_at, 'شارژ کیف‌پول' as type,
+                       CAST(user_id AS TEXT) as description,
+                       amount, 'income' as direction
+                FROM zarinpal_transactions WHERE status='success'
+                UNION ALL
+                SELECT created_at, 'هزینه' as type,
+                       title || ' (' || category || ')' as description,
+                       amount, 'expense' as direction
+                FROM expenses
+                UNION ALL
+                SELECT created_at, 'پورسانت' as type,
+                       CAST(referrer_id AS TEXT) as description,
+                       reward_amount as amount, 'expense' as direction
+                FROM referrals WHERE rewarded=1
+            ) {where}
+            ORDER BY created_at DESC LIMIT ?;
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ─── CRUD هزینه‌ها ────────────────────────────────────────────────────────────
+
+def get_expenses(date_from="", date_to="", category="", limit=100) -> list:
+    conn = _get_connection(); conn.row_factory = sqlite3.Row
+    try:
+        where = "WHERE 1=1"
+        if date_from: where += f" AND expense_date>='{date_from}'"
+        if date_to:   where += f" AND expense_date<='{date_to}'"
+        if category:  where += f" AND category='{category.replace(chr(39),'')}'"
+        return [dict(r) for r in conn.execute(
+            f"SELECT * FROM expenses {where} ORDER BY expense_date DESC, id DESC LIMIT ?;", (limit,)
+        ).fetchall()]
+    finally: conn.close()
+
+
+def create_expense(title: str, category: str, amount: int,
+                   expense_date: str = "", description: str = "") -> int:
+    ensure_accounting_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO expenses (title,category,amount,expense_date,description) VALUES (?,?,?,?,?);",
+            (title, category, amount, expense_date or datetime.utcnow().strftime('%Y-%m-%d'), description)
+        )
+        conn.commit(); return cur.lastrowid
+    finally: conn.close()
+
+
+def delete_expense(eid: int):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM expenses WHERE id=?;", (eid,))
+        conn.commit()
+    finally: conn.close()
+
+
+def get_expense_categories() -> list:
+    ensure_accounting_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute("SELECT name FROM expense_categories ORDER BY id;").fetchall()
+        return [r[0] for r in rows]
+    finally: conn.close()
+
+
+def add_expense_category(name: str):
+    ensure_accounting_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("INSERT OR IGNORE INTO expense_categories (name) VALUES (?);", (name,))
+        conn.commit()
+    finally: conn.close()
