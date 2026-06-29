@@ -4,8 +4,10 @@ from datetime import datetime, timedelta
 import random
 import string
 import requests
+import logging
 
 logger = logging.getLogger("inox_bot")
+import requests
 import telebot
 from telebot import types
 from telebot import apihelper
@@ -377,6 +379,7 @@ def _send_delivery_to_user(chat_id: int, order_id: int, pid: int, title: str, ef
 
     # ذخیره دائمی پیام تحویل برای امکان «برگشت» از پنل
     try:
+        import sqlite3 as _sq3
         from datetime import datetime as _dt2
         _c = _sq3.connect(DB_FULL_PATH)
         _c.execute(
@@ -493,6 +496,7 @@ def try_dispatch_pending_for_product(product_id: int, limit: int = 50) -> int:
 # نکته: Order ID با Feed ID فرق دارد. برای جلوگیری از سردرگمی، ارتباط feed_id <-> order_id را هم ذخیره می‌کنیم.
 def _ensure_delivery_table():
     try:
+        import sqlite3
         _conn = sqlite3.connect(DB_FULL_PATH)
         _conn.execute(
             """CREATE TABLE IF NOT EXISTS delivery_messages (
@@ -536,12 +540,13 @@ from db import (
 )
 
 BOT_BASE_URL = os.getenv("BOT_WEBHOOK_URL", "").rstrip("/")
-PANEL_URL = "https://panel.stland.ir/admin"
+RAILWAY_PANEL = "https://stockland-bot-production.up.railway.app/admin"
 
 
 def _get_product_chat_enabled(product_id: int) -> int:
     """چک chat_enabled برای محصول."""
     try:
+        import sqlite3 as _sq3
         _c = _sq3.connect(DB_FULL_PATH)
         row = _c.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
         _c.close()
@@ -552,6 +557,7 @@ def _get_product_chat_enabled(product_id: int) -> int:
 
 def _set_product_chat_enabled(product_id: int, enabled: int) -> None:
     try:
+        import sqlite3 as _sq3
         _c = _sq3.connect(DB_FULL_PATH)
         _c.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
         _c.commit()
@@ -638,7 +644,7 @@ def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup
         types.InlineKeyboardButton("✏️ پاسخ از تلگرام", callback_data=f"ticket_v2_reply_{ticket_id}_{user_id}"),
         types.InlineKeyboardButton("🔒 بستن تیکت", callback_data=f"ticket_v2_admin_close_{ticket_id}"),
     )
-    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{PANEL_URL}/tickets/{ticket_id}"))
+    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{RAILWAY_PANEL}/tickets/{ticket_id}"))
     return kb
 
 
@@ -721,33 +727,24 @@ def _is_menu_or_system_button(text: str) -> bool:
 
 def _exit_chat_if_needed(message) -> bool:
     """
-    استاندارد سراسری: اگر کاربر در هر حالت چندمرحله‌ای
-    کاری غیر از ادامه همان گفتگو انجام داد، خودکار خارج شود.
-    Returns True اگر خارج شد.
+    استاندارد سراسری: اگر کاربر وسط چت/تیکت کاری غیر از پیام‌دادن کرد،
+    خودکار از حالت چت خارج شود و پیام در تیکت ثبت نشود.
+    خروجی: True اگر از چت خارج شد (یعنی نباید ادامه داد).
     """
     uid = message.from_user.id
     st  = user_states.get(uid, {})
-    mode = st.get("mode")
-    if not mode:
-        return False  # اصلاً در هیچ حالت چندمرحله‌ای نیست
+    if st.get("mode") != "ticket_v2":
+        return False  # اصلاً در حالت چت نیست
 
     txt = message.text or ""
 
-    # دستور یا دکمه منو → خروج از هر حالتی
+    # حالت ۱: دکمه منو یا دستور → خروج + انتقال به handler مربوطه
     if message.content_type == "text" and _is_menu_or_system_button(txt):
         clear_user_state(uid)
-        if mode == "ticket_v2":
-            # تیکت‌ها: پیام رو به handler اصلی منتقل کن
-            try:
-                bot.process_new_messages([message])
-            except Exception:
-                pass
-        else:
-            # بقیه حالت‌ها: فقط State پاک و re-dispatch
-            try:
-                bot.process_new_messages([message])
-            except Exception:
-                pass
+        try:
+            bot.process_new_messages([message])
+        except Exception:
+            pass
         return True
 
     return False
@@ -772,7 +769,7 @@ def _ticket_v2_handle_user_message(message) -> None:
     ticket = ticket_get(int(ticket_id))
     if not ticket or ticket["status"] == "closed":
         clear_user_state(uid)
-        bot.send_message(message.chat.id, t("MSG_TICKET_CLOSED"), reply_markup=main_menu(user_id=uid))
+        bot.send_message(message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
         return
 
     # ─── Anti-spam: سقف ۳ پیام واقعی متوالی ────────────────────────────────
@@ -892,7 +889,7 @@ def handle_admin_command(message):
     uid = message.from_user.id
     if not ensure_admin(uid):
         return
-    panel_url = "https://panel.stland.ir/admin/"
+    panel_url = "https://stockland-bot-production.up.railway.app/admin/"
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
         types.InlineKeyboardButton("🌐 ورود به پنل مدیریت", url=panel_url),
@@ -1248,7 +1245,9 @@ def start_product_payment(
 # ========= PRODUCTS UI =========
 
 
+import sqlite3
 from datetime import datetime
+import html
 
 def finalize_product_order(call, uid, product, category, eff_price, wallet_used=0):
 
@@ -1263,7 +1262,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             call.message.message_id,
             reply_markup=None
         )
-    except Exception:
+    except:
         pass
 
     # ----------------------------
@@ -1397,13 +1396,6 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
     if feed_item:
         feed_id, feed_data = feed_item
 
-        # ذخیره feed_id در orders برای «خریدهای من»
-        try:
-            from db import order_set_feed_id
-            order_set_feed_id(int(order_id), int(feed_id))
-        except Exception:
-            pass
-
         # تحویل عادی
         bot.send_message(
             call.message.chat.id,
@@ -1442,7 +1434,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                 f"محصول: {title} (#{pid})\n"
                 f"مبلغ: {eff_price:,} تومان"
             )
-        except Exception:
+        except:
             pass
 
 def send_products_menu(chat_id, category, admin_view=False, user_id=None):
@@ -2108,6 +2100,7 @@ def send_admin_categories(chat_id):
 def send_admin_product_detail(call_message, product, edit=False):
     pid = int(product[0])
     try:
+        import sqlite3
         _conn = sqlite3.connect(DB_FULL_PATH)
         _row = _conn.execute(
             'SELECT daily_limit_customer, daily_limit_partner FROM products WHERE id=?',
@@ -2289,6 +2282,7 @@ def admin_feed_panel_menu():
 
 
 def count_feed_items_global(delivered_filter: int | None, category_key: str | None = None):
+    import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
     cur = conn.cursor()
 
@@ -2314,6 +2308,7 @@ def count_feed_items_global(delivered_filter: int | None, category_key: str | No
 
 
 def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset: int = 0, category_key: str | None = None):
+    import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
     cur = conn.cursor()
 
@@ -2345,6 +2340,7 @@ def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset
 
 def get_feed_stats_by_category():
     """Return list of dicts: category, total, delivered, undelivered."""
+    import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
     cur = conn.cursor()
     cur.execute(
@@ -2546,6 +2542,7 @@ def send_admin_feed_panel_list(chat_id: int, page: int = 0, mode: int = 0, messa
         )
 
 def send_admin_feed_panel_view(chat_id: int, feed_id: int, page: int = 0, mode: int = 0, message_id: int | None = None, category_key: str | None = None):
+    import sqlite3
     fid = int(feed_id)
     conn = sqlite3.connect(DB_FULL_PATH)
     row = conn.execute(
@@ -2689,53 +2686,99 @@ def handle_wallet(message):
     bot.send_message(message.chat.id, text, reply_markup=wallet_inline_keyboard(), parse_mode="HTML")
 
 
-def _is_my_orders_button(txt: str) -> bool:
-    if not txt:
-        return False
-    txt = txt.strip()
-    candidates = {
-        t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "خریدهای من 🧾")).strip(),
-        "🧾 خریدهای من",
-        "خریدهای من 🧾",
-        "خریدهای من",
-    }
-    return txt in candidates or "خریدهای من" in txt
-
-
-@bot.message_handler(func=lambda m: _is_my_orders_button(m.text or ""))
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_MY_ORDERS"))
 def handle_my_orders_menu(message):
     if not is_main_button_enabled("MAIN_BTN_MY_ORDERS"):
         bot.reply_to(message, t("MSG_BTN_DISABLED"))
         return
-    _show_my_orders(message.chat.id, message.from_user.id)
+    uid = message.from_user.id
+    _show_my_orders(message.chat.id, uid)
 
 
 def _show_my_orders(chat_id, uid):
-    """نمایش ۵ خرید آخر — لیست خطی + کلیک برای باز کردن محصول."""
-    try:
-        orders = get_recent_orders_by_user(int(uid), limit=5)
-    except Exception as ex:
-        logger.error("my_orders fetch error: %s", ex)
-        orders = []
+    """نمایش ۵ خرید آخر با inline keyboard کشویی."""
+    orders = get_recent_orders_by_user(uid, limit=5)
     if not orders:
-        bot.send_message(chat_id, t("MSG_NO_ORDERS"))
+        bot.send_message(chat_id, t("MSG_NO_ORDERS", "هنوز خریدی انجام نداده‌اید."))
         return
-    lines = ["🛒 <b>خریدهای من</b>\n"]
+
+    text = "🛒 <b>خریدهای من</b>\n\nبرای مشاهده محصول روی هر سفارش بزنید:"
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for i, o in enumerate(orders, 1):
+    for o in orders:
         oid, title, price, created_at = o
         date_str = (created_at or "")[:10]
-        lines.append(f"{i}. {title} — {int(price):,} ت | {date_str}")
         kb.add(types.InlineKeyboardButton(
-            f"📦 {i}. {str(title)[:40]}",
-            callback_data=f"myord_{oid}"
+            f"📦 {title[:35]} — {int(price):,} ت | {date_str}",
+            callback_data=f"order_detail_{oid}"
         ))
-    lines.append("\n👇 برای مشاهده محصول روی هر سفارش بزنید:")
-    bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "myord_back")
-def cb_myord_back(call):
+@bot.callback_query_handler(func=lambda c: c.data.startswith("order_detail_"))
+def cb_order_detail(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        oid = int(call.data.split("_")[-1])
+    except ValueError:
+        return
+
+    import sqlite3 as _sq
+    from config import DB_PATH as _DBP
+    conn = _sq.connect(_DBP)
+    conn.row_factory = _sq.Row
+    try:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id=? AND CAST(user_id AS INTEGER)=?;",
+            (oid, uid)
+        ).fetchone()
+        if not order:
+            bot.answer_callback_query(call.id, "سفارش یافت نشد", show_alert=True)
+            return
+        # محتوای محصول از product_feed
+        feed = conn.execute(
+            "SELECT data FROM product_feed WHERE order_id=? LIMIT 1;",
+            (oid,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    title     = order["title"] or "—"
+    price     = int(order["price"] or 0)
+    date_str  = (order["created_at"] or "")[:10]
+    feed_data = feed["data"] if feed else None
+
+    if feed_data:
+        text = (
+            f"📦 <b>سفارش #{oid}</b>\n\n"
+            f"محصول: {title}\n"
+            f"مبلغ: {price:,} تومان\n"
+            f"تاریخ: {date_str}\n\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"<code>{feed_data}</code>"
+        )
+    else:
+        text = (
+            f"📦 <b>سفارش #{oid}</b>\n\n"
+            f"محصول: {title}\n"
+            f"مبلغ: {price:,} تومان\n"
+            f"تاریخ: {date_str}\n\n"
+            f"ℹ️ محتوای این سفارش توسط پشتیبانی تحویل داده می‌شود."
+        )
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت به خریدها", callback_data="my_orders_back"))
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id,
+            parse_mode="HTML", reply_markup=kb
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "my_orders_back")
+def cb_my_orders_back(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     try:
@@ -2743,99 +2786,6 @@ def cb_myord_back(call):
     except Exception:
         pass
     _show_my_orders(call.message.chat.id, uid)
-
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("myord_") and c.data != "myord_back")
-def cb_myord_detail(call):
-    uid = call.from_user.id
-    bot.answer_callback_query(call.id)
-    try:
-        oid = int(call.data.split("_")[-1])
-    except ValueError:
-        return
-    from config import DB_PATH as _DBP
-    conn = _sq.connect(_DBP)
-    conn.row_factory = _sq.Row
-    try:
-        order = conn.execute(
-            "SELECT * FROM orders WHERE id=? AND CAST(user_id AS INTEGER)=?;",
-            (oid, int(uid))
-        ).fetchone()
-        if not order:
-            bot.answer_callback_query(call.id, "سفارش یافت نشد", show_alert=True)
-            return
-        # محتوا از product_feed با feed_id
-        feed = None
-        try:
-            fid = order["feed_id"]
-            if fid:
-                feed = conn.execute(
-                    "SELECT data FROM product_feed WHERE id=?;", (fid,)
-                ).fetchone()
-        except Exception:
-            pass
-    finally:
-        conn.close()
-
-    title    = order["title"] or "—"
-    price    = int(order["price"] or 0)
-    date_str = (order["created_at"] or "")[:10]
-    feed_data = feed["data"] if feed else None
-
-    # پاک‌سازی جداکننده‌های داخلی (*** و شناسه‌های سیستمی)
-    def _clean_feed(raw: str) -> str:
-        if not raw:
-            return raw
-        # تقسیم بر *** (چندخطی) و نگه‌داشتن فقط بخش اول اگه چندتایی بود
-        parts = [p.strip() for p in raw.split("***") if p.strip()]
-        return parts[0] if parts else raw.strip()
-
-    if feed_data:
-        import html as _html
-        safe_feed = _html.escape(str(feed_data))
-        text = (f"📦 <b>سفارش #{oid}</b>\n\n"
-                f"محصول: {title}\n"
-                f"مبلغ: {price:,} تومان\n"
-                f"تاریخ: {date_str}\n\n"
-                f"━━━━━━━━━━━━━━━\n<code>{safe_feed}</code>")
-    else:
-        # محصول نیاز به راه‌اندازی — تیکت موجود بررسی شود
-        import sqlite3 as _sq2
-        from config import DB_PATH as _DBP2
-        setup_delivered = False
-        try:
-            _c = _sq2.connect(_DBP2)
-            ticket_row = _c.execute(
-                "SELECT status FROM tickets WHERE CAST(user_id AS INTEGER)=? "
-                "AND type='product_setup' ORDER BY id DESC LIMIT 1;",
-                (uid,)
-            ).fetchone()
-            if ticket_row and ticket_row[0] == "closed":
-                setup_delivered = True
-            _c.close()
-        except Exception:
-            pass
-
-        if setup_delivered:
-            text = (f"📦 <b>سفارش #{oid}</b>\n\n"
-                    f"محصول: {title}\n"
-                    f"مبلغ: {price:,} تومان\n"
-                    f"تاریخ: {date_str}\n\n"
-                    f"✅ این سفارش توسط پشتیبانی تحویل داده شده است.")
-        else:
-            text = (f"📦 <b>سفارش #{oid}</b>\n\n"
-                    f"محصول: {title}\n"
-                    f"مبلغ: {price:,} تومان\n"
-                    f"تاریخ: {date_str}\n\n"
-                    f"ℹ️ این سفارش در حال آماده‌سازی توسط پشتیبانی است.")
-
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="myord_back"))
-    try:
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                              parse_mode="HTML", reply_markup=kb)
-    except Exception:
-        bot.send_message(call.message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_SUPPORT"))
@@ -2882,26 +2832,19 @@ def handle_partner_panel(message):
 
 
 def _partner_edit(call, text, kb):
-    """
-    helper برای edit پیام‌های پنل همکار.
-    اگه پیام عکس (بنر سطح) بود → caption رو edit کن یا پیام جدید بفرست.
-    """
-    cid  = call.message.chat.id
-    mid  = call.message.message_id
-    # اول text edit امتحان کن
+    """edit پیام داشبورد همکار — photo یا text."""
+    cid, mid = call.message.chat.id, call.message.message_id
     try:
         bot.edit_message_text(text, cid, mid, parse_mode="HTML", reply_markup=kb)
         return
     except Exception:
         pass
-    # شاید photo بود → caption
     try:
         bot.edit_message_caption(caption=text, chat_id=cid, message_id=mid,
                                  parse_mode="HTML", reply_markup=kb)
         return
     except Exception:
         pass
-    # آخر: پیام جدید
     try:
         bot.delete_message(cid, mid)
     except Exception:
@@ -2910,7 +2853,7 @@ def _partner_edit(call, text, kb):
 
 
 def _show_partner_dashboard(chat_id, uid):
-    """داشبورد همکار — طرح اصلی + بنر سطح."""
+    """داشبورد کامل همکار با سطح، آمار و لینک معرفی."""
     from db import (get_partner_order_count, get_partner_tier_for, get_partner_tiers,
                     get_referral_stats_for, ensure_partner_system_schema,
                     ensure_partner_tiers_extended)
@@ -2944,30 +2887,48 @@ def _show_partner_dashboard(chat_id, uid):
     else:
         next_line = "\n🎉 شما در بالاترین سطح هستید!"
 
+    conn = None
+    partner_total = 0
+    try:
+        import sqlite3 as _sq
+        from config import DB_PATH as _DBP
+        conn = _sq.connect(_DBP)
+        row = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
+            (uid,)).fetchone()
+        partner_total = int(row[0] or 0) if row else 0
+    except Exception:
+        pass
+    finally:
+        if conn: conn.close()
+
     text = (
         f"🤝 <b>داشبورد همکار</b>\n"
         f"━━━━━━━━━━━━━━━\n\n"
         f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n"
         f"🛒 خریدهای همکاری: <b>{order_count}</b>\n"
-        f"👥 معرفی‌های موفق: <b>{ref_stats['rewarded']}</b>"
-        f"{next_line}"
+        f"💰 مجموع خرید: <b>{partner_total:,}</b> تومان"
+        f"{next_line}\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👥 <b>زیرمجموعه‌ها</b>\n"
+        f"معرفی‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
-        types.InlineKeyboardButton(t("BTN_PARTNER_MY_SELLERS"), callback_data="partner_sub_stats"),
-        types.InlineKeyboardButton(t("BTN_PARTNER_PROFILE"), callback_data="partner_profile"),
+        types.InlineKeyboardButton("👥 فروشندگان شما", callback_data="partner_sub_stats"),
+        types.InlineKeyboardButton("👤 پروفایل", callback_data="partner_profile"),
     )
     kb.row(
-        types.InlineKeyboardButton(t("BTN_PARTNER_WALLET"), callback_data="partner_wallet"),
-        types.InlineKeyboardButton(t("BTN_PARTNER_REF_LINK"), callback_data="partner_ref_link"),
+        types.InlineKeyboardButton("💼 کیف‌پول همکاری", callback_data="partner_wallet"),
+        types.InlineKeyboardButton("🔗 لینک معرفی من", callback_data="partner_ref_link"),
     )
     kb.row(
-        types.InlineKeyboardButton(t("BTN_PARTNER_CHAT"), callback_data="partner_support"),
-        types.InlineKeyboardButton(t("BTN_PARTNER_GUIDE"), callback_data="partner_guide"),
+        types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support"),
+        types.InlineKeyboardButton("📖 راهنما و قوانین", callback_data="partner_guide"),
     )
 
-    # ارسال بنر سطح (اگه تنظیم شده)
+    # بنر سطح
     tier_photo = None
     try:
         tier_photo = (tier.get("photo_file_id") or "").strip() or None
@@ -2976,110 +2937,7 @@ def _show_partner_dashboard(chat_id, uid):
 
     if tier_photo:
         try:
-            bot.send_photo(chat_id, tier_photo, caption=text,
-                           parse_mode="HTML", reply_markup=kb)
-            return
-        except Exception:
-            pass
-    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
-
-    # داده‌های پایه
-    order_count = get_partner_order_count(uid)
-    tier        = get_partner_tier_for(order_count)
-    all_tiers   = get_partner_tiers()
-    ref_stats   = get_referral_stats_for(uid)
-    wallet_bal  = get_partner_wallet_balance(uid)
-
-    # نام کاربر
-    try:
-        from config import DB_PATH as _DBP2
-        _c = _sq2.connect(_DBP2)
-        _row = _c.execute("SELECT full_name FROM users WHERE user_id=?;", (uid,)).fetchone()
-        full_name = (_row[0] or "").split()[0] if _row and _row[0] else "همکار"
-        # آمار زیرمجموعه
-        sub_count = _c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (uid,)).fetchone()[0]
-        sub_ids = [r[0] for r in _c.execute("SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)).fetchall()]
-        total_sub_sales = 0
-        if sub_ids:
-            ph = ",".join("?" * len(sub_ids))
-            row = _c.execute(f"SELECT COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({ph});", sub_ids).fetchone()
-            total_sub_sales = int(row[0] or 0)
-        _c.close()
-    except Exception:
-        full_name = "همکار"
-        sub_count = ref_stats['total']
-        total_sub_sales = 0
-
-    # سطح بعدی
-    next_tier = None
-    for t_ in all_tiers:
-        if t_["min_orders"] > order_count:
-            next_tier = t_
-            break
-
-    # نوار پیشرفت
-    if next_tier:
-        prev_min = tier.get("min_orders", 0)
-        remaining = next_tier["min_orders"] - order_count
-        span = next_tier["min_orders"] - prev_min
-        pct  = int(((order_count - prev_min) / span) * 100) if span > 0 else 0
-        pct  = max(0, min(100, pct))
-        bars = round(pct / 10)
-        progress_bar = "●" * bars + "○" * (10 - bars)
-        upgrade_line = (
-            f"\n🏆 برای ارتقا به سطح <b>{next_tier['name']}</b>: "
-            f"<b>{remaining}</b> فروش دیگر نیاز دارید\n"
-            f"<code>{progress_bar}</code> {pct}%"
-        )
-    else:
-        upgrade_line = "\n🏆 <b>شما در بالاترین سطح هستید!</b>"
-
-    # عکس بنر سطح (اگه در تنظیمات باشه)
-    tier_photo_id = None
-    try:
-        tier_photo_id = tier.get("photo_file_id") or None
-    except Exception:
-        pass
-
-    # ─── متن داشبورد ─────────────────────────────────────────────────
-    text = (
-        f"👋 سلام <b>{full_name}</b> عزیز\n"
-        f"سطح همکاری شما: <b>{tier['icon']} {tier['name']}</b>\n"
-        f"{'─' * 22}\n\n"
-        f"<b>📊 آمار شما</b>\n\n"
-        f"👥  فروشندگان شما\n"
-        f"    <b>{sub_count:,}</b> نفر\n\n"
-        f"📈  کل فروش شما\n"
-        f"    <b>{total_sub_sales:,}</b> تومان\n\n"
-        f"💰  پورسانت قابل برداشت\n"
-        f"    <b>{wallet_bal:,}</b> تومان\n"
-        f"{'─' * 22}"
-        f"{upgrade_line}"
-    )
-
-    # ─── کیبورد ──────────────────────────────────────────────────────
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        types.InlineKeyboardButton("👥 فروشندگان من", callback_data="partner_sub_stats"),
-        types.InlineKeyboardButton("📊 آمار و گزارش‌ها", callback_data="partner_full_stats"),
-    )
-    kb.add(
-        types.InlineKeyboardButton("💰 برداشت پورسانت", callback_data="partner_wallet"),
-        types.InlineKeyboardButton("🛒 محصولات", callback_data="partner_products"),
-    )
-    kb.add(
-        types.InlineKeyboardButton("🎁 کد اختصاصی من", callback_data="partner_ref_link"),
-        types.InlineKeyboardButton("ℹ راهنما و قوانین", callback_data="partner_guide"),
-    )
-    kb.add(
-        types.InlineKeyboardButton("📞 پشتیبانی", callback_data="partner_support"),
-    )
-
-    # ارسال با یا بدون عکس
-    if tier_photo_id:
-        try:
-            bot.send_photo(chat_id, tier_photo_id, caption=text,
-                           parse_mode="HTML", reply_markup=kb)
+            bot.send_photo(chat_id, tier_photo, caption=text, parse_mode="HTML", reply_markup=kb)
             return
         except Exception:
             pass
@@ -3091,7 +2949,6 @@ def cb_partner_profile(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     _show_partner_profile(call.message.chat.id, uid, edit_msg=call.message.message_id)
-
 
 def _show_partner_profile(chat_id, uid, edit_msg=None):
     from db import get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_bank_address
@@ -3106,12 +2963,9 @@ def _show_partner_profile(chat_id, uid, edit_msg=None):
     except Exception:
         pass
     bank = get_partner_bank_info(uid)
-
     def _v(val): return val or "—"
-
     text = (
-        f"👤 <b>پروفایل همکار</b>\n"
-        f"{'─'*20}\n\n"
+        f"👤 <b>پروفایل همکار</b>\n{'─'*20}\n\n"
         f"<b>اطلاعات فروشگاه</b>\n"
         f"👤 نام: {_v(partner['full_name'] if partner else None)}\n"
         f"🏪 فروشگاه: {_v(partner['shop_name'] if partner else None)}\n"
@@ -3124,20 +2978,19 @@ def _show_partner_profile(chat_id, uid, edit_msg=None):
     )
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
-        types.InlineKeyboardButton(t("BTN_EDIT_NAME"), callback_data="pedit_name"),
-        types.InlineKeyboardButton(t("BTN_EDIT_SHOP"), callback_data="pedit_shop"),
+        types.InlineKeyboardButton("✏️ نام", callback_data="pedit_name"),
+        types.InlineKeyboardButton("✏️ فروشگاه", callback_data="pedit_shop"),
     )
     kb.row(
-        types.InlineKeyboardButton(t("BTN_EDIT_CITY"), callback_data="pedit_city"),
-        types.InlineKeyboardButton(t("BTN_EDIT_ADDRESS"), callback_data="pedit_address"),
+        types.InlineKeyboardButton("✏️ شهر", callback_data="pedit_city"),
+        types.InlineKeyboardButton("✏️ آدرس", callback_data="pedit_address"),
     )
     kb.row(
-        types.InlineKeyboardButton(t("BTN_EDIT_CARD"), callback_data="pedit_card"),
-        types.InlineKeyboardButton(t("BTN_EDIT_IBAN"), callback_data="pedit_iban"),
+        types.InlineKeyboardButton("✏️ کارت", callback_data="pedit_card"),
+        types.InlineKeyboardButton("✏️ شبا", callback_data="pedit_iban"),
     )
-    kb.row(types.InlineKeyboardButton(t("BTN_EDIT_BANK_NAME"), callback_data="pedit_bankname"))
+    kb.row(types.InlineKeyboardButton("✏️ نام صاحب حساب", callback_data="pedit_bankname"))
     kb.row(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-
     if edit_msg:
         try:
             bot.edit_message_text(text, chat_id, edit_msg, parse_mode="HTML", reply_markup=kb)
@@ -3146,31 +2999,25 @@ def _show_partner_profile(chat_id, uid, edit_msg=None):
             pass
     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
 
-
-# ─── handler های ویرایش فیلدهای پروفایل ──────────────────────────────────
-
-_PEDIT_FIELDS = {
-    "pedit_name":     ("partner_name",    "نام و نام خانوادگی",    "نام"),
-    "pedit_shop":     ("partner_shop",    "نام فروشگاه",           "نام فروشگاه"),
-    "pedit_city":     ("partner_city",    "شهر",                   "شهر"),
-    "pedit_address":  ("partner_address", "آدرس",                  "آدرس کامل"),
-    "pedit_card":     ("partner_card",    "شماره کارت (۱۶ رقم)",   "۱۶ رقم بدون فاصله"),
-    "pedit_iban":     ("partner_iban",    "شماره شبا",             "با یا بدون IR"),
-    "pedit_bankname": ("partner_bankname","نام صاحب حساب",         "نام کامل"),
+_PEDIT_MAP = {
+    "pedit_name":     ("partner_name",    "نام و نام خانوادگی"),
+    "pedit_shop":     ("partner_shop",    "نام فروشگاه"),
+    "pedit_city":     ("partner_city",    "شهر"),
+    "pedit_address":  ("partner_address", "آدرس"),
+    "pedit_card":     ("partner_card",    "شماره کارت (۱۶ رقم)"),
+    "pedit_iban":     ("partner_iban",    "شماره شبا (با یا بدون IR)"),
+    "pedit_bankname": ("partner_bankname","نام صاحب حساب"),
 }
 
-@bot.callback_query_handler(func=lambda c: c.data in _PEDIT_FIELDS)
-def cb_pedit_field(call):
+@bot.callback_query_handler(func=lambda c: c.data in _PEDIT_MAP)
+def cb_pedit(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    mode, label, hint = _PEDIT_FIELDS[call.data]
-    user_states[uid] = {"mode": mode, "msg_id": call.message.message_id}
-    bot.send_message(call.message.chat.id,
-        f"✏️ <b>ویرایش {label}</b>\n\n{hint} را وارد کنید:",
-        parse_mode="HTML")
+    mode, label = _PEDIT_MAP[call.data]
+    user_states[uid] = {"mode": mode}
+    bot.send_message(call.message.chat.id, f"✏️ <b>{label}</b> را وارد کنید:", parse_mode="HTML")
 
 def _pedit_save(uid, chat_id, table, col, val):
-    """ذخیره یه فیلد پروفایل همکار."""
     import sqlite3 as _sqe
     from config import DB_PATH as _DBPe
     from db import ensure_partner_bank_schema, ensure_partner_bank_address, get_partner_bank_info
@@ -3188,71 +3035,48 @@ def _pedit_save(uid, chat_id, table, col, val):
         conn.commit()
     finally:
         conn.close()
-    bot.send_message(chat_id, t("MSG_PROFILE_SAVED"))
+    bot.send_message(chat_id, "✅ ذخیره شد.")
     _show_partner_profile(chat_id, uid)
-
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_name")
 def _ph_name(message):
-    uid=message.from_user.id
-    if _exit_chat_if_needed(message): return
-    val=(message.text or "").strip()
+    uid=message.from_user.id; val=(message.text or "").strip()
     if not val: bot.reply_to(message,"نام نمی‌تواند خالی باشد:"); return
-    user_states.pop(uid,None)
-    _pedit_save(uid,message.chat.id,"partners","full_name",val)
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partners","full_name",val)
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_shop")
 def _ph_shop(message):
-    uid=message.from_user.id
-    if _exit_chat_if_needed(message): return
-    val=(message.text or "").strip()
-    user_states.pop(uid,None)
-    _pedit_save(uid,message.chat.id,"partners","shop_name",val)
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partners","shop_name",val)
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_city")
 def _ph_city(message):
-    uid=message.from_user.id
-    if _exit_chat_if_needed(message): return
-    val=(message.text or "").strip()
-    user_states.pop(uid,None)
-    _pedit_save(uid,message.chat.id,"partners","city",val)
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partners","city",val)
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_address")
 def _ph_address(message):
-    uid=message.from_user.id
-    if _exit_chat_if_needed(message): return
-    val=(message.text or "").strip()
-    user_states.pop(uid,None)
-    _pedit_save(uid,message.chat.id,"partner_bank_info","address",val)
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","address",val)
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_card")
 def _ph_card(message):
-    uid=message.from_user.id
-    if _exit_chat_if_needed(message): return
-    val=(message.text or "").replace("-","").replace(" ","").strip()
+    uid=message.from_user.id; val=(message.text or "").replace("-","").replace(" ","").strip()
     if not (val.isdigit() and len(val)==16):
-        bot.reply_to(message,"شماره کارت باید دقیقاً ۱۶ رقم باشد:"); return
-    user_states.pop(uid,None)
-    _pedit_save(uid,message.chat.id,"partner_bank_info","card_number",val)
+        bot.reply_to(message,"شماره کارت باید ۱۶ رقم باشد:"); return
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","card_number",val)
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_iban")
 def _ph_iban(message):
-    uid=message.from_user.id
-    if _exit_chat_if_needed(message): return
-    val=((message.text or "").strip().upper().replace(" ",""))
+    uid=message.from_user.id; val=(message.text or "").strip().upper().replace(" ","")
     if not val.startswith("IR"): val="IR"+val
-    if len(val)!=26:
-        bot.reply_to(message,"شماره شبا باید ۲۴ رقم (بدون IR) باشد:"); return
-    user_states.pop(uid,None)
-    _pedit_save(uid,message.chat.id,"partner_bank_info","iban",val)
+    if len(val)!=26: bot.reply_to(message,"شماره شبا باید ۲۴ رقم (بدون IR) باشد:"); return
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","iban",val)
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_bankname")
 def _ph_bankname(message):
-    uid=message.from_user.id
-    if _exit_chat_if_needed(message): return
-    val=(message.text or "").strip()
-    user_states.pop(uid,None)
-    _pedit_save(uid,message.chat.id,"partner_bank_info","full_name",val)
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","full_name",val)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
@@ -3266,72 +3090,70 @@ def cb_partner_ref_link(call):
         bot_username = bot.get_me().username
     except Exception:
         bot_username = "your_bot"
-    link   = f"https://t.me/{bot_username}?start=ref_{uid}"
+    link = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = settings.get("reward_amount", 5000)
 
     text = (
-        f"🔗 <b>لینک معرفی اختصاصی شما</b>\n\n"
+        f"🔗 <b>لینک معرفی شما</b>\n\n"
         f"کد معرفی: <code>{uid}</code>\n\n"
-        f"لینک (برای کپی ضربه بزنید):\n"
-        f"<code>{link}</code>\n\n"
-        f"💡 دوستتان را به این لینک هدایت کنید.\n"
-        f"با اولین خرید موفق، <b>{reward:,}</b> تومان پاداش دریافت می‌کنید!\n\n"
-        f"📊 آمار:\n"
-        f"• معرفی‌ها: {stats['total']}\n"
+        f"لینک اختصاصی:\n<code>{link}</code>\n\n"
+        f"💰 با هر معرفی موفق <b>{reward:,}</b> تومان پاداش بگیرید!\n\n"
+        f"📊 آمار شما:\n"
+        f"• کل معرفی‌ها: {stats['total']}\n"
         f"• پاداش دریافتی: {stats['total_reward']:,} تومان"
     )
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        types.InlineKeyboardButton(
-            t("BTN_SHARE_REF_LINK"),
-            url=f"https://t.me/share/url?url={link}&text=با+این+لینک+وارد+شو"
-        ),
-        types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back")
-    )
-    _partner_edit(call, text, kb)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                          parse_mode="HTML", reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_sub_stats")
 def cb_partner_sub_stats(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
+    import sqlite3 as _sq
     from config import DB_PATH as _DBP
-    total_refs = active_refs = total_orders = total_purchase = total_reward = 0
     try:
         conn = _sq.connect(_DBP)
-        total_refs  = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (uid,)).fetchone()[0]
-        active_refs = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND rewarded=1;", (uid,)).fetchone()[0]
-        total_reward = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE referrer_id=? AND rewarded=1;", (uid,)).fetchone()[0]
-        sub_ids = [r[0] for r in conn.execute("SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)).fetchall()]
+        # تعداد زیرمجموعه‌ها
+        total_refs = conn.execute(
+            "SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (uid,)
+        ).fetchone()[0]
+        # زیرمجموعه‌های فعال (خرید کردن)
+        active_refs = conn.execute(
+            "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND rewarded=1;", (uid,)
+        ).fetchone()[0]
+        # جمع کل خرید زیرمجموعه‌ها (کلی - بدون ID)
+        sub_ids = [r[0] for r in conn.execute(
+            "SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)
+        ).fetchall()]
+        total_purchase = 0
+        total_orders = 0
         if sub_ids:
-            ph = ",".join("?" * len(sub_ids))
-            row = conn.execute(f"SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({ph});", sub_ids).fetchone()
-            total_orders   = int(row[0] or 0)
+            placeholders = ",".join("?" * len(sub_ids))
+            row = conn.execute(
+                f"SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({placeholders});",
+                sub_ids
+            ).fetchone()
+            total_orders  = int(row[0] or 0)
             total_purchase = int(row[1] or 0)
         conn.close()
     except Exception:
-        pass
-
-    # نوار پیشرفت معرفی‌های موفق
-    pct   = int((active_refs / total_refs * 100) if total_refs else 0)
-    bar   = "▓" * (pct // 10) + "░" * (10 - pct // 10)
+        total_refs = active_refs = total_orders = total_purchase = 0
 
     text = (
-        f"📊 <b>آمار زیرمجموعه‌ها</b>\n"
-        f"━━━━━━━━━━━━━━━\n\n"
-        f"👥 <b>معرفی‌ها</b>\n"
-        f"• کل معرفی‌ها: <b>{total_refs}</b>\n"
-        f"• فعال (خرید کرده): <b>{active_refs}</b>\n"
-        f"<code>{bar}</code> {pct}% موفقیت\n\n"
-        f"🛒 <b>خریدها</b>\n"
-        f"• تعداد کل خرید: <b>{total_orders}</b>\n"
-        f"• مجموع خرید: <b>{total_purchase:,}</b> تومان\n\n"
-        f"💰 <b>پورسانت</b>\n"
-        f"• پاداش دریافتی: <b>{int(total_reward):,}</b> تومان"
+        f"📊 <b>آمار زیرمجموعه‌ها</b>\n\n"
+        f"👥 کل معرفی‌ها: <b>{total_refs}</b>\n"
+        f"✅ معرفی‌های فعال (خرید کرده): <b>{active_refs}</b>\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🛒 تعداد کل خریدها: <b>{total_orders}</b>\n"
+        f"💰 مجموع خرید: <b>{total_purchase:,}</b> تومان"
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    _partner_edit(call, text, kb)
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                          parse_mode="HTML", reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_wallet")
@@ -3345,8 +3167,8 @@ def cb_partner_wallet(call):
 
     type_map = {
         "credit": "💚 واریز پورسانت",
-        "transfer_out": t("BTN_WALLET_TRANSFER"),
-        "payout_request": t("BTN_WALLET_PAYOUT"),
+        "transfer_out": "🔄 انتقال به کیف‌پول اصلی",
+        "payout_request": "📤 درخواست تسویه",
         "payout_rejected": "↩️ برگشت تسویه",
     }
     txn_lines = "\n".join(
@@ -3362,21 +3184,18 @@ def cb_partner_wallet(call):
     )
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
-        types.InlineKeyboardButton(t("BTN_WALLET_TRANSFER"), callback_data="partner_transfer"),
-        types.InlineKeyboardButton(t("BTN_WALLET_PAYOUT"), callback_data="partner_payout"),
+        types.InlineKeyboardButton("🔄 انتقال به کیف‌پول اصلی", callback_data="partner_transfer"),
+        types.InlineKeyboardButton("📤 درخواست تسویه", callback_data="partner_payout"),
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
     )
     _partner_edit(call, text, kb)
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "partner_transfer")
 def cb_partner_transfer(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     from db import get_partner_wallet_balance
     bal = get_partner_wallet_balance(uid)
     if bal <= 0:
-        bot.answer_callback_query(call.id, t("MSG_TRANSFER_EMPTY"), show_alert=True)
+        bot.answer_callback_query(call.id, "موجودی کیف‌پول همکاری صفر است", show_alert=True)
         return
     user_states[uid] = {"mode": "partner_transfer", "max": bal}
     bot.send_message(call.message.chat.id,
@@ -3415,106 +3234,32 @@ def handle_partner_transfer(message):
 @bot.callback_query_handler(func=lambda c: c.data == "partner_payout")
 def cb_partner_payout(call):
     uid = call.from_user.id
-    from db import get_partner_payout_settings, get_partner_wallet_balance, get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_wallet_schema, ensure_payout_settings_extended
-    ensure_partner_bank_schema(); ensure_partner_wallet_schema(); ensure_payout_settings_extended()
+    from db import get_partner_wallet_balance, get_partner_payout_settings, ensure_partner_wallet_schema
+    ensure_partner_wallet_schema()
     settings = get_partner_payout_settings()
-
     if not settings.get("is_active"):
-        bot.answer_callback_query(call.id, t("MSG_PAYOUT_DISABLED"), show_alert=True)
+        bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
         return
-
-    bal   = get_partner_wallet_balance(uid)
+    bal = get_partner_wallet_balance(uid)
     min_a = int(settings.get("min_amount") or 0)
     if min_a and bal < min_a:
         bot.answer_callback_query(call.id,
-            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی فعلی: {bal:,} تومان",
+            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی شما: {bal:,} تومان",
             show_alert=True)
         return
-
-    # اطلاعات بانکی
     bot.answer_callback_query(call.id)
-    bank = get_partner_bank_info(uid)
-    if not bank:
-        user_states[uid] = {"mode": "partner_bank_name", "after": "payout"}
-        bot.send_message(call.message.chat.id,
-            "💳 <b>اولین درخواست تسویه</b>\n\n"
-            "لطفاً اطلاعات بانکی خود را وارد کنید:\n\n"
-            f"{t('MSG_PAYOUT_BANK_NAME_REQ')}",
-            parse_mode="HTML")
-    else:
-        max_a  = int(settings.get("max_amount") or 0)
-        user_states[uid] = {"mode": "partner_payout", "bal": bal}
-        text = (
-            f"📤 <b>درخواست تسویه</b>\n\n"
-            f"💳 کارت: <code>{bank['card_number']}</code>\n"
-            f"👤 {bank['full_name']}\n\n"
-            f"موجودی: <b>{bal:,}</b> تومان\n"
-            + (f"حداقل: {min_a:,} ت\n" if min_a else "")
-            + (f"حداکثر: {max_a:,} ت\n" if max_a else "")
-            + f"\n{t('MSG_PAYOUT_ENTER_AMOUNT')}"
-        )
-        bot.send_message(call.message.chat.id, text, parse_mode="HTML")
-
-
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_name")
-def handle_partner_bank_name(message):
-    uid = message.from_user.id
-    if _exit_chat_if_needed(message): return
-    name = (message.text or "").strip()
-    if len(name) < 3:
-        bot.reply_to(message, "نام وارد‌شده معتبر نیست. لطفاً نام کامل را وارد کنید:")
-        return
-    st = user_states.get(uid, {})
-    user_states[uid] = {**st, "mode": "partner_bank_card", "bank_name": name}
-    bot.send_message(message.chat.id, t("MSG_PAYOUT_CARD_REQ"))
-
-
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_card")
-def handle_partner_bank_card(message):
-    uid = message.from_user.id
-    if _exit_chat_if_needed(message): return
-    card = (message.text or "").replace("-","").replace(" ","").strip()
-    if not card.isdigit() or len(card) != 16:
-        bot.reply_to(message, "شماره کارت باید ۱۶ رقم باشد:")
-        return
-    st = user_states.get(uid, {})
-    user_states[uid] = {**st, "mode": "partner_bank_iban", "bank_card": card}
-    bot.send_message(message.chat.id, t("MSG_PAYOUT_IBAN_REQ"))
-
-
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_bank_iban")
-def handle_partner_bank_iban(message):
-    uid = message.from_user.id
-    if _exit_chat_if_needed(message): return
-    iban = (message.text or "").strip().upper().replace(" ","")
-    if not iban.startswith("IR"):
-        iban = "IR" + iban
-    if len(iban) != 26:
-        bot.reply_to(message, "شماره شبا باید ۲۴ رقم (بدون IR) باشد:")
-        return
-    st = user_states.pop(uid, {})
-    from db import save_partner_bank_info
-    save_partner_bank_info(uid, st.get("bank_name",""), st.get("bank_card",""), iban)
-    after = st.get("after", "payout")
-    bot.send_message(message.chat.id,
-        f"✅ اطلاعات بانکی ذخیره شد:\n"
-        f"👤 {st.get('bank_name')}\n"
-        f"💳 {st.get('bank_card')}\n"
-        f"🏦 {iban}",
-        parse_mode="HTML")
-    if after == "profile":
-        # برگشت به پروفایل
-        from db import get_partner_bank_info
-        bank = get_partner_bank_info(uid)
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-        bot.send_message(message.chat.id, "✅ پروفایل به‌روز شد.", reply_markup=kb)
-    else:
-        # ادامه درخواست تسویه
-        from db import get_partner_wallet_balance, get_partner_payout_settings
-        bal      = get_partner_wallet_balance(uid)
-        settings = get_partner_payout_settings()
-        user_states[uid] = {"mode": "partner_payout", "bal": bal}
+    max_a = int(settings.get("max_amount") or 0)
+    max_pm = int(settings.get("max_per_month") or 0)
+    user_states[uid] = {"mode": "partner_payout", "bal": bal}
+    text = (
+        f"📤 <b>درخواست تسویه</b>\n\n"
+        f"موجودی: <b>{bal:,}</b> تومان\n"
+        f"{'حداقل: '+format(min_a,',')+'تومان' if min_a else ''}\n"
+        f"{'حداکثر: '+format(max_a,',')+'تومان' if max_a else ''}\n"
+        f"{'سقف ماهانه: '+str(max_pm)+' درخواست' if max_pm else ''}\n\n"
+        "مبلغ درخواستی را وارد کنید:"
+    )
+    bot.send_message(call.message.chat.id, text, parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_payout")
@@ -3552,66 +3297,16 @@ def handle_partner_payout(message):
 def cb_partner_guide(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-
-    # بررسی اینکه مدیر متن دستی گذاشته یا داینامیک بسازیم
-    custom_text = t("PARTNER_GUIDE_TEXT", "")
-    if custom_text and "تنظیم نشده" not in custom_text:
-        guide_text = custom_text
-    else:
-        # ساخت راهنمای داینامیک از تنظیمات سیستم
-        from db import (get_partner_tiers, get_partner_commission,
-                        get_partner_payout_settings, get_referral_settings,
-                        ensure_partner_system_schema, ensure_partner_wallet_schema)
-        ensure_partner_system_schema(); ensure_partner_wallet_schema()
-        tiers    = get_partner_tiers()
-        comm     = get_partner_commission()
-        payout   = get_partner_payout_settings()
-        referral = get_referral_settings()
-
-        tier_lines = "\n".join(
-            f"  {tr['icon']} <b>{tr['name']}</b> — از {tr['min_orders']} خرید به بالا"
-            for tr in tiers
-        ) or "  (سطوح تنظیم نشده)"
-
-        comm_pct  = comm.get("percent", 0)
-        min_order = int(comm.get("min_order") or 0)
-        max_pay   = int(comm.get("max_payout") or 0)
-        min_pout  = int(payout.get("min_amount") or 0)
-        max_pout  = int(payout.get("max_amount") or 0)
-        max_pm    = int(payout.get("max_per_month") or 0)
-        ref_rew   = int(referral.get("reward_amount") or 0)
-
-        guide_text = (
-            f"📖 <b>راهنمای همکاری در فروش</b>\n"
-            f"━━━━━━━━━━━━━━━\n\n"
-            f"🛒 <b>نحوه خرید همکاری</b>\n"
-            f"پس از تأیید حساب همکاری، قیمت‌های ویژه همکار برای شما فعال می‌شود. "
-            f"خریدهای شما به‌صورت خودکار در سطح همکاری ثبت می‌شوند.\n\n"
-            f"🏆 <b>سطوح همکاری</b>\n{tier_lines}\n\n"
-            f"💰 <b>سیستم پورسانت معرفی</b>\n"
-            f"به ازای هر خرید موفق زیرمجموعه، <b>{comm_pct}٪</b> پورسانت دریافت می‌کنید."
-            + (f"\n• حداقل مبلغ خرید زیرمجموعه: <b>{min_order:,}</b> تومان" if min_order else "")
-            + (f"\n• سقف پورسانت هر خرید: <b>{max_pay:,}</b> تومان" if max_pay else "") +
-            f"\n\n🔗 <b>شرایط معرفی</b>\n"
-            f"با لینک اختصاصی خود کاربران جدید معرفی کنید. "
-            f"به ازای هر معرفی موفق <b>{ref_rew:,}</b> تومان به کیف‌پول همکاری واریز می‌شود.\n\n"
-            f"💼 <b>انتقال موجودی</b>\n"
-            f"موجودی کیف‌پول همکاری را می‌توانید به کیف‌پول اصلی منتقل کنید "
-            f"تا در خریدهای ربات استفاده شود.\n\n"
-            f"📤 <b>درخواست تسویه</b>\n"
-            + (f"• حداقل مبلغ: <b>{min_pout:,}</b> تومان\n" if min_pout else "")
-            + (f"• حداکثر مبلغ: <b>{max_pout:,}</b> تومان\n" if max_pout else "")
-            + (f"• سقف ماهانه: <b>{max_pm}</b> درخواست\n" if max_pm else "")
-            + f"• درخواست‌ها پس از بررسی تأیید یا رد می‌شوند."
-        )
-
+    guide_text = t("PARTNER_GUIDE_TEXT",
+        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
+        "متن راهنما توسط مدیر تنظیم نشده است.\n"
+        "لطفاً با پشتیبانی تماس بگیرید.")
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    try:
-        bot.edit_message_text(guide_text, call.message.chat.id, call.message.message_id,
-                              parse_mode="HTML", reply_markup=kb)
-    except Exception:
-        bot.send_message(call.message.chat.id, guide_text, parse_mode="HTML", reply_markup=kb)
+    bot.edit_message_text(
+        guide_text, call.message.chat.id, call.message.message_id,
+        parse_mode="HTML", reply_markup=kb
+    )
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_support")
@@ -3624,6 +3319,7 @@ def cb_partner_support(call):
     # اگه تیکت همکاری باز داره، ادامه بده
     existing = None
     try:
+        import sqlite3 as _sq
         from config import DB_PATH as _DBP
         _c = _sq.connect(_DBP); _c.row_factory = _sq.Row
         existing = _c.execute(
@@ -3807,17 +3503,9 @@ def handle_help(message):
     bot.send_message(message.chat.id, text)
 
 
-@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and (
-    m.from_user.id in admin_states or
-    user_states.get(m.from_user.id, {}).get("mode") == "ticket_support"
-))
+@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
 def handle_admin_text(message):
     aid = message.from_user.id
-
-    # دکمه‌های منوی اصلی هرگز توسط این handler گرفته نشوند
-    if _is_my_orders_button(message.text or ""):
-        _show_my_orders(message.chat.id, aid)
-        return
 
     # ─── اگه ادمین در حالت تیکت کاربر (تست) باشه → به handler تیکت برو ──
     user_st = user_states.get(aid, {})
@@ -4314,22 +4002,6 @@ def cb_admin_toggle_chat(call: types.CallbackQuery):
 def handle_callbacks(call: types.CallbackQuery):
     data = call.data
     uid = call.from_user.id
-
-    # خروج از حالت‌های انتظار ورودی (نه ticket که handler خودش داره)
-    _INPUT_MODES = {
-        "wallet_charge_amount", "partner_bank_name", "partner_bank_card",
-        "partner_bank_iban", "partner_transfer", "partner_payout",
-        "partner_name", "partner_shop", "partner_city", "partner_address",
-        "partner_card", "partner_iban", "partner_bankname",
-    }
-    _FLOW_CALLBACKS = {  # callback هایی که بخشی از flow هستن — state رو پاک نکن
-        "partner_payout", "partner_transfer", "partner_wallet", "partner_support",
-        "partner_ref_link", "partner_sub_stats", "partner_profile", "partner_guide",
-        "partner_back", "partner_edit_bank",
-    }
-    st = user_states.get(uid, {})
-    if st.get("mode") in _INPUT_MODES and data not in _FLOW_CALLBACKS and not data.startswith("pedit_"):
-        clear_user_state(uid)
     # --- toggle active/inactive for other_services ---
     if data.startswith("toggle_other_"):
         if not ensure_admin(uid):
@@ -4337,6 +4009,7 @@ def handle_callbacks(call: types.CallbackQuery):
             return
         service_key = data.replace("toggle_other_", "")
 
+        import sqlite3
         with sqlite3.connect(DB_PATH) as conn:
             cur = conn.cursor()
             cur.execute("""
@@ -4467,8 +4140,7 @@ def handle_callbacks(call: types.CallbackQuery):
     if data == "cancel_purchase":
         bot.answer_callback_query(call.id)
         clear_user_state(uid)
-        bot.send_message(call.message.chat.id, t("MSG_BUY_CANCELLED"),
-                         reply_markup=main_menu(user_id=uid))
+        bot.send_message(call.message.chat.id, "خرید لغو شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     # ─── ناوبری دسته‌بندی داینامیک ────────────────────────────────────────
@@ -4538,7 +4210,7 @@ def handle_callbacks(call: types.CallbackQuery):
             if t_row:
                 clear_user_state(int(t_row["user_id"]))
                 try:
-                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu(user_id=int(t_row["user_id"])))
+                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
                 except Exception:
                     pass
         return
@@ -4671,14 +4343,12 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "back_main":
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"),
-                         reply_markup=main_menu(user_id=uid))
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     if data == "other_back":
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"),
-                         reply_markup=main_menu(user_id=uid))
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
         return
 
     if data == "admin_products_back":
@@ -4694,7 +4364,7 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "admin_settings":
         bot.answer_callback_query(call.id)
-        panel_url = f"https://panel.stland.ir/admin/settings"
+        panel_url = f"https://stockland-bot-production.up.railway.app/admin/settings"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل تنظیمات", url=panel_url))
         bot.send_message(call.message.chat.id, "تنظیمات به پنل وب منتقل شده است:", reply_markup=kb)
@@ -4703,7 +4373,7 @@ def handle_callbacks(call: types.CallbackQuery):
     if data in ("admin_main_btn_manage", "admin_ui_main_buttons", "admin_ui_texts",
                 "admin_ui_captions", "admin_backup_menu"):
         bot.answer_callback_query(call.id)
-        panel_url = f"https://panel.stland.ir/admin/"
+        panel_url = f"https://stockland-bot-production.up.railway.app/admin/"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل مدیریت", url=panel_url))
         bot.send_message(call.message.chat.id, "این بخش به پنل وب منتقل شده:", reply_markup=kb)
@@ -4713,7 +4383,7 @@ def handle_callbacks(call: types.CallbackQuery):
             data in ("admin_export_backup", "admin_import_backup",
                      "admin_full_reset_1", "admin_full_reset_2", "admin_full_reset_do")):
         bot.answer_callback_query(call.id)
-        panel_url = "https://panel.stland.ir/admin/"
+        panel_url = "https://stockland-bot-production.up.railway.app/admin/"
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🌐 پنل مدیریت وب", url=panel_url))
         bot.send_message(call.message.chat.id, "این بخش از پنل وب مدیریت می‌شود:", reply_markup=kb)
@@ -4796,6 +4466,7 @@ def handle_callbacks(call: types.CallbackQuery):
             return
         # toggle delivered flag only (safely)
         try:
+            import sqlite3
             conn = sqlite3.connect(DB_FULL_PATH)
             cur = conn.cursor()
             cur.execute("SELECT delivered FROM product_feed WHERE id=?", (fid,))
@@ -4843,6 +4514,7 @@ def handle_callbacks(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, "فرمت نامعتبر", show_alert=True)
             return
         try:
+            import sqlite3
             conn = sqlite3.connect(DB_FULL_PATH)
             # اگر پیام تحویل برای این محصول ذخیره شده، قبل از حذف آیتم تلاش کن آن پیام را پاک کنی
             _info = _get_delivery_message(int(fid))
@@ -5063,6 +4735,7 @@ def handle_callbacks(call: types.CallbackQuery):
 
         skey = data.replace("admin_other_toggle_", "")
 
+        import sqlite3
         conn = sqlite3.connect(DB_PATH)
         row = conn.execute(
             "SELECT is_active FROM other_services WHERE service_key=?",
@@ -5180,6 +4853,7 @@ def handle_callbacks(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         row = list_feed_items(pid, None, limit=1, offset=0)
         try:
+            import sqlite3
             _conn = sqlite3.connect(DB_FULL_PATH)
             _r = _conn.execute(
                 "SELECT id, data, delivered, created_at FROM product_feed WHERE id=? AND product_id=?;",
@@ -5228,6 +4902,7 @@ def handle_callbacks(call: types.CallbackQuery):
         page = safe_int(_p[5]) or 0
         mode = safe_int(_p[6]) or 0
         try:
+            import sqlite3
             _conn = sqlite3.connect(DB_FULL_PATH)
             _r = _conn.execute("SELECT delivered FROM product_feed WHERE id=? AND product_id=?;", (int(feed_id), int(pid))).fetchone()
             _conn.close()
@@ -5552,6 +5227,7 @@ def handle_callbacks(call: types.CallbackQuery):
         return
         
 # ===== بررسی ادامه خرید بعد از شارژ =====
+        import sqlite3
 
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
