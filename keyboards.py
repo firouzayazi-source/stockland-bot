@@ -37,9 +37,8 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
         # همکار: پنل همکار (یه ردیف کامل)
         if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
             kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "پنل همکار 🤝"))))
-        # فقط راهنما
-        if is_main_button_enabled("MAIN_BTN_GUIDE"):
-            kb.row(types.KeyboardButton(t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "راهنما 🔑"))))
+        # راهنمای همکاری (نه پشتیبانی)
+        kb.row(types.KeyboardButton(t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "📖 راهنمای همکاری"))))
     else:
         # کاربر عادی: درخواست همکاری
         if is_main_button_enabled("MAIN_BTN_PARTNER_REQUEST"):

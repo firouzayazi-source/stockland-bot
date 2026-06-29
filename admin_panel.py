@@ -4172,8 +4172,28 @@ async def feed_item_edit_get(request: Request, fid: int, flash: str = ""):
             return _redir("/admin/feed")
         product = conn.execute("SELECT title FROM products WHERE id=? LIMIT 1;", (item["product_id"],)).fetchone()
         product_title = product["title"] if product else f"#{item['product_id']}"
+        # اطلاعات batch
+        batch = None
+        if item["batch_id"]:
+            batch = conn.execute("SELECT * FROM feed_batches WHERE id=?;", (item["batch_id"],)).fetchone()
     finally:
         conn.close()
+
+    batch_section = ""
+    if batch:
+        batch_section = f"""
+        <div class="border-t pt-4 mt-2">
+          <h3 class="text-sm font-semibold text-gray-700 mb-3">📊 اطلاعات حسابداری Batch #{batch['id']}</h3>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="text-xs text-gray-500 block mb-1">قیمت خرید هر واحد (ت)</label>
+              <input type="number" name="purchase_price" value="{batch['purchase_price']}"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">هزینه جانبی (ت)</label>
+              <input type="number" name="side_cost" value="{batch['side_cost']}"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+          </div>
+          <input type="hidden" name="batch_id" value="{batch['id']}">
+        </div>"""
 
     body = f"""
     <div class="flex items-center gap-3 mb-6">
@@ -4185,39 +4205,43 @@ async def feed_item_edit_get(request: Request, fid: int, flash: str = ""):
       <form method="post" action="/admin/feed/item/{fid}/edit" class="space-y-4">
         <div>
           <label class="text-sm font-medium text-gray-700 block mb-1">محتوای آیتم</label>
-          <div class="text-xs text-gray-400 mb-2">برای چندخطی: هر خط محتوا است</div>
           {_textarea("data", "", str(item["data"] or ""), rows=6)}
         </div>
         <div class="flex items-center gap-3">
           <label class="text-sm font-medium text-gray-700">تحویل داده شده</label>
           <input type="checkbox" name="delivered" value="1" {"checked" if item["delivered"] else ""}>
         </div>
+        {batch_section}
         <div class="flex gap-3">
           {_btn("ذخیره", color="green")}
           {_btn("انصراف", f"/admin/feed/{item['product_id']}", "slate")}
         </div>
       </form>
     </div>"""
-
     return _layout(f"ویرایش فید #{fid}", body, adm, flash=flash)
 
 
 @router.post("/feed/item/{fid}/edit")
-async def feed_item_edit_post(request: Request, fid: int,
-                               data: str = Form(""), delivered: str = Form("")):
+async def feed_item_edit_post(request: Request, fid: int):
     adm = _get_admin(request)
     guard = _require(adm, "feed")
     if guard: return guard
+    form = await request.form()
+    data      = str(form.get("data","")).strip()
+    delivered = 1 if form.get("delivered") == "1" else 0
+    batch_id  = form.get("batch_id")
+    pp        = int(form.get("purchase_price") or 0)
+    sc        = int(form.get("side_cost") or 0)
 
     conn = _db()
     try:
         row = conn.execute("SELECT product_id FROM product_feed WHERE id=?;", (fid,)).fetchone()
         pid = row["product_id"] if row else 0
-        delivered_val = 1 if delivered == "1" else 0
-        conn.execute(
-            "UPDATE product_feed SET data=?, delivered=? WHERE id=?;",
-            (data.strip(), delivered_val, fid)
-        )
+        conn.execute("UPDATE product_feed SET data=?, delivered=? WHERE id=?;",
+                     (data, delivered, fid))
+        if batch_id:
+            conn.execute("UPDATE feed_batches SET purchase_price=?, side_cost=? WHERE id=?;",
+                         (pp, sc, int(batch_id)))
         conn.commit()
     finally:
         conn.close()
