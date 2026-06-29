@@ -3169,7 +3169,8 @@ def get_partner_order_count(tg_user_id: int) -> int:
 
 
 def get_partner_tier_for(order_count: int) -> dict:
-    """سطح فعلی بر اساس تعداد خرید."""
+    """سطح فعلی بر اساس تعداد خرید — شامل photo_file_id."""
+    ensure_partner_tiers_extended()
     tiers = get_partner_tiers()
     current = None
     for t in tiers:
@@ -3177,7 +3178,7 @@ def get_partner_tier_for(order_count: int) -> dict:
             current = t
     if current is None and tiers:
         current = tiers[0]
-    return dict(current) if current else {"name": "برنز", "icon": "🥉", "min_orders": 0}
+    return dict(current) if current else {"name": "برنز", "icon": "🥉", "min_orders": 0, "photo_file_id": ""}
 
 
 def get_referral_stats_for(referrer_id: int) -> dict:
