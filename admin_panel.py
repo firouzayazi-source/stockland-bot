@@ -5949,8 +5949,8 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
     bulk_delete_btn = """
         <form method="post" action="/admin/receipts/delete-all"
               onsubmit="return confirm('⚠️ تمام رسیدهای کارت‌به‌کارت برای همیشه حذف می‌شوند. مطمئنید؟')">
-          <button class="px-3 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium whitespace-nowrap">
-            🗑 حذف همه کارت‌به‌کارت
+          <button class="px-2.5 py-1 bg-red-50 text-red-500 border border-red-200 rounded-md text-[11px] font-medium whitespace-nowrap hover:bg-red-100 transition">
+            🗑 حذف همه
           </button>
         </form>"""
 
@@ -5958,10 +5958,7 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
     <div id="financial" style="scroll-margin-top:80px" class="mt-8">
       <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 class="text-xl font-bold text-gray-800">💰 مرکز مالی</h1>
-        <div class="flex items-center gap-2">
-          {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
-          {bulk_delete_btn}
-        </div>
+        {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
       </div>
       <div class="flex gap-2 mb-4 flex-wrap">{tabs}</div>
       <form method="get" class="flex gap-2 mb-4">
@@ -5971,6 +5968,7 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
           class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
         <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">جستجو</button>
       </form>
+      <div class="flex justify-end mb-2">{bulk_delete_btn}</div>
       <div class="card overflow-hidden"><div class="overflow-x-auto">
         <table class="w-full text-right min-w-max">
           <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
