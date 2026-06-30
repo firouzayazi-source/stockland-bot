@@ -4,7 +4,7 @@ from datetime import datetime
 
 from config import DB_PATH, BASE_DIR
 
-# اگر DB_PATH در config نسبی باشد، به BASE_DIR وصل می‌کنیم
+# اگر DB_PATH در config نسبی باشد، به BASE_DIR وصل میکنیم
 DB_FULL_PATH = DB_PATH
 if not os.path.isabs(DB_FULL_PATH):
     DB_FULL_PATH = os.path.join(BASE_DIR, DB_PATH)
@@ -12,7 +12,7 @@ if not os.path.isabs(DB_FULL_PATH):
 
 def _get_connection():
     """
-    همیشه یک کانکشن جدید می‌سازد تا با Threadهای تلگرام مشکل نداشته باشیم.
+    همیشه یک کانکشن جدید میسازد تا با Threadهای تلگرام مشکل نداشته باشیم.
     """
     conn = sqlite3.connect(DB_FULL_PATH, timeout=30)
     # Configure SQLite to handle concurrent writers better
@@ -26,8 +26,8 @@ def _get_connection():
 
 def init_db(db_path=None):
     """
-    ساخت / به‌روزرسانی جداول دیتابیس.
-    اگر قبلاً ساخته شده باشد، فقط مهاجرت‌های لازم را انجام می‌دهد.
+    ساخت / بهروزرسانی جداول دیتابیس.
+    اگر قبلاً ساخته شده باشد، فقط مهاجرتهای لازم را انجام میدهد.
     """
     global DB_FULL_PATH
     if db_path:
@@ -39,328 +39,330 @@ def init_db(db_path=None):
     os.makedirs(os.path.dirname(DB_FULL_PATH), exist_ok=True)
 
     conn = _get_connection()
-    cur = conn.cursor()
-
-    # جدول کیف پول
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS wallets (
-            user_id INTEGER PRIMARY KEY,
-            balance INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL
-        );
-        """
-    )
-
-    # جدول محصولات
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT NOT NULL,
-            product_key TEXT NOT NULL,
-            title TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            description TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1
-        );
-        """
-    )
-
-    # مهاجرت: ستون قیمت همکار برای محصولات
     try:
-        cur.execute("ALTER TABLE products ADD COLUMN partner_price INTEGER;")
-    except sqlite3.OperationalError:
-        # ستون احتمالاً وجود دارد
-        pass
+        cur = conn.cursor()
 
-    # مهاجرت: ستون‌های حد خرید روزانه برای محصولات
-    try:
-        cur.execute('ALTER TABLE products ADD COLUMN daily_limit_customer INTEGER DEFAULT 0;')
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cur.execute('ALTER TABLE products ADD COLUMN daily_limit_partner INTEGER DEFAULT 0;')
-    except sqlite3.OperationalError:
-        pass
-
-
-    # جدول همکاران (نمایندگان)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS partners (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tg_user_id INTEGER UNIQUE,
-            phone TEXT UNIQUE,
-            status TEXT NOT NULL DEFAULT 'pending',
-            username TEXT,
-            full_name TEXT,
-            note TEXT,
-            city TEXT,
-            shop_name TEXT,
-            created_at TEXT NOT NULL,
-            approved_at TEXT
-        );
-        """
-    )
-
-
-    
-    
-    # مهاجرت/ایندکس‌ها برای partners
-    try:
-        cur.execute("PRAGMA table_info(partners);")
-        cols = {row[1] for row in cur.fetchall()}
-        # ستون‌های اصلی
-        if "tg_user_id" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN tg_user_id INTEGER;")
-        if "phone" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN phone TEXT;")
-        if "status" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';")
-        if "username" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN username TEXT;")
-        if "full_name" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN full_name TEXT;")
-        if "note" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN note TEXT;")
-        if "city" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN city TEXT;")
-        if "shop_name" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN shop_name TEXT;")
-        if "created_at" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN created_at TEXT;")
-        if "approved_at" not in cols:
-            cur.execute("ALTER TABLE partners ADD COLUMN approved_at TEXT;")
-        # ایندکس یکتا برای جلوگیری از درخواست تکراری
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_partners_phone ON partners(phone);")
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_partners_tg_user_id ON partners(tg_user_id);")
-    except Exception:
-        pass
-
-# جدول سفارش‌ها
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            category TEXT NOT NULL,
-            product_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            buyer_type TEXT
-        );
-        """
-    )
-    try:
-        cur.execute("ALTER TABLE orders ADD COLUMN buyer_type TEXT;")
-    except sqlite3.OperationalError:
-        pass
-    # وضعیت سفارش: active | returned (برای مورد برگشت محصول)
-    try:
-        cur.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'active';")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cur.execute("ALTER TABLE orders ADD COLUMN feed_id INTEGER;")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        cur.execute("ALTER TABLE orders ADD COLUMN returned_at TEXT;")
-    except sqlite3.OperationalError:
-        pass
-
-    # جدول تراکنش‌های زرین‌پال
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS zarinpal_transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            amount INTEGER NOT NULL,
-            authority TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        """
-    )
-    for col, decl in {
-        "payment_type": "TEXT DEFAULT 'wallet'",
-        "product_id": "INTEGER",
-        "wallet_reserved": "INTEGER DEFAULT 0",
-        "total_amount": "INTEGER",
-        "buyer_type": "TEXT",
-        "ref_id": "TEXT",
-        "paid_at": "TEXT",
-        "error": "TEXT",
-    }.items():
-        try:
-            cur.execute(f"ALTER TABLE zarinpal_transactions ADD COLUMN {col} {decl};")
-        except sqlite3.OperationalError:
-            pass
-    # A1 — Ledger تراکنش: authority باید یکتا باشد (anchor برای ایمنی/ایدِمپوتنسی)
-    # اگر DB قدیمی authority تکراری داشته باشد، ابتدا dedupe می‌کنیم و سپس ایندکس یکتا را می‌سازیم.
-    try:
-        cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_zarinpal_transactions_authority "
-            "ON zarinpal_transactions(authority);"
-        )
-    except (sqlite3.IntegrityError, sqlite3.OperationalError):
-        # نگه داشتن قدیمی‌ترین رکورد هر authority و حذف بقیه
+        # جدول کیف پول
         cur.execute(
             """
-            DELETE FROM zarinpal_transactions
-            WHERE id NOT IN (
-                SELECT MIN(id) FROM zarinpal_transactions GROUP BY authority
+            CREATE TABLE IF NOT EXISTS wallets (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
             );
             """
         )
+
+        # جدول محصولات
         cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_zarinpal_transactions_authority "
-            "ON zarinpal_transactions(authority);"
+            """
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                product_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                description TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1
+            );
+            """
+        )
+
+        # مهاجرت: ستون قیمت همکار برای محصولات
+        try:
+            cur.execute("ALTER TABLE products ADD COLUMN partner_price INTEGER;")
+        except sqlite3.OperationalError:
+            # ستون احتمالاً وجود دارد
+            pass
+
+        # مهاجرت: ستونهای حد خرید روزانه برای محصولات
+        try:
+            cur.execute('ALTER TABLE products ADD COLUMN daily_limit_customer INTEGER DEFAULT 0;')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute('ALTER TABLE products ADD COLUMN daily_limit_partner INTEGER DEFAULT 0;')
+        except sqlite3.OperationalError:
+            pass
+
+
+        # جدول همکاران (نمایندگان)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS partners (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_user_id INTEGER UNIQUE,
+                phone TEXT UNIQUE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                username TEXT,
+                full_name TEXT,
+                note TEXT,
+                city TEXT,
+                shop_name TEXT,
+                created_at TEXT NOT NULL,
+                approved_at TEXT
+            );
+            """
         )
 
 
-    # جدول فید محصولات (انبار تحویل خودکار)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS product_feed (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER NOT NULL,
-            data TEXT NOT NULL,
-            delivered INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        );
-        """
-    )
+    
+    
+        # مهاجرت/ایندکسها برای partners
+        try:
+            cur.execute("PRAGMA table_info(partners);")
+            cols = {row[1] for row in cur.fetchall()}
+            # ستونهای اصلی
+            if "tg_user_id" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN tg_user_id INTEGER;")
+            if "phone" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN phone TEXT;")
+            if "status" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';")
+            if "username" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN username TEXT;")
+            if "full_name" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN full_name TEXT;")
+            if "note" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN note TEXT;")
+            if "city" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN city TEXT;")
+            if "shop_name" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN shop_name TEXT;")
+            if "created_at" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN created_at TEXT;")
+            if "approved_at" not in cols:
+                cur.execute("ALTER TABLE partners ADD COLUMN approved_at TEXT;")
+            # ایندکس یکتا برای جلوگیری از درخواست تکراری
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_partners_phone ON partners(phone);")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_partners_tg_user_id ON partners(tg_user_id);")
+        except Exception:
+            pass
+
+        # ول سفارشها
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                category TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                buyer_type TEXT
+            );
+            """
+        )
+        try:
+            cur.execute("ALTER TABLE orders ADD COLUMN buyer_type TEXT;")
+        except sqlite3.OperationalError:
+            pass
+        # وضعیت سفارش: active | returned (برای مورد برگشت محصول)
+        try:
+            cur.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'active';")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute("ALTER TABLE orders ADD COLUMN feed_id INTEGER;")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute("ALTER TABLE orders ADD COLUMN returned_at TEXT;")
+        except sqlite3.OperationalError:
+            pass
+
+        # جدول تراکنشهای زرینپال
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS zarinpal_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                authority TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        for col, decl in {
+            "payment_type": "TEXT DEFAULT 'wallet'",
+            "product_id": "INTEGER",
+            "wallet_reserved": "INTEGER DEFAULT 0",
+            "total_amount": "INTEGER",
+            "buyer_type": "TEXT",
+            "ref_id": "TEXT",
+            "paid_at": "TEXT",
+            "error": "TEXT",
+        }.items():
+            try:
+                cur.execute(f"ALTER TABLE zarinpal_transactions ADD COLUMN {col} {decl};")
+            except sqlite3.OperationalError:
+                pass
+        # A1 — Ledger تراکنش: authority باید یکتا باشد (anchor برای ایمنی/ایدِمپوتنسی)
+        # اگر DB قدیمی authority تکراری داشته باشد، ابتدا dedupe میکنیم و سپس ایندکس یکتا را میسازیم.
+        try:
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_zarinpal_transactions_authority "
+                "ON zarinpal_transactions(authority);"
+            )
+        except (sqlite3.IntegrityError, sqlite3.OperationalError):
+            # نگه داشتن قدیمیترین رکورد هر authority و حذف بقیه
+            cur.execute(
+                """
+                DELETE FROM zarinpal_transactions
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM zarinpal_transactions GROUP BY authority
+                );
+                """
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_zarinpal_transactions_authority "
+                "ON zarinpal_transactions(authority);"
+            )
+
+
+        # جدول فید محصولات (انبار تحویل خودکار)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS product_feed (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                data TEXT NOT NULL,
+                delivered INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
 
     
 
-    # تنظیمات هشدار کمبود موجودی فید (برای هر محصول)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS feed_alert_settings (
-            product_id INTEGER PRIMARY KEY,
-            threshold INTEGER NOT NULL DEFAULT 5,
-            last_notified_remaining INTEGER,
-            updated_at TEXT NOT NULL
-        );
-        """
-    )
-
-    # جدول سرویس‌های «سایر محصولات» (زیرشاخه‌های پویا مثل Gmail/Yahoo و ...)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS other_services (
-            service_key TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            emoji TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
-        );
-        """
-    )
-
-    seed_defaults = os.getenv("SEED_DEFAULT_DATA", "0") == "1"
-
-
-
-    # اگر هیچ سرویسی تعریف نشده بود، پیش‌فرض جیمیل را اضافه کن
-    cur.execute("SELECT COUNT(*) FROM other_services;")
-    svc_count = cur.fetchone()[0] or 0
-    if seed_defaults and svc_count == 0:
-        now = datetime.utcnow().isoformat()
+        # تنظیمات هشدار کمبود موجودی فید (برای هر محصول)
         cur.execute(
-            "INSERT INTO other_services (service_key, title, emoji, is_active, created_at) VALUES (?, ?, ?, ?, ?);",
-            ("gmail", "سرویس‌های جیمیل", "✉️", 1, now),
-        )
-
-
-    # اگر هیچ محصولی وجود نداشت، چند محصول نمونه اضافه کن
-    cur.execute("SELECT COUNT(*) FROM products;")
-    count = cur.fetchone()[0] or 0
-    if seed_defaults and count == 0:
-        sample_products = [
-            ("apple", "apple_ready_1", "اپل آیدی آماده ریجن آمریکا", 250000,
-             "تحویل فوری، آمریکا، بدون سوال امنیتی.", 1),
-            ("apple", "apple_ready_2", "اپل آیدی آماده ریجن ترکیه", 130000,
-             "تحویل فوری، ترکیه، مناسب خریدهای ارزان‌تر.", 1),
-            ("apple", "apple_ready_3", "ساخت اپل آیدی با ایمیل شما", 170000,
-             "ساخت دستی، تنظیم ریجن مناسب، تحویل ۳۰ دقیقه‌ای.", 1),
-            ("gmail", "gmail_ready_1", "جیمیل آماده سنی وریفای شده", 90000,
-             "ایده‌آل برای سرویس‌های تحریم‌محور، سنی بالای ۱۸ سال.", 1),
-            ("gmail", "gmail_ready_2", "جیمیل اختصاصی با مشخصات شما", 110000,
-             "ساخت اختصاصی، تحویل تا ۱ ساعت.", 1),
-        ]
-        cur.executemany(
             """
-            INSERT INTO products (category, product_key, title, price, description, is_active)
-            VALUES (?, ?, ?, ?, ?, ?);
-            """,
-            sample_products,
+            CREATE TABLE IF NOT EXISTS feed_alert_settings (
+                product_id INTEGER PRIMARY KEY,
+                threshold INTEGER NOT NULL DEFAULT 5,
+                last_notified_remaining INTEGER,
+                updated_at TEXT NOT NULL
+            );
+            """
         )
 
-    # جدول دسته‌بندی‌های داینامیک (نامحدود، درختی)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            slug TEXT NOT NULL,
-            parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
-            emoji TEXT DEFAULT '',
-            sort_order INTEGER DEFAULT 0,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-    )
-    # ستون category_id برای محصولات
-    try:
-        cur.execute("ALTER TABLE products ADD COLUMN category_id INTEGER REFERENCES categories(id);")
-    except sqlite3.OperationalError:
-        pass
+        # جدول سرویسهای «سایر محصولات» (زیرشاخههای پویا مثل Gmail/Yahoo و ...)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS other_services (
+                service_key TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                emoji TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
 
-    # جدول کاربران (برای Broadcast)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            full_name TEXT,
-            first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_seen TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-    )
+        seed_defaults = os.getenv("SEED_DEFAULT_DATA", "0") == "1"
 
-    # جدول پیام‌های تیکت (تاریخچه مکالمه)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ticket_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticket_id INTEGER NOT NULL,
-            sender TEXT NOT NULL,
-            text TEXT,
-            media_type TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-    )
 
-    # جدول متن‌های رابط کاربری (UI)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ui_texts (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        """
-    )
 
-    conn.commit()
-    conn.close()
+        # اگر هیچ سرویسی تعریف نشده بود، پیشفرض جیمیل را اضافه کن
+        cur.execute("SELECT COUNT(*) FROM other_services;")
+        svc_count = cur.fetchone()[0] or 0
+        if seed_defaults and svc_count == 0:
+            now = datetime.utcnow().isoformat()
+            cur.execute(
+                "INSERT INTO other_services (service_key, title, emoji, is_active, created_at) VALUES (?, ?, ?, ?, ?);",
+                ("gmail", "سرویسهای جیمیل", "✉️", 1, now),
+            )
+
+
+        # اگر هیچ محصولی وجود نداشت، چند محصول نمونه اضافه کن
+        cur.execute("SELECT COUNT(*) FROM products;")
+        count = cur.fetchone()[0] or 0
+        if seed_defaults and count == 0:
+            sample_products = [
+                ("apple", "apple_ready_1", "اپل آیدی آماده ریجن آمریکا", 250000,
+                 "تحویل فوری، آمریکا، بدون سوال امنیتی.", 1),
+                ("apple", "apple_ready_2", "اپل آیدی آماده ریجن ترکیه", 130000,
+                 "تحویل فوری، ترکیه، مناسب خریدهای ارزانتر.", 1),
+                ("apple", "apple_ready_3", "ساخت اپل آیدی با ایمیل شما", 170000,
+                 "ساخت دستی، تنظیم ریجن مناسب، تحویل ۳۰ دقیقهای.", 1),
+                ("gmail", "gmail_ready_1", "جیمیل آماده سنی وریفای شده", 90000,
+                 "ایدهآل برای سرویسهای تحریممحور، سنی بالای ۱۸ سال.", 1),
+                ("gmail", "gmail_ready_2", "جیمیل اختصاصی با مشخصات شما", 110000,
+                 "ساخت اختصاصی، تحویل تا ۱ ساعت.", 1),
+            ]
+            cur.executemany(
+                """
+                INSERT INTO products (category, product_key, title, price, description, is_active)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """,
+                sample_products,
+            )
+
+        # جدول دستهبندیهای داینامیک (نامحدود، درختی)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+                emoji TEXT DEFAULT '',
+                sort_order INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        # ستون category_id برای محصولات
+        try:
+            cur.execute("ALTER TABLE products ADD COLUMN category_id INTEGER REFERENCES categories(id);")
+        except sqlite3.OperationalError:
+            pass
+
+        # جدول کاربران (برای Broadcast)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                full_name TEXT,
+                first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_seen TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        # جدول پیامهای تیکت (تاریخچه مکالمه)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ticket_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL,
+                sender TEXT NOT NULL,
+                text TEXT,
+                media_type TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        # جدول متنهای رابط کاربری (UI)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ui_texts (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ========= WALLET HELPERS =========
@@ -379,7 +381,7 @@ def get_wallet_balance(user_id: int) -> int:
 
 def add_wallet_balance(user_id: int, amount: int) -> int:
     """
-    موجودی را افزایش می‌دهد و موجودی جدید را برمی‌گرداند.
+    موجودی را افزایش میدهد و موجودی جدید را برمیگرداند.
     """
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
@@ -405,7 +407,7 @@ def add_wallet_balance(user_id: int, amount: int) -> int:
 
 def subtract_wallet_balance(user_id: int, amount: int) -> bool:
     """
-    اگر موجودی کافی باشد، مبلغ را کم می‌کند و True برمی‌گرداند؛ در غیر این صورت False.
+    اگر موجودی کافی باشد، مبلغ را کم میکند و True برمیگرداند؛ در غیر این صورت False.
     """
     amount = int(amount)
     conn = _get_connection()
@@ -433,7 +435,7 @@ def subtract_wallet_balance(user_id: int, amount: int) -> bool:
 
 def set_wallet_balance(user_id: int, new_balance: int) -> int:
     """
-    مستقیماً موجودی کیف پول را روی مقدار دلخواه تنظیم می‌کند (برای ادمین).
+    مستقیماً موجودی کیف پول را روی مقدار دلخواه تنظیم میکند (برای ادمین).
     """
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
@@ -460,7 +462,7 @@ def set_wallet_balance(user_id: int, new_balance: int) -> int:
 
 def create_order(user_id: int, category: str, title: str, price: int, product_id=None, buyer_type: str | None = None) -> int:
     """
-    یک سفارش جدید ثبت می‌کند و id سفارش را برمی‌گرداند.
+    یک سفارش جدید ثبت میکند و id سفارش را برمیگرداند.
     """
     now = datetime.utcnow().isoformat()
     product_id_str = str(product_id) if product_id is not None else ""
@@ -481,36 +483,40 @@ def create_order(user_id: int, category: str, title: str, price: int, product_id
 
 def get_recent_orders_by_user(user_id: int, limit: int = 10):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, title, price, created_at
-        FROM orders
-        WHERE CAST(user_id AS INTEGER) = ?
-        ORDER BY id DESC
-        LIMIT ?;
-        """,
-        (int(user_id), limit),
-    )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, title, price, created_at
+            FROM orders
+            WHERE CAST(user_id AS INTEGER) = ?
+            ORDER BY id DESC
+            LIMIT ?;
+            """,
+            (int(user_id), limit),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return rows
 
 
 def get_recent_orders_global(limit: int = 15):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, user_id, title, price, created_at
-        FROM orders
-        ORDER BY id DESC
-        LIMIT ?;
-        """,
-        (limit,),
-    )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, title, price, created_at
+            FROM orders
+            ORDER BY id DESC
+            LIMIT ?;
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return rows
 
 
@@ -519,70 +525,74 @@ def get_recent_orders_global(limit: int = 15):
 
 def get_products_by_category(category: str):
     """
-    محصولات یک دسته را برمی‌گرداند.
+    محصولات یک دسته را برمیگرداند.
     خروجی همیشه ۷ فیلد است:
     (id, category, title, price, description, is_active, partner_price)
     اگر ستون partner_price وجود نداشت، مقدار آن None خواهد بود.
     """
     conn = _get_connection()
-    cur = conn.cursor()
-    # بررسی وجود ستون partner_price
     try:
-        cur.execute("PRAGMA table_info(products);")
-        cols = {row[1] for row in cur.fetchall()}
-    except Exception:
-        cols = set()
-    has_partner = 'partner_price' in cols
-    if has_partner:
-        cur.execute(
-            """
-            SELECT id, category, title, price, description, is_active, partner_price
-            FROM products
-            WHERE category = ?
-            ORDER BY id ASC;
-            """,
-            (category,),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT id, category, title, price, description, is_active, NULL as partner_price
-            FROM products
-            WHERE category = ?
-            ORDER BY id ASC;
-            """,
-            (category,),
-        )
-    rows = cur.fetchall()
-    conn.close()
+        cur = conn.cursor()
+        # بررسی وجود ستون partner_price
+        try:
+            cur.execute("PRAGMA table_info(products);")
+            cols = {row[1] for row in cur.fetchall()}
+        except Exception:
+            cols = set()
+        has_partner = 'partner_price' in cols
+        if has_partner:
+            cur.execute(
+                """
+                SELECT id, category, title, price, description, is_active, partner_price
+                FROM products
+                WHERE category = ?
+                ORDER BY id ASC;
+                """,
+                (category,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, category, title, price, description, is_active, NULL as partner_price
+                FROM products
+                WHERE category = ?
+                ORDER BY id ASC;
+                """,
+                (category,),
+            )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return rows
 
 def get_product_by_id(pid: int):
     conn = _get_connection()
-    cur = conn.cursor()
-    # بررسی وجود ستون‌ها (برای سازگاری با دیتابیس‌های قدیمی)
     try:
-        cur.execute('PRAGMA table_info(products);')
-        cols = {row[1] for row in cur.fetchall()}
-    except Exception:
-        cols = set()
+        cur = conn.cursor()
+        # بررسی وجود ستونها (برای سازگاری با دیتابیسهای قدیمی)
+        try:
+            cur.execute('PRAGMA table_info(products);')
+            cols = {row[1] for row in cur.fetchall()}
+        except Exception:
+            cols = set()
 
-    has_partner = 'partner_price' in cols
-    has_lim_c = 'daily_limit_customer' in cols
-    has_lim_p = 'daily_limit_partner' in cols
+        has_partner = 'partner_price' in cols
+        has_lim_c = 'daily_limit_customer' in cols
+        has_lim_p = 'daily_limit_partner' in cols
 
-    select_cols = [
-        'id', 'category', 'title', 'price', 'description', 'is_active',
-        ('partner_price' if has_partner else 'NULL AS partner_price'),
-        ('daily_limit_customer' if has_lim_c else '0 AS daily_limit_customer'),
-        ('daily_limit_partner' if has_lim_p else '0 AS daily_limit_partner'),
-    ]
-    cur.execute(
-        f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
-        (pid,),
-    )
-    row = cur.fetchone()
-    conn.close()
+        select_cols = [
+            'id', 'category', 'title', 'price', 'description', 'is_active',
+            ('partner_price' if has_partner else 'NULL AS partner_price'),
+            ('daily_limit_customer' if has_lim_c else '0 AS daily_limit_customer'),
+            ('daily_limit_partner' if has_lim_p else '0 AS daily_limit_partner'),
+        ]
+        cur.execute(
+            f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
+            (pid,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
     return row
 
 def update_product_field(pid: int, field: str, value):
@@ -594,39 +604,42 @@ def update_product_field(pid: int, field: str, value):
         raise ValueError("Invalid product field")
 
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        f"UPDATE products SET {field} = ? WHERE id = ?;",
-        (value, pid),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE products SET {field} = ? WHERE id = ?;",
+            (value, pid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def toggle_product_active(pid: int):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT is_active FROM products WHERE id = ?;", (pid,))
-    row = cur.fetchone()
-    if not row:
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT is_active FROM products WHERE id = ?;", (pid,))
+        row = cur.fetchone()
+        if not row:
+            return
+        current = int(row[0]) or 0
+        new_val = 0 if current else 1
+        cur.execute(
+            "UPDATE products SET is_active = ? WHERE id = ?;",
+            (new_val, pid),
+        )
+        conn.commit()
+    finally:
         conn.close()
-        return
-    current = int(row[0]) or 0
-    new_val = 0 if current else 1
-    cur.execute(
-        "UPDATE products SET is_active = ? WHERE id = ?;",
-        (new_val, pid),
-    )
-    conn.commit()
-    conn.close()
 
 
 def add_product(category: str, title: str, price: int, description: str = "", is_active: int = 1, partner_price: int | None = None) -> int:
     """
-    یک محصول جدید اضافه می‌کند و id آن را برمی‌گرداند.
-    product_key یا code به‌صورت خودکار از روی عنوان ساخته می‌شود.
-    اگر جدول محصولات ستون product_key یا code داشته باشد، مقدار مناسب در هر ستون درج می‌شود.
-    اگر ستون partner_price وجود داشته باشد و partner_price داده شود، در همان ستون درج می‌شود.
+    یک محصول جدید اضافه میکند و id آن را برمیگرداند.
+    product_key یا code بهصورت خودکار از روی عنوان ساخته میشود.
+    اگر جدول محصولات ستون product_key یا code داشته باشد، مقدار مناسب در هر ستون درج میشود.
+    اگر ستون partner_price وجود داشته باشد و partner_price داده شود، در همان ستون درج میشود.
     """
     # generate slug from title
     slug = "".join(ch if ch.isalnum() else "_" for ch in title)
@@ -673,7 +686,7 @@ def add_product(category: str, title: str, price: int, description: str = "", is
 def delete_product(product_id: int) -> None:
     """حذف واقعی (Hard Delete) یک محصول بر اساس id.
 
-    علاوه بر حذف رکورد محصول، آیتم‌های فید مرتبط با آن نیز پاک می‌شوند تا رکورد یتیم باقی نماند.
+    علاوه بر حذف رکورد محصول، آیتمهای فید مرتبط با آن نیز پاک میشوند تا رکورد یتیم باقی نماند.
     """
     conn = _get_connection()
     cur = conn.cursor()
@@ -693,26 +706,28 @@ def delete_product(product_id: int) -> None:
 
 
 def get_stats():
-    """برگشت آمار کلی: (تعداد کیف‌ها، جمع موجودی‌ها، تعداد سفارش‌ها، مجموع فروش، تعداد محصولات فعال)"""
+    """برگشت آمار کلی: (تعداد کیفها، جمع موجودیها، تعداد سفارشها، مجموع فروش، تعداد محصولات فعال)"""
     conn = _get_connection()
-    cur = conn.cursor()
-    # کیف پول‌ها
-    cur.execute("SELECT COUNT(*), COALESCE(SUM(balance), 0) FROM wallets;")
-    wallet_row = cur.fetchone()
-    total_wallets = wallet_row[0] or 0
-    total_balance = wallet_row[1] or 0
-    # سفارش‌ها
-    cur.execute("SELECT COUNT(*), COALESCE(SUM(price), 0) FROM orders;")
-    order_row = cur.fetchone()
-    total_orders = order_row[0] or 0
-    total_sales = order_row[1] or 0
-    # محصولات فعال
-    cur.execute("SELECT COUNT(*) FROM products WHERE is_active = 1;")
-    active_products = cur.fetchone()[0] or 0
-    conn.close()
+    try:
+        cur = conn.cursor()
+        # کیف پولها
+        cur.execute("SELECT COUNT(*), COALESCE(SUM(balance), 0) FROM wallets;")
+        wallet_row = cur.fetchone()
+        total_wallets = wallet_row[0] or 0
+        total_balance = wallet_row[1] or 0
+        # سفارشها
+        cur.execute("SELECT COUNT(*), COALESCE(SUM(price), 0) FROM orders;")
+        order_row = cur.fetchone()
+        total_orders = order_row[0] or 0
+        total_sales = order_row[1] or 0
+        # محصولات فعال
+        cur.execute("SELECT COUNT(*) FROM products WHERE is_active = 1;")
+        active_products = cur.fetchone()[0] or 0
+    finally:
+        conn.close()
     return total_wallets, total_balance, total_orders, total_sales, active_products
 def create_zarinpal_pending_transaction(user_id: int, amount: int, authority: str) -> bool:
-    """یک رکورد pending برای authority می‌سازد. اگر authority قبلا ثبت شده باشد False برمی‌گرداند."""
+    """یک رکورد pending برای authority میسازد. اگر authority قبلا ثبت شده باشد False برمیگرداند."""
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
     cur = conn.cursor()
@@ -735,18 +750,20 @@ def create_zarinpal_pending_transaction(user_id: int, amount: int, authority: st
 def get_zarinpal_transaction(authority: str):
     """برگشت: dict یا None"""
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, user_id, amount, authority, status, created_at
-        FROM zarinpal_transactions
-        WHERE authority = ?
-        LIMIT 1;
-        """,
-        (str(authority),),
-    )
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, amount, authority, status, created_at
+            FROM zarinpal_transactions
+            WHERE authority = ?
+            LIMIT 1;
+            """,
+            (str(authority),),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
         return None
     return {
@@ -760,8 +777,8 @@ def get_zarinpal_transaction(authority: str):
 
 
 def update_zarinpal_status(authority: str, new_status: str, expected_current: str | None = None) -> int:
-    """status را تغییر می‌دهد. اگر expected_current داده شود فقط وقتی status فعلی همان باشد update می‌کند.
-    خروجی: تعداد ردیف‌های تغییرکرده (0 یا 1).
+    """status را تغییر میدهد. اگر expected_current داده شود فقط وقتی status فعلی همان باشد update میکند.
+    خروجی: تعداد ردیفهای تغییرکرده (0 یا 1).
     """
     conn = _get_connection()
     cur = conn.cursor()
@@ -783,13 +800,13 @@ def update_zarinpal_status(authority: str, new_status: str, expected_current: st
 
     cur = conn.cursor()
 
-    # کیف پول‌ها
+    # کیف پولها
     cur.execute("SELECT COUNT(*), COALESCE(SUM(balance), 0) FROM wallets;")
     wallet_row = cur.fetchone()
     total_wallets = wallet_row[0] or 0
     total_balance = wallet_row[1] or 0
 
-    # سفارش‌ها
+    # سفارشها
     cur.execute("SELECT COUNT(*), COALESCE(SUM(price), 0) FROM orders;")
     order_row = cur.fetchone()
     total_orders = order_row[0] or 0
@@ -808,8 +825,8 @@ def update_zarinpal_status(authority: str, new_status: str, expected_current: st
 
 def add_feed_items(product_id: int, items):
     """
-    چند آیتم را برای یک محصول ثبت می‌کند.
-    تکراری‌ها ثبت می‌شوند اما flagged می‌شوند.
+    چند آیتم را برای یک محصول ثبت میکند.
+    تکراریها ثبت میشوند اما flagged میشوند.
     Returns: {"added": int, "duplicates": list}
     """
     if not items:
@@ -818,7 +835,7 @@ def add_feed_items(product_id: int, items):
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
     try:
-        # پیدا کردن تکراری‌ها
+        # پیدا کردن تکراریها
         duplicates = []
         for item in items:
             existing = conn.execute(
@@ -842,43 +859,45 @@ def add_feed_items(product_id: int, items):
 
 def get_feed_stats(product_id: int):
     """
-    تعداد کل، تعداد تحویل نشده، تعداد تحویل شده را برمی‌گرداند.
+    تعداد کل، تعداد تحویل نشده، تعداد تحویل شده را برمیگرداند.
     """
     conn = _get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute(
-        "SELECT COUNT(*) FROM product_feed WHERE product_id = ?;",
-        (product_id,),
-    )
-    total = cur.fetchone()[0] or 0
+        cur.execute(
+            "SELECT COUNT(*) FROM product_feed WHERE product_id = ?;",
+            (product_id,),
+        )
+        total = cur.fetchone()[0] or 0
 
-    cur.execute(
-        "SELECT COUNT(*) FROM product_feed WHERE product_id = ? AND delivered = 0;",
-        (product_id,),
-    )
-    remaining = cur.fetchone()[0] or 0
+        cur.execute(
+            "SELECT COUNT(*) FROM product_feed WHERE product_id = ? AND delivered = 0;",
+            (product_id,),
+        )
+        remaining = cur.fetchone()[0] or 0
 
-    delivered = total - remaining
-    conn.close()
+        delivered = total - remaining
+    finally:
+        conn.close()
     return total, remaining, delivered
 
 
 def claim_next_feed_item(product_id: int, order_id: int = None):
     """
-    اتمیک: اولین آیتم تحویل‌نشده را claim می‌کند (delivered=1) و برمی‌گرداند: (feed_id, data) یا None.
-    از BEGIN IMMEDIATE برای جلوگیری از race condition در خریدهای همزمان استفاده می‌شه.
+    اتمیک: اولین آیتم تحویلنشده را claim میکند (delivered=1) و برمیگرداند: (feed_id, data) یا None.
+    از BEGIN IMMEDIATE برای جلوگیری از race condition در خریدهای همزمان استفاده میشه.
     """
     conn = _get_connection()
     cur = conn.cursor()
     try:
-        # migration: اضافه کردن ستون‌های tracking اگه نباشن
+        # migration: اضافه کردن ستونهای tracking اگه نباشن
         try:
             cur.execute("ALTER TABLE product_feed ADD COLUMN order_id INTEGER;")
             cur.execute("ALTER TABLE product_feed ADD COLUMN delivered_at TEXT;")
             conn.commit()
         except Exception:
-            pass  # ستون‌ها قبلاً اضافه شدن
+            pass  # ستونها قبلاً اضافه شدن
 
         cur.execute("BEGIN IMMEDIATE;")
         cur.execute(
@@ -924,19 +943,21 @@ def get_next_feed_item(product_id: int):
     Retained for backward compatibility.
     """
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, data
-        FROM product_feed
-        WHERE product_id = ? AND delivered = 0
-        ORDER BY id ASC
-        LIMIT 1;
-        """,
-        (product_id,),
-    )
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, data
+            FROM product_feed
+            WHERE product_id = ? AND delivered = 0
+            ORDER BY id ASC
+            LIMIT 1;
+            """,
+            (product_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
         return None
     return row[0], row[1]
@@ -947,52 +968,56 @@ def mark_feed_item_delivered(feed_id: int):
     Marks a feed item delivered. Prefer claim_next_feed_item for user delivery path.
     """
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE product_feed SET delivered = 1 WHERE id = ?;",
-        (feed_id,),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE product_feed SET delivered = 1 WHERE id = ?;",
+            (feed_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 
 def list_feed_items(product_id: int, delivered: int | None = None, limit: int = 10, offset: int = 0):
-    """لیست آیتم‌های فید یک محصول را برمی‌گرداند.
+    """لیست آیتمهای فید یک محصول را برمیگرداند.
 
     delivered:
       - None: همه
-      - 0: فقط تحویل‌نشده
-      - 1: فقط تحویل‌شده
+      - 0: فقط تحویلنشده
+      - 1: فقط تحویلشده
     """
     conn = _get_connection()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    if delivered is None:
-        cur.execute(
-            """
-            SELECT id, data, delivered, created_at
-            FROM product_feed
-            WHERE product_id = ?
-            ORDER BY delivered ASC, id DESC
-            LIMIT ? OFFSET ?;
-            """,
-            (product_id, int(limit), int(offset)),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT id, data, delivered, created_at
-            FROM product_feed
-            WHERE product_id = ? AND delivered = ?
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?;
-            """,
-            (product_id, int(delivered), int(limit), int(offset)),
-        )
+        if delivered is None:
+            cur.execute(
+                """
+                SELECT id, data, delivered, created_at
+                FROM product_feed
+                WHERE product_id = ?
+                ORDER BY delivered ASC, id DESC
+                LIMIT ? OFFSET ?;
+                """,
+                (product_id, int(limit), int(offset)),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, data, delivered, created_at
+                FROM product_feed
+                WHERE product_id = ? AND delivered = ?
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?;
+                """,
+                (product_id, int(delivered), int(limit), int(offset)),
+            )
 
-    rows = cur.fetchall() or []
-    conn.close()
+        rows = cur.fetchall() or []
+    finally:
+        conn.close()
     return rows
 
 
@@ -1013,43 +1038,49 @@ def count_feed_items(product_id: int, delivered: int | None = None) -> int:
 
 def set_feed_item_delivered(feed_id: int, delivered: int):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE product_feed SET delivered = ? WHERE id = ?;",
-        (int(1 if delivered else 0), int(feed_id)),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE product_feed SET delivered = ? WHERE id = ?;",
+            (int(1 if delivered else 0), int(feed_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_feed_item(feed_id: int):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM product_feed WHERE id = ?;", (int(feed_id),))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM product_feed WHERE id = ?;", (int(feed_id),))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 
 def list_other_services(active_only: bool = True):
-    """لیست سرویس‌های «سایر محصولات» را برمی‌گرداند."""
+    """لیست سرویسهای «سایر محصولات» را برمیگرداند."""
     conn = _get_connection()
-    cur = conn.cursor()
-    if active_only:
-        cur.execute(
-            "SELECT service_key, title, COALESCE(emoji,''), is_active FROM other_services WHERE is_active=1 ORDER BY title;"
-        )
-    else:
-        cur.execute(
-            "SELECT service_key, title, COALESCE(emoji,''), is_active FROM other_services ORDER BY title;"
-        )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        if active_only:
+            cur.execute(
+                "SELECT service_key, title, COALESCE(emoji,''), is_active FROM other_services WHERE is_active=1 ORDER BY title;"
+            )
+        else:
+            cur.execute(
+                "SELECT service_key, title, COALESCE(emoji,''), is_active FROM other_services ORDER BY title;"
+            )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return rows
 
 
 def add_other_service(service_key: str, title: str, emoji: str = "🧩") -> bool:
-    """یک سرویس جدید اضافه می‌کند. اگر کلید تکراری باشد False برمی‌گرداند."""
+    """یک سرویس جدید اضافه میکند. اگر کلید تکراری باشد False برمیگرداند."""
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
     cur = conn.cursor()
@@ -1067,7 +1098,7 @@ def add_other_service(service_key: str, title: str, emoji: str = "🧩") -> bool
 
 
 def delete_other_service(service_key: str, delete_products: bool = True) -> None:
-    """یک سرویس را حذف می‌کند. در صورت delete_products محصولات و فیدهای آن سرویس هم پاک می‌شود."""
+    """یک سرویس را حذف میکند. در صورت delete_products محصولات و فیدهای آن سرویس هم پاک میشود."""
     conn = _get_connection()
     cur = conn.cursor()
     if delete_products:
@@ -1086,68 +1117,74 @@ def delete_other_service(service_key: str, delete_products: bool = True) -> None
 # ========= FEED ALERT SETTINGS =========
 
 def get_feed_alert_setting(product_id: int):
-    """برمی‌گرداند: (threshold, last_notified_remaining). اگر تنظیمی نبود threshold=5."""
+    """برمیگرداند: (threshold, last_notified_remaining). اگر تنظیمی نبود threshold=5."""
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT threshold, last_notified_remaining FROM feed_alert_settings WHERE product_id=?;",
-        (product_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        # مقدار پیش‌فرض
-        threshold = 5
-        last = None
-        now = datetime.utcnow().isoformat()
+    try:
+        cur = conn.cursor()
         cur.execute(
-            "INSERT OR IGNORE INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, ?, NULL, ?);",
-            (product_id, threshold, now),
+            "SELECT threshold, last_notified_remaining FROM feed_alert_settings WHERE product_id=?;",
+            (product_id,),
         )
-        conn.commit()
+        row = cur.fetchone()
+        if not row:
+            threshold = 5
+            last = None
+            now = datetime.utcnow().isoformat()
+            cur.execute(
+                "INSERT OR IGNORE INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, ?, NULL, ?);",
+                (product_id, threshold, now),
+            )
+            conn.commit()
+            return threshold, last
+        return int(row[0]), row[1]
+    finally:
         conn.close()
-        return threshold, last
-    conn.close()
-    return int(row[0]), row[1]
 
 
 def set_feed_alert_threshold(product_id: int, threshold: int):
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, ?, NULL, ?) "
-        "ON CONFLICT(product_id) DO UPDATE SET threshold=excluded.threshold, updated_at=excluded.updated_at;",
-        (product_id, int(threshold), now),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, ?, NULL, ?) "
+            "ON CONFLICT(product_id) DO UPDATE SET threshold=excluded.threshold, updated_at=excluded.updated_at;",
+            (product_id, int(threshold), now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def reset_feed_alert_notification(product_id: int):
-    """پس از شارژ مجدد موجودی، هشدار قبلی ریست می‌شود تا دوباره ارسال شود."""
+    """پس از شارژ مجدد موجودی، هشدار قبلی ریست میشود تا دوباره ارسال شود."""
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, 5, NULL, ?) "
-        "ON CONFLICT(product_id) DO UPDATE SET last_notified_remaining=NULL, updated_at=excluded.updated_at;",
-        (product_id, now),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, 5, NULL, ?) "
+            "ON CONFLICT(product_id) DO UPDATE SET last_notified_remaining=NULL, updated_at=excluded.updated_at;",
+            (product_id, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def set_feed_alert_last_notified(product_id: int, remaining: int):
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, 5, ?, ?) "
-        "ON CONFLICT(product_id) DO UPDATE SET last_notified_remaining=excluded.last_notified_remaining, updated_at=excluded.updated_at;",
-        (product_id, int(remaining), now),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO feed_alert_settings (product_id, threshold, last_notified_remaining, updated_at) VALUES (?, 5, ?, ?) "
+            "ON CONFLICT(product_id) DO UPDATE SET last_notified_remaining=excluded.last_notified_remaining, updated_at=excluded.updated_at;",
+            (product_id, int(remaining), now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 # =====================
 # Partner / Reseller API
@@ -1156,141 +1193,151 @@ def set_feed_alert_last_notified(product_id: int, remaining: int):
 def upsert_partner_request(tg_user_id: int, phone: str, username: str = "", full_name: str = "", note: str = "", city: str = "", shop_name: str = ""):
     """ثبت درخواست نمایندگی.
 
-    سیاست فعلی: هر کاربر/شماره فقط یک‌بار می‌تواند درخواست ثبت کند.
-    بنابراین اگر رکوردی وجود داشته باشد، وضعیت آن را به pending برنمی‌گردانیم.
-    - pending: فقط اطلاعات پروفایل را به‌روزرسانی می‌کنیم (بدون تغییر created_at)
-    - approved: فقط اطلاعات پروفایل را به‌روزرسانی می‌کنیم (بدون تغییر approved_at)
-    - rejected: فقط اطلاعات پروفایل را به‌روزرسانی می‌کنیم
+    سیاست فعلی: هر کاربر/شماره فقط یکبار میتواند درخواست ثبت کند.
+    بنابراین اگر رکوردی وجود داشته باشد، وضعیت آن را به pending برنمیگردانیم.
+    - pending: فقط اطلاعات پروفایل را بهروزرسانی میکنیم (بدون تغییر created_at)
+    - approved: فقط اطلاعات پروفایل را بهروزرسانی میکنیم (بدون تغییر approved_at)
+    - rejected: فقط اطلاعات پروفایل را بهروزرسانی میکنیم
     """
     conn = _get_connection()
-    cur = conn.cursor()
-    now = datetime.utcnow().isoformat(timespec='seconds')
+    try:
+        cur = conn.cursor()
+        now = datetime.utcnow().isoformat(timespec='seconds')
 
-    cur.execute("SELECT id, status, created_at, approved_at FROM partners WHERE tg_user_id = ? OR phone = ? ORDER BY id DESC LIMIT 1;", (tg_user_id, phone))
-    row = cur.fetchone()
+        cur.execute("SELECT id, status, created_at, approved_at FROM partners WHERE tg_user_id = ? OR phone = ? ORDER BY id DESC LIMIT 1;", (tg_user_id, phone))
+        row = cur.fetchone()
 
-    if row:
-        pid, st, created_at, approved_at = row[0], (row[1] or "").strip().lower(), row[2], row[3]
-        if st == "pending":
-            cur.execute(
-                """
-                UPDATE partners
-                SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
-                    city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
-                WHERE id = ?;
-                """,
-                (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
-            )
-        elif st == "approved":
-            cur.execute(
-                """
-                UPDATE partners
-                SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
-                    city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
-                WHERE id = ?;
-                """,
-                (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
-            )
-        elif st == "rejected":
-            cur.execute(
-                """
-                UPDATE partners
-                SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
-                    city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
-                WHERE id = ?;
-                """,
-                (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
-            )
+        if row:
+            pid, st, created_at, approved_at = row[0], (row[1] or "").strip().lower(), row[2], row[3]
+            if st == "pending":
+                cur.execute(
+                    """
+                    UPDATE partners
+                    SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
+                        city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
+                    WHERE id = ?;
+                    """,
+                    (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
+                )
+            elif st == "approved":
+                cur.execute(
+                    """
+                    UPDATE partners
+                    SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
+                        city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
+                    WHERE id = ?;
+                    """,
+                    (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
+                )
+            elif st == "rejected":
+                cur.execute(
+                    """
+                    UPDATE partners
+                    SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
+                        city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
+                    WHERE id = ?;
+                    """,
+                    (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
+                )
+            else:
+                # وضعیتهای ناشناخته: مثل pending رفتار کن
+                cur.execute(
+                    """
+                    UPDATE partners
+                    SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
+                        city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
+                    WHERE id = ?;
+                    """,
+                    (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
+                )
         else:
-            # وضعیت‌های ناشناخته: مثل pending رفتار کن
             cur.execute(
                 """
-                UPDATE partners
-                SET tg_user_id = ?, phone = ?, username = ?, full_name = ?, note = ?,
-                    city = COALESCE(?, city), shop_name = COALESCE(?, shop_name)
-                WHERE id = ?;
+                INSERT OR IGNORE INTO partners (tg_user_id, phone, status, username, full_name, note, city, shop_name, created_at)
+                VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?);
                 """,
-                (tg_user_id, phone, username, full_name, note, city or None, shop_name or None, pid),
+                (tg_user_id, phone, username, full_name, note, city, shop_name, now),
             )
-    else:
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO partners (tg_user_id, phone, status, username, full_name, note, city, shop_name, created_at)
-            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?);
-            """,
-            (tg_user_id, phone, username, full_name, note, city, shop_name, now),
-        )
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 
 def update_partner_city_shop(tg_user_id: int, city: str = "", shop_name: str = ""):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE partners SET city = COALESCE(?, city), shop_name = COALESCE(?, shop_name) WHERE tg_user_id = ?;",
-        (city or None, shop_name or None, tg_user_id),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE partners SET city = COALESCE(?, city), shop_name = COALESCE(?, shop_name) WHERE tg_user_id = ?;",
+            (city or None, shop_name or None, tg_user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_partner_by_user_id(tg_user_id: int):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, tg_user_id, phone, status, username, full_name, note, created_at, approved_at
-        FROM partners WHERE tg_user_id = ? ORDER BY id DESC LIMIT 1;
-        """,
-        (tg_user_id,),
-    )
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, tg_user_id, phone, status, username, full_name, note, created_at, approved_at
+            FROM partners WHERE tg_user_id = ? ORDER BY id DESC LIMIT 1;
+            """,
+            (tg_user_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
     return row
 
 
 def get_partner_by_phone(phone: str):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT id, tg_user_id, phone, status, username, full_name, note, created_at, approved_at
-        FROM partners WHERE phone = ? ORDER BY id DESC LIMIT 1;
-        """,
-        (phone,),
-    )
-    row = cur.fetchone()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, tg_user_id, phone, status, username, full_name, note, created_at, approved_at
+            FROM partners WHERE phone = ? ORDER BY id DESC LIMIT 1;
+            """,
+            (phone,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
     return row
 
 def list_partner_requests(status: str | None = None, query: str | None = None, limit: int = 50, offset: int = 0):
-    """لیست درخواست‌های همکار با امکان فیلتر وضعیت و جستجو.
+    """لیست درخواستهای همکار با امکان فیلتر وضعیت و جستجو.
 
     خروجی: (id, tg_user_id, phone, username, full_name, city, shop_name, status, created_at, approved_at)
     """
     conn = _get_connection()
-    cur = conn.cursor()
-    sql = """
-        SELECT id, tg_user_id, phone, username, full_name, city, shop_name, status, created_at, approved_at
-        FROM partners
-        WHERE 1=1
-    """
-    params: list = []
-    if status:
-        sql += " AND status = ?"
-        params.append(status)
-    if query:
-        q = f"%{query.strip()}%"
-        sql += " AND (phone LIKE ? OR username LIKE ? OR full_name LIKE ? OR city LIKE ? OR shop_name LIKE ?)"
-        params.extend([q, q, q, q, q])
-    sql += " ORDER BY id DESC LIMIT ? OFFSET ?;"
-    params.extend([int(limit), int(offset)])
-    cur.execute(sql, params)
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        sql = """
+            SELECT id, tg_user_id, phone, username, full_name, city, shop_name, status, created_at, approved_at
+            FROM partners
+            WHERE 1=1
+        """
+        params: list = []
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        if query:
+            q = f"%{query.strip()}%"
+            sql += " AND (phone LIKE ? OR username LIKE ? OR full_name LIKE ? OR city LIKE ? OR shop_name LIKE ?)"
+            params.extend([q, q, q, q, q])
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?;"
+        params.extend([int(limit), int(offset)])
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     return rows
 
 
@@ -1300,24 +1347,28 @@ def list_pending_partners():
 
 def approve_partner(tg_user_id: int):
     conn = _get_connection()
-    cur = conn.cursor()
-    now = datetime.utcnow().isoformat(timespec='seconds')
-    cur.execute(
-        """UPDATE partners SET status='approved', approved_at=? WHERE tg_user_id=?;""",
-        (now, tg_user_id),
-    )
-    conn.commit()
-    changed = cur.rowcount
-    conn.close()
+    try:
+        cur = conn.cursor()
+        now = datetime.utcnow().isoformat(timespec='seconds')
+        cur.execute(
+            """UPDATE partners SET status='approved', approved_at=? WHERE tg_user_id=?;""",
+            (now, tg_user_id),
+        )
+        conn.commit()
+        changed = cur.rowcount
+    finally:
+        conn.close()
     return changed > 0
 
 def reject_partner(tg_user_id: int):
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute("UPDATE partners SET status='rejected' WHERE tg_user_id=?;", (tg_user_id,))
-    conn.commit()
-    changed = cur.rowcount
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE partners SET status='rejected' WHERE tg_user_id=?;", (tg_user_id,))
+        conn.commit()
+        changed = cur.rowcount
+    finally:
+        conn.close()
     return changed > 0
 
 def is_partner_approved(tg_user_id: int) -> bool:
@@ -1587,7 +1638,7 @@ def update_category(cat_id: int, name: str, emoji: str, sort_order: int, is_acti
 
 
 def delete_category(cat_id: int) -> None:
-    """حذف دسته و همه زیردسته‌ها و محصولات مرتبط"""
+    """حذف دسته و همه زیردستهها و محصولات مرتبط"""
     conn = _get_connection()
     try:
         conn.execute("PRAGMA foreign_keys=ON;")
@@ -1638,7 +1689,7 @@ def toggle_category(cat_id: int) -> None:
 
 
 def get_all_categories_flat() -> list:
-    """همه دسته‌ها برای نمایش در select box پنل"""
+    """همه دستهها برای نمایش در select box پنل"""
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
@@ -2014,7 +2065,7 @@ def ticket_get_messages(ticket_id: int) -> list:
 
 
 def ticket_count_waiting() -> int:
-    """تعداد تیکت‌هایی که ادمین باید پاسخ بده (badge count)."""
+    """تعداد تیکتهایی که ادمین باید پاسخ بده (badge count)."""
     conn = _get_connection()
     try:
         return int(conn.execute(
@@ -2140,7 +2191,7 @@ def order_mark_returned_advanced(
             else:  # delete
                 conn.execute("DELETE FROM product_feed WHERE id=?;", (int(feed_id),))
 
-        # تکلیف کیف‌پول
+        # تکلیف کیفپول
         wallet_delta = 0
         if wallet_action == "full":
             wallet_delta = price
@@ -2182,7 +2233,7 @@ def order_mark_returned(order_id: int) -> dict:
     """
     برگشت محصول:
       - وضعیت سفارش → 'returned'
-      - اگر feed_id موجود باشد، آیتم فید به delivered=0 برمی‌گردد (موجودی +1)
+      - اگر feed_id موجود باشد، آیتم فید به delivered=0 برمیگردد (موجودی +1)
     return: {ok, feed_id, product_id, chat_id, message_id, user_id, title}
     """
     from datetime import datetime as _dt
@@ -2230,7 +2281,7 @@ def order_mark_returned(order_id: int) -> dict:
         if feed_id:
             conn.execute("UPDATE product_feed SET delivered=0 WHERE id=?;", (int(feed_id),))
 
-        # علامت‌گذاری سفارش به‌عنوان برگشتی
+        # علامتگذاری سفارش بهعنوان برگشتی
         now = _dt.utcnow().isoformat()
         conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;", (now, order_id))
         conn.commit()
@@ -2268,7 +2319,7 @@ def order_update(order_id: int, title: str = None, price: int = None) -> bool:
 
 
 def order_stats_returned() -> dict:
-    """آمار سفارش‌های برگشتی."""
+    """آمار سفارشهای برگشتی."""
     conn = _get_connection()
     try:
         total = conn.execute("SELECT COUNT(*) FROM orders;").fetchone()[0]
@@ -2282,7 +2333,7 @@ def order_stats_returned() -> dict:
 
 
 def feed_returned_count(product_id: int) -> int:
-    """تعداد آیتم‌های برگشتی یک محصول (سفارش‌های returned با این product_id)."""
+    """تعداد آیتمهای برگشتی یک محصول (سفارشهای returned با این product_id)."""
     conn = _get_connection()
     try:
         return int(conn.execute(
@@ -2299,40 +2350,42 @@ def feed_returned_count(product_id: int) -> int:
 
 def ensure_discount_table():
     conn = _get_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS discount_codes (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            code            TEXT    UNIQUE NOT NULL COLLATE NOCASE,
-            type            TEXT    NOT NULL DEFAULT 'percent',  -- 'percent' | 'fixed' | 'wallet'
-            value           INTEGER NOT NULL DEFAULT 0,
-            max_value       INTEGER DEFAULT 0,    -- سقف تخفیف (برای درصدی) — 0=نامحدود
-            min_amount      INTEGER DEFAULT 0,    -- حداقل مبلغ سفارش
-            max_uses        INTEGER DEFAULT 0,    -- 0=نامحدود
-            max_uses_per_user INTEGER DEFAULT 0,  -- 0=نامحدود
-            used_count      INTEGER DEFAULT 0,
-            product_id      INTEGER DEFAULT NULL, -- NULL=همه محصولات
-            category_id     INTEGER DEFAULT NULL, -- NULL=همه دسته‌ها
-            first_buy_only  INTEGER DEFAULT 0,    -- فقط اولین خرید
-            vip_only        INTEGER DEFAULT 0,    -- فقط کاربران VIP
-            starts_at       TEXT    DEFAULT NULL,
-            expires_at      TEXT    DEFAULT NULL,
-            is_active       INTEGER DEFAULT 1,
-            created_at      TEXT    DEFAULT (datetime('now','localtime')),
-            description     TEXT    DEFAULT ''
-        );
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS discount_usage (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            code_id     INTEGER NOT NULL,
-            user_id     INTEGER NOT NULL,
-            order_id    INTEGER,
-            used_at     TEXT DEFAULT (datetime('now','localtime')),
-            FOREIGN KEY(code_id) REFERENCES discount_codes(id)
-        );
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS discount_codes (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                code            TEXT    UNIQUE NOT NULL COLLATE NOCASE,
+                type            TEXT    NOT NULL DEFAULT 'percent',  -- 'percent' | 'fixed' | 'wallet'
+                value           INTEGER NOT NULL DEFAULT 0,
+                max_value       INTEGER DEFAULT 0,    -- سقف تخفیف (برای درصدی) — 0=نامحدود
+                min_amount      INTEGER DEFAULT 0,    -- حداقل مبلغ سفارش
+                max_uses        INTEGER DEFAULT 0,    -- 0=نامحدود
+                max_uses_per_user INTEGER DEFAULT 0,  -- 0=نامحدود
+                used_count      INTEGER DEFAULT 0,
+                product_id      INTEGER DEFAULT NULL, -- NULL=همه محصولات
+                category_id     INTEGER DEFAULT NULL, -- NULL=همه دستهها
+                first_buy_only  INTEGER DEFAULT 0,    -- فقط اولین خرید
+                vip_only        INTEGER DEFAULT 0,    -- فقط کاربران VIP
+                starts_at       TEXT    DEFAULT NULL,
+                expires_at      TEXT    DEFAULT NULL,
+                is_active       INTEGER DEFAULT 1,
+                created_at      TEXT    DEFAULT (datetime('now','localtime')),
+                description     TEXT    DEFAULT ''
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS discount_usage (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                code_id     INTEGER NOT NULL,
+                user_id     INTEGER NOT NULL,
+                order_id    INTEGER,
+                used_at     TEXT DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY(code_id) REFERENCES discount_codes(id)
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def validate_discount(code: str, product_id: int = None, category_id: int = None,
@@ -2360,7 +2413,7 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
         if row["product_id"] and product_id and int(row["product_id"]) != int(product_id):
             return {"valid": False, "error": "این کد برای محصول دیگری است"}
         if row["category_id"] and category_id and int(row["category_id"]) != int(category_id):
-            return {"valid": False, "error": "این کد برای دسته‌بندی دیگری است"}
+            return {"valid": False, "error": "این کد برای دستهبندی دیگری است"}
         if user_id:
             if row["max_uses_per_user"] > 0:
                 uses = conn.execute(
@@ -2385,7 +2438,7 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
         elif row["type"] == "fixed":
             discount = row["value"]
         elif row["type"] == "wallet":
-            discount = row["value"]  # اعتبار کیف‌پول
+            discount = row["value"]  # اعتبار کیفپول
         else:
             discount = 0
         discount = min(discount, amount)
@@ -2420,18 +2473,20 @@ def use_discount(code_id: int, user_id: int = None, order_id: int = None):
 
 def ensure_subscription_table():
     conn = _get_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS stock_subscriptions (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id    INTEGER NOT NULL,
-            product_id INTEGER NOT NULL,
-            created_at TEXT    DEFAULT (datetime('now','localtime')),
-            notified   INTEGER DEFAULT 0,
-            UNIQUE(user_id, product_id)
-        );
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stock_subscriptions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                created_at TEXT    DEFAULT (datetime('now','localtime')),
+                notified   INTEGER DEFAULT 0,
+                UNIQUE(user_id, product_id)
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def subscribe_stock(user_id: int, product_id: int) -> bool:
@@ -2477,7 +2532,7 @@ def mark_subscriptions_notified(product_id: int):
 
 
 def reset_subscriptions_on_restock(product_id: int):
-    """وقتی موجودی اومد، اشتراک‌ها رو reset کن برای دور بعد."""
+    """وقتی موجودی اومد، اشتراکها رو reset کن برای دور بعد."""
     conn = _get_connection()
     try:
         conn.execute(
@@ -2494,7 +2549,7 @@ def reset_subscriptions_on_restock(product_id: int):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_product_support_schema():
-    """اضافه کردن ستون‌های setup به products."""
+    """اضافه کردن ستونهای setup به products."""
     conn = _get_connection()
     try:
         for col, default in [
@@ -2522,7 +2577,7 @@ def get_product_support_flag(product_id: int) -> bool:
 
 
 def get_product_setup_message(product_id: int) -> str:
-    """متن راهنما برای کاربر هنگام راه‌اندازی محصول."""
+    """متن راهنما برای کاربر هنگام راهاندازی محصول."""
     conn = _get_connection()
     try:
         row = conn.execute("SELECT setup_message FROM products WHERE id=? LIMIT 1;", (product_id,)).fetchone()
@@ -2539,28 +2594,30 @@ def get_product_setup_message(product_id: int) -> str:
 
 def ensure_referral_schema():
     conn = _get_connection()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS referral_settings (
-            id              INTEGER PRIMARY KEY DEFAULT 1,
-            reward_amount   INTEGER DEFAULT 5000,
-            is_active       INTEGER DEFAULT 1,
-            updated_at      TEXT    DEFAULT (datetime('now','localtime'))
-        );
-        INSERT OR IGNORE INTO referral_settings (id) VALUES (1);
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS referral_settings (
+                id              INTEGER PRIMARY KEY DEFAULT 1,
+                reward_amount   INTEGER DEFAULT 5000,
+                is_active       INTEGER DEFAULT 1,
+                updated_at      TEXT    DEFAULT (datetime('now','localtime'))
+            );
+            INSERT OR IGNORE INTO referral_settings (id) VALUES (1);
 
-        CREATE TABLE IF NOT EXISTS referrals (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            referrer_id     INTEGER NOT NULL,
-            referred_id     INTEGER NOT NULL UNIQUE,
-            rewarded        INTEGER DEFAULT 0,
-            reward_amount   INTEGER DEFAULT 0,
-            first_order_id  INTEGER DEFAULT NULL,
-            created_at      TEXT    DEFAULT (datetime('now','localtime')),
-            rewarded_at     TEXT    DEFAULT NULL
-        );
-    """)
-    conn.commit()
-    conn.close()
+            CREATE TABLE IF NOT EXISTS referrals (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id     INTEGER NOT NULL,
+                referred_id     INTEGER NOT NULL UNIQUE,
+                rewarded        INTEGER DEFAULT 0,
+                reward_amount   INTEGER DEFAULT 0,
+                first_order_id  INTEGER DEFAULT NULL,
+                created_at      TEXT    DEFAULT (datetime('now','localtime')),
+                rewarded_at     TEXT    DEFAULT NULL
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_referral_settings() -> dict:
@@ -2609,7 +2666,7 @@ def process_referral_reward(referred_id: int, order_id: int) -> dict:
         settings = conn.execute("SELECT * FROM referral_settings WHERE id=1;").fetchone()
         amount   = int(settings["reward_amount"] if settings else 5000)
 
-        # اضافه کردن به کیف‌پول همکاری (نه کیف‌پول اصلی)
+        # اضافه کردن به کیفپول همکاری (نه کیفپول اصلی)
         credit_partner_wallet(ref["referrer_id"], amount,
                               note=f"پاداش معرفی — سفارش #{order_id}")
 
@@ -2646,64 +2703,66 @@ SELLER_LEVELS = [
 
 def ensure_seller_schema():
     conn = _get_connection()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS seller_levels (
-            id              INTEGER PRIMARY KEY,
-            name            TEXT    NOT NULL,
-            emoji           TEXT    DEFAULT '',
-            min_sales       INTEGER DEFAULT 0,
-            commission      INTEGER DEFAULT 50000,
-            updated_at      TEXT    DEFAULT (datetime('now','localtime'))
-        );
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS seller_levels (
+                id              INTEGER PRIMARY KEY,
+                name            TEXT    NOT NULL,
+                emoji           TEXT    DEFAULT '',
+                min_sales       INTEGER DEFAULT 0,
+                commission      INTEGER DEFAULT 50000,
+                updated_at      TEXT    DEFAULT (datetime('now','localtime'))
+            );
 
-        CREATE TABLE IF NOT EXISTS sellers (
-            user_id         INTEGER PRIMARY KEY,
-            code            TEXT    UNIQUE NOT NULL,
-            level_id        INTEGER DEFAULT 1,
-            status          TEXT    DEFAULT 'active',
-            total_sales     INTEGER DEFAULT 0,
-            total_earned    INTEGER DEFAULT 0,
-            wallet_balance  INTEGER DEFAULT 0,
-            custom_commission INTEGER DEFAULT NULL,
-            invited_users   INTEGER DEFAULT 0,
-            created_at      TEXT    DEFAULT (datetime('now','localtime')),
-            updated_at      TEXT    DEFAULT (datetime('now','localtime')),
-            FOREIGN KEY(level_id) REFERENCES seller_levels(id)
-        );
+            CREATE TABLE IF NOT EXISTS sellers (
+                user_id         INTEGER PRIMARY KEY,
+                code            TEXT    UNIQUE NOT NULL,
+                level_id        INTEGER DEFAULT 1,
+                status          TEXT    DEFAULT 'active',
+                total_sales     INTEGER DEFAULT 0,
+                total_earned    INTEGER DEFAULT 0,
+                wallet_balance  INTEGER DEFAULT 0,
+                custom_commission INTEGER DEFAULT NULL,
+                invited_users   INTEGER DEFAULT 0,
+                created_at      TEXT    DEFAULT (datetime('now','localtime')),
+                updated_at      TEXT    DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY(level_id) REFERENCES seller_levels(id)
+            );
 
-        CREATE TABLE IF NOT EXISTS seller_commissions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            seller_id       INTEGER NOT NULL,
-            order_id        INTEGER NOT NULL,
-            buyer_id        INTEGER NOT NULL,
-            product_id      INTEGER,
-            product_title   TEXT    DEFAULT '',
-            order_amount    INTEGER DEFAULT 0,
-            commission      INTEGER DEFAULT 0,
-            level_id        INTEGER DEFAULT 1,
-            status          TEXT    DEFAULT 'earned',
-            created_at      TEXT    DEFAULT (datetime('now','localtime')),
-            paid_at         TEXT    DEFAULT NULL
-        );
+            CREATE TABLE IF NOT EXISTS seller_commissions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id       INTEGER NOT NULL,
+                order_id        INTEGER NOT NULL,
+                buyer_id        INTEGER NOT NULL,
+                product_id      INTEGER,
+                product_title   TEXT    DEFAULT '',
+                order_amount    INTEGER DEFAULT 0,
+                commission      INTEGER DEFAULT 0,
+                level_id        INTEGER DEFAULT 1,
+                status          TEXT    DEFAULT 'earned',
+                created_at      TEXT    DEFAULT (datetime('now','localtime')),
+                paid_at         TEXT    DEFAULT NULL
+            );
 
-        CREATE TABLE IF NOT EXISTS seller_payouts (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            seller_id       INTEGER NOT NULL,
-            amount          INTEGER NOT NULL,
-            status          TEXT    DEFAULT 'pending',
-            card_number     TEXT    DEFAULT '',
-            card_name       TEXT    DEFAULT '',
-            requested_at    TEXT    DEFAULT (datetime('now','localtime')),
-            processed_at    TEXT    DEFAULT NULL,
-            admin_note      TEXT    DEFAULT ''
-        );
-    """)
-    # seed default levels
-    for lv in SELLER_LEVELS:
-        conn.execute("""INSERT OR IGNORE INTO seller_levels (id,name,emoji,min_sales,commission)
-            VALUES (?,?,?,?,?);""", (lv["id"],lv["name"],lv["emoji"],lv["min_sales"],lv["commission"]))
-    conn.commit()
-    conn.close()
+            CREATE TABLE IF NOT EXISTS seller_payouts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id       INTEGER NOT NULL,
+                amount          INTEGER NOT NULL,
+                status          TEXT    DEFAULT 'pending',
+                card_number     TEXT    DEFAULT '',
+                card_name       TEXT    DEFAULT '',
+                requested_at    TEXT    DEFAULT (datetime('now','localtime')),
+                processed_at    TEXT    DEFAULT NULL,
+                admin_note      TEXT    DEFAULT ''
+            );
+        """)
+        # seed default levels
+        for lv in SELLER_LEVELS:
+            conn.execute("""INSERT OR IGNORE INTO seller_levels (id,name,emoji,min_sales,commission)
+                VALUES (?,?,?,?,?);""", (lv["id"],lv["name"],lv["emoji"],lv["min_sales"],lv["commission"]))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _gen_seller_code() -> str:
@@ -2718,7 +2777,7 @@ def _gen_seller_code() -> str:
 
 
 def seller_activate(user_id: int) -> str:
-    """فعال‌سازی فروشنده — کد می‌سازه."""
+    """فعالسازی فروشنده — کد میسازه."""
     ensure_seller_schema()
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
@@ -2928,7 +2987,7 @@ def seller_apply(user_id: int, full_name: str, phone: str, city: str, shop_name:
 
 
 def seller_pending_applications() -> list:
-    """درخواست‌های در انتظار فروشندگی."""
+    """درخواستهای در انتظار فروشندگی."""
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
@@ -2952,7 +3011,7 @@ def seller_approve_application(user_id: int) -> str:
     return code
 
 
-# ─── ستون‌های اضافی کاربران (یادداشت، برچسب، مسدودسازی) ──────────────────────
+# ─── ستونهای اضافی کاربران (یادداشت، برچسب، مسدودسازی) ──────────────────────
 
 def ensure_user_extra_schema():
     conn = _get_connection()
@@ -3071,12 +3130,12 @@ def ensure_partner_system_schema():
         """)
         conn.commit()
 
-        # سطوح پیش‌فرض اگه خالی بود
+        # سطوح پیشفرض اگه خالی بود
         cnt = conn.execute("SELECT COUNT(*) FROM partner_tiers;").fetchone()[0]
         if cnt == 0:
             defaults = [
                 ("برنز", "🥉", 0, 1),
-                ("نقره‌ای", "🥈", 10, 2),
+                ("نقرهای", "🥈", 10, 2),
                 ("طلایی", "🥇", 30, 3),
                 ("الماس", "💎", 70, 4),
             ]
@@ -3086,7 +3145,7 @@ def ensure_partner_system_schema():
             )
             conn.commit()
 
-        # تنظیمات پیش‌فرض
+        # تنظیمات پیشفرض
         c2 = conn.execute("SELECT COUNT(*) FROM partner_commission;").fetchone()[0]
         if c2 == 0:
             conn.execute("INSERT INTO partner_commission (id,percent,min_order,max_payout,is_active) VALUES (1,5.0,0,0,1);")
@@ -3182,7 +3241,7 @@ def get_partner_tier_for(order_count: int) -> dict:
 
 
 def get_referral_stats_for(referrer_id: int) -> dict:
-    """آمار کلی زیرمجموعه‌های یک معرف."""
+    """آمار کلی زیرمجموعههای یک معرف."""
     conn = _get_connection()
     try:
         total = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (referrer_id,)).fetchone()[0]
@@ -3196,7 +3255,7 @@ def get_referral_stats_for(referrer_id: int) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ─── کیف‌پول همکاری ────────────────────────────────────────────────────────
+# ─── کیفپول همکاری ────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_partner_wallet_schema():
@@ -3241,7 +3300,7 @@ def ensure_partner_wallet_schema():
             );
         """)
         conn.commit()
-        # پیش‌فرض تنظیمات تسویه
+        # پیشفرض تنظیمات تسویه
         cnt = conn.execute("SELECT COUNT(*) FROM partner_payout_settings;").fetchone()[0]
         if cnt == 0:
             conn.execute("INSERT INTO partner_payout_settings (id) VALUES (1);")
@@ -3261,7 +3320,7 @@ def get_partner_wallet_balance(user_id: int) -> int:
 
 
 def credit_partner_wallet(user_id: int, amount: int, note: str = "") -> int:
-    """واریز پورسانت به کیف‌پول همکاری. Returns new balance."""
+    """واریز پورسانت به کیفپول همکاری. Returns new balance."""
     ensure_partner_wallet_schema()
     conn = _get_connection()
     try:
@@ -3281,7 +3340,7 @@ def credit_partner_wallet(user_id: int, amount: int, note: str = "") -> int:
 
 
 def transfer_partner_to_main(user_id: int, amount: int) -> dict:
-    """انتقال از کیف‌پول همکاری به کیف‌پول اصلی."""
+    """انتقال از کیفپول همکاری به کیفپول اصلی."""
     ensure_partner_wallet_schema()
     conn = _get_connection()
     try:
@@ -3295,8 +3354,8 @@ def transfer_partner_to_main(user_id: int, amount: int) -> dict:
         conn.execute("UPDATE partner_wallets SET balance=balance-?, updated_at=datetime('now') WHERE user_id=?;",
                      (amount, user_id))
         conn.execute("INSERT INTO partner_transactions (user_id,type,amount,note) VALUES (?,?,?,?);",
-                     (user_id, "transfer_out", amount, "انتقال به کیف‌پول اصلی"))
-        # واریز به کیف‌پول اصلی
+                     (user_id, "transfer_out", amount, "انتقال به کیفپول اصلی"))
+        # واریز به کیفپول اصلی
         existing = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (user_id,)).fetchone()
         if existing:
             conn.execute("UPDATE wallets SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?;",
@@ -3366,7 +3425,7 @@ def request_partner_payout(user_id: int, amount: int) -> dict:
             return {"ok": False, "error": f"سقف {max_pm} درخواست در ماه تکمیل شده"}
     conn = _get_connection()
     try:
-        # کسر موقت از کیف‌پول
+        # کسر موقت از کیفپول
         conn.execute("UPDATE partner_wallets SET balance=balance-?, updated_at=datetime('now') WHERE user_id=?;",
                      (amount, user_id))
         conn.execute("INSERT INTO partner_transactions (user_id,type,amount,note) VALUES (?,?,?,?);",
@@ -3395,7 +3454,7 @@ def process_partner_payout(payout_id: int, approve: bool, admin_note: str = "") 
         conn.execute("""UPDATE partner_payouts SET status=?, admin_note=?, processed_at=datetime('now')
             WHERE id=?;""", (new_status, admin_note, payout_id))
         if not approve:
-            # رد شد → برگردان به کیف‌پول
+            # رد شد → برگردان به کیفپول
             conn.execute("UPDATE partner_wallets SET balance=balance+?, updated_at=datetime('now') WHERE user_id=?;",
                          (pay["amount"], pay["user_id"]))
             conn.execute("INSERT INTO partner_transactions (user_id,type,amount,note) VALUES (?,?,?,?);",
@@ -3551,7 +3610,7 @@ def delete_admin_note(note_id: int):
         conn.close()
 
 
-# ─── ستون‌های اضافی partner_tiers ────────────────────────────────────────────
+# ─── ستونهای اضافی partner_tiers ────────────────────────────────────────────
 
 def ensure_partner_tiers_extended():
     conn = _get_connection()
@@ -3700,7 +3759,7 @@ def get_financial_report() -> dict:
         total_commission = conn.execute(
             "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;"
         ).fetchone()[0]
-        # تسویه‌های تأیید شده
+        # تسویههای تأیید شده
         total_payouts = conn.execute(
             "SELECT COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='approved';"
         ).fetchone()[0]
@@ -3809,7 +3868,7 @@ def ensure_accounting_schema():
     """ساخت جداول حسابداری."""
     conn = _get_connection()
     try:
-        # هزینه‌ها
+        # هزینهها
         conn.execute("""
             CREATE TABLE IF NOT EXISTS expenses (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3821,14 +3880,14 @@ def ensure_accounting_schema():
                 created_at  TEXT DEFAULT (datetime('now'))
             );
         """)
-        # دسته‌بندی هزینه‌ها
+        # دستهبندی هزینهها
         conn.execute("""
             CREATE TABLE IF NOT EXISTS expense_categories (
                 id    INTEGER PRIMARY KEY AUTOINCREMENT,
                 name  TEXT UNIQUE NOT NULL
             );
         """)
-        # دسته‌های پیش‌فرض
+        # دستههای پیشفرض
         defaults = ['تبلیغات','سرور و هاست','دامنه','حقوق','اینترنت','تجهیزات','مالیات','سایر']
         for cat in defaults:
             try:
@@ -3874,7 +3933,7 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             f"SELECT COUNT(*) FROM orders o WHERE status='active'{where_order};"
         ).fetchone()[0]
 
-        # هزینه خرید — فقط برای آیتم‌های تحویل‌شده (sold)
+        # هزینه خرید — فقط برای آیتمهای تحویلشده (sold)
         try:
             total_cost = conn.execute("""
                 SELECT COALESCE(SUM(
@@ -3895,13 +3954,13 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             commission_q += f" AND date(rewarded_at)>='{date_from}'" if 'rewarded_at' in [r[1] for r in conn.execute("PRAGMA table_info(referrals);").fetchall()] else ""
         total_commission = conn.execute(commission_q + ";").fetchone()[0]
 
-        # هزینه‌های ثبت‌شده
+        # هزینههای ثبتشده
         exp_q = "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE 1=1"
         if date_from: exp_q += f" AND expense_date>='{date_from}'"
         if date_to:   exp_q += f" AND expense_date<='{date_to}'"
         total_expenses = conn.execute(exp_q + ";").fetchone()[0]
 
-        # تسویه‌های انجام شده
+        # تسویههای انجام شده
         try:
             payouts_done = conn.execute("SELECT COUNT(*), COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='approved';").fetchone()
             payout_count = int(payouts_done[0] or 0)
@@ -4011,7 +4070,7 @@ def get_cashflow(date_from: str = "", date_to: str = "", limit: int = 100) -> li
                        price as amount, 'income' as direction
                 FROM orders WHERE status='active'
                 UNION ALL
-                SELECT created_at, 'شارژ کیف‌پول' as type,
+                SELECT created_at, 'شارژ کیفپول' as type,
                        CAST(user_id AS TEXT) as description,
                        amount, 'income' as direction
                 FROM zarinpal_transactions WHERE status='success'
@@ -4033,7 +4092,7 @@ def get_cashflow(date_from: str = "", date_to: str = "", limit: int = 100) -> li
         conn.close()
 
 
-# ─── CRUD هزینه‌ها ────────────────────────────────────────────────────────────
+# ─── CRUD هزینهها ────────────────────────────────────────────────────────────
 
 def get_expenses(date_from="", date_to="", category="", limit=100) -> list:
     conn = _get_connection(); conn.row_factory = sqlite3.Row
@@ -4250,7 +4309,7 @@ def set_maintenance_mode(enabled: bool):
         conn.close()
 
 
-# ─── رسیدهای کارت‌به‌کارت ────────────────────────────────────────────────────
+# ─── رسیدهای کارتبهکارت ────────────────────────────────────────────────────
 
 def ensure_card_receipts_schema():
     conn = _get_connection()
@@ -4313,7 +4372,7 @@ def update_card_receipt(rid: int, status: str, note: str = "", amount: int = Non
         conn.close()
 
 
-# ─── آرشیو و حذف تیکت‌ها ──────────────────────────────────────────────────────
+# ─── آرشیو و حذف تیکتها ──────────────────────────────────────────────────────
 
 def ensure_ticket_archive_schema():
     conn = _get_connection()
@@ -4356,7 +4415,7 @@ def delete_ticket(tid: int):
         conn.close()
 
 
-# ─── حذف رسیدهای کارت‌به‌کارت ─────────────────────────────────────────────────
+# ─── حذف رسیدهای کارتبهکارت ─────────────────────────────────────────────────
 
 def delete_card_receipt(rid: int):
     conn = _get_connection()
