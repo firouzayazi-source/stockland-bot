@@ -495,7 +495,7 @@ def _layout(title: str, body: str, admin_info=None,
 
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if bell_count == 0 else ''}">{bell_count}</span></a>
             <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
-            <a class="icon-button notification-button" href="/admin/financial" aria-label="مالی"><i data-lucide="wallet"></i><span id="financial-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
+            <a class="icon-button notification-button" href="/admin/tickets#financial" aria-label="مالی"><i data-lucide="wallet"></i><span id="financial-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
             <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
             <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
               <span class="profile-avatar"><i data-lucide="user-round"></i></span>
@@ -1742,7 +1742,7 @@ async def receipt_approve(request: Request, rid: int):
             f"مبلغ <b>{amount:,}</b> تومان به کیف پول شما اضافه شد.")
     except Exception:
         pass
-    return _redir(f"/admin/receipts?flash=رسید+{rid}+تأیید+شد")
+    return _redir(f"/admin/tickets?flash=رسید+{rid}+تأیید+شد#financial")
 
 
 @router.post("/receipts/{rid}/reject")
@@ -1762,7 +1762,7 @@ async def receipt_reject(request: Request, rid: int):
             "❌ متأسفانه رسید پرداخت شما تأیید نشد.\n"
             "لطفاً با پشتیبانی تماس بگیرید.")
     except Exception: pass
-    return _redir(f"/admin/receipts?flash=رسید+{rid}+رد+شد")
+    return _redir(f"/admin/tickets?flash=رسید+{rid}+رد+شد#financial")
 
 
 @router.get("/settings/panel", response_class=HTMLResponse)
@@ -5801,44 +5801,31 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
     return _layout("گزارش فعالیت", body, adm, flash=flash)
 
 
-@router.get("/financial", response_class=HTMLResponse)
-async def financial_queue(request: Request, type_filter: str = "", q: str = "",
-                          sort: str = "date_desc", flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-
+def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str:
+    """ساخت HTML بخش مرکز مالی — قابل استفاده هم در صفحه مستقل و هم Embed شده در تیکت‌ها.
+    link_fn(type_filter, q, sort) -> URL برای لینک‌های تب/مرتب‌سازی/جستجو
+    """
     from db import get_card_receipts, ensure_card_receipts_schema
     ensure_card_receipts_schema()
 
     rows = []
-
-    # ── کارت‌به‌کارت ─────────────────────────────────────────────────────
     if type_filter in ("", "card2card"):
         for r in get_card_receipts(""):
             rows.append({
-                "type": "card2card",
-                "type_label": "💳 کارت‌به‌کارت",
-                "id": r["id"],
-                "user_id": r["user_id"],
+                "type": "card2card", "type_label": "💳 کارت‌به‌کارت",
+                "id": r["id"], "user_id": r["user_id"],
                 "user_name": r.get("full_name") or r.get("username") or str(r["user_id"]),
-                "amount": int(r.get("amount") or 0),
-                "status": r["status"],
+                "amount": int(r.get("amount") or 0), "status": r["status"],
                 "created_at": r.get("created_at") or "",
-                "updated_at": r.get("updated_at") or r.get("created_at") or "",
                 "detail_url": f"/admin/receipts/{r['id']}/view",
             })
-
-    # ── درخواست تسویه همکار ──────────────────────────────────────────────
     if type_filter in ("", "payout"):
-        conn = _db()
-        conn.row_factory = sqlite3.Row
+        conn = _db(); conn.row_factory = sqlite3.Row
         try:
             payouts = conn.execute("""
                 SELECT p.id, p.user_id, p.amount, p.status, p.created_at,
                        u.full_name, u.username
-                FROM partner_payouts p
-                LEFT JOIN users u ON u.user_id = p.user_id
+                FROM partner_payouts p LEFT JOIN users u ON u.user_id = p.user_id
                 ORDER BY p.id DESC;
             """).fetchall()
         except Exception:
@@ -5847,56 +5834,40 @@ async def financial_queue(request: Request, type_filter: str = "", q: str = "",
             conn.close()
         for p in payouts:
             rows.append({
-                "type": "payout",
-                "type_label": "💰 تسویه همکار",
-                "id": p["id"],
-                "user_id": p["user_id"],
+                "type": "payout", "type_label": "💰 تسویه همکار",
+                "id": p["id"], "user_id": p["user_id"],
                 "user_name": p["full_name"] or p["username"] or str(p["user_id"]),
-                "amount": int(p["amount"] or 0),
-                "status": p["status"],
+                "amount": int(p["amount"] or 0), "status": p["status"],
                 "created_at": p["created_at"] or "",
-                "updated_at": p["created_at"] or "",
                 "detail_url": f"/admin/partners/payout/{p['id']}",
             })
 
-    # ── جستجو ────────────────────────────────────────────────────────────
     if q:
         ql = q.strip().lower()
         rows = [r for r in rows if
-                ql in str(r["user_name"]).lower()
-                or ql in str(r["user_id"])
-                or ql in str(r["id"])
-                or ql in str(r["amount"])
-                or ql in str(r["status"]).lower()
-                or ql in r["type_label"].lower()]
+                ql in str(r["user_name"]).lower() or ql in str(r["user_id"])
+                or ql in str(r["id"]) or ql in str(r["amount"])
+                or ql in str(r["status"]).lower() or ql in r["type_label"].lower()]
 
-    # ── مرتب‌سازی ────────────────────────────────────────────────────────
     if sort == "date_asc":
         rows.sort(key=lambda r: r["created_at"])
     elif sort == "amount_desc":
         rows.sort(key=lambda r: -r["amount"])
     elif sort == "amount_asc":
         rows.sort(key=lambda r: r["amount"])
-    else:  # date_desc (پیش‌فرض)
+    else:
         rows.sort(key=lambda r: r["created_at"], reverse=True)
 
-    # ── نگاشت وضعیت به برچسب استاندارد ──────────────────────────────────
     status_map = {
         "pending":  ("⏳ جدید",     "bg-amber-100 text-amber-700"),
         "approved": ("✅ تأیید شد", "bg-green-100 text-green-700"),
         "rejected": ("❌ رد شد",    "bg-red-100 text-red-600"),
     }
-
     pending_count = sum(1 for r in rows if r["status"] == "pending")
 
     def sort_link(key, label):
         active = sort == key
-        return (f'<a href="{tq_financial(type_filter, q, key)}" '
-                f'class="text-xs {"text-indigo-600 font-bold" if active else "text-gray-400"}">{label}</a>')
-
-    def tq_financial(tf, qq, srt):
-        from urllib.parse import quote
-        return f"/admin/financial?type_filter={tf}&q={quote(qq)}&sort={srt}"
+        return f'<a href="{link_fn(type_filter, q, key)}" class="text-xs {"text-indigo-600 font-bold" if active else "text-gray-400"}">{label}</a>'
 
     rows_html = ""
     for r in rows:
@@ -5916,43 +5887,58 @@ async def financial_queue(request: Request, type_filter: str = "", q: str = "",
     tabs = ""
     for lbl, val in [("همه", ""), ("💳 کارت‌به‌کارت", "card2card"), ("💰 تسویه همکار", "payout")]:
         active = type_filter == val
-        tabs += (f'<a href="/admin/financial?type_filter={val}&q={q}" '
-                 f'class="px-3 py-1.5 rounded-lg text-xs border '
+        tabs += (f'<a href="{link_fn(val, q, sort)}" class="px-3 py-1.5 rounded-lg text-xs border '
                  f'{"bg-indigo-600 text-white border-indigo-600" if active else "bg-white text-gray-500 border-gray-200"}">{lbl}</a>')
 
-    body = f"""
-    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <h1 class="text-2xl font-bold text-gray-800">💰 مرکز مالی</h1>
-      {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
-    </div>
+    return f"""
+    <div id="financial" style="scroll-margin-top:80px" class="mt-8">
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h1 class="text-xl font-bold text-gray-800">💰 مرکز مالی</h1>
+        {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
+      </div>
+      <div class="flex gap-2 mb-4 flex-wrap">{tabs}</div>
+      <form method="get" class="flex gap-2 mb-4">
+        <input type="hidden" name="fin_type" value="{type_filter}">
+        <input type="hidden" name="fin_sort" value="{sort}">
+        <input type="text" name="fin_q" value="{e(q)}" placeholder="جستجو: نام، آیدی، مبلغ، وضعیت..."
+          class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
+        <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">جستجو</button>
+      </form>
+      <div class="card overflow-hidden"><div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-3 py-2">نوع</th><th class="px-3 py-2">کاربر</th>
+            <th class="px-3 py-2">ID</th>
+            <th class="px-3 py-2">{sort_link('amount_desc' if sort!='amount_desc' else 'amount_asc','مبلغ ↕')}</th>
+            <th class="px-3 py-2">وضعیت</th>
+            <th class="px-3 py-2">{sort_link('date_asc' if sort=='date_desc' else 'date_desc','تاریخ ↕')}</th>
+            <th class="px-3 py-2">عملیات</th>
+          </tr></thead>
+          <tbody>{rows_html}</tbody>
+        </table>
+      </div></div>
+    </div>"""
 
-    <div class="flex gap-2 mb-4 flex-wrap">{tabs}</div>
 
-    <form method="get" class="flex gap-2 mb-4">
-      <input type="hidden" name="type_filter" value="{type_filter}">
-      <input type="text" name="q" value="{e(q)}" placeholder="جستجو: نام، آیدی، مبلغ، وضعیت..."
-        class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
-      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">جستجو</button>
-    </form>
+@router.get("/financial", response_class=HTMLResponse)
+async def financial_queue(request: Request, type_filter: str = "", q: str = "",
+                          sort: str = "date_desc", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
 
-    <div class="card overflow-hidden"><div class="overflow-x-auto">
-      <table class="w-full text-right min-w-max">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-3 py-2">نوع</th><th class="px-3 py-2">کاربر</th>
-          <th class="px-3 py-2">ID</th>
-          <th class="px-3 py-2">{sort_link('amount_desc' if sort!='amount_desc' else 'amount_asc','مبلغ ↕')}</th>
-          <th class="px-3 py-2">وضعیت</th>
-          <th class="px-3 py-2">{sort_link('date_asc' if sort=='date_desc' else 'date_desc','تاریخ ↕')}</th>
-          <th class="px-3 py-2">عملیات</th>
-        </tr></thead>
-        <tbody>{rows_html}</tbody>
-      </table>
-    </div></div>"""
+    def link_fn(tf, qq, srt):
+        from urllib.parse import quote
+        return f"/admin/financial?type_filter={tf}&q={quote(qq)}&sort={srt}"
+
+    body = _financial_section_html(type_filter, q, sort, link_fn)
     return _layout("مرکز مالی", body, adm, flash=flash)
 
 
 @router.get("/tickets", response_class=HTMLResponse)
-async def tickets_list(request: Request, status_filter: str = "", type_filter: str = "", flash: str = ""):
+async def tickets_list(request: Request, status_filter: str = "", type_filter: str = "",
+                       fin_type: str = "", fin_q: str = "", fin_sort: str = "date_desc",
+                       flash: str = ""):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
@@ -6089,6 +6075,18 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         </table>
       </div>
     </div>"""
+
+    # ── بخش مرکز مالی — Embed شده زیر تیکت‌ها در همین صفحه ────────────────
+    def _fin_link_fn(tf, qq, srt):
+        from urllib.parse import quote
+        return (f"/admin/tickets?status_filter={status_filter}&type_filter={type_filter}"
+                f"&fin_type={tf}&fin_q={quote(qq)}&fin_sort={srt}#financial")
+    try:
+        financial_html = _financial_section_html(fin_type, fin_q, fin_sort, _fin_link_fn)
+    except Exception:
+        financial_html = ""
+    body += financial_html
+
     return _layout("تیکت‌ها", body, adm, flash=flash)
 
 
@@ -8179,7 +8177,7 @@ async def partner_payout_approve(request: Request, pid: int):
         _log(request, "تأیید تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
         try: _tg_send(uid, msg)
         except Exception: pass
-    return _redir("/admin/partners?tab=payouts&flash=تسویه+تأیید+شد")
+    return _redir("/admin/tickets?flash=تسویه+تأیید+شد#financial")
 
 
 @router.post("/partners/payout/{pid}/reject")
@@ -8201,7 +8199,7 @@ async def partner_payout_reject(request: Request, pid: int):
         _log(request, "رد تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
         try: _tg_send(uid, msg)
         except Exception: pass
-    return _redir("/admin/partners?tab=payouts&flash=تسویه+رد+شد")
+    return _redir("/admin/tickets?flash=تسویه+رد+شد#financial")
 
 
 @router.post("/partners/tier/{tid}/delete-banner")
