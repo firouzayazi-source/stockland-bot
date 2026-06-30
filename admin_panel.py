@@ -206,6 +206,20 @@ def _pending_payout_count() -> int:
         return 0
 
 
+def _pending_card2card_count() -> int:
+    try:
+        from db import get_card_receipts, ensure_card_receipts_schema
+        ensure_card_receipts_schema()
+        return len(get_card_receipts("pending"))
+    except Exception:
+        return 0
+
+
+def _pending_financial_count() -> int:
+    """تعداد کل درخواست‌های مالی در انتظار (کارت‌به‌کارت + تسویه)."""
+    return _pending_payout_count() + _pending_card2card_count()
+
+
 def _pending_partner_count() -> int:
     try:
         conn = _db()
@@ -476,7 +490,7 @@ def _layout(title: str, body: str, admin_info=None,
 
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
             <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
-            <a class="icon-button notification-button" href="/admin/partners?tab=payouts" aria-label="تسویه‌ها"><i data-lucide="banknote"></i><span id="payout-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
+            <a class="icon-button notification-button" href="/admin/financial" aria-label="مالی"><i data-lucide="wallet"></i><span id="financial-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
             <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
             <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
               <span class="profile-avatar"><i data-lucide="user-round"></i></span>
@@ -1103,6 +1117,7 @@ def _layout(title: str, body: str, admin_info=None,
       updateBadge('partner-badge-top', d.partners||0);
       updateBadge('notes-badge-top', d.notes||0);
       updateBadge('payout-badge-top', d.payouts||0);
+      updateBadge('financial-badge-top', d.financial||0);
     }).catch(function(){});
   }, 12000);
   """}
@@ -5781,6 +5796,156 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
     return _layout("گزارش فعالیت", body, adm, flash=flash)
 
 
+@router.get("/financial", response_class=HTMLResponse)
+async def financial_queue(request: Request, type_filter: str = "", q: str = "",
+                          sort: str = "date_desc", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+
+    from db import get_card_receipts, ensure_card_receipts_schema
+    ensure_card_receipts_schema()
+
+    rows = []
+
+    # ── کارت‌به‌کارت ─────────────────────────────────────────────────────
+    if type_filter in ("", "card2card"):
+        for r in get_card_receipts(""):
+            rows.append({
+                "type": "card2card",
+                "type_label": "💳 کارت‌به‌کارت",
+                "id": r["id"],
+                "user_id": r["user_id"],
+                "user_name": r.get("full_name") or r.get("username") or str(r["user_id"]),
+                "amount": int(r.get("amount") or 0),
+                "status": r["status"],
+                "created_at": r.get("created_at") or "",
+                "updated_at": r.get("updated_at") or r.get("created_at") or "",
+                "detail_url": f"/admin/receipts/{r['id']}/view",
+            })
+
+    # ── درخواست تسویه همکار ──────────────────────────────────────────────
+    if type_filter in ("", "payout"):
+        conn = _db()
+        conn.row_factory = sqlite3.Row
+        try:
+            payouts = conn.execute("""
+                SELECT p.id, p.user_id, p.amount, p.status, p.created_at,
+                       u.full_name, u.username
+                FROM partner_payouts p
+                LEFT JOIN users u ON u.user_id = p.user_id
+                ORDER BY p.id DESC;
+            """).fetchall()
+        except Exception:
+            payouts = []
+        finally:
+            conn.close()
+        for p in payouts:
+            rows.append({
+                "type": "payout",
+                "type_label": "💰 تسویه همکار",
+                "id": p["id"],
+                "user_id": p["user_id"],
+                "user_name": p["full_name"] or p["username"] or str(p["user_id"]),
+                "amount": int(p["amount"] or 0),
+                "status": p["status"],
+                "created_at": p["created_at"] or "",
+                "updated_at": p["created_at"] or "",
+                "detail_url": f"/admin/partners/payout/{p['id']}",
+            })
+
+    # ── جستجو ────────────────────────────────────────────────────────────
+    if q:
+        ql = q.strip().lower()
+        rows = [r for r in rows if
+                ql in str(r["user_name"]).lower()
+                or ql in str(r["user_id"])
+                or ql in str(r["id"])
+                or ql in str(r["amount"])
+                or ql in str(r["status"]).lower()
+                or ql in r["type_label"].lower()]
+
+    # ── مرتب‌سازی ────────────────────────────────────────────────────────
+    if sort == "date_asc":
+        rows.sort(key=lambda r: r["created_at"])
+    elif sort == "amount_desc":
+        rows.sort(key=lambda r: -r["amount"])
+    elif sort == "amount_asc":
+        rows.sort(key=lambda r: r["amount"])
+    else:  # date_desc (پیش‌فرض)
+        rows.sort(key=lambda r: r["created_at"], reverse=True)
+
+    # ── نگاشت وضعیت به برچسب استاندارد ──────────────────────────────────
+    status_map = {
+        "pending":  ("⏳ جدید",     "bg-amber-100 text-amber-700"),
+        "approved": ("✅ تأیید شد", "bg-green-100 text-green-700"),
+        "rejected": ("❌ رد شد",    "bg-red-100 text-red-600"),
+    }
+
+    pending_count = sum(1 for r in rows if r["status"] == "pending")
+
+    def sort_link(key, label):
+        active = sort == key
+        return (f'<a href="{tq_financial(type_filter, q, key)}" '
+                f'class="text-xs {"text-indigo-600 font-bold" if active else "text-gray-400"}">{label}</a>')
+
+    def tq_financial(tf, qq, srt):
+        from urllib.parse import quote
+        return f"/admin/financial?type_filter={tf}&q={quote(qq)}&sort={srt}"
+
+    rows_html = ""
+    for r in rows:
+        sl, sc = status_map.get(r["status"], (r["status"], "bg-gray-100 text-gray-600"))
+        rows_html += f"""<tr class="border-b hover:bg-gray-50 text-sm">
+          <td class="px-3 py-3">{r['type_label']}</td>
+          <td class="px-3 py-3 font-medium">{e(str(r['user_name']))}</td>
+          <td class="px-3 py-3 text-xs text-gray-400"><code>{r['user_id']}</code></td>
+          <td class="px-3 py-3 font-bold text-green-600">{r['amount']:,}</td>
+          <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs {sc}">{sl}</span></td>
+          <td class="px-3 py-3 text-xs text-gray-400">{r['created_at'][:16]}</td>
+          <td class="px-3 py-3"><a href="{r['detail_url']}" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده و رسیدگی</a></td>
+        </tr>"""
+    if not rows_html:
+        rows_html = "<tr><td colspan='7' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"
+
+    tabs = ""
+    for lbl, val in [("همه", ""), ("💳 کارت‌به‌کارت", "card2card"), ("💰 تسویه همکار", "payout")]:
+        active = type_filter == val
+        tabs += (f'<a href="/admin/financial?type_filter={val}&q={q}" '
+                 f'class="px-3 py-1.5 rounded-lg text-xs border '
+                 f'{"bg-indigo-600 text-white border-indigo-600" if active else "bg-white text-gray-500 border-gray-200"}">{lbl}</a>')
+
+    body = f"""
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h1 class="text-2xl font-bold text-gray-800">💰 مرکز مالی</h1>
+      {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
+    </div>
+
+    <div class="flex gap-2 mb-4 flex-wrap">{tabs}</div>
+
+    <form method="get" class="flex gap-2 mb-4">
+      <input type="hidden" name="type_filter" value="{type_filter}">
+      <input type="text" name="q" value="{e(q)}" placeholder="جستجو: نام، آیدی، مبلغ، وضعیت..."
+        class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
+      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">جستجو</button>
+    </form>
+
+    <div class="card overflow-hidden"><div class="overflow-x-auto">
+      <table class="w-full text-right min-w-max">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-3 py-2">نوع</th><th class="px-3 py-2">کاربر</th>
+          <th class="px-3 py-2">ID</th>
+          <th class="px-3 py-2">{sort_link('amount_desc' if sort!='amount_desc' else 'amount_asc','مبلغ ↕')}</th>
+          <th class="px-3 py-2">وضعیت</th>
+          <th class="px-3 py-2">{sort_link('date_asc' if sort=='date_desc' else 'date_desc','تاریخ ↕')}</th>
+          <th class="px-3 py-2">عملیات</th>
+        </tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </div></div>"""
+    return _layout("مرکز مالی", body, adm, flash=flash)
+
+
 @router.get("/tickets", response_class=HTMLResponse)
 async def tickets_list(request: Request, status_filter: str = "", type_filter: str = "", flash: str = ""):
     adm = _get_admin(request)
@@ -5837,15 +6002,21 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         bg = "var(--primary)" if active else "var(--card-bg)"
         col = "#000" if active else "var(--text-muted)"
         type_tabs += f'<a href="{tq(status_filter, val)}" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;border:1.5px solid {"var(--primary)" if active else "var(--border)"};background:{bg};color:{col};font-size:12px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} <span style="font-size:10px;padding:1px 6px;border-radius:20px;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"};">{cnt}</span></a>'
-    # تب کارت‌به‌کارت — لینک مستقل به صفحه رسیدها (منطق تیکت دست نمی‌خوره)
-    try:
-        from db import get_card_receipts, ensure_card_receipts_schema
-        ensure_card_receipts_schema()
-        card_pending = len(get_card_receipts("pending"))
-    except Exception:
-        card_pending = 0
-    type_tabs += f'<a href="/admin/receipts" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;border:1.5px solid var(--border);background:var(--card-bg);color:var(--text-muted);font-size:12px;font-weight:500;text-decoration:none">💳 کارت‌به‌کارت <span style="font-size:10px;padding:1px 6px;border-radius:20px;background:var(--page-bg);">{card_pending}</span></a>'
     type_tabs += "</div>"
+
+    # ردیف مستقل «مالی» — Financial Queue جدا از سیستم تیکت (نیازی به منطق تیکت ندارد)
+    try:
+        fin_pending = _pending_financial_count()
+    except Exception:
+        fin_pending = 0
+    financial_row = (
+        '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
+        f'<a href="/admin/financial" style="display:inline-flex;align-items:center;gap:8px;padding:8px 16px;'
+        'border-radius:10px;border:1.5px solid #10B981;background:rgba(16,185,129,.08);color:#10B981;'
+        f'font-size:13px;font-weight:700;text-decoration:none">💰 مالی'
+        + (f' <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#10B981;color:#fff;">{fin_pending}</span>' if fin_pending else '')
+        + '</a></div>'
+    )
 
     status_tabs = '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
     for lbl, val, cnt in [("همه","",sum(stats.values())),("منتظر اطلاعات","waiting_info",stats.get("waiting_info",0)),
@@ -5913,6 +6084,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
       <h1 class="text-2xl font-bold text-gray-800">🎫 تیکت‌های پشتیبانی</h1>
     </div>
     {type_tabs}
+    {financial_row}
     {status_tabs}
     <div class="card overflow-hidden">
       <div class="overflow-x-auto ticket-table-wrap">
@@ -6428,11 +6600,16 @@ async def badges_json(request: Request):
         pending_payouts = _pending_payout_count()
     except Exception:
         pending_payouts = 0
+    try:
+        pending_financial = _pending_financial_count()
+    except Exception:
+        pending_financial = 0
     return JSONResponse({
         "tickets": _open_ticket_count(),
         "partners": _pending_partner_count(),
         "notes": int(open_notes),
         "payouts": pending_payouts,
+        "financial": pending_financial,
     })
 
 
