@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 
 import requests as _requests
 from fastapi import APIRouter, BackgroundTasks, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
 
 router = APIRouter(prefix="/admin")
 
@@ -5866,10 +5866,10 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
         active = sort == key
         return f'<a href="{link_fn(type_filter, q, key)}" class="text-xs {"text-indigo-600 font-bold" if active else "text-gray-400"}">{label}</a>'
 
-    rows_html = ""
+    fin_rows_list = []
     for r in rows:
         sl, sc = status_map.get(r["status"], (r["status"], "bg-gray-100 text-gray-600"))
-        rows_html += f"""<tr class="border-b hover:bg-gray-50 text-sm">
+        fin_rows_list.append(f"""<tr class="border-b hover:bg-gray-50 text-sm">
           <td class="px-3 py-3">{r['type_label']}</td>
           <td class="px-3 py-3 font-medium">{e(str(r['user_name']))}</td>
           <td class="px-3 py-3 text-xs text-gray-400"><code>{r['user_id']}</code></td>
@@ -5877,9 +5877,41 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
           <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs {sc}">{sl}</span></td>
           <td class="px-3 py-3 text-xs text-gray-400">{r['created_at'][:16]}</td>
           <td class="px-3 py-3"><a href="{r['detail_url']}" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده و رسیدگی</a></td>
-        </tr>"""
-    if not rows_html:
-        rows_html = "<tr><td colspan='7' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"
+        </tr>""")
+
+    fin_recent = fin_rows_list[:3]
+    fin_older  = fin_rows_list[3:]
+    rows_html = "".join(fin_recent) or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"
+    fin_older_html = "".join(fin_older)
+
+    fin_toggle_btn = ""
+    if fin_older:
+        fin_toggle_btn = f"""
+        <div style="text-align:center;padding:10px">
+          <button type="button" id="toggle-older-fin-btn" data-older-count="{len(fin_older)}"
+            style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
+                   border-radius:20px;font-size:12px;cursor:pointer">
+            🔽 نمایش {len(fin_older)} درخواست قدیمی‌تر
+          </button>
+        </div>
+        <script>
+        (function(){{
+          var btn = document.getElementById('toggle-older-fin-btn');
+          if(btn){{
+            btn.addEventListener('click', function(){{
+              var el = document.getElementById('older-fin-block');
+              var cnt = btn.getAttribute('data-older-count');
+              if(el.style.display === 'none'){{
+                el.style.display = 'table-row-group';
+                btn.textContent = '🔼 بستن درخواست‌های قدیمی‌تر';
+              }} else {{
+                el.style.display = 'none';
+                btn.textContent = '🔽 نمایش ' + cnt + ' درخواست قدیمی‌تر';
+              }}
+            }});
+          }}
+        }})();
+        </script>"""
 
     tabs = ""
     for lbl, val in [("همه", ""), ("💳 کارت‌به‌کارت", "card2card"), ("💰 تسویه همکار", "payout")]:
@@ -5912,8 +5944,10 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
             <th class="px-3 py-2">عملیات</th>
           </tr></thead>
           <tbody>{rows_html}</tbody>
+          <tbody id="older-fin-block" style="display:none">{fin_older_html}</tbody>
         </table>
       </div></div>
+      {fin_toggle_btn}
     </div>"""
 
 
@@ -5935,10 +5969,13 @@ async def financial_queue(request: Request, type_filter: str = "", q: str = "",
 @router.get("/tickets", response_class=HTMLResponse)
 async def tickets_list(request: Request, status_filter: str = "", type_filter: str = "",
                        fin_type: str = "", fin_q: str = "", fin_sort: str = "date_desc",
-                       flash: str = ""):
+                       show_archived: str = "0", flash: str = ""):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
+
+    from db import ensure_ticket_archive_schema
+    ensure_ticket_archive_schema()
 
     conn = _db()
     try:
@@ -5947,6 +5984,10 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
             wheres.append("t.status=?"); params.append(status_filter)
         if type_filter:
             wheres.append("t.type=?"); params.append(type_filter)
+        if show_archived == "1":
+            wheres.append("t.archived=1")
+        else:
+            wheres.append("(t.archived IS NULL OR t.archived=0)")
         where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
         params.append(200)
         try:
@@ -6019,7 +6060,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         icon,label,bg,color = defs.get(t,("🔵","پشتیبانی","#EFF6FF","#1D4ED8"))
         return f'<span style="padding:2px 7px;background:{bg};color:{color};border-radius:20px;font-size:10px;font-weight:600">{icon} {label}</span>'
 
-    rows = ""
+    ticket_rows_list = []
     for t in tickets:
         try: ls = t["last_sender"]
         except: ls = None
@@ -6042,7 +6083,16 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
 
         last_col = ptitle or ("↗ کاربر" if ls=="user" else ("↙ ادمین" if ls=="admin" else ""))
 
-        rows += f"""<tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="location.href='/admin/tickets/{t['id']}'">
+        if show_archived == "1":
+            action_btns = f"""<button type="button" onclick="event.stopPropagation();unarchiveTicket({t['id']})"
+              class="px-2 py-1 text-xs bg-blue-50 text-blue-600 border border-blue-200 rounded">بازگردانی</button>"""
+        else:
+            action_btns = f"""<button type="button" onclick="event.stopPropagation();archiveTicket({t['id']})"
+              class="px-2 py-1 text-xs bg-gray-50 text-gray-500 border border-gray-200 rounded">📦 آرشیو</button>
+              <button type="button" onclick="event.stopPropagation();deleteTicket({t['id']})"
+              class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>"""
+
+        row_html = f"""<tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="location.href='/admin/tickets/{t['id']}'">
           <td class="px-4 py-3" data-label="#"><a href="/admin/tickets/{t['id']}" class="text-xs font-bold text-indigo-600">#{t['id']}</a></td>
           <td class="px-4 py-3" data-label="نوع">{type_b}</td>
           <td class="px-4 py-3" data-label="کاربر"><code class="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{e(str(t['user_id']))}</code></td>
@@ -6050,12 +6100,33 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
           <td class="px-4 py-3 text-xs text-gray-400" data-label="محصول">{last_col}</td>
           <td class="px-4 py-3 text-xs text-gray-400" data-label="پیام‌ها">{int(t['msg_count'] or 0)} پیام</td>
           <td class="px-4 py-3 text-xs text-gray-400" data-label="آپدیت">{(t['updated_at'] or '')[:16]}</td>
-          <td class="px-4 py-3" data-label=""><a href="/admin/tickets/{t['id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">مشاهده</a></td>
+          <td class="px-4 py-3 whitespace-nowrap" data-label="">{action_btns}</td>
         </tr>"""
+        ticket_rows_list.append(row_html)
+
+    recent_rows = ticket_rows_list[:3]
+    older_rows  = ticket_rows_list[3:]
+    rows = "".join(recent_rows)
+    older_rows_html = "".join(older_rows)
+
+    tickets_toggle_btn = ""
+    if older_rows:
+        tickets_toggle_btn = f"""
+        <div style="text-align:center;padding:10px">
+          <button type="button" id="toggle-older-tickets-btn" data-older-count="{len(older_rows)}"
+            style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
+                   border-radius:20px;font-size:12px;cursor:pointer">
+            🔽 نمایش {len(older_rows)} تیکت قدیمی‌تر
+          </button>
+        </div>"""
 
     body = f"""
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <h1 class="text-2xl font-bold text-gray-800">🎫 تیکت‌های پشتیبانی</h1>
+      <a href="?status_filter={status_filter}&type_filter={type_filter}&show_archived={'0' if show_archived=='1' else '1'}"
+         class="px-3 py-1.5 text-xs rounded-lg border {'bg-gray-700 text-white' if show_archived=='1' else 'bg-gray-50 text-gray-500 border-gray-200'}">
+        {'🔙 بازگشت به لیست فعال' if show_archived=='1' else '📦 آرشیو شده‌ها'}
+      </a>
     </div>
     {type_tabs}
     {status_tabs}
@@ -6069,9 +6140,41 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
             <th class="px-4 py-3">آپدیت</th><th class="px-4 py-3"></th>
           </tr></thead>
           <tbody>{rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>تیکتی یافت نشد</td></tr>"}</tbody>
+          <tbody id="older-tickets-block" style="display:none">{older_rows_html}</tbody>
         </table>
       </div>
-    </div>"""
+      {tickets_toggle_btn}
+    </div>
+
+    <script>
+      window.archiveTicket = function(id){{
+        if(!confirm('این تیکت آرشیو شود؟')) return;
+        fetch('/admin/tickets/'+id+'/archive', {{method:'POST'}}).then(function(){{ location.reload(); }});
+      }};
+      window.unarchiveTicket = function(id){{
+        fetch('/admin/tickets/'+id+'/unarchive', {{method:'POST'}}).then(function(){{ location.reload(); }});
+      }};
+      window.deleteTicket = function(id){{
+        if(!confirm('⚠️ این تیکت برای همیشه حذف می‌شود. ادامه؟')) return;
+        fetch('/admin/tickets/'+id+'/delete', {{method:'POST'}}).then(function(){{ location.reload(); }});
+      }};
+      (function(){{
+        var btn = document.getElementById('toggle-older-tickets-btn');
+        if(btn){{
+          btn.addEventListener('click', function(){{
+            var el = document.getElementById('older-tickets-block');
+            var cnt = btn.getAttribute('data-older-count');
+            if(el.style.display === 'none'){{
+              el.style.display = 'table-row-group';
+              btn.textContent = '🔼 بستن تیکت‌های قدیمی‌تر';
+            }} else {{
+              el.style.display = 'none';
+              btn.textContent = '🔽 نمایش ' + cnt + ' تیکت قدیمی‌تر';
+            }}
+          }});
+        }}
+      }})();
+    </script>"""
 
     # ── بخش مرکز مالی — Embed شده زیر تیکت‌ها در همین صفحه ────────────────
     def _fin_link_fn(tf, qq, srt):
@@ -6086,6 +6189,36 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
 
     return _layout("تیکت‌ها", body, adm, flash=flash)
 
+
+
+@router.post("/tickets/{tid}/archive")
+async def ticket_archive(request: Request, tid: int):
+    adm = _get_admin(request)
+    if not adm: return JSONResponse({"ok": False})
+    from db import archive_ticket
+    archive_ticket(tid)
+    _log(request, "آرشیو تیکت", "تیکت‌ها", f"#{tid}")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/tickets/{tid}/unarchive")
+async def ticket_unarchive(request: Request, tid: int):
+    adm = _get_admin(request)
+    if not adm: return JSONResponse({"ok": False})
+    from db import unarchive_ticket
+    unarchive_ticket(tid)
+    _log(request, "بازگردانی تیکت از آرشیو", "تیکت‌ها", f"#{tid}")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/tickets/{tid}/delete")
+async def ticket_delete(request: Request, tid: int):
+    adm = _get_admin(request)
+    if not adm: return JSONResponse({"ok": False})
+    from db import delete_ticket
+    delete_ticket(tid)
+    _log(request, "حذف تیکت", "تیکت‌ها", f"#{tid}")
+    return JSONResponse({"ok": True})
 
 
 @router.get("/tickets/{tid}", response_class=HTMLResponse)
@@ -8396,4 +8529,3 @@ async def partner_reject(request: Request, uid: int):
     except Exception:
         pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
-    
