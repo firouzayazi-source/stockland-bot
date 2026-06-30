@@ -139,10 +139,89 @@ logging.basicConfig(
 )
 logger = logging.getLogger("inox_bot")
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+
+class _BotExceptionHandler(telebot.ExceptionHandler):
+    """گیرنده مرکزی همه خطاهای handler ها — بدون این، باگ‌های آینده بی‌صدا گم می‌شدند.
+    خطا را کامل لاگ می‌کند و یک هشدار (rate-limited) به ادمین می‌فرستد."""
+    _last_alert_ts = 0.0
+    _ALERT_COOLDOWN = 60  # حداکثر یک پیام هشدار در هر ۶۰ ثانیه
+
+    def handle(self, exception):
+        import traceback, time as _t
+        tb = traceback.format_exc()
+        logger.error("Unhandled bot exception: %s\n%s", exception, tb)
+        now = _t.time()
+        if now - _BotExceptionHandler._last_alert_ts > _BotExceptionHandler._ALERT_COOLDOWN:
+            _BotExceptionHandler._last_alert_ts = now
+            try:
+                bot.send_message(
+                    ADMIN_ID,
+                    f"⚠️ <b>خطای داخلی ربات</b>\n<code>{str(exception)[:300]}</code>\n\n"
+                    f"جزئیات کامل در لاگ سرور (journalctl) موجود است.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        return True  # جلوگیری از crash مجدد و توقف پردازش این آپدیت
+
+
+try:
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", exception_handler=_BotExceptionHandler())
+except TypeError:
+    # نسخه قدیمی‌تر pyTelegramBotAPI که exception_handler را پشتیبانی نمی‌کند
+    logger.warning("telebot نسخه فعلی از exception_handler پشتیبانی نمی‌کند — fallback به حالت معمولی")
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 set_ui_cache_clear_callback(ui_cache_clear)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── Rate Limiting ربات ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+import time as _rl_time
+_rl_msg_store: dict = {}   # uid → list[float]
+_rl_cb_store:  dict = {}   # uid → list[float]
+_RL_MSG_MAX   = 10    # حداکثر ۱۰ پیام در ۱۰ ثانیه
+_RL_MSG_WIN   = 10.0
+_RL_CB_MAX    = 20    # حداکثر ۲۰ callback در ۱۵ ثانیه
+_RL_CB_WIN    = 15.0
+
+
+def _rate_check(store: dict, uid: int, max_count: int, window: float) -> bool:
+    """True = مجاز ، False = بلاک. ادمین هرگز بلاک نمی‌شه."""
+    try:
+        if int(uid) == int(ADMIN_ID):
+            return True
+    except Exception:
+        pass
+    now = _rl_time.time()
+    ts_list = store.get(uid, [])
+    ts_list = [t for t in ts_list if now - t < window]
+    store[uid] = ts_list
+    if len(ts_list) >= max_count:
+        return False
+    ts_list.append(now)
+    return True
+
+
+@bot.message_handler(
+    func=lambda m: not _rate_check(_rl_msg_store, m.from_user.id, _RL_MSG_MAX, _RL_MSG_WIN),
+    content_types=["text", "photo", "document", "voice", "video", "audio", "sticker"]
+)
+def _rl_msg_blocked(message):
+    """کاربر خیلی سریع پیام فرستاده — نادیده گرفته می‌شه (بی‌صدا)."""
+    pass
+
+
+@bot.callback_query_handler(
+    func=lambda c: not _rate_check(_rl_cb_store, c.from_user.id, _RL_CB_MAX, _RL_CB_WIN)
+)
+def _rl_cb_blocked(call):
+    """Callback خیلی سریع — فقط acknowledge، بدون پردازش."""
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
 
 def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, message=None, cat_id=None):
@@ -278,42 +357,44 @@ def ensure_pending_schema():
     """Create / migrate pending_deliveries table (best-effort, backward compatible)."""
     try:
         conn = _db_conn()
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pending_deliveries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                order_id INTEGER UNIQUE,
-                user_id INTEGER,
-                chat_id INTEGER,
-                product_id INTEGER,
-                product_title TEXT,
-                price INTEGER,
-                status TEXT DEFAULT 'pending',
-                feed_id INTEGER,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                delivered_at TEXT
-            );
-            """
-        )
-        # Add missing columns if table existed before (SQLite safe migration)
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(pending_deliveries);").fetchall()}
-        needed = {
-            "order_id": "INTEGER UNIQUE",
-            "user_id": "INTEGER",
-            "chat_id": "INTEGER",
-            "product_id": "INTEGER",
-            "product_title": "TEXT",
-            "price": "INTEGER",
-            "status": "TEXT DEFAULT 'pending'",
-            "feed_id": "INTEGER",
-            "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP",
-            "delivered_at": "TEXT",
-        }
-        for col, decl in needed.items():
-            if col not in cols:
-                conn.execute(f"ALTER TABLE pending_deliveries ADD COLUMN {col} {decl};")
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_deliveries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER UNIQUE,
+                    user_id INTEGER,
+                    chat_id INTEGER,
+                    product_id INTEGER,
+                    product_title TEXT,
+                    price INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    feed_id INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    delivered_at TEXT
+                );
+                """
+            )
+            # Add missing columns if table existed before (SQLite safe migration)
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(pending_deliveries);").fetchall()}
+            needed = {
+                "order_id": "INTEGER UNIQUE",
+                "user_id": "INTEGER",
+                "chat_id": "INTEGER",
+                "product_id": "INTEGER",
+                "product_title": "TEXT",
+                "price": "INTEGER",
+                "status": "TEXT DEFAULT 'pending'",
+                "feed_id": "INTEGER",
+                "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP",
+                "delivered_at": "TEXT",
+            }
+            for col, decl in needed.items():
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE pending_deliveries ADD COLUMN {col} {decl};")
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         # never block bot start
         pass
@@ -327,28 +408,32 @@ def enqueue_pending_delivery(order_id: int, user_id: int, chat_id: int, product_
     ensure_pending_schema()
     try:
         conn = _db_conn()
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO pending_deliveries
-                (order_id, user_id, chat_id, product_id, product_title, price, status, feed_id)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL);
-            """,
-            (int(order_id), int(user_id), int(chat_id), int(product_id), str(title), int(price)),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO pending_deliveries
+                    (order_id, user_id, chat_id, product_id, product_title, price, status, feed_id)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL);
+                """,
+                (int(order_id), int(user_id), int(chat_id), int(product_id), str(title), int(price)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
 def _mark_pending_delivered(order_id: int, feed_id: int):
     try:
         conn = _db_conn()
-        conn.execute(
-            "UPDATE pending_deliveries SET status='delivered', feed_id=?, delivered_at=CURRENT_TIMESTAMP WHERE order_id=?;",
-            (int(feed_id), int(order_id)),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "UPDATE pending_deliveries SET status='delivered', feed_id=?, delivered_at=CURRENT_TIMESTAMP WHERE order_id=?;",
+                (int(feed_id), int(order_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -369,13 +454,15 @@ def _send_delivery_to_user(chat_id: int, order_id: int, pid: int, title: str, ef
         import sqlite3 as _sq3
         from datetime import datetime as _dt2
         _c = _sq3.connect(DB_FULL_PATH)
-        _c.execute(
-            "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
-            "VALUES (?,?,?,?,?);",
-            (int(feed_id), int(order_id), int(chat_id), int(_delivery_msg.message_id), _dt2.utcnow().isoformat())
-        )
-        _c.commit()
-        _c.close()
+        try:
+            _c.execute(
+                "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                "VALUES (?,?,?,?,?);",
+                (int(feed_id), int(order_id), int(chat_id), int(_delivery_msg.message_id), _dt2.utcnow().isoformat())
+            )
+            _c.commit()
+        finally:
+            _c.close()
     except Exception as _ex:
         logger.error("delivery_messages insert failed: %s", _ex)
 
@@ -485,26 +572,28 @@ def _ensure_delivery_table():
     try:
         import sqlite3
         _conn = sqlite3.connect(DB_FULL_PATH)
-        _conn.execute(
-            """CREATE TABLE IF NOT EXISTS delivery_messages (
-                feed_id INTEGER PRIMARY KEY,
-                order_id INTEGER,
-                chat_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            );"""
-        )
+        try:
+            _conn.execute(
+                """CREATE TABLE IF NOT EXISTS delivery_messages (
+                    feed_id INTEGER PRIMARY KEY,
+                    order_id INTEGER,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );"""
+            )
 
-        # مهاجرت نرم: اگر جدول قبلاً ساخته شده و ستون order_id ندارد، اضافه‌اش کن.
-        cols = [r[1] for r in _conn.execute("PRAGMA table_info(delivery_messages);").fetchall()]
-        if "order_id" not in cols:
-            try:
-                _conn.execute("ALTER TABLE delivery_messages ADD COLUMN order_id INTEGER;")
-            except Exception:
-                pass
+            # مهاجرت نرم: اگر جدول قبلاً ساخته شده و ستون order_id ندارد، اضافه‌اش کن.
+            cols = [r[1] for r in _conn.execute("PRAGMA table_info(delivery_messages);").fetchall()]
+            if "order_id" not in cols:
+                try:
+                    _conn.execute("ALTER TABLE delivery_messages ADD COLUMN order_id INTEGER;")
+                except Exception:
+                    pass
 
-        _conn.commit()
-        _conn.close()
+            _conn.commit()
+        finally:
+            _conn.close()
     except Exception:
         pass
 
@@ -535,9 +624,11 @@ def _get_product_chat_enabled(product_id: int) -> int:
     try:
         import sqlite3 as _sq3
         _c = _sq3.connect(DB_FULL_PATH)
-        row = _c.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
-        _c.close()
-        return int(row[0] or 0) if row else 0
+        try:
+            row = _c.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
+            return int(row[0] or 0) if row else 0
+        finally:
+            _c.close()
     except Exception:
         return 0
 
@@ -546,9 +637,11 @@ def _set_product_chat_enabled(product_id: int, enabled: int) -> None:
     try:
         import sqlite3 as _sq3
         _c = _sq3.connect(DB_FULL_PATH)
-        _c.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
-        _c.commit()
-        _c.close()
+        try:
+            _c.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
+            _c.commit()
+        finally:
+            _c.close()
     except Exception:
         pass
 
@@ -893,6 +986,49 @@ MAINTENANCE_MSG = (
     "به‌زودی با امکانات جدید بازخواهیم گشت.\n"
     "از شکیبایی شما سپاسگزاریم. ❤️"
 )
+
+# ─── Rate Limiter ─────────────────────────────────────────────────────────────
+# جلوگیری از flood: حداکثر 15 پیام در 10 ثانیه برای هر کاربر
+import collections as _collections, time as _time
+
+_rate_limits: dict = {}  # {user_id: deque of timestamps}
+_RATE_MAX_MSGS = 15
+_RATE_WINDOW   = 10.0   # ثانیه
+_rate_last_cleanup = _time.monotonic()
+
+def _is_rate_limited(uid: int) -> bool:
+    """True اگه کاربر بیش از حد مجاز پیام بفرسته."""
+    global _rate_last_cleanup
+    if uid == ADMIN_ID:
+        return False
+    now = _time.monotonic()
+    # هر ۵ دقیقه یه‌بار کاربرهای قدیمی رو پاک کن
+    if now - _rate_last_cleanup > 300:
+        dead = [k for k, dq in _rate_limits.items()
+                if not dq or dq[-1] < now - _RATE_WINDOW * 3]
+        for k in dead:
+            del _rate_limits[k]
+        _rate_last_cleanup = now
+    dq = _rate_limits.setdefault(uid, _collections.deque())
+    while dq and dq[0] < now - _RATE_WINDOW:
+        dq.popleft()
+    if len(dq) >= _RATE_MAX_MSGS:
+        return True
+    dq.append(now)
+    return False
+
+@bot.message_handler(func=lambda m: _is_rate_limited(m.from_user.id),
+                     content_types=["text","photo","document","voice","video","sticker"])
+def rate_limit_blocker(message):
+    pass  # بدون پاسخ — جلوگیری از amplification attack
+
+@bot.callback_query_handler(func=lambda c: _is_rate_limited(c.from_user.id))
+def rate_limit_blocker_cb(call):
+    try:
+        bot.answer_callback_query(call.id)  # فقط dismiss می‌کنه، پیامی نمی‌ده
+    except Exception:
+        pass
+# ─────────────────────────────────────────────────────────────────────────────
 
 @bot.message_handler(func=lambda m: _check_maintenance(m), content_types=["text","photo","document","voice","video"])
 def maintenance_blocker(message):
@@ -1307,32 +1443,31 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
     # بررسی و کسر موجودی (نسخه قطعی)
     # ----------------------------
     conn = sqlite3.connect(DB_FULL_PATH)
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("SELECT balance FROM wallets WHERE user_id=?", (uid,))
-    row = cur.fetchone()
+        cur.execute("SELECT balance FROM wallets WHERE user_id=?", (uid,))
+        row = cur.fetchone()
 
-    if not row:
+        if not row:
+            bot.answer_callback_query(call.id, "کیف پول یافت نشد", show_alert=True)
+            return
+
+        current_balance = int(row[0])
+
+        if current_balance < eff_price:
+            bot.answer_callback_query(call.id, "موجودی کافی نیست", show_alert=True)
+            return
+
+        new_balance = current_balance - eff_price
+
+        cur.execute(
+            "UPDATE wallets SET balance=?, updated_at=? WHERE user_id=?",
+            (new_balance, datetime.utcnow().isoformat(), uid)
+        )
+        conn.commit()
+    finally:
         conn.close()
-        bot.answer_callback_query(call.id, "کیف پول یافت نشد", show_alert=True)
-        return
-
-    current_balance = int(row[0])
-
-    if current_balance < eff_price:
-        conn.close()
-        bot.answer_callback_query(call.id, "موجودی کافی نیست", show_alert=True)
-        return
-
-    new_balance = current_balance - eff_price
-
-    cur.execute(
-        "UPDATE wallets SET balance=?, updated_at=? WHERE user_id=?",
-        (new_balance, datetime.utcnow().isoformat(), uid)
-    )
-
-    conn.commit()
-    conn.close()
 
     # ----------------------------
     # ایجاد سفارش
@@ -2058,11 +2193,13 @@ def send_admin_product_detail(call_message, product, edit=False):
     try:
         import sqlite3
         _conn = sqlite3.connect(DB_FULL_PATH)
-        _row = _conn.execute(
-            'SELECT daily_limit_customer, daily_limit_partner FROM products WHERE id=?',
-            (pid,)
-        ).fetchone()
-        _conn.close()
+        try:
+            _row = _conn.execute(
+                'SELECT daily_limit_customer, daily_limit_partner FROM products WHERE id=?',
+                (pid,)
+            ).fetchone()
+        finally:
+            _conn.close()
         _lim_c = _row[0] if _row else None
         _lim_p = _row[1] if _row else None
     except Exception:
@@ -2240,79 +2377,85 @@ def admin_feed_panel_menu():
 def count_feed_items_global(delivered_filter: int | None, category_key: str | None = None):
     import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    where = []
-    params = []
-    if delivered_filter is not None:
-        where.append("pf.delivered=?")
-        params.append(int(delivered_filter))
-    if category_key:
-        where.append("p.category=?")
-        params.append(str(category_key))
+        where = []
+        params = []
+        if delivered_filter is not None:
+            where.append("pf.delivered=?")
+            params.append(int(delivered_filter))
+        if category_key:
+            where.append("p.category=?")
+            params.append(str(category_key))
 
-    if where:
-        cur.execute(
-            "SELECT COUNT(*) FROM product_feed pf LEFT JOIN products p ON p.id=pf.product_id WHERE " + " AND ".join(where),
-            tuple(params),
-        )
-    else:
-        cur.execute("SELECT COUNT(*) FROM product_feed")
-    total = cur.fetchone()[0]
-    conn.close()
-    return int(total or 0)
+        if where:
+            cur.execute(
+                "SELECT COUNT(*) FROM product_feed pf LEFT JOIN products p ON p.id=pf.product_id WHERE " + " AND ".join(where),
+                tuple(params),
+            )
+        else:
+            cur.execute("SELECT COUNT(*) FROM product_feed")
+        total = cur.fetchone()[0]
+        return int(total or 0)
+    finally:
+        conn.close()
 
 
 def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset: int = 0, category_key: str | None = None):
     import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    where = []
-    params = []
-    if delivered_filter is not None:
-        where.append("pf.delivered=?")
-        params.append(int(delivered_filter))
-    if category_key:
-        where.append("p.category=?")
-        params.append(str(category_key))
+        where = []
+        params = []
+        if delivered_filter is not None:
+            where.append("pf.delivered=?")
+            params.append(int(delivered_filter))
+        if category_key:
+            where.append("p.category=?")
+            params.append(str(category_key))
 
-    base_sql = '''
-        SELECT pf.id, pf.product_id, COALESCE(p.category,''), COALESCE(p.title,''), pf.data, pf.delivered, pf.created_at
-        FROM product_feed pf
-        LEFT JOIN products p ON p.id = pf.product_id
-    '''
-    if where:
-        base_sql += " WHERE " + " AND ".join(where)
-    base_sql += " ORDER BY pf.id DESC LIMIT ? OFFSET ?"
+        base_sql = '''
+            SELECT pf.id, pf.product_id, COALESCE(p.category,''), COALESCE(p.title,''), pf.data, pf.delivered, pf.created_at
+            FROM product_feed pf
+            LEFT JOIN products p ON p.id = pf.product_id
+        '''
+        if where:
+            base_sql += " WHERE " + " AND ".join(where)
+        base_sql += " ORDER BY pf.id DESC LIMIT ? OFFSET ?"
 
-    params.extend([int(limit), int(offset)])
-    cur.execute(base_sql, tuple(params))
+        params.extend([int(limit), int(offset)])
+        cur.execute(base_sql, tuple(params))
 
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+        rows = cur.fetchall()
+        return rows
+    finally:
+        conn.close()
 
 
 def get_feed_stats_by_category():
     """Return list of dicts: category, total, delivered, undelivered."""
     import sqlite3
     conn = sqlite3.connect(DB_FULL_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        '''
-        SELECT COALESCE(p.category,'') AS category,
-               COUNT(*) AS total,
-               SUM(CASE WHEN pf.delivered=1 THEN 1 ELSE 0 END) AS delivered,
-               SUM(CASE WHEN pf.delivered=0 THEN 1 ELSE 0 END) AS undelivered
-        FROM product_feed pf
-        LEFT JOIN products p ON p.id = pf.product_id
-        GROUP BY COALESCE(p.category,'')
-        ORDER BY total DESC
-        '''
-    )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            SELECT COALESCE(p.category,'') AS category,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN pf.delivered=1 THEN 1 ELSE 0 END) AS delivered,
+                   SUM(CASE WHEN pf.delivered=0 THEN 1 ELSE 0 END) AS undelivered
+            FROM product_feed pf
+            LEFT JOIN products p ON p.id = pf.product_id
+            GROUP BY COALESCE(p.category,'')
+            ORDER BY total DESC
+            '''
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     out = []
     for cat, total, deliv, undel in rows:
         out.append(
@@ -2501,16 +2644,18 @@ def send_admin_feed_panel_view(chat_id: int, feed_id: int, page: int = 0, mode: 
     import sqlite3
     fid = int(feed_id)
     conn = sqlite3.connect(DB_FULL_PATH)
-    row = conn.execute(
-        '''
-        SELECT pf.id, pf.product_id, COALESCE(p.category,''), COALESCE(p.title,''), pf.data, pf.delivered, pf.created_at
-        FROM product_feed pf
-        LEFT JOIN products p ON p.id = pf.product_id
-        WHERE pf.id=?
-        ''',
-        (fid,),
-    ).fetchone()
-    conn.close()
+    try:
+        row = conn.execute(
+            '''
+            SELECT pf.id, pf.product_id, COALESCE(p.category,''), COALESCE(p.title,''), pf.data, pf.delivered, pf.created_at
+            FROM product_feed pf
+            LEFT JOIN products p ON p.id = pf.product_id
+            WHERE pf.id=?
+            ''',
+            (fid,),
+        ).fetchone()
+    finally:
+        conn.close()
 
     if not row:
         bot.send_message(chat_id, "این آیتم یافت نشد.")
@@ -2914,8 +3059,10 @@ def _show_partner_profile(chat_id, uid, edit_msg=None):
     partner = None
     try:
         _c = _sq4.connect(_DBP4); _c.row_factory = _sq4.Row
-        partner = _c.execute("SELECT * FROM partners WHERE tg_user_id=?;", (uid,)).fetchone()
-        _c.close()
+        try:
+            partner = _c.execute("SELECT * FROM partners WHERE tg_user_id=?;", (uid,)).fetchone()
+        finally:
+            _c.close()
     except Exception:
         pass
     bank = get_partner_bank_info(uid)
@@ -3277,11 +3424,13 @@ def cb_partner_support(call):
         import sqlite3 as _sq
         from config import DB_PATH as _DBP
         _c = _sq.connect(_DBP); _c.row_factory = _sq.Row
-        existing = _c.execute(
-            "SELECT * FROM tickets WHERE user_id=? AND type='partner_support' AND status!='closed' ORDER BY id DESC LIMIT 1;",
-            (uid,)
-        ).fetchone()
-        _c.close()
+        try:
+            existing = _c.execute(
+                "SELECT * FROM tickets WHERE user_id=? AND type='partner_support' AND status!='closed' ORDER BY id DESC LIMIT 1;",
+                (uid,)
+            ).fetchone()
+        finally:
+            _c.close()
     except Exception:
         pass
 
@@ -4549,30 +4698,31 @@ def handle_callbacks(call: types.CallbackQuery):
         try:
             import sqlite3
             conn = sqlite3.connect(DB_FULL_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT delivered FROM product_feed WHERE id=?", (fid,))
-            r = cur.fetchone()
-            if not r:
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT delivered FROM product_feed WHERE id=?", (fid,))
+                r = cur.fetchone()
+                if not r:
+                    bot.answer_callback_query(call.id, "یافت نشد", show_alert=True)
+                    return
+                new_val = 0 if int(r[0]) == 1 else 1
+
+                # اگر از حالت «ارسال‌شده» به «برگشت/ارسال‌نشده» می‌رویم،
+                # پیام تحویل مرتبط با همین Feed را از چت مشتری پاک کن و رکوردش را هم حذف کن.
+                if int(r[0]) == 1 and int(new_val) == 0:
+                    _info = _get_delivery_message(int(fid))
+                    if _info:
+                        _chat_id, _msg_id = _info[0], _info[1]
+                        try:
+                            bot.delete_message(int(_chat_id), int(_msg_id))
+                        except Exception:
+                            pass
+                        _delete_delivery_message_record(int(fid))
+
+                cur.execute("UPDATE product_feed SET delivered=? WHERE id=?", (new_val, fid))
+                conn.commit()
+            finally:
                 conn.close()
-                bot.answer_callback_query(call.id, "یافت نشد", show_alert=True)
-                return
-            new_val = 0 if int(r[0]) == 1 else 1
-
-            # اگر از حالت «ارسال‌شده» به «برگشت/ارسال‌نشده» می‌رویم،
-            # پیام تحویل مرتبط با همین Feed را از چت مشتری پاک کن و رکوردش را هم حذف کن.
-            if int(r[0]) == 1 and int(new_val) == 0:
-                _info = _get_delivery_message(int(fid))
-                if _info:
-                    _chat_id, _msg_id = _info[0], _info[1]
-                    try:
-                        bot.delete_message(int(_chat_id), int(_msg_id))
-                    except Exception:
-                        pass
-                _delete_delivery_message_record(int(fid))
-
-            cur.execute("UPDATE product_feed SET delivered=? WHERE id=?", (new_val, fid))
-            conn.commit()
-            conn.close()
         except Exception:
             bot.answer_callback_query(call.id, "خطا در تغییر وضعیت", show_alert=True)
             return
@@ -4597,17 +4747,19 @@ def handle_callbacks(call: types.CallbackQuery):
         try:
             import sqlite3
             conn = sqlite3.connect(DB_FULL_PATH)
-            # اگر پیام تحویل برای این محصول ذخیره شده، قبل از حذف آیتم تلاش کن آن پیام را پاک کنی
-            _info = _get_delivery_message(int(fid))
-            if _info:
-                try:
-                    bot.delete_message(int(_info[0]), int(_info[1]))
-                except Exception:
-                    pass
-                _delete_delivery_message_record(int(fid))
-            conn.execute("DELETE FROM product_feed WHERE id=?", (fid,))
-            conn.commit()
-            conn.close()
+            try:
+                # اگر پیام تحویل برای این محصول ذخیره شده، قبل از حذف آیتم تلاش کن آن پیام را پاک کنی
+                _info = _get_delivery_message(int(fid))
+                if _info:
+                    try:
+                        bot.delete_message(int(_info[0]), int(_info[1]))
+                    except Exception:
+                        pass
+                    _delete_delivery_message_record(int(fid))
+                conn.execute("DELETE FROM product_feed WHERE id=?", (fid,))
+                conn.commit()
+            finally:
+                conn.close()
         except Exception:
             bot.answer_callback_query(call.id, "خطا در حذف", show_alert=True)
             return
@@ -4826,20 +4978,21 @@ def handle_callbacks(call: types.CallbackQuery):
 
         import sqlite3
         conn = sqlite3.connect(DB_PATH)
-        row = conn.execute(
-            "SELECT is_active FROM other_services WHERE service_key=?",
-            (skey,)
-        ).fetchone()
+        try:
+            row = conn.execute(
+                "SELECT is_active FROM other_services WHERE service_key=?",
+                (skey,)
+            ).fetchone()
 
-        if row:
-            new_status = 0 if int(row[0]) == 1 else 1
-            conn.execute(
-                "UPDATE other_services SET is_active=? WHERE service_key=?",
-                (new_status, skey)
-            )
-            conn.commit()
-
-        conn.close()
+            if row:
+                new_status = 0 if int(row[0]) == 1 else 1
+                conn.execute(
+                    "UPDATE other_services SET is_active=? WHERE service_key=?",
+                    (new_status, skey)
+                )
+                conn.commit()
+        finally:
+            conn.close()
 
         bot.answer_callback_query(call.id, "وضعیت تغییر کرد")
         bot.send_message(call.message.chat.id, "سایر محصولات (ادمین):", reply_markup=admin_other_products_menu())
@@ -4944,11 +5097,13 @@ def handle_callbacks(call: types.CallbackQuery):
         try:
             import sqlite3
             _conn = sqlite3.connect(DB_FULL_PATH)
-            _r = _conn.execute(
-                "SELECT id, data, delivered, created_at FROM product_feed WHERE id=? AND product_id=?;",
-                (int(feed_id), int(pid)),
-            ).fetchone()
-            _conn.close()
+            try:
+                _r = _conn.execute(
+                    "SELECT id, data, delivered, created_at FROM product_feed WHERE id=? AND product_id=?;",
+                    (int(feed_id), int(pid)),
+                ).fetchone()
+            finally:
+                _conn.close()
         except Exception:
             _r = None
         if not _r:
@@ -4993,8 +5148,10 @@ def handle_callbacks(call: types.CallbackQuery):
         try:
             import sqlite3
             _conn = sqlite3.connect(DB_FULL_PATH)
-            _r = _conn.execute("SELECT delivered FROM product_feed WHERE id=? AND product_id=?;", (int(feed_id), int(pid))).fetchone()
-            _conn.close()
+            try:
+                _r = _conn.execute("SELECT delivered FROM product_feed WHERE id=? AND product_id=?;", (int(feed_id), int(pid))).fetchone()
+            finally:
+                _conn.close()
             cur_del = int(_r[0]) if _r else 0
         except Exception:
             cur_del = 0
