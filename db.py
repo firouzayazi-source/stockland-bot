@@ -4354,3 +4354,23 @@ def delete_ticket(tid: int):
         conn.commit()
     finally:
         conn.close()
+
+
+# ─── حذف رسیدهای کارت‌به‌کارت ─────────────────────────────────────────────────
+
+def delete_card_receipt(rid: int):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM card_receipts WHERE id=?;", (rid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_all_card_receipts():
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM card_receipts;")
+        conn.commit()
+    finally:
+        conn.close()
