@@ -495,7 +495,6 @@ def _layout(title: str, body: str, admin_info=None,
 
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if bell_count == 0 else ''}">{bell_count}</span></a>
             <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
-            <a class="icon-button notification-button" href="/admin/tickets#financial" aria-label="مالی"><i data-lucide="wallet"></i><span id="financial-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
             <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
             <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
               <span class="profile-avatar"><i data-lucide="user-round"></i></span>
@@ -1121,8 +1120,6 @@ def _layout(title: str, body: str, admin_info=None,
       updateBadge('ticket-badge-top', (d.tickets||0) + (d.financial||0));
       updateBadge('partner-badge-top', d.partners||0);
       updateBadge('notes-badge-top', d.notes||0);
-      updateBadge('payout-badge-top', d.payouts||0);
-      updateBadge('financial-badge-top', d.financial||0);
     }).catch(function(){});
   }, 12000);
   """}
@@ -1733,7 +1730,7 @@ async def receipt_approve(request: Request, rid: int):
     r = all_r[0]
     # از مبلغ وارد شده استفاده کن، اگه نبود از مبلغ اصلی
     amount = confirmed_amount if confirmed_amount > 0 else int(r["amount"] or 0)
-    update_card_receipt(rid, "approved", f"تأیید ادمین — مبلغ: {amount:,}")
+    update_card_receipt(rid, "approved", f"تأیید ادمین — مبلغ: {amount:,}", amount=amount)
     add_wallet_balance(r["user_id"], amount)
     _log(request, f"تأیید رسید #{rid}", "کیف‌پول", f"user:{r['user_id']} amount:{amount:,}")
     try:
@@ -6166,17 +6163,18 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
         except Exception:
             return '<em style="opacity:.5;font-size:12px">[خطا]</em>'
 
-    for msg in messages:
+    older_messages = messages[:-3] if len(messages) > 3 else []
+    recent_messages = messages[-3:] if len(messages) > 3 else messages
+
+    def _render_msg(msg) -> str:
         is_adm = msg["sender"] == "admin"
-        last_msg_id = max(last_msg_id, int(msg["id"] or 0))
         content_html = _render_media(msg)
         try: src = msg["source"] or ""
         except: src = ""
         src_icon = "🖥" if src not in ("telegram", "") else "📱"
         time_str = (msg["created_at"] or "")[:16]
-
         if is_adm:
-            chat_html += f"""
+            return f"""
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px" data-msg-id="{msg['id']}">
           <div style="max-width:80%">
             <div style="background:#2EC4B6;color:#fff;border-radius:18px 4px 18px 18px;
@@ -6188,7 +6186,7 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
           </div>
         </div>"""
         else:
-            chat_html += f"""
+            return f"""
         <div style="display:flex;justify-content:flex-start;margin-bottom:10px" data-msg-id="{msg['id']}">
           <div style="max-width:80%">
             <div style="background:#fff;border:1px solid #E5E7EB;border-radius:4px 18px 18px 18px;
@@ -6200,7 +6198,31 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
           </div>
         </div>"""
 
-    if not chat_html:
+    for msg in messages:
+        last_msg_id = max(last_msg_id, int(msg["id"] or 0))
+
+    older_html = "".join(_render_msg(m) for m in older_messages)
+    recent_html = "".join(_render_msg(m) for m in recent_messages)
+
+    toggle_btn = ""
+    if older_messages:
+        toggle_btn = f"""
+        <div style="text-align:center;margin-bottom:12px">
+          <button type="button" id="toggle-older-btn" onclick="
+            var el=document.getElementById('older-messages-block');
+            var btn=document.getElementById('toggle-older-btn');
+            if(el.style.display==='none'){{ el.style.display='block'; btn.textContent='🔼 بستن پیام‌های قبلی'; }}
+            else {{ el.style.display='none'; btn.textContent='🔽 نمایش {len(older_messages)} پیام قبلی'; }}
+          " style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
+                   border-radius:20px;font-size:12px;cursor:pointer">
+            🔽 نمایش {len(older_messages)} پیام قبلی
+          </button>
+        </div>
+        <div id="older-messages-block" style="display:none">{older_html}</div>"""
+
+    chat_html = toggle_btn + recent_html
+
+    if not chat_html.strip() or not messages:
         chat_html = '<div class="text-center py-8 text-gray-400 text-sm" id="no-msgs">پیامی ثبت نشده</div>'
 
     # ── فرم پاسخ ─────────────────────────────────────────────────────────────
