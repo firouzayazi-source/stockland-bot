@@ -1656,11 +1656,11 @@ async def receipt_view(request: Request, rid: int):
     from db import get_card_receipts
     all_r = [r for r in get_card_receipts("") if r["id"] == rid]
     if not all_r:
-        return _redir("/admin/receipts?flash=رسید+یافت+نشد")
+        return _redir("/admin/tickets?flash=رسید+یافت+نشد#financial")
     r = all_r[0]
     body = f"""
     <div class="flex items-center gap-3 mb-6">
-      {_btn("← رسیدها", "/admin/receipts", "slate", small=True)}
+      {_btn("← مرکز مالی", "/admin/tickets#financial", "slate", small=True)}
       <h1 class="text-xl font-bold text-gray-800">رسید #{rid}</h1>
     </div>
     <div class="grid md:grid-cols-2 gap-4">
@@ -1683,6 +1683,11 @@ async def receipt_view(request: Request, rid: int):
             <button class="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm w-full">❌ رد درخواست</button>
           </form>
         </div>''' if r['status']=='pending' else '<p class="mt-3 text-sm text-gray-400">این رسید قبلاً بررسی شده است.</p>'}
+        <div class="mt-4 pt-4 border-t border-gray-100">
+          <form method="post" action="/admin/receipts/{rid}/delete" onsubmit="return confirm('⚠️ این رسید برای همیشه حذف می‌شود. ادامه؟')">
+            <button class="px-4 py-2 bg-red-50 text-red-500 border border-red-200 rounded-lg text-sm w-full">🗑 حذف این رسید</button>
+          </form>
+        </div>
       </div>
       <div class="card p-5 text-center">
         <h2 class="font-bold text-gray-700 mb-3">تصویر رسید</h2>
@@ -1690,6 +1695,28 @@ async def receipt_view(request: Request, rid: int):
       </div>
     </div>"""
     return _layout(f"رسید #{rid}", body, adm)
+
+
+@router.post("/receipts/delete-all")
+async def receipts_delete_all(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import delete_all_card_receipts
+    delete_all_card_receipts()
+    _log(request, "حذف همه رسیدهای کارت‌به‌کارت", "کیف‌پول", "bulk delete")
+    return _redir("/admin/tickets?fin_type=card2card&flash=همه+رسیدها+حذف+شدند#financial")
+
+
+@router.post("/receipts/{rid}/delete")
+async def receipt_delete(request: Request, rid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+    from db import delete_card_receipt
+    delete_card_receipt(rid)
+    _log(request, f"حذف رسید #{rid}", "کیف‌پول", f"receipt:{rid}")
+    return _redir("/admin/tickets?flash=رسید+حذف+شد#financial")
 
 
 @router.get("/receipts/{rid}/image")
@@ -1726,7 +1753,7 @@ async def receipt_approve(request: Request, rid: int):
     from db import get_card_receipts, update_card_receipt, add_wallet_balance
     all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
     if not all_r:
-        return _redir("/admin/receipts?flash=رسید+یافت+نشد")
+        return _redir("/admin/tickets?flash=رسید+یافت+نشد#financial")
     r = all_r[0]
     # از مبلغ وارد شده استفاده کن، اگه نبود از مبلغ اصلی
     amount = confirmed_amount if confirmed_amount > 0 else int(r["amount"] or 0)
@@ -1750,7 +1777,7 @@ async def receipt_reject(request: Request, rid: int):
     from db import get_card_receipts, update_card_receipt
     all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
     if not all_r:
-        return _redir("/admin/receipts?flash=رسید+یافت+نشد")
+        return _redir("/admin/tickets?flash=رسید+یافت+نشد#financial")
     r = all_r[0]
     update_card_receipt(rid, "rejected", "رد ادمین")
     _log(request, f"رد رسید #{rid}", "کیف‌پول", f"user:{r['user_id']}")
@@ -5919,11 +5946,24 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
         tabs += (f'<a href="{link_fn(val, q, sort)}" class="px-3 py-1.5 rounded-lg text-xs border '
                  f'{"bg-indigo-600 text-white border-indigo-600" if active else "bg-white text-gray-500 border-gray-200"}">{lbl}</a>')
 
+    bulk_delete_btn = ""
+    if type_filter == "card2card":
+        bulk_delete_btn = """
+        <form method="post" action="/admin/receipts/delete-all"
+              onsubmit="return confirm('⚠️ تمام رسیدهای کارت‌به‌کارت برای همیشه حذف می‌شوند. مطمئنید؟')">
+          <button class="px-3 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium">
+            🗑 حذف همه کارت‌به‌کارت
+          </button>
+        </form>"""
+
     return f"""
     <div id="financial" style="scroll-margin-top:80px" class="mt-8">
       <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 class="text-xl font-bold text-gray-800">💰 مرکز مالی</h1>
-        {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
+        <div class="flex items-center gap-2">
+          {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
+          {bulk_delete_btn}
+        </div>
       </div>
       <div class="flex gap-2 mb-4 flex-wrap">{tabs}</div>
       <form method="get" class="flex gap-2 mb-4">
