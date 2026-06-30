@@ -417,6 +417,11 @@ def _layout(title: str, body: str, admin_info=None,
 
     open_tickets    = _open_ticket_count()    if admin_info else 0
     pending_partners = _pending_partner_count() if admin_info else 0
+    try:
+        pending_financial_top = _pending_financial_count() if admin_info else 0
+    except Exception:
+        pending_financial_top = 0
+    bell_count = open_tickets + pending_financial_top
 
     def has_perm(perm):
         return is_super or perm in perms
@@ -488,7 +493,7 @@ def _layout(title: str, body: str, admin_info=None,
           </div>
           <div class="topbar-actions">
 
-            <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if open_tickets == 0 else ''}">{open_tickets}</span></a>
+            <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if bell_count == 0 else ''}">{bell_count}</span></a>
             <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
             <a class="icon-button notification-button" href="/admin/financial" aria-label="مالی"><i data-lucide="wallet"></i><span id="financial-badge-top" class="notification-count hidden" style="background:#10B981"></span></a>
             <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
@@ -1113,7 +1118,7 @@ def _layout(title: str, body: str, admin_info=None,
   }
   setInterval(function(){
     fetch('/admin/badges.json').then(function(r){return r.json();}).then(function(d){
-      updateBadge('ticket-badge-top', d.tickets||0);
+      updateBadge('ticket-badge-top', (d.tickets||0) + (d.financial||0));
       updateBadge('partner-badge-top', d.partners||0);
       updateBadge('notes-badge-top', d.notes||0);
       updateBadge('payout-badge-top', d.payouts||0);
@@ -6004,20 +6009,6 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         type_tabs += f'<a href="{tq(status_filter, val)}" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;border:1.5px solid {"var(--primary)" if active else "var(--border)"};background:{bg};color:{col};font-size:12px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} <span style="font-size:10px;padding:1px 6px;border-radius:20px;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"};">{cnt}</span></a>'
     type_tabs += "</div>"
 
-    # ردیف مستقل «مالی» — Financial Queue جدا از سیستم تیکت (نیازی به منطق تیکت ندارد)
-    try:
-        fin_pending = _pending_financial_count()
-    except Exception:
-        fin_pending = 0
-    financial_row = (
-        '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
-        f'<a href="/admin/financial" style="display:inline-flex;align-items:center;gap:8px;padding:8px 16px;'
-        'border-radius:10px;border:1.5px solid #10B981;background:rgba(16,185,129,.08);color:#10B981;'
-        f'font-size:13px;font-weight:700;text-decoration:none">💰 مالی'
-        + (f' <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#10B981;color:#fff;">{fin_pending}</span>' if fin_pending else '')
-        + '</a></div>'
-    )
-
     status_tabs = '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
     for lbl, val, cnt in [("همه","",sum(stats.values())),("منتظر اطلاعات","waiting_info",stats.get("waiting_info",0)),
                           ("نیاز به پاسخ","waiting_admin",stats.get("waiting_admin",0)),("در بررسی","reviewing",stats.get("reviewing",0)),
@@ -6084,7 +6075,6 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
       <h1 class="text-2xl font-bold text-gray-800">🎫 تیکت‌های پشتیبانی</h1>
     </div>
     {type_tabs}
-    {financial_row}
     {status_tabs}
     <div class="card overflow-hidden">
       <div class="overflow-x-auto ticket-table-wrap">
