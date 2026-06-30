@@ -4370,14 +4370,22 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "wallet_card2card":
         bot.answer_callback_query(call.id)
-        # اول مبلغ بگیر
-        user_states[uid] = {"mode": "card2card_amount"}
+        user_states[uid] = {"mode": "card2card_receipt"}
+        text_msg = (
+            "برای افزایش موجودی کیف پول، مبلغ مورد نظر را به حساب زیر واریز کرده و سپس عکس رسید را در همین چت ارسال کنید:\n\n"
+            "💳 شماره کارت:\n"
+            "<code>6037701608004393</code>\n"
+            "به نام: <b>سید فیروز ایازی</b>\n\n"
+            "📍 پس از بررسی، موجودی کیف پول شما شارژ خواهد شد.\n\n"
+            "⚠️ فقط عکس واضح از رسید را ارسال کنید.\n"
+        )
         kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
-        bot.send_message(call.message.chat.id,
-            "💳 <b>شارژ کیف‌پول (کارت‌به‌کارت)</b>\n\n"
-            "لطفاً مبلغ واریزی را به تومان وارد کنید:",
-            parse_mode="HTML", reply_markup=kb)
+        kb.add(
+            types.InlineKeyboardButton(
+                "❌ انصراف", callback_data="wallet_cancel_card2card"
+            )
+        )
+        bot.send_message(call.message.chat.id, text_msg, reply_markup=kb)
         return
 
     if data == "wallet_cancel_card2card":
@@ -5407,27 +5415,6 @@ def handle_callbacks(call: types.CallbackQuery):
         )
 
 
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_amount")
-def handle_card2card_amount(message):
-    uid = message.from_user.id
-    text = (message.text or "").strip().replace(",", "").replace("،", "")
-    if not text.isdigit() or int(text) <= 0:
-        bot.reply_to(message, "❌ مبلغ نامعتبر — لطفاً یک عدد صحیح وارد کنید (مثلاً 500000):")
-        return
-    amount = int(text)
-    user_states[uid] = {"mode": "card2card_receipt", "amount": amount}
-    card_num   = t("CARD2CARD_NUMBER",  "6037701608004393")
-    card_owner = t("CARD2CARD_OWNER",   "سید فیروز ایازی")
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
-    bot.send_message(message.chat.id,
-        f"✅ مبلغ <b>{amount:,}</b> تومان ثبت شد.\n\n"
-        f"💳 لطفاً به کارت زیر واریز کنید:\n<code>{card_num}</code>\n"
-        f"به نام: <b>{card_owner}</b>\n\n"
-        f"📸 پس از واریز، عکس رسید را ارسال کنید:",
-        parse_mode="HTML", reply_markup=kb)
-
-
 @bot.message_handler(
     func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt",
     content_types=["photo"]
@@ -5443,10 +5430,9 @@ def handle_card2card_photo(message):
     rid = save_card_receipt(uid, amount, file_id)
 
     bot.reply_to(message,
-        f"✅ رسید شما ثبت شد.\n"
-        f"شناسه پیگیری: <code>#{rid}</code>\n"
-        f"مبلغ: <b>{amount:,}</b> تومان\n\n"
-        "پس از بررسی توسط پشتیبانی، کیف‌پول شما شارژ می‌شود.",
+        f"رسید شما ثبت شد ✅\n"
+        f"شناسه پیگیری: <code>#{rid}</code>\n\n"
+        "پس از تأیید توسط پشتیبانی، کیف پول شما شارژ خواهد شد.",
         parse_mode="HTML")
     try:
         import html as _h
@@ -5456,8 +5442,8 @@ def handle_card2card_photo(message):
         bot.send_photo(ADMIN_ID, file_id,
             caption=(f"💳 <b>رسید کارت‌به‌کارت جدید</b>\n"
                      f"شناسه: #{rid}\n"
-                     f"کاربر: {name} (<code>{uid}</code>)\n"
-                     f"مبلغ: <b>{amount:,}</b> تومان\n\n"
+                     f"کاربر: {name} (<code>{uid}</code>)\n\n"
+                     f"⚠️ مبلغ هنگام تأیید در پنل وارد شود.\n"
                      f"پنل: /admin/receipts/{rid}/view\n"
                      f"تأیید: /approve_receipt_{rid}\n"
                      f"رد: /reject_receipt_{rid}"),
