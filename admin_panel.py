@@ -8396,3 +8396,4 @@ async def partner_reject(request: Request, uid: int):
     except Exception:
         pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
+    
