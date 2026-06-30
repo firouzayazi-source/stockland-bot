@@ -4299,11 +4299,15 @@ def get_card_receipts(status: str = "pending") -> list:
         conn.close()
 
 
-def update_card_receipt(rid: int, status: str, note: str = ""):
+def update_card_receipt(rid: int, status: str, note: str = "", amount: int = None):
     conn = _get_connection()
     try:
-        conn.execute("""UPDATE card_receipts SET status=?,admin_note=?,updated_at=datetime('now')
-            WHERE id=?;""", (status, note, rid))
+        if amount is not None:
+            conn.execute("""UPDATE card_receipts SET status=?,admin_note=?,amount=?,updated_at=datetime('now')
+                WHERE id=?;""", (status, note, amount, rid))
+        else:
+            conn.execute("""UPDATE card_receipts SET status=?,admin_note=?,updated_at=datetime('now')
+                WHERE id=?;""", (status, note, rid))
         conn.commit()
     finally:
         conn.close()
