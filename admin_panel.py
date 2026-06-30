@@ -5946,12 +5946,10 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
         tabs += (f'<a href="{link_fn(val, q, sort)}" class="px-3 py-1.5 rounded-lg text-xs border '
                  f'{"bg-indigo-600 text-white border-indigo-600" if active else "bg-white text-gray-500 border-gray-200"}">{lbl}</a>')
 
-    bulk_delete_btn = ""
-    if type_filter == "card2card":
-        bulk_delete_btn = """
+    bulk_delete_btn = """
         <form method="post" action="/admin/receipts/delete-all"
               onsubmit="return confirm('⚠️ تمام رسیدهای کارت‌به‌کارت برای همیشه حذف می‌شوند. مطمئنید؟')">
-          <button class="px-3 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium">
+          <button class="px-3 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium whitespace-nowrap">
             🗑 حذف همه کارت‌به‌کارت
           </button>
         </form>"""
