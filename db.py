@@ -4311,3 +4311,46 @@ def update_card_receipt(rid: int, status: str, note: str = "", amount: int = Non
         conn.commit()
     finally:
         conn.close()
+
+
+# ─── آرشیو و حذف تیکت‌ها ──────────────────────────────────────────────────────
+
+def ensure_ticket_archive_schema():
+    conn = _get_connection()
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(tickets);").fetchall()]
+        if "archived" not in cols:
+            conn.execute("ALTER TABLE tickets ADD COLUMN archived INTEGER DEFAULT 0;")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def archive_ticket(tid: int):
+    ensure_ticket_archive_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE tickets SET archived=1 WHERE id=?;", (tid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def unarchive_ticket(tid: int):
+    ensure_ticket_archive_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE tickets SET archived=0 WHERE id=?;", (tid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_ticket(tid: int):
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM ticket_messages WHERE ticket_id=?;", (tid,))
+        conn.execute("DELETE FROM tickets WHERE id=?;", (tid,))
+        conn.commit()
+    finally:
+        conn.close()
