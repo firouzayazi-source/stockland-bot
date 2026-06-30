@@ -6124,11 +6124,13 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         last_col = ptitle or ("↗ کاربر" if ls=="user" else ("↙ ادمین" if ls=="admin" else ""))
 
         if show_archived == "1":
-            action_btns = f"""<button type="button" onclick="event.stopPropagation();unarchiveTicket({t['id']})"
-              class="px-2 py-1 text-xs bg-blue-50 text-blue-600 border border-blue-200 rounded">بازگردانی</button>"""
+            action_btns = f"""<a href="/admin/tickets/{t['id']}" onclick="event.stopPropagation()"
+              class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">👁 مشاهده</a>
+              <button type="button" onclick="event.stopPropagation();unarchiveTicket({t['id']})"
+              class="px-2 py-1 text-xs bg-blue-50 text-blue-600 border border-blue-200 rounded mr-1">بازگردانی</button>"""
         else:
-            action_btns = f"""<button type="button" onclick="event.stopPropagation();archiveTicket({t['id']})"
-              class="px-2 py-1 text-xs bg-gray-50 text-gray-500 border border-gray-200 rounded">📦 آرشیو</button>
+            action_btns = f"""<a href="/admin/tickets/{t['id']}" onclick="event.stopPropagation()"
+              class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">👁 مشاهده</a>
               <button type="button" onclick="event.stopPropagation();deleteTicket({t['id']})"
               class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>"""
 
@@ -6535,9 +6537,20 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
           <h3 style="font-size:13px;font-weight:700;margin-bottom:10px">تغییر وضعیت</h3>
           {status_btns}
         </div>
+        <div class="card card-p">
+          <button type="button" onclick="archiveThisTicket({tid})"
+            style="width:100%;padding:8px 12px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
+                   border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer">
+            📦 آرشیو این تیکت
+          </button>
+        </div>
       </div>
     </div>
     <script>
+      window.archiveThisTicket = function(id){{
+        if(!confirm('این تیکت آرشیو شود؟ از لیست اصلی پنهان می‌شود.')) return;
+        fetch('/admin/tickets/'+id+'/archive', {{method:'POST'}}).then(function(){{ location.href='/admin/tickets'; }});
+      }};
       (function(){{
         var b = document.getElementById('chat-box');
         if(b) b.scrollTop = b.scrollHeight;
