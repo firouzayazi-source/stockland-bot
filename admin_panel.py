@@ -110,7 +110,9 @@ def _make_session(admin_id: str) -> str:
     return f"{token}:{admin_id}|{ts}"
 
 def _get_admin(request: Request):
-    """Returns (admin_id, is_super, permissions_list) or None. اعتبارسنجی + بررسی idle timeout."""
+    """Returns (admin_id, is_super, permissions_list) or None.
+    اعتبارسنجی HMAC + بررسی idle timeout. Session لغزنده نیست — عمر ثابت ۳۰۰ ثانیه از آخرین صدور.
+    هر response باید با _refresh_session() کوکی رو تجدید کنه تا مدیر فعال kick نشه."""
     import time as _t
     ensure_admins_table()
     cookie = request.cookies.get("adm", "")
@@ -119,7 +121,6 @@ def _get_admin(request: Request):
 
     token, payload = cookie.rsplit(":", 1)
 
-    # payload قالب جدید: admin_id|timestamp — سازگاری با قالب قدیمی (فقط admin_id)
     if "|" in payload:
         admin_id, ts_str = payload.rsplit("|", 1)
     else:
@@ -134,12 +135,11 @@ def _get_admin(request: Request):
     if not _hmac.compare_digest(token, expected_token):
         return None
 
-    # بررسی idle timeout (۵ دقیقه)
     if ts_str:
         try:
             age = int(_t.time()) - int(ts_str)
             if age > IDLE_TIMEOUT_SECONDS:
-                return None  # منقضی شده → نیاز به ورود مجدد
+                return None
         except Exception:
             return None
 
@@ -159,6 +159,22 @@ def _get_admin(request: Request):
         return (str(row["id"]), False, perms)
     except Exception:
         return None
+
+
+def _refresh_session(response, admin_info) -> None:
+    """Session را تجدید می‌کند تا مدیر فعال بعد از ۵ دقیقه kick نشود.
+    باید در ابتدای هر GET handler صدا زده شود."""
+    if not admin_info:
+        return
+    admin_id = admin_info[0]
+    new_cookie = _make_session(str(admin_id))
+    response.set_cookie(
+        "adm", new_cookie,
+        max_age=IDLE_TIMEOUT_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # اگه پنل HTTPS داره، True بذار
+    )
 
 
 def _admin_id_of(admin_info) -> str:
@@ -506,7 +522,7 @@ def _layout(title: str, body: str, admin_info=None,
 
     css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items())
 
-    return HTMLResponse(f"""<!DOCTYPE html>
+    html_response = HTMLResponse(f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl" data-saved-dark="{saved_dark}" data-saved-classic="{saved_classic}">
 <head>
   <meta charset="utf-8">
@@ -1128,6 +1144,14 @@ def _layout(title: str, body: str, admin_info=None,
 </script>
 </body>
 </html>""")
+
+    # تجدید session cookie برای مدیر فعال (sliding window)
+    if admin_info:
+        try:
+            _refresh_session(html_response, admin_info)
+        except Exception:
+            pass
+    return html_response
 
 def _card(title, value, sub="", color="indigo"):
     colors = {
@@ -7199,9 +7223,6 @@ def _start_auto_backup_thread() -> None:
                 _tg_logger.error("low-stock check error: %s", ex)
 
     _threading.Thread(target=_stock_runner, name="stock-check", daemon=True).start()
-
-    t = _threading.Thread(target=_runner, daemon=True, name="auto-backup")
-    t.start()
     _tg_logger.info("Scheduler started (backup:24h, low-stock:2h)")
 
 
