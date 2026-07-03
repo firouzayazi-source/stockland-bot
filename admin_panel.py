@@ -1856,10 +1856,10 @@ async def settings_hub(request: Request, flash: str = ""):
         </script>
       </div>
       <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">📝 مدیریت متن‌ها</h2>
-        <p class="text-sm text-gray-500 mb-4">ویرایش تمام متن‌ها و دکمه‌های ربات از یک محل.</p>
-        <a href="/admin/settings?group=" class="block w-full py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-sm font-medium text-center hover:bg-indigo-100 transition">
-          رفتن به مدیریت متن‌ها ←
+        <h2 class="font-bold text-gray-700 mb-3">🔘 مدیریت دکمه‌ها</h2>
+        <p class="text-sm text-gray-500 mb-4">ویرایش برچسب دکمه‌ها، فعال/غیرفعال‌سازی و تنظیمات متنی مهم.</p>
+        <a href="/admin/settings" class="block w-full py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-sm font-medium text-center hover:bg-indigo-100 transition">
+          رفتن به تنظیمات دکمه‌ها ←
         </a>
       </div>
       <!-- حالت تعمیرات -->
@@ -1886,150 +1886,196 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
     guard = _require(adm, "settings")
     if guard: return guard
 
-    _ensure_theme_table()
-    theme = _get_theme()
-
     try:
-        from ui_texts import (DEFAULT_UI_TEXTS as _DEFAULTS, TEXT_GROUPS as _GROUPS,
-                              TEXT_DESCRIPTIONS as _DESCS, MAIN_BUTTON_KEYS as _BTN_KEYS)
+        from ui_texts import (
+            DEFAULT_UI_TEXTS as _D,
+            EDITABLE_BUTTON_GROUPS as _BG,
+            CRITICAL_TEXT_KEYS as _CTK,
+            CRITICAL_TEXT_LABELS as _CTL,
+            BUTTON_ICONS as _BICONS,
+            MAIN_BUTTON_KEYS as _BK,
+        )
     except ImportError:
-        _DEFAULTS = {}; _GROUPS = {}; _DESCS = {}; _BTN_KEYS = []
+        _D = {}; _BG = {}; _CTK = []; _CTL = {}; _BICONS = {}; _BK = []
 
     conn = _db()
     try:
         db_texts = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ui_texts;").fetchall()}
-        btn_states = {k: db_texts.get(f"MAIN_BTN_ENABLED_{k}", "1") not in ("0","false","off","no") for k in _BTN_KEYS}
+        btn_states = {k: db_texts.get(f"MAIN_BTN_ENABLED_{k}", "1") not in ("0","false","off","no") for k in _BK}
     finally:
         conn.close()
 
-    def get_val(k): return db_texts.get(k, _DEFAULTS.get(k, ""))
+    def gv(k): return db_texts.get(k, _D.get(k, ""))
 
-    # انتخاب گروه فعال
-    group_names = list(_GROUPS.keys()) + ["🔘 دکمه‌های منو"]
-    active_group = group or (group_names[0] if group_names else "")
+    # ─── Toggle switch CSS ─────────────────────────────────────────────────
+    tog_css = """<style>
+.tog{display:inline-flex;align-items:center;cursor:pointer;flex-shrink:0}
+.tog input{display:none}
+.tog-track{width:44px;height:24px;background:#d1d5db;border-radius:12px;position:relative;transition:background .22s;flex-shrink:0}
+.tog-track::after{content:'';position:absolute;width:18px;height:18px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .22s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.tog input:checked~.tog-track{background:#6366f1}
+.tog input:checked~.tog-track::after{transform:translateX(20px)}
+.tog-off .tog-track{background:#ef4444}
+.field-row{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid #f1f5f9;border-radius:12px;transition:background .15s}
+.field-row:hover{background:#f8fafc}
+.field-inp{flex:1;border:1px solid #e2e8f0;border-radius:8px;padding:7px 12px;font-size:.85rem;background:#fff;outline:none;transition:border-color .15s,box-shadow .15s;direction:rtl}
+.field-inp:focus{border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
+.save-btn{display:inline-flex;align-items:center;gap:6px;padding:9px 22px;background:#6366f1;color:#fff;border:none;border-radius:10px;font-size:.9rem;font-weight:600;cursor:pointer;transition:opacity .2s,transform .1s}
+.save-btn:disabled{opacity:.35;cursor:not-allowed}
+.save-btn:not(:disabled):hover{opacity:.9}
+.save-btn:not(:disabled):active{transform:scale(.97)}
+.sec-hdr{font-weight:700;color:#374151;font-size:1rem;display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.sec-sub{font-size:.78rem;color:#9ca3af;margin-bottom:14px}
+</style>"""
 
-    # ─── Sidebar ناوبری گروه‌ها ──────────────────────────────────────────
-    group_icons = {
-        "دکمه‌های منو": "🔘",
-        "پیام‌های اصلی": "💬",
-        "کیف پول": "💰",
-        "جریان خرید": "🛒",
-        "سفارش‌ها": "🧾",
-        "پشتیبانی و راهنما": "📖",
-        "همکاران": "🤝",
-        "🔘 دکمه‌های منو": "🔘",
-    }
-    sidebar = ""
-    for gname in group_names:
-        icon = group_icons.get(gname, "📝")
-        is_active = gname == active_group
-        bg = "bg-indigo-50 text-indigo-700 font-semibold border-r-2 border-indigo-600" if is_active else "text-gray-600 hover:bg-gray-50"
-        sidebar += f'<a href="/admin/settings?group={e(gname)}" class="flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg transition {bg}">{icon} {e(gname)}</a>'
+    # ─── Section 1: دکمه‌های منوی اصلی (با toggle + برچسب) ──────────────
+    main_rows = ""
+    for key in _BG.get("دکمه‌های منوی اصلی", []):
+        en = btn_states.get(key, True)
+        val = gv(key)
+        icon = _BICONS.get(key, "")
+        main_rows += f"""
+      <div class="field-row">
+        <label class="tog" title="{'فعال' if en else 'غیرفعال'}">
+          <input type="checkbox" name="enable_{e(key)}" {"checked" if en else ""} onchange="markDirty();this.closest('.tog').classList.toggle('tog-off',!this.checked)">
+          <span class="tog-track"></span>
+        </label>
+        <span style="font-size:1.1rem;width:22px;text-align:center;flex-shrink:0">{icon}</span>
+        <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()" placeholder="برچسب دکمه">
+      </div>"""
 
-    # ─── محتوای گروه فعال ────────────────────────────────────────────────
-    content = ""
+    # ─── Section 2: دکمه‌های پنل همکار (فقط برچسب) ──────────────────────
+    partner_rows = ""
+    for key in _BG.get("دکمه‌های پنل همکار", []):
+        val = gv(key)
+        icon = _BICONS.get(key, "")
+        partner_rows += f"""
+      <div class="field-row" style="padding:8px 14px">
+        <span style="font-size:1rem;width:20px;text-align:center;flex-shrink:0">{icon}</span>
+        <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()">
+      </div>"""
 
-    if active_group == "🔘 دکمه‌های منو":
-        btn_label_map = {
-            "MAIN_BTN_MY_ORDERS": "خریدهای من 🧾",
-            "MAIN_BTN_WALLET": "کیف پول 💰",
-            "MAIN_BTN_PARTNER_REQUEST": "درخواست نمایندگی 📝",
-            "MAIN_BTN_PARTNER_PANEL": "پنل همکار 🤝",
-            "MAIN_BTN_GUIDE": "راهنما 🔑",
-            "MAIN_BTN_SUPPORT": "پشتیبانی 👨‍💻",
-        }
-        toggle_rows = ""
-        for k in _BTN_KEYS:
-            en = btn_states.get(k, True)
-            toggle_rows += f"""
-            <label class="flex items-center justify-between p-4 border border-gray-100 rounded-xl hover:bg-gray-50 transition cursor-pointer">
-              <div class="flex items-center gap-3">
-                <span class="text-sm font-medium text-gray-700">{e(btn_label_map.get(k,k))}</span>
-                <span class="text-xs text-gray-400">Reply Keyboard | منوی اصلی</span>
-              </div>
-              <input type="checkbox" name="btn_{e(k)}" {"checked" if en else ""}
-                onchange="markDirty()" class="w-5 h-5 rounded text-indigo-600">
-            </label>"""
+    # ─── Section 3: دکمه‌های کیف‌پول (فقط برچسب) ────────────────────────
+    wallet_rows = ""
+    for key in _BG.get("دکمه‌های کیف‌پول و پرداخت", []):
+        val = gv(key)
+        icon = _BICONS.get(key, "")
+        wallet_rows += f"""
+      <div class="field-row" style="padding:8px 14px">
+        <span style="font-size:1rem;width:20px;text-align:center;flex-shrink:0">{icon}</span>
+        <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()">
+      </div>"""
 
-        content = f"""
-        <form id="settings-form" method="post" action="/admin/settings/save-all">
-          <input type="hidden" name="group" value="{e(active_group)}">
-          <input type="hidden" name="is_buttons" value="1">
-          <div class="space-y-2 mb-6">{toggle_rows}</div>
-          {_settings_action_bar()}
-        </form>"""
-
-    else:
-        keys = _GROUPS.get(active_group, [])
-        fields_html = ""
-        for key in keys:
-            val      = get_val(key)
-            default  = _DEFAULTS.get(key, "")
-            label    = _DESCS.get(key, "") or key  # عنوان قابل فهم، نه نام متغیر
-            is_long  = len(default) > 80 or "\n" in default
-
-            if is_long:
-                field_input = (
-                    f'<textarea name="field_{e(key)}" rows="3" onchange="markDirty()" oninput="markDirty()" '
-                    f'class="w-full border border-gray-200 rounded-lg px-3 py-2 bg-white text-sm">{e(val)}</textarea>'
-                )
-            else:
-                field_input = (
-                    f'<input type="text" name="field_{e(key)}" value="{e(val)}" onchange="markDirty()" oninput="markDirty()" '
-                    f'class="w-full border border-gray-200 rounded-lg px-3 py-2 bg-white text-sm">'
-                )
-
-            fields_html += f"""
-            <div class="mb-4">
-              <label class="block text-sm font-medium text-gray-700 mb-1.5">{e(label)}</label>
-              {field_input}
-            </div>"""
-
-        content = f"""
-        <form id="settings-form" method="post" action="/admin/settings/save-all">
-          <input type="hidden" name="group" value="{e(active_group)}">
-          <div class="mb-6">{fields_html}</div>
-          {_settings_action_bar()}
-        </form>"""
+    # ─── Section 4: تنظیمات متنی مهم ─────────────────────────────────────
+    text_fields = ""
+    for key in _CTK:
+        val = gv(key)
+        lbl = _CTL.get(key, key)
+        if key == "WALLET_QUICK_AMOUNTS":
+            fld = f'<input type="text" class="field-inp" style="width:100%;box-sizing:border-box" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()" placeholder="10000,50000,100000,500000">'
+        else:
+            fld = f'<textarea class="field-inp" style="width:100%;box-sizing:border-box;resize:vertical;min-height:110px" name="field_{e(key)}" oninput="markDirty()" dir="rtl">{e(val)}</textarea>'
+        text_fields += f"""
+      <div style="margin-bottom:18px">
+        <label style="display:block;font-size:.82rem;font-weight:600;color:#4b5563;margin-bottom:6px">{e(lbl)}</label>
+        {fld}
+      </div>"""
 
     body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">⚙️ مدیریت متن‌ها</h1>
+    {tog_css}
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px">
+      <h1 style="font-size:1.4rem;font-weight:700;color:#1f2937;margin:0">⚙️ تنظیمات ربات</h1>
+      <button id="sbtn-top" form="sf" type="submit" class="save-btn" disabled>💾 ذخیره تغییرات</button>
     </div>
 
-    <div class="mb-4 lg:hidden overflow-x-auto">
-      <div class="flex gap-2 pb-2 min-w-max">
-        {" ".join(f'<a href="/admin/settings?group={e(g)}" class="px-3 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if g == active_group else "bg-white text-gray-600"}">{group_icons.get(g,"📝")} {e(g)}</a>' for g in group_names)}
-      </div>
-    </div>
+    <form id="sf" method="post" action="/admin/settings/save-all">
+      <input type="hidden" name="is_combined" value="1">
 
-    <div class="flex gap-6">
-      <div class="hidden lg:block w-52 shrink-0">
-        <div class="card p-2 space-y-0.5 sticky top-20">
-          {sidebar}
+      <!-- ─── دکمه‌های منوی اصلی ─────────────────────────────────────── -->
+      <div class="card" style="padding:20px;margin-bottom:16px">
+        <div class="sec-hdr">🔘 دکمه‌های منوی اصلی</div>
+        <div class="sec-sub">دکمه‌های Reply Keyboard در منوی کاربران — می‌توانید نمایش هر دکمه را فعال یا غیرفعال کنید.</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          {main_rows}
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end">
+          <button type="button" onclick="resetSection('main')"
+            style="font-size:.76rem;color:#9ca3af;background:none;border:none;cursor:pointer;transition:color .15s"
+            onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'">
+            🔄 بازگردانی این بخش به پیش‌فرض
+          </button>
         </div>
       </div>
-      <div class="flex-1 min-w-0">
-        <div class="card p-4 md:p-6">
-          <h2 class="font-bold text-gray-700 text-lg mb-5">{e(active_group)}</h2>
-          {content}
+
+      <!-- ─── دکمه‌های پنل همکار + کیف‌پول (۲ ستون) ─────────────────── -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" class="two-col-grid">
+        <div class="card" style="padding:20px">
+          <div class="sec-hdr">🤝 دکمه‌های پنل همکار</div>
+          <div class="sec-sub">Inline Keyboard — داشبورد همکاران</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            {partner_rows}
+          </div>
+        </div>
+        <div class="card" style="padding:20px">
+          <div class="sec-hdr">💰 دکمه‌های کیف‌پول</div>
+          <div class="sec-sub">Inline Keyboard — بخش کیف‌پول</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            {wallet_rows}
+          </div>
         </div>
       </div>
-    </div>
+
+      <!-- ─── تنظیمات متنی مهم ─────────────────────────────────────────── -->
+      <div class="card" style="padding:20px;margin-bottom:20px">
+        <div class="sec-hdr">📝 تنظیمات متنی</div>
+        <div class="sec-sub">این متن‌ها مستقیماً در ربات نمایش داده می‌شوند — بقیه متن‌ها ثابت و پیش‌فرض هستند.</div>
+        {text_fields}
+      </div>
+
+      <!-- ─── دکمه‌های پایین صفحه ──────────────────────────────────────── -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:32px;flex-wrap:wrap;gap:10px">
+        <button type="button" onclick="confirmResetAll()"
+          style="font-size:.82rem;color:#9ca3af;background:none;border:none;cursor:pointer;transition:color .15s;padding:0"
+          onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'">
+          🔄 بازگردانی همه به پیش‌فرض
+        </button>
+        <button id="sbtn-bot" form="sf" type="submit" class="save-btn" disabled>💾 ذخیره همه تغییرات</button>
+      </div>
+    </form>
+
+    <style>
+    @media(max-width:640px){{
+      .two-col-grid{{grid-template-columns:1fr !important}}
+    }}
+    </style>
 
     <script>
     var _dirty = false;
     function markDirty() {{
+      if (_dirty) return;
       _dirty = true;
-      var btn = document.getElementById('save-btn');
-      if(btn) {{ btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }}
+      ['sbtn-top','sbtn-bot'].forEach(function(id){{
+        var b=document.getElementById(id);
+        if(b){{b.disabled=false;}}
+      }});
     }}
-    window.addEventListener('beforeunload', function(e) {{
-      if(_dirty) {{ e.preventDefault(); e.returnValue = ''; }}
+    window.addEventListener('beforeunload', function(e){{
+      if(_dirty){{e.preventDefault();e.returnValue='';}}
     }});
-    document.getElementById('settings-form').addEventListener('submit', function() {{ _dirty = false; }});
-    function confirmReset() {{
-      return confirm('تمام تنظیمات این بخش به حالت اولیه بازگردانده شود؟');
+    document.getElementById('sf').addEventListener('submit',function(){{_dirty=false;}});
+
+    function resetSection(sec) {{
+      if(!confirm('تنظیمات این بخش به پیش‌فرض برگردانده شود؟')) return;
+      var fd = new FormData();
+      fd.append('section', sec);
+      fetch('/admin/settings/reset-section', {{method:'POST', body:fd}})
+        .then(function(){{location.reload();}});
+    }}
+    function confirmResetAll() {{
+      if(!confirm('همه تنظیمات دکمه‌ها و متن‌ها به حالت اولیه بازگردانده شوند؟')) return;
+      fetch('/admin/settings/reset-all', {{method:'POST'}})
+        .then(function(){{location.reload();}});
     }}
     </script>"""
 
@@ -2114,75 +2160,128 @@ async def settings_save_all(request: Request):
     guard = _require(adm, "settings")
     if guard: return guard
     form = await request.form()
-    group = str(form.get("group", ""))
-    is_buttons = form.get("is_buttons") == "1"
+    is_combined = form.get("is_combined") == "1"
+
     try:
-        from ui_texts import (DEFAULT_UI_TEXTS as _D, TEXT_GROUPS as _G, MAIN_BUTTON_KEYS as _BK)
+        from ui_texts import (
+            DEFAULT_UI_TEXTS as _D,
+            EDITABLE_BUTTON_GROUPS as _BG,
+            CRITICAL_TEXT_KEYS as _CTK,
+            MAIN_BUTTON_KEYS as _BK,
+        )
     except ImportError:
-        _D = {}; _G = {}; _BK = []
+        _D = {}; _BG = {}; _CTK = []; _BK = []
 
     conn = _db()
     try:
-        if is_buttons:
-            # ذخیره وضعیت دکمه‌ها
-            for k in _BK:
-                enabled = form.get(f"btn_{k}") is not None
-                val = "1" if enabled else "0"
-                conn.execute(
-                    "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now');",
-                    (f"MAIN_BTN_ENABLED_{k}", val)
-                )
-        else:
-            # ذخیره متن‌ها — فقط آن‌هایی که تغییر کرده‌اند
-            keys = _G.get(group, [])
-            for key in keys:
+        if is_combined:
+            # ─── ذخیره برچسب همه دکمه‌ها ───────────────────────────────
+            all_btn_keys = [k for keys in _BG.values() for k in keys]
+            for key in all_btn_keys:
                 new_val = form.get(f"field_{key}")
                 if new_val is None:
                     continue
-                new_val = str(new_val)
+                new_val = str(new_val).strip()
                 default = _D.get(key, "")
-                if new_val == default:
-                    # برابر پیش‌فرض → حذف از DB
+                if new_val == "" or new_val == default:
                     conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
                 else:
                     conn.execute(
-                        "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now');",
+                        "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now');",
+                        (key, new_val)
+                    )
+
+            # ─── ذخیره وضعیت فعال/غیرفعال دکمه‌های منو ─────────────────
+            for key in _BK:
+                enabled = form.get(f"enable_{key}") is not None  # checkbox: present=True
+                conn.execute(
+                    "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now');",
+                    (f"MAIN_BTN_ENABLED_{key}", "1" if enabled else "0")
+                )
+
+            # ─── ذخیره متن‌های مهم ──────────────────────────────────────
+            for key in _CTK:
+                new_val = form.get(f"field_{key}")
+                if new_val is None:
+                    continue
+                new_val = str(new_val).strip()
+                default = _D.get(key, "")
+                if new_val == "" or new_val == default:
+                    conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
+                else:
+                    conn.execute(
+                        "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now');",
                         (key, new_val)
                     )
         conn.commit()
     finally:
         conn.close()
     _clear_ui_cache()
-    _log(request, "ذخیره تنظیمات", "تنظیمات", group)
-    return _redir(f"/admin/settings?group={group}&flash=✅+تغییرات+ذخیره+شد")
+    _log(request, "ذخیره تنظیمات", "تنظیمات", "combined")
+    return _redir("/admin/settings?flash=✅+تغییرات+ذخیره+شد")
 
 
-@router.post("/settings/reset-group")
-async def settings_reset_group(request: Request):
+@router.post("/settings/reset-section")
+async def settings_reset_section(request: Request):
+    """بازگردانی یک بخش خاص به پیش‌فرض"""
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     form = await request.form()
-    group = str(form.get("group", ""))
-    is_buttons = form.get("is_buttons") == "1"
+    section = str(form.get("section", ""))
     try:
-        from ui_texts import TEXT_GROUPS as _G, MAIN_BUTTON_KEYS as _BK
+        from ui_texts import EDITABLE_BUTTON_GROUPS as _BG, MAIN_BUTTON_KEYS as _BK
     except ImportError:
-        _G = {}; _BK = []
+        _BG = {}; _BK = []
+
     conn = _db()
     try:
-        if is_buttons:
+        if section == "main":
+            for k in _BG.get("دکمه‌های منوی اصلی", []):
+                conn.execute("DELETE FROM ui_texts WHERE key=?;", (k,))
             for k in _BK:
                 conn.execute("DELETE FROM ui_texts WHERE key=?;", (f"MAIN_BTN_ENABLED_{k}",))
-        else:
-            for key in _G.get(group, []):
-                conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
         conn.commit()
     finally:
         conn.close()
     _clear_ui_cache()
-    _log(request, "بازگردانی پیش‌فرض", "تنظیمات", group)
-    return _redir(f"/admin/settings?group={group}&flash=🔄+به+پیش‌فرض+بازگردانده+شد")
+    _log(request, "بازگردانی بخش", "تنظیمات", section)
+    return _redir("/admin/settings?flash=🔄+به+پیش‌فرض+بازگردانده+شد")
+
+
+@router.post("/settings/reset-all")
+async def settings_reset_all(request: Request):
+    """بازگردانی همه تنظیمات دکمه‌ها و متن‌ها به پیش‌فرض"""
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    try:
+        from ui_texts import EDITABLE_BUTTON_GROUPS as _BG, CRITICAL_TEXT_KEYS as _CTK, MAIN_BUTTON_KEYS as _BK
+    except ImportError:
+        _BG = {}; _CTK = []; _BK = []
+
+    conn = _db()
+    try:
+        all_keys = [k for keys in _BG.values() for k in keys] + _CTK
+        for k in all_keys:
+            conn.execute("DELETE FROM ui_texts WHERE key=?;", (k,))
+        for k in _BK:
+            conn.execute("DELETE FROM ui_texts WHERE key=?;", (f"MAIN_BTN_ENABLED_{k}",))
+        conn.commit()
+    finally:
+        conn.close()
+    _clear_ui_cache()
+    _log(request, "بازگردانی همه", "تنظیمات", "all")
+    return _redir("/admin/settings?flash=🔄+همه+تنظیمات+به+پیش‌فرض+بازگردانده+شد")
+
+
+@router.post("/settings/reset-group")
+async def settings_reset_group(request: Request):
+    """backward compat — همه را به پیش‌فرض برمی‌گرداند"""
+    return await settings_reset_all(request)
 
 
 @router.post("/settings/save-field")
