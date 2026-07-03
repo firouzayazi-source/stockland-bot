@@ -1084,7 +1084,22 @@ def handle_start(message):
                     ensure_referral_schema()
                     settings = get_referral_settings()
                     if settings.get("is_active"):
-                        register_referral(referrer_id, uid)
+                        is_new = register_referral(referrer_id, uid)
+                        # اطلاع‌رسانی به معرف — فقط برای عضویت جدید
+                        if is_new:
+                            try:
+                                new_name = (full_name or username or "کاربر جدید").strip()
+                                bot.send_message(
+                                    referrer_id,
+                                    "🎉 <b>خبر خوب!</b>\n\n"
+                                    f"«{new_name}» با لینک دعوت شما به ربات پیوست.\n\n"
+                                    "زیرمجموعه‌های خود را می‌توانید از بخش "
+                                    "«👥 فروشندگان من» در پنل همکاری مشاهده کنید.\n"
+                                    "هرچه شبکه شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪",
+                                    parse_mode="HTML"
+                                )
+                            except Exception:
+                                pass
             except Exception:
                 pass
 
@@ -1491,6 +1506,23 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                 bot.send_message(ref_result["referrer_id"],
                     f"🎉 یکی از دوستانی که معرفی کردید خرید کرد!\n"
                     f"💰 <b>{ref_result['amount']:,}</b> تومان به کیف‌پول شما اضافه شد.",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # پورسانت سطحی — روی «هر» خرید زیرمجموعه (درصد یا مبلغ ثابت سطح معرف)
+    try:
+        from db import process_referral_commission
+        comm = process_referral_commission(uid, order_id, eff_price)
+        if comm.get("paid"):
+            try:
+                bot.send_message(comm["referrer_id"],
+                    f"💸 <b>پورسانت جدید!</b>\n\n"
+                    f"یکی از زیرمجموعه‌های شما خرید کرد و\n"
+                    f"💰 <b>{comm['amount']:,}</b> تومان پورسانت (سطح {comm['tier_name']}) "
+                    f"به کیف‌پول همکاری شما اضافه شد.",
                     parse_mode="HTML")
             except Exception:
                 pass
@@ -2830,7 +2862,8 @@ def cb_order_detail(call):
     conn.row_factory = _sq.Row
     try:
         order = conn.execute(
-            "SELECT * FROM orders WHERE id=? AND CAST(user_id AS INTEGER)=?;",
+            "SELECT * FROM orders WHERE id=? AND CAST(user_id AS INTEGER)=? "
+            "AND COALESCE(status,'active') != 'returned';",
             (oid, uid)
         ).fetchone()
         if not order:
@@ -2924,9 +2957,9 @@ def handle_partner_panel(message):
     uid = message.from_user.id
     if not is_partner_approved(uid):
         bot.send_message(message.chat.id,
-            "پنل همکار 🤝\n\n"
+            "🤝 پنل همکار\n\n"
             "شما هنوز به‌عنوان همکار تایید نشده‌اید.\n"
-            "برای ثبت درخواست از «درخواست نمایندگی 📝» استفاده کنید.")
+            "برای ثبت درخواست از «📝 درخواست نمایندگی» استفاده کنید.")
         return
 
     _show_partner_dashboard(message.chat.id, uid)
@@ -3018,7 +3051,7 @@ def _show_partner_dashboard(chat_id, uid):
     kb = types.InlineKeyboardMarkup(row_width=2)
     from ui_texts import t as _t, DEFAULT_UI_TEXTS as _D
     kb.row(
-        types.InlineKeyboardButton(_t("BTN_PARTNER_MY_SELLERS",  _D.get("BTN_PARTNER_MY_SELLERS",  "👥 فروشندگان شما")),  callback_data="partner_sub_stats"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_MY_SELLERS",  _D.get("BTN_PARTNER_MY_SELLERS",  "👥 فروشندگان من")),  callback_data="partner_sub_stats"),
         types.InlineKeyboardButton(_t("BTN_PARTNER_PROFILE",     _D.get("BTN_PARTNER_PROFILE",     "👤 پروفایل")),        callback_data="partner_profile"),
     )
     kb.row(
@@ -3027,7 +3060,6 @@ def _show_partner_dashboard(chat_id, uid):
     )
     kb.row(
         types.InlineKeyboardButton(_t("BTN_PARTNER_CHAT",        _D.get("BTN_PARTNER_CHAT",        "💬 چت با پشتیبان")), callback_data="partner_support"),
-        types.InlineKeyboardButton(_t("BTN_PARTNER_GUIDE",       _D.get("BTN_PARTNER_GUIDE",       "📖 راهنما و قوانین")),callback_data="partner_guide"),
     )
 
     # بنر سطح
@@ -3217,46 +3249,68 @@ def cb_partner_ref_link(call):
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_sub_stats")
 def cb_partner_sub_stats(call):
+    """نمای شبکه‌ای — کاربر بالا، زیرمجموعه‌ها با آمار خرید زیرش (سبک نتورک)"""
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     import sqlite3 as _sq
     from config import DB_PATH as _DBP
+
+    my_name = (call.from_user.first_name or "شما").strip()
+    subs, total_orders, total_purchase = [], 0, 0
     try:
         conn = _sq.connect(_DBP)
-        # تعداد زیرمجموعه‌ها
-        total_refs = conn.execute(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_id=?;", (uid,)
-        ).fetchone()[0]
-        # زیرمجموعه‌های فعال (خرید کردن)
-        active_refs = conn.execute(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND rewarded=1;", (uid,)
-        ).fetchone()[0]
-        # جمع کل خرید زیرمجموعه‌ها (کلی - بدون ID)
-        sub_ids = [r[0] for r in conn.execute(
-            "SELECT referred_id FROM referrals WHERE referrer_id=?;", (uid,)
-        ).fetchall()]
-        total_purchase = 0
-        total_orders = 0
-        if sub_ids:
-            placeholders = ",".join("?" * len(sub_ids))
-            row = conn.execute(
-                f"SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER) IN ({placeholders});",
-                sub_ids
-            ).fetchone()
-            total_orders  = int(row[0] or 0)
-            total_purchase = int(row[1] or 0)
+        conn.row_factory = _sq.Row
+        # زیرمجموعه‌ها + آمار خرید هرکدام + تعداد زیرمجموعه‌ی خودشان (سطح ۲)
+        subs = conn.execute("""
+            SELECT r.referred_id AS sid,
+                   COALESCE(u.full_name, u.username, 'کاربر ' || r.referred_id) AS name,
+                   COALESCE(o.cnt, 0)   AS order_count,
+                   COALESCE(o.total, 0) AS total_spent,
+                   COALESCE(r2.cnt, 0)  AS own_subs
+            FROM referrals r
+            LEFT JOIN users u ON CAST(u.user_id AS INTEGER) = r.referred_id
+            LEFT JOIN (
+                SELECT CAST(user_id AS INTEGER) AS ouid, COUNT(*) AS cnt, SUM(price) AS total
+                FROM orders WHERE COALESCE(status,'active') != 'returned'
+                GROUP BY CAST(user_id AS INTEGER)
+            ) o ON o.ouid = r.referred_id
+            LEFT JOIN (
+                SELECT referrer_id, COUNT(*) AS cnt FROM referrals GROUP BY referrer_id
+            ) r2 ON r2.referrer_id = r.referred_id
+            WHERE r.referrer_id = ?
+            ORDER BY total_spent DESC, order_count DESC
+            LIMIT 30;
+        """, (uid,)).fetchall()
         conn.close()
+        total_orders   = sum(int(s["order_count"]) for s in subs)
+        total_purchase = sum(int(s["total_spent"]) for s in subs)
     except Exception:
-        total_refs = active_refs = total_orders = total_purchase = 0
+        subs = []
 
-    text = (
-        f"📊 <b>آمار زیرمجموعه‌ها</b>\n\n"
-        f"👥 کل معرفی‌ها: <b>{total_refs}</b>\n"
-        f"✅ معرفی‌های فعال (خرید کرده): <b>{active_refs}</b>\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"🛒 تعداد کل خریدها: <b>{total_orders}</b>\n"
-        f"💰 مجموع خرید: <b>{total_purchase:,}</b> تومان"
-    )
+    # ─── ساخت درخت شبکه ───
+    lines = [
+        f"👥 <b>فروشندگان من</b>\n",
+        f"👤 <b>{my_name}</b>  (شما)",
+    ]
+    if not subs:
+        lines.append("\n└ هنوز زیرمجموعه‌ای ندارید.\n\n🔗 لینک معرفی خود را به اشتراک بگذارید تا شبکه‌تان رشد کند!")
+    else:
+        for i, s in enumerate(subs):
+            is_last = (i == len(subs) - 1)
+            branch  = "└" if is_last else "├"
+            medal   = "🥇" if i == 0 and s["order_count"] > 0 else ("🥈" if i == 1 and s["order_count"] > 0 else ("🥉" if i == 2 and s["order_count"] > 0 else "👤"))
+            own     = f" | 👥{s['own_subs']}" if s["own_subs"] else ""
+            if s["order_count"] > 0:
+                lines.append(f"{branch} {medal} {s['name']}\n{'   ' if is_last else '│  '}🛒 {s['order_count']} خرید | 💰 {int(s['total_spent']):,} ت{own}")
+            else:
+                lines.append(f"{branch} {medal} {s['name']} — بدون خرید{own}")
+        lines.append(
+            f"\n━━━━━━━━━━━━━━━\n"
+            f"📊 جمع شبکه: <b>{len(subs)}</b> نفر | "
+            f"🛒 <b>{total_orders}</b> خرید | 💰 <b>{total_purchase:,}</b> ت"
+        )
+
+    text = "\n".join(lines)
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
     _partner_edit(call, text, kb)
@@ -3288,10 +3342,11 @@ def cb_partner_wallet(call):
         f"موجودی: <b>{bal:,}</b> تومان\n\n"
         f"📋 <b>آخرین تراکنش‌ها:</b>\n{txn_lines}"
     )
+    from ui_texts import t as _t, DEFAULT_UI_TEXTS as _D
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
-        types.InlineKeyboardButton("🔄 انتقال به کیف‌پول اصلی", callback_data="partner_transfer"),
-        types.InlineKeyboardButton("📤 درخواست تسویه", callback_data="partner_payout"),
+        types.InlineKeyboardButton(_t("BTN_WALLET_TRANSFER", _D.get("BTN_WALLET_TRANSFER", "🔄 انتقال به کیف‌پول اصلی")), callback_data="partner_transfer"),
+        types.InlineKeyboardButton(_t("BTN_WALLET_PAYOUT",   _D.get("BTN_WALLET_PAYOUT",   "📤 درخواست تسویه")),          callback_data="partner_payout"),
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
     )
     _partner_edit(call, text, kb)
@@ -4499,13 +4554,14 @@ def handle_callbacks(call: types.CallbackQuery):
         bot.send_message(call.message.chat.id, "✏️ متن چت این محصول را ارسال کنید.\nبرای پاک کردن: /reset\n" + hint)
         return
     if data == "wallet_charge":
+        from ui_texts import t as _t, DEFAULT_UI_TEXTS as _D
         kb = types.InlineKeyboardMarkup()
         kb.add(
             types.InlineKeyboardButton(
-                "💳 کارت به کارت", callback_data="wallet_card2card"
+                _t("BTN_WALLET_CARD",    _D.get("BTN_WALLET_CARD",    "💳 کارت به کارت")), callback_data="wallet_card2card"
             ),
             types.InlineKeyboardButton(
-                "🌐 درگاه پرداخت", callback_data="wallet_gateway"
+                _t("BTN_WALLET_GATEWAY", _D.get("BTN_WALLET_GATEWAY", "🌐 درگاه پرداخت")), callback_data="wallet_gateway"
             ),
         )
         bot.answer_callback_query(call.id)
