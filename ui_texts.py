@@ -7,12 +7,12 @@ from db import get_ui_text, set_ui_text
 DEFAULT_UI_TEXTS = {
 
     # ─── دکمه‌های منوی اصلی ────────────────────────────────────────────────
-    "MAIN_BTN_MY_ORDERS":        "خریدهای من 🧾",
-    "MAIN_BTN_WALLET":           "کیف پول 💰",
-    "MAIN_BTN_PARTNER_REQUEST":  "درخواست نمایندگی 📝",
-    "MAIN_BTN_PARTNER_PANEL":    "پنل همکار 🤝",
-    "MAIN_BTN_GUIDE":            "راهنما 🔑",
-    "MAIN_BTN_SUPPORT":          "پشتیبانی 👨‍💻",
+    "MAIN_BTN_MY_ORDERS":        "🧾 خریدهای من",
+    "MAIN_BTN_WALLET":           "💰 کیف پول",
+    "MAIN_BTN_PARTNER_REQUEST":  "📝 درخواست نمایندگی",
+    "MAIN_BTN_PARTNER_PANEL":    "🤝 پنل همکار",
+    "MAIN_BTN_GUIDE":            "🔑 راهنما",
+    "MAIN_BTN_SUPPORT":          "👨‍💻 پشتیبانی",
 
     # ─── پیام‌های خوش‌آمدگویی ─────────────────────────────────────────────
     "MSG_WELCOME":
@@ -134,7 +134,7 @@ DEFAULT_UI_TEXTS = {
 
 
     # ─── دکمه‌های داشبورد همکار ────────────────────────────────────────────
-    "BTN_PARTNER_MY_SELLERS":   "👥 فروشندگان شما",
+    "BTN_PARTNER_MY_SELLERS":   "👥 فروشندگان من",
     "BTN_PARTNER_PROFILE":      "👤 پروفایل",
     "BTN_PARTNER_WALLET":       "💰 کیف‌پول همکاری",
     "BTN_PARTNER_REF_LINK":     "🔗 لینک معرفی من",
