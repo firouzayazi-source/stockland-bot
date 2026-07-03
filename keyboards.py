@@ -37,20 +37,14 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
         # همکار: پنل همکار (یه ردیف کامل)
         if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
             kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "پنل همکار 🤝"))))
-        # راهنمای همکاری (نه پشتیبانی)
-        kb.row(types.KeyboardButton(t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "📖 راهنمای همکاری"))))
+        # قوانین همکاری — جایگزین راهنما برای همکاران
+        kb.row(types.KeyboardButton(t("BTN_PARTNER_GUIDE", DEFAULT_UI_TEXTS.get("BTN_PARTNER_GUIDE", "📖 راهنما و قوانین"))))
     else:
-        # کاربر عادی: درخواست همکاری
+        # کاربر عادی: درخواست همکاری + پشتیبانی (بدون راهنما)
         if is_main_button_enabled("MAIN_BTN_PARTNER_REQUEST"):
             kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "درخواست نمایندگی 📝"))))
-        # راهنما + پشتیبانی
-        sys_row2 = []
-        if is_main_button_enabled("MAIN_BTN_GUIDE"):
-            sys_row2.append(types.KeyboardButton(t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "راهنما 🔑"))))
         if is_main_button_enabled("MAIN_BTN_SUPPORT"):
-            sys_row2.append(types.KeyboardButton(t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "پشتیبانی 👨‍💻"))))
-        if sys_row2:
-            kb.row(*sys_row2)
+            kb.row(types.KeyboardButton(t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "پشتیبانی 👨‍💻"))))
 
     return kb
 
@@ -97,8 +91,12 @@ def category_inline_keyboard(cat_id: int, user_id: int = None) -> types.InlineKe
 # ─── کیف پول ────────────────────────────────────────────────────────────────
 
 def wallet_inline_keyboard():
+    from ui_texts import t, DEFAULT_UI_TEXTS
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("➕ شارژ حساب", callback_data="wallet_charge"))
+    kb.add(types.InlineKeyboardButton(
+        t("BTN_WALLET_CHARGE", DEFAULT_UI_TEXTS.get("BTN_WALLET_CHARGE", "➕ شارژ حساب")),
+        callback_data="wallet_charge"
+    ))
     return kb
 
 
