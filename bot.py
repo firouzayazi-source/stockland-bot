@@ -773,7 +773,7 @@ def _is_menu_or_system_button(text: str) -> bool:
     try:
         system_keys = (
             "MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET", "MAIN_BTN_PARTNER_REQUEST",
-            "MAIN_BTN_PARTNER_PANEL", "MAIN_BTN_GUIDE", "MAIN_BTN_SUPPORT",
+            "MAIN_BTN_PARTNER_PANEL", "BTN_PARTNER_GUIDE", "MAIN_BTN_SUPPORT",
             "MAIN_BTN_OTHER_PRODUCTS", "MAIN_BTN_BUY_APPLE_ID",
         )
         for key in system_keys:
@@ -1347,12 +1347,12 @@ def process_wallet_charge_amount(message):
 
     # چک کن متن دکمه‌های سیستمی (کیف‌پول، سفارش و ...) بود
     system_buttons = [
-        t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "")),
-        t("MAIN_BTN_WALLET", DEFAULT_UI_TEXTS.get("MAIN_BTN_WALLET", "")),
-        t("MAIN_BTN_GUIDE", DEFAULT_UI_TEXTS.get("MAIN_BTN_GUIDE", "")),
-        t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "")),
-        t("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "")),
-        t("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "")),
+        t("MAIN_BTN_MY_ORDERS",      DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "")),
+        t("MAIN_BTN_WALLET",         DEFAULT_UI_TEXTS.get("MAIN_BTN_WALLET", "")),
+        t("BTN_PARTNER_GUIDE",       DEFAULT_UI_TEXTS.get("BTN_PARTNER_GUIDE", "")),
+        t("MAIN_BTN_SUPPORT",        DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "")),
+        t("MAIN_BTN_PARTNER_REQUEST",DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "")),
+        t("MAIN_BTN_PARTNER_PANEL",  DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "")),
     ]
     if text in system_buttons:
         clear_user_state(uid)
@@ -3016,17 +3016,18 @@ def _show_partner_dashboard(chat_id, uid):
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
+    from ui_texts import t as _t, DEFAULT_UI_TEXTS as _D
     kb.row(
-        types.InlineKeyboardButton("👥 فروشندگان شما", callback_data="partner_sub_stats"),
-        types.InlineKeyboardButton("👤 پروفایل", callback_data="partner_profile"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_MY_SELLERS",  _D.get("BTN_PARTNER_MY_SELLERS",  "👥 فروشندگان شما")),  callback_data="partner_sub_stats"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_PROFILE",     _D.get("BTN_PARTNER_PROFILE",     "👤 پروفایل")),        callback_data="partner_profile"),
     )
     kb.row(
-        types.InlineKeyboardButton("💼 کیف‌پول همکاری", callback_data="partner_wallet"),
-        types.InlineKeyboardButton("🔗 لینک معرفی من", callback_data="partner_ref_link"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_WALLET",      _D.get("BTN_PARTNER_WALLET",      "💼 کیف‌پول همکاری")), callback_data="partner_wallet"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_REF_LINK",    _D.get("BTN_PARTNER_REF_LINK",    "🔗 لینک معرفی من")),  callback_data="partner_ref_link"),
     )
     kb.row(
-        types.InlineKeyboardButton("💬 چت با پشتیبان", callback_data="partner_support"),
-        types.InlineKeyboardButton("📖 راهنما و قوانین", callback_data="partner_guide"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_CHAT",        _D.get("BTN_PARTNER_CHAT",        "💬 چت با پشتیبان")), callback_data="partner_support"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_GUIDE",       _D.get("BTN_PARTNER_GUIDE",       "📖 راهنما و قوانین")),callback_data="partner_guide"),
     )
 
     # بنر سطح
@@ -3597,14 +3598,17 @@ def process_reseller_shop(message):
         pass
 
 
-@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_GUIDE"))
-def handle_help(message):
-    if not is_main_button_enabled("MAIN_BTN_GUIDE"):
-        bot.reply_to(message, t("MSG_BTN_DISABLED"))
-        return
-
-    text = t("HELP_TEXT", DEFAULT_UI_TEXTS.get("HELP_TEXT", ""))
-    bot.send_message(message.chat.id, text)
+@bot.message_handler(func=lambda m: m.text == t("BTN_PARTNER_GUIDE") and is_partner_approved(m.from_user.id))
+def handle_partner_guide_reply(message):
+    """همکار دکمه «راهنما و قوانین» را در Reply Keyboard فشرد"""
+    guide_text = t(
+        "PARTNER_GUIDE_TEXT",
+        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
+        "متن راهنما توسط مدیر تنظیم نشده است.\n"
+        "برای اطلاعات بیشتر با پشتیبانی در تماس باشید."
+    )
+    kb = types.InlineKeyboardMarkup()
+    bot.send_message(message.chat.id, guide_text, reply_markup=kb, parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
