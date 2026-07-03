@@ -271,149 +271,69 @@ def set_main_button_enabled(btn_key: str, enabled: bool) -> None:
     set_ui_text(_main_btn_flag_key(btn_key), "1" if enabled else "0")
     _ui_cache.pop(_main_btn_flag_key(btn_key), None)
 
-# ─── Text group definitions (for admin panel display) ─────────────────────
+# ─── Text group definitions — deprecated, kept for backward compat ────────
+TEXT_GROUPS: dict = {}
+TEXT_DESCRIPTIONS: dict = {}
 
-TEXT_GROUPS = {
-    "دکمه‌های منو": [
-        "MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET",
-        "MAIN_BTN_PARTNER_REQUEST", "MAIN_BTN_PARTNER_PANEL",
-        "MAIN_BTN_GUIDE", "MAIN_BTN_SUPPORT",
-        "BTN_WALLET_CHARGE", "BTN_WALLET_GATEWAY", "BTN_WALLET_CARD",
-        "TXT_BACK_BTN", "TXT_BACK_MAIN_BTN", "TXT_CANCEL_BTN",
+# ─── ساختار جدید تنظیمات ادمین ───────────────────────────────────────────
+
+# دکمه‌هایی که برچسب آن‌ها از ادمین قابل ویرایش است (دسته‌بندی‌شده)
+EDITABLE_BUTTON_GROUPS: dict[str, list[str]] = {
+    "دکمه‌های منوی اصلی": [
+        "MAIN_BTN_MY_ORDERS",
+        "MAIN_BTN_WALLET",
+        "MAIN_BTN_PARTNER_REQUEST",
+        "MAIN_BTN_PARTNER_PANEL",
+        "MAIN_BTN_GUIDE",
+        "MAIN_BTN_SUPPORT",
     ],
-    "پیام‌های اصلی": [
-        "MSG_WELCOME", "MSG_BTN_DISABLED", "TXT_MAIN_MENU_TITLE",
-        "TXT_SELECT_CATEGORY", "TXT_SELECT_PRODUCT", "TXT_NO_PRODUCTS",
+    "دکمه‌های پنل همکار": [
+        "BTN_PARTNER_MY_SELLERS",
+        "BTN_PARTNER_PROFILE",
+        "BTN_PARTNER_WALLET",
+        "BTN_PARTNER_REF_LINK",
+        "BTN_PARTNER_CHAT",
+        "BTN_PARTNER_GUIDE",
     ],
-    "کیف پول": [
-        "MSG_WALLET_BALANCE", "MSG_WALLET_SELECT_METHOD",
-        "MSG_WALLET_AMOUNT_REQUEST", "MSG_WALLET_AMOUNT_INVALID",
-        "MSG_WALLET_MIN_AMOUNT", "MSG_WALLET_TOPUP_SUCCESS",
-        "WALLET_QUICK_AMOUNTS",
-    ],
-    "جریان خرید": [
-        "MSG_PURCHASE_REDIRECT", "MSG_PURCHASE_CANCELLED",
-        "MSG_PURCHASE_SUCCESS", "MSG_PURCHASE_QUEUED",
-        "MSG_PURCHASE_NO_STOCK", "MSG_INSUFFICIENT_BALANCE",
-        "MSG_DAILY_LIMIT_REACHED", "MSG_PAYMENT_ERROR", "MSG_PAYMENT_BTN",
-    ],
-    "سفارش‌ها": [
-        "MSG_NO_ORDERS", "MSG_ORDERS_HEADER",
-    ],
-    "پشتیبانی و راهنما": [
-        "SUPPORT_TEXT", "HELP_TEXT",
-    ],
-    "دکمه‌های همکار": [
-        "BTN_PARTNER_MY_SELLERS", "BTN_PARTNER_PROFILE", "BTN_PARTNER_WALLET",
-        "BTN_PARTNER_REF_LINK", "BTN_PARTNER_CHAT", "BTN_PARTNER_GUIDE",
-        "BTN_WALLET_TRANSFER", "BTN_WALLET_PAYOUT", "BTN_SHARE_REF_LINK",
-        "BTN_EDIT_BANK_INFO",
-    ],
-    "دکمه‌های پروفایل": [
-        "BTN_EDIT_NAME", "BTN_EDIT_SHOP", "BTN_EDIT_CITY", "BTN_EDIT_ADDRESS",
-        "BTN_EDIT_CARD", "BTN_EDIT_IBAN", "BTN_EDIT_BANK_NAME",
-    ],
-    "دکمه‌های ناوبری": [
-        "TXT_BACK_BTN", "TXT_BACK_MAIN_BTN", "TXT_CANCEL_BTN",
-        "BTN_ORDER_BACK", "BTN_CLOSE_TICKET",
-    ],
-    "پیام‌های همکار": [
-        "MSG_PARTNER_DASHBOARD_TITLE", "MSG_PARTNER_TOP_TIER",
-        "MSG_PROFILE_TITLE", "MSG_PROFILE_SAVED", "MSG_SELLERS_TITLE",
-    ],
-    "پیام‌های تسویه": [
-        "MSG_PAYOUT_REQUEST_TITLE", "MSG_PAYOUT_SAVED", "MSG_PAYOUT_BANK_NAME_REQ",
-        "MSG_PAYOUT_CARD_REQ", "MSG_PAYOUT_IBAN_REQ", "MSG_PAYOUT_BANK_SAVED",
-        "MSG_PAYOUT_ENTER_AMOUNT", "MSG_PAYOUT_DISABLED",
-        "MSG_TRANSFER_EMPTY", "MSG_TRANSFER_SUCCESS",
-    ],
-    "پیام‌های خریدها": [
-        "MSG_MY_ORDERS_TITLE", "MSG_MY_ORDERS_HINT",
-        "MSG_ORDER_DETAIL_SETUP", "MSG_ORDER_DETAIL_DONE",
-    ],
-    "پیام‌های تیکت": [
-        "MSG_SUPPORT_OPEN", "MSG_TICKET_CLOSED", "MSG_TICKET_CLOSING",
-    ],
-    "پیام‌های عمومی": [
-        "MSG_INVALID_INPUT", "MSG_BUY_CANCELLED",
-    ],
-        "کیف‌پول و پرداخت": [
-        "MSG_WALLET_BALANCE", "MSG_WALLET_TOPUP_REQUEST", "MSG_WALLET_AMOUNT_REQUEST",
-        "MSG_WALLET_MIN_AMOUNT", "MSG_PAYMENT_PENDING", "MSG_PAYMENT_SUCCESS",
-        "MSG_PAYMENT_FAILED", "MSG_WALLET_CHARGED",
-    ],
-    "سفارش و خرید": [
-        "MSG_ORDER_SUMMARY", "MSG_ORDER_CONFIRMED", "MSG_ORDER_DELIVERED",
-        "MSG_ORDER_SETUP_PENDING", "MSG_NO_ORDERS", "MSG_ORDER_RETURNED",
-        "MSG_STOCK_EMPTY",
-    ],
-    "کد تخفیف": [
-        "MSG_DISCOUNT_ENTER", "MSG_DISCOUNT_INVALID", "MSG_DISCOUNT_APPLIED",
-        "MSG_DISCOUNT_EXPIRED", "MSG_DISCOUNT_LIMIT_REACHED",
-    ],
-    "همکاران": [
-        "MSG_PARTNER_ALREADY", "MSG_PARTNER_PENDING",
-        "MSG_PARTNER_APPROVED", "MSG_PARTNER_REJECTED",
-        "MSG_PARTNER_REQUEST_SENT", "MSG_PARTNER_PHONE_REQUEST",
-        "MSG_PARTNER_CITY_REQUEST", "MSG_PARTNER_SHOP_REQUEST",
-        "PARTNER_GUIDE_TEXT",
+    "دکمه‌های کیف‌پول و پرداخت": [
+        "BTN_WALLET_CHARGE",
+        "BTN_WALLET_GATEWAY",
+        "BTN_WALLET_CARD",
+        "BTN_WALLET_TRANSFER",
+        "BTN_WALLET_PAYOUT",
     ],
 }
 
-# توضیح هر کلید — کجا نمایش داده می‌شود
-TEXT_DESCRIPTIONS = {
-    # دکمه‌های منو
-    "MAIN_BTN_MY_ORDERS":        "دکمه Reply Keyboard | منوی اصلی",
-    "MAIN_BTN_WALLET":           "دکمه Reply Keyboard | منوی اصلی",
-    "MAIN_BTN_PARTNER_REQUEST":  "دکمه Reply Keyboard | منوی اصلی — برای کاربران عادی",
-    "MAIN_BTN_PARTNER_PANEL":    "دکمه Reply Keyboard | منوی اصلی — فقط برای همکاران تأیید‌شده",
-    "MAIN_BTN_GUIDE":            "دکمه Reply Keyboard | منوی اصلی",
-    "MAIN_BTN_SUPPORT":          "دکمه Reply Keyboard | منوی اصلی",
-    "BTN_WALLET_CHARGE":         "دکمه Inline | زیر موجودی کیف‌پول",
-    "BTN_WALLET_GATEWAY":        "دکمه Inline | انتخاب روش پرداخت",
-    "BTN_WALLET_CARD":           "دکمه Inline | انتخاب روش پرداخت",
-    "TXT_BACK_BTN":              "دکمه Inline | بازگشت به دسته قبلی",
-    "TXT_BACK_MAIN_BTN":         "دکمه Inline | بازگشت به منوی اصلی",
-    "TXT_CANCEL_BTN":            "دکمه Inline | لغو خرید",
-    # پیام‌های اصلی
-    "MSG_WELCOME":               "پیام | بعد از /start — {name} = نام کاربر",
-    "MSG_BTN_DISABLED":          "پیام | وقتی بخشی غیرفعال است",
-    "TXT_MAIN_MENU_TITLE":       "عنوان | در برخی پیام‌های منو",
-    "TXT_SELECT_CATEGORY":       "پیام | بالای لیست دسته‌بندی‌ها",
-    "TXT_SELECT_PRODUCT":        "پیام | بالای لیست محصولات",
-    "TXT_NO_PRODUCTS":           "پیام | وقتی دسته محصولی ندارد",
-    # کیف پول
-    "MSG_WALLET_BALANCE":        "پیام | نمایش موجودی — {balance} = مبلغ",
-    "MSG_WALLET_SELECT_METHOD":  "پیام | انتخاب روش شارژ",
-    "MSG_WALLET_AMOUNT_REQUEST": "پیام | درخواست مبلغ شارژ — {min_amount} = حداقل",
-    "MSG_WALLET_AMOUNT_INVALID": "پیام خطا | مبلغ وارد‌شده عدد نیست",
-    "MSG_WALLET_MIN_AMOUNT":     "پیام خطا | مبلغ کمتر از حداقل — {min_amount} = حداقل",
-    "MSG_WALLET_TOPUP_SUCCESS":  "پیام موفق | بعد از شارژ — {amount} = مبلغ، {ref_id} = کد پیگیری",
-    "WALLET_QUICK_AMOUNTS":      "فیلد تنظیمات | مبالغ سریع کیف‌پول، با کاما جدا کن — مثال: 10000,50000,100000,500000 (خالی=پنهان)",
-    # جریان خرید
-    "MSG_PURCHASE_REDIRECT":     "پیام | قبل از انتقال به درگاه پرداخت",
-    "MSG_PURCHASE_CANCELLED":    "پیام | بعد از لغو خرید",
-    "MSG_PURCHASE_SUCCESS":      "پیام موفق | بعد از خرید — {order_id}، {title}، {price}، {feed_data}",
-    "MSG_PURCHASE_QUEUED":       "پیام | خرید ثبت شد ولی موجودی ندارد — {order_id}، {title}",
-    "MSG_PURCHASE_NO_STOCK":     "پیام | موجودی تمام شد",
-    "MSG_INSUFFICIENT_BALANCE":  "پیام خطا | موجودی کافی نیست — {balance}، {price}",
-    "MSG_DAILY_LIMIT_REACHED":   "پیام خطا | سقف روزانه — {limit} = سقف",
-    "MSG_PAYMENT_ERROR":         "پیام خطا | خطای درگاه پرداخت",
-    "MSG_PAYMENT_BTN":           "دکمه Inline | ورود به درگاه پرداخت",
-    # سفارش‌ها
-    "MSG_NO_ORDERS":             "پیام | وقتی کاربر هنوز خریدی ندارد",
-    "MSG_ORDERS_HEADER":         "عنوان | بالای لیست سفارش‌ها",
-    # پشتیبانی
-    "SUPPORT_TEXT":              "پیام | بعد از فشردن دکمه پشتیبانی",
-    "HELP_TEXT":                 "پیام | بعد از فشردن دکمه راهنما — از HTML پشتیبانی می‌کند",
-    # همکاران
-    "MSG_PARTNER_ALREADY":       "پیام | کاربر قبلاً تأیید شده",
-    "MSG_PARTNER_PENDING":       "پیام | درخواست در صف بررسی",
-    "MSG_PARTNER_APPROVED":      "پیام | بعد از تأیید همکار",
-    "MSG_PARTNER_REJECTED":      "پیام | بعد از رد درخواست",
-    "MSG_PARTNER_REQUEST_SENT":  "پیام | بعد از ارسال درخواست",
-    "MSG_PARTNER_PHONE_REQUEST": "پیام | درخواست شماره موبایل",
-    "MSG_PARTNER_CITY_REQUEST":  "پیام | درخواست شهر",
-    "MSG_PARTNER_SHOP_REQUEST":  "پیام | درخواست نام فروشگاه",
-    "PARTNER_GUIDE_TEXT":        "متن کامل | راهنمای همکاری در فروش — از HTML پشتیبانی می‌کند",
+# متن‌هایی که فقط این‌ها از ادمین قابل ویرایش هستند (سایر متن‌ها پیش‌فرض ثابت‌اند)
+CRITICAL_TEXT_KEYS: list[str] = [
+    "WALLET_QUICK_AMOUNTS",
+    "HELP_TEXT",
+    "PARTNER_GUIDE_TEXT",
+]
+
+CRITICAL_TEXT_LABELS: dict[str, str] = {
+    "WALLET_QUICK_AMOUNTS": "مبالغ سریع کیف‌پول (با کاما — مثال: 10000,50000,100000,500000 — خالی=پنهان)",
+    "HELP_TEXT": "متن راهنما — نمایش به کاربر عادی (از HTML پشتیبانی می‌کند)",
+    "PARTNER_GUIDE_TEXT": "راهنما و قوانین همکاری — نمایش در پنل همکار (از HTML پشتیبانی می‌کند)",
+}
+
+# آیکون هر کلید دکمه برای نمایش در پنل ادمین
+BUTTON_ICONS: dict[str, str] = {
+    "MAIN_BTN_MY_ORDERS":       "🧾",
+    "MAIN_BTN_WALLET":          "💰",
+    "MAIN_BTN_PARTNER_REQUEST": "📝",
+    "MAIN_BTN_PARTNER_PANEL":   "🤝",
+    "MAIN_BTN_GUIDE":           "🔑",
+    "MAIN_BTN_SUPPORT":         "👨‍💻",
+    "BTN_PARTNER_MY_SELLERS":   "👥",
+    "BTN_PARTNER_PROFILE":      "👤",
+    "BTN_PARTNER_WALLET":       "💰",
+    "BTN_PARTNER_REF_LINK":     "🔗",
+    "BTN_PARTNER_CHAT":         "💬",
+    "BTN_PARTNER_GUIDE":        "📖",
+    "BTN_WALLET_CHARGE":        "➕",
+    "BTN_WALLET_GATEWAY":       "🌐",
+    "BTN_WALLET_CARD":          "💳",
+    "BTN_WALLET_TRANSFER":      "🔄",
+    "BTN_WALLET_PAYOUT":        "📤",
 }
