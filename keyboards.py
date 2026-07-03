@@ -27,24 +27,24 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     # ردیف خریدهای من + کیف‌پول (برای همه)
     sys_row1 = []
     if is_main_button_enabled("MAIN_BTN_MY_ORDERS"):
-        sys_row1.append(types.KeyboardButton(t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "خریدهای من 🧾"))))
+        sys_row1.append(types.KeyboardButton(t("MAIN_BTN_MY_ORDERS", DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "🧾 خریدهای من"))))
     if is_main_button_enabled("MAIN_BTN_WALLET"):
-        sys_row1.append(types.KeyboardButton(t("MAIN_BTN_WALLET", DEFAULT_UI_TEXTS.get("MAIN_BTN_WALLET", "کیف پول 💰"))))
+        sys_row1.append(types.KeyboardButton(t("MAIN_BTN_WALLET", DEFAULT_UI_TEXTS.get("MAIN_BTN_WALLET", "💰 کیف پول"))))
     if sys_row1:
         kb.row(*sys_row1)
 
     if is_partner:
         # همکار: پنل همکار (یه ردیف کامل)
         if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
-            kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "پنل همکار 🤝"))))
+            kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_PANEL", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "🤝 پنل همکار"))))
         # قوانین همکاری — جایگزین راهنما برای همکاران
         kb.row(types.KeyboardButton(t("BTN_PARTNER_GUIDE", DEFAULT_UI_TEXTS.get("BTN_PARTNER_GUIDE", "📖 راهنما و قوانین"))))
     else:
         # کاربر عادی: درخواست همکاری + پشتیبانی (بدون راهنما)
         if is_main_button_enabled("MAIN_BTN_PARTNER_REQUEST"):
-            kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "درخواست نمایندگی 📝"))))
+            kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "📝 درخواست نمایندگی"))))
         if is_main_button_enabled("MAIN_BTN_SUPPORT"):
-            kb.row(types.KeyboardButton(t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "پشتیبانی 👨‍💻"))))
+            kb.row(types.KeyboardButton(t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "👨‍💻 پشتیبانی"))))
 
     return kb
 
@@ -79,11 +79,9 @@ def category_inline_keyboard(cat_id: int, user_id: int = None) -> types.InlineKe
                 label = f"{p['title']} | {int(eff):,} تومان"
                 kb.add(types.InlineKeyboardButton(label, callback_data=f"cat_{cat_id}_p_{p['id']}"))
 
-    # دکمه بازگشت
+    # دکمه بازگشت — فقط برای زیردسته‌ها (دسته‌های ریشه بازگشت ندارند)
     if cat["parent_id"]:
         kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=f"cat_{cat['parent_id']}"))
-    else:
-        kb.add(types.InlineKeyboardButton("🔙 بازگشت به منو", callback_data="back_main"))
 
     return kb
 
