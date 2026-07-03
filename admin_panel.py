@@ -452,15 +452,14 @@ def _layout(title: str, body: str, admin_info=None,
     if admin_info:
         sidebar = f"""
         <aside id="sidebar" class="sidebar">
-          <div class="sidebar-header">
-            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند">
-              <div class="brand-text-only" style="direction:ltr">
+          <div class="sidebar-header" style="justify-content:center">
+            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" style="margin:0 auto">
+              <div class="brand-text-only" style="direction:ltr;text-align:center">
                 <span style="color:#E8EDF2;font-weight:900;letter-spacing:1.5px">STOCK</span>
                 <span style="color:#2EC4B6;font-weight:900;letter-spacing:1.5px"> LAND</span>
                 <small style="display:block;font-size:9.5px;color:#536075;letter-spacing:.8px;font-weight:400;margin-top:3px;direction:rtl">مدیریت فروشگاه</small>
               </div>
             </a>
-            <button class="icon-button sidebar-close" onclick="toggleSidebar()" aria-label="بستن منو"><i data-lucide="x"></i></button>
           </div>
           <div class="nav-caption">منو اصلی</div>
           <nav class="sidebar-nav">
@@ -655,7 +654,7 @@ def _layout(title: str, body: str, admin_info=None,
     }}
     .brand-text-only span {{ color:var(--clr-primary); }}
     .brand-text-only small {{ display:block; font-size:9.5px; font-weight:400; color:#364454; letter-spacing:.6px; margin-top:2px; direction:rtl; }}
-    .sidebar-nav {{ flex:1; overflow-y:auto; padding:10px 10px; display:flex; flex-direction:column; gap:1px; scrollbar-width:none; }}
+    .sidebar-nav {{ flex:1; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:10px 10px; display:flex; flex-direction:column; gap:1px; scrollbar-width:none; }}
     .sidebar-nav::-webkit-scrollbar {{ display:none; }}
     .nav-divider {{
       display:flex; align-items:center; gap:8px; padding:14px 16px 5px; opacity:.6;
@@ -698,10 +697,6 @@ def _layout(title: str, body: str, admin_info=None,
     }}
     .sidebar-logout:hover {{ background:rgba(239,68,68,.1); color:var(--clr-danger); }}
     .sidebar-logout i {{ width:16px; height:16px; }}
-    .sidebar-close {{
-      display:none; background:none; border:none; cursor:pointer;
-      color:#556070; margin-right:auto; padding:6px; border-radius:8px;
-    }}
     .icon-button {{
       width:38px; height:38px; border-radius:var(--r-md); background:none;
       border:1.5px solid var(--bdr); display:flex; align-items:center;
@@ -965,7 +960,6 @@ def _layout(title: str, body: str, admin_info=None,
       :root {{ --sidebar-w:0px; }}
       .sidebar {{ transform:translateX(100%); }}
       .sidebar.open {{ transform:translateX(0); --sidebar-w:272px; }}
-      .sidebar-close {{ display:flex !important; }}
       .overlay.open {{ display:block; }}
       .topbar {{ right:0; }}
       .topbar-menu {{ display:flex !important; align-items:center; justify-content:center; }}
@@ -1404,8 +1398,6 @@ async def dashboard(request: Request, err: str = ""):
         command_item("message-square", "تیکت‌های باز", open_tix, "در انتظار پاسخ مدیر", "danger" if open_tix else "success", "/admin/tickets"),
         command_item("handshake", "همکاران معلق", partners_pend, "درخواست بررسی‌نشده", "warning" if partners_pend else "success", "/admin/partners"),
         command_item("database-backup", "آخرین بکاپ", "ثبت شده" if last_backup else "ناموجود", last_backup or "هنوز بکاپی ثبت نشده", "success" if last_backup else "warning", "/admin/database"),
-        command_item("activity", "سلامت سیستم", "پایدار", "سرویس پنل در دسترس است", "success", "/admin/database"),
-        command_item("bot", "وضعیت ربات", "فعال", "آماده پاسخ‌گویی", "cyan", "/admin/broadcast"),
     ])
 
     tasks = "".join([
@@ -4194,8 +4186,7 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
         <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
           <div><label class="text-xs text-gray-600 block mb-1">قیمت خرید هر واحد (ت) <span class="text-red-500">*</span></label>
             <input type="number" id="acc_purchase" name="purchase_price" value="0" min="0"
-              class="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm bg-amber-50" placeholder="اجباری">
-              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              class="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm bg-amber-50" placeholder="اجباری"></div>
           <div><label class="text-xs text-gray-600 block mb-1">هزینه‌های جانبی (ت)</label>
             <input type="number" id="acc_side" name="side_cost" value="0"
               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
@@ -4447,7 +4438,81 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
     flash_msg = f"✅+{len(items)}+آیتم+اضافه+شد"
     if dispatched > 0:
         flash_msg += f"+و+{dispatched}+سفارش+معلق+تحویل+داده+شد"
+
+    # اگر قیمت خرید ثبت نشده → صفحه قیمت‌گذاری batch باز شود
+    if purchase_price <= 0:
+        return _redir(f"/admin/feed/{pid}/batch-pricing?n={len(items)}")
     return _redir(f"/admin/feed/{pid}?flash={flash_msg}")
+
+
+@router.get("/feed/{pid}/batch-pricing", response_class=HTMLResponse)
+async def feed_batch_pricing_get(request: Request, pid: int, n: int = 0):
+    """صفحه قیمت‌گذاری بعد از آپلود فایل — قیمت خرید + هزینه جانبی + یادداشت"""
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        prod = conn.execute("SELECT title FROM products WHERE id=?;", (pid,)).fetchone()
+    finally:
+        conn.close()
+    title = prod["title"] if prod else f"#{pid}"
+
+    body = f"""
+    <div class="max-w-lg mx-auto">
+      <div class="card p-6">
+        <div class="text-center mb-5">
+          <div class="text-4xl mb-2">✅</div>
+          <h1 class="text-lg font-bold text-gray-800">{n} آیتم به «{e(title)}» اضافه شد</h1>
+          <p class="text-sm text-gray-500 mt-1">حالا اطلاعات حسابداری این محموله را ثبت کنید</p>
+        </div>
+        <form method="post" action="/admin/feed/{pid}/batch-pricing" class="space-y-4">
+          <input type="hidden" name="n" value="{n}">
+          <div>
+            <label class="text-sm font-medium text-gray-700 block mb-1">قیمت خرید هر واحد (تومان) <span class="text-red-500">*</span></label>
+            <input type="number" name="purchase_price" required min="1" placeholder="مثلاً 45000"
+              class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
+          </div>
+          <div>
+            <label class="text-sm font-medium text-gray-700 block mb-1">هزینه‌های جانبی (تومان)</label>
+            <input type="number" name="side_cost" value="0" min="0"
+              class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
+          </div>
+          <div>
+            <label class="text-sm font-medium text-gray-700 block mb-1">یادداشت</label>
+            <input type="text" name="batch_notes" placeholder="مثلاً: خرید دوره‌ای از تأمین‌کننده"
+              class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
+          </div>
+          <div class="flex gap-3 pt-2">
+            <button type="submit" class="flex-1 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">💾 ثبت و پایان</button>
+            <a href="/admin/feed/{pid}" class="px-5 py-2.5 bg-gray-100 text-gray-500 rounded-xl text-sm text-center hover:bg-gray-200 transition">رد شدن</a>
+          </div>
+        </form>
+      </div>
+    </div>"""
+    return _layout("قیمت‌گذاری محموله", body, adm)
+
+
+@router.post("/feed/{pid}/batch-pricing")
+async def feed_batch_pricing_post(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+    form = await request.form()
+    purchase_price = int(form.get("purchase_price") or 0)
+    side_cost      = int(form.get("side_cost") or 0)
+    batch_notes    = str(form.get("batch_notes") or "").strip()
+    n              = int(form.get("n") or 0)
+
+    if purchase_price > 0 and n > 0:
+        from db import create_feed_batch, link_batch_to_feed, ensure_feed_batch_schema
+        ensure_feed_batch_schema()
+        batch_id = create_feed_batch(pid, purchase_price, side_cost, n, batch_notes)
+        link_batch_to_feed(pid, batch_id, 0, n)
+        _log(request, "قیمت‌گذاری محموله", "موجودی", f"محصول #{pid} — {n} آیتم @ {purchase_price:,}ت", admin_info=adm)
+
+    return _redir(f"/admin/feed/{pid}?flash=✅+اطلاعات+حسابداری+ثبت+شد")
 
 
 @router.post("/feed/{pid}/delete-all")
@@ -5670,6 +5735,8 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
                 <button class="px-3 py-1 bg-indigo-600 text-white rounded text-xs">ثبت</button>
               </form>
             </details>
+            <a href="/admin/wallets/{w["user_id"]}/history"
+              class="px-2 py-1 text-xs bg-teal-50 text-teal-700 border border-teal-200 rounded hover:bg-teal-100 mr-1">🧾 تاریخچه شارژ</a>
           </td>
         </tr>""" for w in wallets)
 
@@ -5711,6 +5778,80 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
     </div>"""
 
     return _layout("کیف‌پول‌ها", body, adm, flash=flash)
+
+
+@router.get("/wallets/{uid}/history", response_class=HTMLResponse)
+async def wallet_charge_history(request: Request, uid: int):
+    """تاریخچه شارژ کاربر — تاریخ، مبلغ، روش (درگاه / کارت به کارت)"""
+    adm = _get_admin(request)
+    guard = _require(adm, "wallets")
+    if guard: return guard
+
+    charges = []
+    conn = _db()
+    try:
+        # شارژهای درگاه (زرین‌پال) — فقط پرداخت‌شده‌ها
+        try:
+            for r in conn.execute("""
+                SELECT amount, COALESCE(paid_at, created_at) AS dt, ref_id
+                FROM zarinpal_transactions
+                WHERE user_id=? AND status IN ('paid','OK','success','verified')
+                  AND COALESCE(payment_type,'wallet')='wallet'
+                ORDER BY id DESC LIMIT 100;
+            """, (uid,)).fetchall():
+                charges.append({"dt": r["dt"] or "", "amount": int(r["amount"] or 0),
+                                "method": "🌐 درگاه پرداخت", "ref": r["ref_id"] or "—"})
+        except Exception:
+            pass
+        # شارژهای کارت به کارت — تأییدشده‌ها
+        try:
+            for r in conn.execute("""
+                SELECT amount, COALESCE(updated_at, created_at) AS dt
+                FROM card_receipts
+                WHERE user_id=? AND status='approved'
+                ORDER BY id DESC LIMIT 100;
+            """, (uid,)).fetchall():
+                charges.append({"dt": r["dt"] or "", "amount": int(r["amount"] or 0),
+                                "method": "💳 کارت به کارت", "ref": "—"})
+        except Exception:
+            pass
+        # موجودی فعلی
+        w = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (uid,)).fetchone()
+        balance = int(w["balance"]) if w else 0
+    finally:
+        conn.close()
+
+    charges.sort(key=lambda c: c["dt"], reverse=True)
+    total_charged = sum(c["amount"] for c in charges)
+
+    rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
+        <td class="px-4 py-2.5 text-xs text-gray-500">{(c['dt'] or '')[:16].replace('T',' ')}</td>
+        <td class="px-4 py-2.5 font-bold text-green-700">{c['amount']:,} ت</td>
+        <td class="px-4 py-2.5">{c['method']}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400"><code>{e(str(c['ref']))}</code></td>
+      </tr>""" for c in charges)
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6 flex-wrap">
+      {_btn("← کیف‌پول‌ها", "/admin/wallets", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">🧾 تاریخچه شارژ — کاربر <code>{uid}</code></h1>
+    </div>
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      {_card("موجودی فعلی", f"{balance:,} ت", "", "indigo")}
+      {_card("تعداد شارژ", f"{len(charges)}", "", "teal")}
+      {_card("جمع شارژها", f"{total_charged:,} ت", "", "green")}
+    </div>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">مبلغ</th>
+          <th class="px-4 py-3">روش پرداخت</th><th class="px-4 py-3">کد پیگیری</th>
+        </tr></thead>
+        <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>شارژی ثبت نشده</td></tr>"}</tbody>
+      </table></div>
+    </div>"""
+
+    return _layout("تاریخچه شارژ", body, adm)
 
 @router.post("/wallets/adjust")
 async def wallet_adjust(request: Request, uid: str=Form(""), amount: str=Form("0"), op: str=Form("add")):
@@ -8018,9 +8159,10 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
             st = p["status"] or "pending"
             bc = {"pending":"yellow","approved":"green","rejected":"red"}.get(st,"gray")
             bl = {"pending":"در انتظار","approved":"تایید","rejected":"رد"}.get(st,st)
-            actions = ""
+            actions = f"""<a href="/admin/partners/{p['tg_user_id']}/profile"
+                  class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded hover:bg-indigo-100">👤 پروفایل</a>"""
             if st == "pending":
-                actions = f"""<form method="post" action="/admin/partners/{p['tg_user_id']}/approve" class="inline">
+                actions += f"""<form method="post" action="/admin/partners/{p['tg_user_id']}/approve" class="inline">
                   <button class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">✅</button></form>
                   <form method="post" action="/admin/partners/{p['tg_user_id']}/reject" class="inline">
                   <button class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">❌</button></form>"""
@@ -8111,6 +8253,9 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
         for tr in tiers:
             try: commission = tr['commission_percent'] or 0
             except Exception: commission = 0
+            try: cfixed = int(tr['commission_fixed'] or 0)
+            except Exception: cfixed = 0
+            comm_label = f"{cfixed:,} ت ثابت" if cfixed > 0 else f"{commission}٪"
             try: color = tr['color'] or '#6B7280'
             except Exception: color = '#6B7280'
             try: desc = e(tr['description'] or '')
@@ -8122,13 +8267,13 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <td class="px-4 py-3 text-2xl">{e(tr['icon'])}</td>
               <td class="px-4 py-3 text-sm font-medium">{e(tr['name'])}</td>
               <td class="px-4 py-3 text-sm text-gray-600">{tr['min_orders']} خرید</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{commission}٪</td>
+              <td class="px-4 py-3 text-sm text-gray-600">{comm_label}</td>
               <td class="px-4 py-3"><span style="background:{color};width:20px;height:20px;display:inline-block;border-radius:4px"></span></td>
               <td class="px-4 py-3 text-xs text-center">{has_banner}</td>
               <td class="px-4 py-3 text-xs text-gray-400">{desc[:30]}</td>
               <td class="px-4 py-3">
                 <div class="flex gap-1 flex-wrap items-center">
-                  <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},'{color}','{desc}')"
+                  <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},{cfixed},'{color}','{desc}')"
                     class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
                   <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
                         enctype="multipart/form-data" id="bf{tr['id']}" style="display:inline">
@@ -8159,6 +8304,8 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <input type="number" name="min_orders" id="tier_min" value="0" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
             <div><label class="text-xs text-gray-500 block mb-1">پورسانت اضافه (٪)</label>
               <input type="number" step="0.1" name="commission_percent" id="tier_comm" value="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">پورسانت ثابت (تومان — 0=درصدی)</label>
+              <input type="number" name="commission_fixed" id="tier_fixed" value="0" min="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
             <div><label class="text-xs text-gray-500 block mb-1">رنگ</label>
               <input type="color" name="color" id="tier_color" value="#6B7280" class="w-full h-10 border border-gray-200 rounded-lg px-1"></div>
             <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">توضیح</label>
@@ -8179,12 +8326,13 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           </table>
         </div></div>
         <script>
-        function editTier(id,name,icon,min,comm,color,desc){{
+        function editTier(id,name,icon,min,comm,cfixed,color,desc){{
           document.getElementById('tier_id').value=id;
           document.getElementById('tier_name').value=name;
           document.getElementById('tier_icon').value=icon;
           document.getElementById('tier_min').value=min;
           document.getElementById('tier_comm').value=comm;
+          document.getElementById('tier_fixed').value=cfixed||0;
           document.getElementById('tier_color').value=color;
           document.getElementById('tier_desc').value=desc;
           document.getElementById('tier-form').scrollIntoView({{behavior:'smooth'}});
@@ -8195,6 +8343,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           document.getElementById('tier_icon').value='🥉';
           document.getElementById('tier_min').value='0';
           document.getElementById('tier_comm').value='0';
+          document.getElementById('tier_fixed').value='0';
           document.getElementById('tier_color').value='#6B7280';
           document.getElementById('tier_desc').value='';
         }}
@@ -8324,6 +8473,122 @@ async def partner_payout_settings_save(request: Request):
     })
     _log(request, "تنظیمات تسویه", "همکاران", "updated")
     return _redir("/admin/partners?tab=settings&flash=تنظیمات+تسویه+ذخیره+شد")
+
+
+@router.get("/partners/{uid}/profile", response_class=HTMLResponse)
+async def partner_profile_admin(request: Request, uid: int):
+    """پروفایل کامل همکار — مشخصات + خریدها + زیرمجموعه‌های مستقیم"""
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+
+    conn = _db()
+    try:
+        p = conn.execute("SELECT * FROM partners WHERE tg_user_id=?;", (str(uid),)).fetchone()
+        if not p:
+            p = conn.execute("SELECT * FROM partners WHERE CAST(tg_user_id AS INTEGER)=?;", (uid,)).fetchone()
+
+        orders = conn.execute("""
+            SELECT * FROM orders WHERE CAST(user_id AS INTEGER)=?
+            ORDER BY id DESC LIMIT 50;
+        """, (uid,)).fetchall()
+        o_total = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER)=? AND COALESCE(status,'active')!='returned';",
+            (uid,)).fetchone()
+
+        subs = conn.execute("""
+            SELECT r.referred_id,
+                   COALESCE(u.full_name, u.username, 'کاربر ' || r.referred_id) AS name,
+                   r.created_at,
+                   COALESCE(o.cnt,0) AS ocnt, COALESCE(o.total,0) AS ototal
+            FROM referrals r
+            LEFT JOIN users u ON CAST(u.user_id AS INTEGER)=r.referred_id
+            LEFT JOIN (SELECT CAST(user_id AS INTEGER) ouid, COUNT(*) cnt, SUM(price) total
+                       FROM orders WHERE COALESCE(status,'active')!='returned'
+                       GROUP BY CAST(user_id AS INTEGER)) o ON o.ouid=r.referred_id
+            WHERE r.referrer_id=? ORDER BY ototal DESC;
+        """, (uid,)).fetchall()
+
+        try:
+            pw = conn.execute("SELECT COALESCE(balance,0) FROM partner_wallets WHERE user_id=?;", (uid,)).fetchone()
+            pw_bal = int(pw[0]) if pw else 0
+        except Exception:
+            pw_bal = 0
+    finally:
+        conn.close()
+
+    name  = e((p["full_name"] if p else "") or f"کاربر {uid}")
+    phone = e((p["phone"] if p else "") or "—")
+    city  = e((p["city"] if p else "") or "—")
+    shop  = e((p["shop_name"] if p else "") or "—")
+    st    = (p["status"] if p else "—") or "—"
+    st_bc = {"pending":"yellow","approved":"green","rejected":"red"}.get(st,"gray")
+    st_bl = {"pending":"در انتظار","approved":"تایید شده","rejected":"رد شده"}.get(st,st)
+
+    order_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
+        <td class="px-4 py-2.5 text-xs text-gray-400">#{o['id']}</td>
+        <td class="px-4 py-2.5">{e(o['title'] or '—')}</td>
+        <td class="px-4 py-2.5 font-medium">{int(o['price'] or 0):,} ت</td>
+        <td class="px-4 py-2.5">{'<span class="px-2 py-0.5 text-xs bg-red-100 text-red-600 rounded-full">برگشتی</span>' if (o['status'] or 'active')=='returned' else '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400">{(o['created_at'] or '')[:10]}</td>
+      </tr>""" for o in orders)
+
+    sub_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
+        <td class="px-4 py-2.5 font-mono text-xs"><code>{s['referred_id']}</code></td>
+        <td class="px-4 py-2.5">{e(s['name'])}</td>
+        <td class="px-4 py-2.5">{int(s['ocnt'])} خرید</td>
+        <td class="px-4 py-2.5 font-medium text-green-600">{int(s['ototal']):,} ت</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400">{(s['created_at'] or '')[:10]}</td>
+      </tr>""" for s in subs)
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6 flex-wrap">
+      {_btn("← همکاران", "/admin/partners", "slate", small=True)}
+      <h1 class="text-xl font-bold text-gray-800">👤 {name}</h1>
+      <span class="px-2.5 py-1 text-xs rounded-full bg-{st_bc}-100 text-{st_bc}-700">{st_bl}</span>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      {_card("خریدها", f"{int(o_total[0] or 0)}", "", "indigo")}
+      {_card("جمع خرید", f"{int(o_total[1] or 0):,} ت", "", "green")}
+      {_card("زیرمجموعه مستقیم", f"{len(subs)}", "", "amber")}
+      {_card("کیف‌پول همکاری", f"{pw_bal:,} ت", "", "teal")}
+    </div>
+
+    <div class="card p-5 mb-6">
+      <h2 class="font-bold text-gray-700 mb-3">📇 مشخصات</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+        <div><span class="text-xs text-gray-400 block">User ID</span><code>{uid}</code></div>
+        <div><span class="text-xs text-gray-400 block">شماره</span>{phone}</div>
+        <div><span class="text-xs text-gray-400 block">شهر</span>{city}</div>
+        <div><span class="text-xs text-gray-400 block">فروشگاه</span>{shop}</div>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-2 gap-6">
+      <div class="card overflow-hidden">
+        <div class="px-5 py-4 border-b"><h2 class="font-bold text-gray-700">🛒 خریدها (۵۰ مورد آخر)</h2></div>
+        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-2.5">#</th><th class="px-4 py-2.5">محصول</th>
+            <th class="px-4 py-2.5">مبلغ</th><th class="px-4 py-2.5">وضعیت</th><th class="px-4 py-2.5">تاریخ</th>
+          </tr></thead>
+          <tbody>{order_rows or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>خریدی ندارد</td></tr>"}</tbody>
+        </table></div>
+      </div>
+      <div class="card overflow-hidden">
+        <div class="px-5 py-4 border-b"><h2 class="font-bold text-gray-700">👥 زیرمجموعه‌های مستقیم</h2></div>
+        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-4 py-2.5">ID</th><th class="px-4 py-2.5">نام</th>
+            <th class="px-4 py-2.5">خرید</th><th class="px-4 py-2.5">مبلغ</th><th class="px-4 py-2.5">عضویت</th>
+          </tr></thead>
+          <tbody>{sub_rows or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>زیرمجموعه‌ای ندارد</td></tr>"}</tbody>
+        </table></div>
+      </div>
+    </div>"""
+
+    return _layout(f"پروفایل همکار", body, adm)
 
 
 @router.get("/partners/payout/{pid}", response_class=HTMLResponse)
@@ -8596,19 +8861,20 @@ async def partner_tier_save(request: Request):
         icon   = str(form.get("icon","🥉")).strip()
         min_o  = int(form.get("min_orders") or 0)
         comm   = float(form.get("commission_percent") or 0)
+        cfixed = int(form.get("commission_fixed") or 0)
         color  = str(form.get("color","#6B7280")).strip()
         desc   = str(form.get("description","")).strip()
         photo  = str(form.get("photo_file_id","")).strip()
         if tid:
             conn.execute("""UPDATE partner_tiers SET name=?,icon=?,min_orders=?,
-                commission_percent=?,color=?,description=?,photo_file_id=? WHERE id=?;""",
-                (name, icon, min_o, comm, color, desc, photo, tid))
+                commission_percent=?,commission_fixed=?,color=?,description=?,photo_file_id=? WHERE id=?;""",
+                (name, icon, min_o, comm, cfixed, color, desc, photo, tid))
         else:
             mx = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM partner_tiers;").fetchone()[0]
             conn.execute("""INSERT INTO partner_tiers
-                (name,icon,min_orders,commission_percent,color,description,photo_file_id,sort_order)
-                VALUES (?,?,?,?,?,?,?,?);""",
-                (name, icon, min_o, comm, color, desc, photo, mx))
+                (name,icon,min_orders,commission_percent,commission_fixed,color,description,photo_file_id,sort_order)
+                VALUES (?,?,?,?,?,?,?,?,?);""",
+                (name, icon, min_o, comm, cfixed, color, desc, photo, mx))
         conn.commit()
     finally:
         conn.close()
