@@ -2678,6 +2678,71 @@ def process_referral_reward(referred_id: int, order_id: int) -> dict:
         conn.close()
 
 
+def process_referral_commission(referred_id: int, order_id: int, order_price: int) -> dict:
+    """
+    پورسانت روی «هر» خرید زیرمجموعه — بر اساس سطح معرف:
+      1. اگر سطح معرف مبلغ ثابت (commission_fixed) دارد → همان مبلغ
+      2. وگرنه اگر سطح درصد (commission_percent) دارد → درصدی از مبلغ سفارش
+      3. وگرنه → درصد عمومی از partner_commission
+    Returns: {paid, referrer_id, amount, tier_name}
+    """
+    ensure_referral_schema()
+    ensure_partner_tiers_extended()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        ref = conn.execute(
+            "SELECT referrer_id FROM referrals WHERE referred_id=? LIMIT 1;",
+            (referred_id,)
+        ).fetchone()
+        if not ref:
+            return {"paid": False}
+        referrer_id = int(ref["referrer_id"])
+
+        # تنظیمات عمومی پورسانت
+        gset = conn.execute("SELECT * FROM partner_commission WHERE id=1;").fetchone()
+        if gset and not int(gset["is_active"] or 0):
+            return {"paid": False}
+        global_pct = float(gset["percent"] if gset else 5.0)
+        min_order  = int(gset["min_order"] if gset else 0)
+        max_payout = int(gset["max_payout"] if gset else 0)
+
+        if min_order > 0 and order_price < min_order:
+            return {"paid": False}
+
+        # سطح معرف
+        order_count = conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
+            (referrer_id,)
+        ).fetchone()[0]
+        tier = conn.execute("""
+            SELECT * FROM partner_tiers WHERE min_orders <= ?
+            ORDER BY min_orders DESC LIMIT 1;
+        """, (order_count,)).fetchone()
+
+        tier_name  = tier["name"] if tier else "—"
+        tier_fixed = int(tier["commission_fixed"] or 0) if tier and "commission_fixed" in tier.keys() else 0
+        tier_pct   = float(tier["commission_percent"] or 0) if tier and "commission_percent" in tier.keys() else 0.0
+
+        if tier_fixed > 0:
+            amount = tier_fixed
+        elif tier_pct > 0:
+            amount = int(order_price * tier_pct / 100)
+        else:
+            amount = int(order_price * global_pct / 100)
+
+        if max_payout > 0:
+            amount = min(amount, max_payout)
+        if amount <= 0:
+            return {"paid": False}
+    finally:
+        conn.close()
+
+    credit_partner_wallet(referrer_id, amount,
+                          note=f"پورسانت خرید زیرمجموعه — سفارش #{order_id} (سطح {tier_name})")
+    return {"paid": True, "referrer_id": referrer_id, "amount": amount, "tier_name": tier_name}
+
+
 def get_referral_stats(referrer_id: int) -> dict:
     ensure_referral_schema()
     conn = _get_connection()
@@ -3076,11 +3141,14 @@ def toggle_user_block(user_id: int) -> bool:
 
 
 def get_user_orders(user_id: int, limit: int = 20) -> list:
+    """سفارش‌های کاربر — سفارش‌های برگشت‌خورده نمایش داده نمی‌شوند."""
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute("""
-            SELECT * FROM orders WHERE CAST(user_id AS INTEGER)=?
+            SELECT * FROM orders
+            WHERE CAST(user_id AS INTEGER)=?
+              AND COALESCE(status,'active') != 'returned'
             ORDER BY id DESC LIMIT ?;
         """, (user_id, limit)).fetchall()
     finally:
@@ -3617,6 +3685,7 @@ def ensure_partner_tiers_extended():
     try:
         for col, default in [
             ("commission_percent", "REAL DEFAULT 0"),
+            ("commission_fixed",  "INTEGER DEFAULT 0"),
             ("color",             "TEXT DEFAULT '#6B7280'"),
             ("description",       "TEXT DEFAULT ''"),
             ("photo_file_id",     "TEXT DEFAULT ''"),
