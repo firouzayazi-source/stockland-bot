@@ -253,7 +253,6 @@ MAIN_BUTTON_KEYS = [
     "MAIN_BTN_WALLET",
     "MAIN_BTN_PARTNER_REQUEST",
     "MAIN_BTN_PARTNER_PANEL",
-    "MAIN_BTN_GUIDE",
     "MAIN_BTN_SUPPORT",
 ]
 
@@ -284,7 +283,6 @@ EDITABLE_BUTTON_GROUPS: dict[str, list[str]] = {
         "MAIN_BTN_WALLET",
         "MAIN_BTN_PARTNER_REQUEST",
         "MAIN_BTN_PARTNER_PANEL",
-        "MAIN_BTN_GUIDE",
         "MAIN_BTN_SUPPORT",
     ],
     "دکمه‌های پنل همکار": [
@@ -323,7 +321,6 @@ BUTTON_ICONS: dict[str, str] = {
     "MAIN_BTN_WALLET":          "💰",
     "MAIN_BTN_PARTNER_REQUEST": "📝",
     "MAIN_BTN_PARTNER_PANEL":   "🤝",
-    "MAIN_BTN_GUIDE":           "🔑",
     "MAIN_BTN_SUPPORT":         "👨‍💻",
     "BTN_PARTNER_MY_SELLERS":   "👥",
     "BTN_PARTNER_PROFILE":      "👤",
