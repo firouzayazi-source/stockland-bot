@@ -77,6 +77,16 @@ MODULES = {
         "tables": ["expenses", "expense_categories"],
         "deps": [],
     },
+    "growth": {
+        "label": "🚀 رشد و فروش",
+        "tables": ["flash_sales", "winback_log"],
+        "deps": [],
+    },
+    "growth": {
+        "label": "🚀 رشد و فروش",
+        "tables": ["flash_sales", "winback_log"],
+        "deps": [],
+    },
     "discounts": {
         "label": "🏷 کدهای تخفیف",
         "tables": ["discount_codes", "discount_usage"],
