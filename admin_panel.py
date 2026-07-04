@@ -1,9457 +1,6129 @@
-"""
-admin_panel.py — پنل مدیریت وب استوک لند (نسخه کامل)
-────────────────────────────────────────────────────
-ویژگی‌ها:
-  - سیستم ادمین چندنفره با اختیارات مجزا
-  - مدیریت کامل تنظیمات ربات
-  - بکاپ / بازیابی / ریست دیتابیس
-  - مدیریت ادمین‌ها از پنل وب
-"""
-
-import hashlib
-import hmac as _hmac
-import html
-import json
 import os
-import shutil
-import sqlite3
-import threading
-import time
+import logging
 from datetime import datetime, timedelta
+import random
+import string
+import requests
+import logging
 
-import requests as _requests
-from fastapi import APIRouter, BackgroundTasks, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
+logger = logging.getLogger("inox_bot")
+import requests
+import telebot
+from telebot import types
+from telebot import apihelper
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-router = APIRouter(prefix="/admin")
+# Telegram networking timeouts (stability)
+apihelper.CONNECT_TIMEOUT = 15
+apihelper.READ_TIMEOUT = 60
+import re
+import time
+import threading
+import html
+from db import subtract_wallet_balance
+from db import (
+    init_db,
+    DB_FULL_PATH,
+    get_wallet_balance,
+    add_wallet_balance,
+    subtract_wallet_balance,
+    set_wallet_balance,
+    create_order,
+    get_recent_orders_by_user,
+    get_recent_orders_global,
+    get_products_by_category,
+    get_product_by_id,
+    update_product_field,
+    toggle_product_active,
+    add_product,
+    delete_product,
+    get_stats,
+    claim_next_feed_item,
+    add_feed_items,
+    get_feed_stats,
+    list_feed_items,
+    count_feed_items,
+    set_feed_item_delivered,
+    delete_feed_item,
+    get_feed_alert_setting,
+    set_feed_alert_threshold,
+    reset_feed_alert_notification,
+    set_feed_alert_last_notified,
+    list_other_services,
+    add_other_service,
+    delete_other_service,
+    upsert_partner_request,
+    list_pending_partners,
+    list_partner_requests,
+    approve_partner,
+    reject_partner,
+    update_partner_city_shop,
+    is_partner_approved,
+    get_partner_by_user_id,
+    get_partner_by_phone,
+    count_user_product_orders_today,
+    get_ui_text,
+    set_ui_text,
+    delete_ui_text,
+    list_ui_texts,
+    # دسته‌بندی داینامیک
+    get_root_categories,
+    get_subcategories,
+    get_category,
+    get_category_products,
+    get_category_by_button_text,
+    get_category_path,
+    # کاربران و تیکت
+    upsert_user,
+    # کد تخفیف
+    validate_discount, use_discount,
+    # اشتراک موجودی
+    subscribe_stock, get_stock_subscribers, mark_subscriptions_notified,
+    reset_subscriptions_on_restock,
+    # پشتیبانی محصول
+    get_product_support_flag, ensure_product_support_schema, get_product_setup_message,
+)
+from services.payments import start_wallet_charge_payment
+from config import (
+    BOT_TOKEN,
+    ADMIN_ID,
+    BASE_DIR,
+    DB_PATH,
+    ZARINPAL_SANDBOX,
+    BASE_CALLBACK_URL,
+    MIN_TOPUP_AMOUNT,
+)
+from state import (
+    STATE,
+    user_states,
+    reseller_signup,
+    admin_states,
+    clear_user_state,
+    clear_admin_state,
+    ensure_admin,
+    admin_has_perm,
+)
+from backup_tools import (
+    BACKUP_DIR,
+    _ensure_backup_dir,
+    create_db_backup,
+    validate_backup_db,
+    restore_db_from_backup,
+    admin_backup_menu,
+    admin_full_reset_confirm_menu,
+    full_reset_database,
+    set_ui_cache_clear_callback,
+)
+from ui_texts import (
+    DEFAULT_UI_TEXTS,
+    MAIN_BUTTON_KEYS,
+    t,
+    tf,
+    is_main_button_enabled,
+    set_main_button_enabled,
+    ui_cache_clear,
+)
+from keyboards import (
+    main_menu,
+    other_products_menu,
+    admin_other_products_menu,
+    wallet_inline_keyboard,
+    admin_main_inline,
+    admin_settings_menu,
+    admin_main_btn_manage_menu,
+    admin_ui_list_menu,
+    category_inline_keyboard,
+)
 
-# ── migrations at startup ────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("inox_bot")
+
+
+class _BotExceptionHandler(telebot.ExceptionHandler):
+    """گیرنده مرکزی همه خطاهای handler ها — بدون این، باگ‌های آینده بی‌صدا گم می‌شدند.
+    خطا را کامل لاگ می‌کند و یک هشدار (rate-limited) به ادمین می‌فرستد."""
+    _last_alert_ts = 0.0
+    _ALERT_COOLDOWN = 60  # حداکثر یک پیام هشدار در هر ۶۰ ثانیه
+
+    def handle(self, exception):
+        import traceback, time as _t
+        tb = traceback.format_exc()
+        logger.error("Unhandled bot exception: %s\n%s", exception, tb)
+        now = _t.time()
+        if now - _BotExceptionHandler._last_alert_ts > _BotExceptionHandler._ALERT_COOLDOWN:
+            _BotExceptionHandler._last_alert_ts = now
+            try:
+                bot.send_message(
+                    ADMIN_ID,
+                    f"⚠️ <b>خطای داخلی ربات</b>\n<code>{str(exception)[:300]}</code>\n\n"
+                    f"جزئیات کامل در لاگ سرور (journalctl) موجود است.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        return True  # جلوگیری از crash مجدد و توقف پردازش این آپدیت
+
+
 try:
-    from db import ensure_product_support_schema, ensure_discount_table, ensure_subscription_table, ensure_referral_schema, ensure_user_extra_schema, ensure_partner_system_schema, ensure_partner_wallet_schema, ensure_admin_notes_schema, ensure_partner_tiers_extended
-    ensure_product_support_schema()
-    ensure_discount_table()
-    ensure_subscription_table()
-    ensure_referral_schema()
-    ensure_user_extra_schema()
-    ensure_partner_system_schema()
-    ensure_partner_wallet_schema()
-    ensure_admin_notes_schema()
-    ensure_partner_tiers_extended()
-except Exception:
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", exception_handler=_BotExceptionHandler())
+except TypeError:
+    # نسخه قدیمی‌تر pyTelegramBotAPI که exception_handler را پشتیبانی نمی‌کند
+    logger.warning("telebot نسخه فعلی از exception_handler پشتیبانی نمی‌کند — fallback به حالت معمولی")
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+set_ui_cache_clear_callback(ui_cache_clear)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── اعداد فارسی — تبدیل سراسری همه پیام‌های خروجی ربات ────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+import re as _fa_re
+_FA_DIGIT_MAP = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+# لینک‌ها، بلوک‌های code/pre، یوزرنیم‌ها و دستورات دست نمی‌خورند
+_FA_SKIP_RE = _fa_re.compile(
+    r'(<code>.*?</code>|<pre>.*?</pre>|https?://[^\s<]+|t\.me/[^\s<]+|@\w+|/\w+)',
+    _fa_re.S
+)
+
+def _fa_digits(text):
+    """تبدیل ارقام لاتین به فارسی — به‌جز لینک‌ها و بلوک‌های کد."""
+    if not isinstance(text, str) or not text:
+        return text
+    parts = _FA_SKIP_RE.split(text)
+    return "".join(p if i % 2 else p.translate(_FA_DIGIT_MAP)
+                   for i, p in enumerate(parts) if p is not None)
+
+# پچ توابع ارسال — یک‌بار، سراسری
+_orig_send_message = bot.send_message
+def _fa_send_message(chat_id, text, *args, **kwargs):
+    return _orig_send_message(chat_id, _fa_digits(text), *args, **kwargs)
+bot.send_message = _fa_send_message
+
+_orig_edit_message_text = bot.edit_message_text
+def _fa_edit_message_text(text, *args, **kwargs):
+    return _orig_edit_message_text(_fa_digits(text), *args, **kwargs)
+bot.edit_message_text = _fa_edit_message_text
+
+_orig_reply_to = bot.reply_to
+def _fa_reply_to(message, text, *args, **kwargs):
+    return _orig_reply_to(message, _fa_digits(text), *args, **kwargs)
+bot.reply_to = _fa_reply_to
+
+_orig_send_photo = bot.send_photo
+def _fa_send_photo(chat_id, photo, *args, **kwargs):
+    if "caption" in kwargs:
+        kwargs["caption"] = _fa_digits(kwargs["caption"])
+    return _orig_send_photo(chat_id, photo, *args, **kwargs)
+bot.send_photo = _fa_send_photo
+
+_orig_answer_cbq = bot.answer_callback_query
+def _fa_answer_cbq(callback_query_id, text=None, *args, **kwargs):
+    return _orig_answer_cbq(callback_query_id, _fa_digits(text) if text else text, *args, **kwargs)
+bot.answer_callback_query = _fa_answer_cbq
+
+_orig_edit_caption = bot.edit_message_caption
+def _fa_edit_caption(caption=None, *args, **kwargs):
+    return _orig_edit_caption(_fa_digits(caption) if caption else caption, *args, **kwargs)
+bot.edit_message_caption = _fa_edit_caption
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── Rate Limiting ربات ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+import time as _rl_time
+_rl_msg_store: dict = {}   # uid → list[float]
+_rl_cb_store:  dict = {}   # uid → list[float]
+_RL_MSG_MAX   = 10    # حداکثر ۱۰ پیام در ۱۰ ثانیه
+_RL_MSG_WIN   = 10.0
+_RL_CB_MAX    = 20    # حداکثر ۲۰ callback در ۱۵ ثانیه
+_RL_CB_WIN    = 15.0
+
+
+def _rate_check(store: dict, uid: int, max_count: int, window: float) -> bool:
+    """True = مجاز ، False = بلاک. ادمین هرگز بلاک نمی‌شه."""
+    try:
+        if int(uid) == int(ADMIN_ID):
+            return True
+    except Exception:
+        pass
+    now = _rl_time.time()
+    ts_list = store.get(uid, [])
+    ts_list = [t for t in ts_list if now - t < window]
+    store[uid] = ts_list
+    if len(ts_list) >= max_count:
+        return False
+    ts_list.append(now)
+    return True
+
+
+@bot.message_handler(
+    func=lambda m: not _rate_check(_rl_msg_store, m.from_user.id, _RL_MSG_MAX, _RL_MSG_WIN),
+    content_types=["text", "photo", "document", "voice", "video", "audio", "sticker"]
+)
+def _rl_msg_blocked(message):
+    """کاربر خیلی سریع پیام فرستاده — نادیده گرفته می‌شه (بی‌صدا)."""
     pass
 
-# ─────────────────────────── Config ────────────────────────────────────────
 
-def _env(k: str, default: str = "") -> str:
-    return os.getenv(k) or default
-
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(_env("DB_PATH"), timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
-    return conn
-
-# ─────────────────────────── Permissions ───────────────────────────────────
-
-ALL_PERMISSIONS = {
-    "dashboard":  "مشاهده داشبورد",
-    "categories": "مدیریت دسته‌بندی‌ها",
-    "products":   "مدیریت محصولات",
-    "feed":       "مدیریت موجودی",
-    "orders":     "مشاهده سفارش‌ها",
-    "tickets":    "مدیریت تیکت‌ها",
-    "wallets":    "مدیریت کیف‌پول",
-    "partners":   "مدیریت همکاران",
-    "settings":   "تنظیمات ربات",
-    "database":   "بکاپ و دیتابیس",
-    "admins":     "مدیریت ادمین‌ها",
-    "broadcast":  "پیام همگانی",
-}
-
-# ─────────────────────────── DB Schema for Admins ──────────────────────────
-
-def ensure_admins_table() -> None:
+@bot.callback_query_handler(
+    func=lambda c: not _rate_check(_rl_cb_store, c.from_user.id, _RL_CB_MAX, _RL_CB_WIN)
+)
+def _rl_cb_blocked(call):
+    """Callback خیلی سریع — فقط acknowledge، بدون پردازش."""
     try:
-        conn = _db()
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS admins (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER UNIQUE,
-                name TEXT NOT NULL,
-                web_username TEXT UNIQUE,
-                web_password_hash TEXT,
-                permissions TEXT DEFAULT '[]',
-                is_active INTEGER DEFAULT 1,
-                notes TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
-        conn.close()
+        bot.answer_callback_query(call.id)
     except Exception:
         pass
 
-# ─────────────────────────── Auth & Session ────────────────────────────────
 
-def _hash_pw(password: str) -> str:
-    secret = _env("SESSION_SECRET", "stockland")
-    return hashlib.sha256((secret + password).encode()).hexdigest()
-
-IDLE_TIMEOUT_SECONDS = 300  # ۵ دقیقه عدم فعالیت → logout
-
-def _make_session(admin_id: str) -> str:
-    """session شامل admin_id و timestamp، امضاشده با HMAC."""
-    import time as _t
-    ts = str(int(_t.time()))
-    secret = _env("SESSION_SECRET", "stockland-panel")
-    payload = f"{admin_id}|{ts}"
-    token = _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{token}:{admin_id}|{ts}"
-
-def _get_admin(request: Request):
-    """Returns (admin_id, is_super, permissions_list) or None.
-    اعتبارسنجی HMAC + بررسی idle timeout. Session لغزنده نیست — عمر ثابت ۳۰۰ ثانیه از آخرین صدور.
-    هر response باید با _refresh_session() کوکی رو تجدید کنه تا مدیر فعال kick نشه."""
-    import time as _t
-    ensure_admins_table()
-    cookie = request.cookies.get("adm", "")
-    if not cookie or ":" not in cookie:
-        return None
-
-    token, payload = cookie.rsplit(":", 1)
-
-    if "|" in payload:
-        admin_id, ts_str = payload.rsplit("|", 1)
+def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, message=None, cat_id=None):
+    """نمایش جزئیات محصول.
+    
+    از هر دو روش قدیمی (category TEXT) و جدید (cat_id INT) پشتیبانی می‌کند.
+    """
+    # handle both chat_id (int) and message object
+    if hasattr(chat_id_or_msg, 'chat'):
+        msg_obj = chat_id_or_msg
+        chat_id = msg_obj.chat.id
+        if user_id is None and hasattr(msg_obj, 'from_user'):
+            user_id = msg_obj.from_user.id
     else:
-        admin_id, ts_str = payload, None
+        chat_id = chat_id_or_msg
+        msg_obj = message
 
-    expected_token = _hmac.new(
-        _env("SESSION_SECRET", "stockland-panel").encode(),
-        payload.encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    # product می‌تونه tuple یا sqlite3.Row باشه
+    if hasattr(product, 'keys'):
+        pid = product["id"]
+        category = category or product.get("category") or str(product.get("category_id", ""))
+        title = product["title"]
+        price = product["price"]
+        description = product.get("description")
+        is_active = product.get("is_active", 1)
+        partner_price = product.get("partner_price")
+        daily_lim_c = product.get("daily_limit_customer") or 0
+        daily_lim_p = product.get("daily_limit_partner") or 0
+        if cat_id is None:
+            cat_id = product.get("category_id")
+    else:
+        pid, category, title, price, description, is_active = product[0:6]
+        partner_price = product[6] if len(product) > 6 else None
+        daily_lim_c = product[7] if len(product) > 7 else 0
+        daily_lim_p = product[8] if len(product) > 8 else 0
 
-    if not _hmac.compare_digest(token, expected_token):
-        return None
+    # تعیین back_cb
+    if cat_id:
+        back_cb = f"cat_{cat_id}"
+    else:
+        back_cb = f"back_list_{category}"
 
-    if ts_str:
+    partner_ok = (user_id is not None) and is_partner_approved(int(user_id))
+    eff_price = partner_price if (partner_ok and partner_price) else price
+    from db import apply_flash_price as _afp
+    eff_price, _flash_sale = _afp(int(pid), int(eff_price))
+
+    # بررسی سقف خرید روزانه
+    if user_id is not None:
+        buyer_type = "partner" if partner_ok else "customer"
+        limit_val = int((daily_lim_p if buyer_type == "partner" else daily_lim_c) or 0)
+        if limit_val > 0:
+            cnt = count_user_product_orders_today(int(user_id), int(pid), buyer_type=buyer_type)
+            if cnt >= limit_val:
+                kb_limit = types.InlineKeyboardMarkup()
+                kb_limit.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
+                bot.send_message(
+                    chat_id,
+                    f"نام سرویس: <b>{title}</b>\n\n"
+                    f"⛔️ سقف خرید روزانه‌ی این محصول ({limit_val} عدد) برای شما تکمیل شده است.\n"
+                    f"لطفاً فردا دوباره اقدام کنید.",
+                    reply_markup=kb_limit,
+                    parse_mode="HTML",
+                )
+                return
+
+    wallet_balance = get_wallet_balance(user_id) if user_id else 0
+
+    # امتیاز محصول
+    rating_text = ""
+    try:
+        from db import get_product_rating, ensure_ratings_schema
+        ensure_ratings_schema()
+        r = get_product_rating(int(pid))
+        if r["count"] > 0:
+            stars = "⭐️" * round(r["avg"]) + f"  {r['avg']}/5"
+            rating_text = f"\n{stars} ({r['count']} نظر)"
+    except Exception:
+        pass
+
+    # FAQ
+    faq_text = ""
+    try:
+        faq_text = _build_faq_text(int(pid))
+    except Exception:
+        pass
+
+    # ضمانت
+    guarantee = _build_guarantee_text()
+
+    text = (
+        f"نام سرویس: <b>{title}</b>{rating_text}\n"
+        f"{_flash_badge(pid, _flash_sale, price, eff_price)}"
+        f"قیمت: <b>{eff_price:,}</b> تومان\n\n"
+        f"{description or 'بدون توضیحات'}"
+        f"{faq_text}"
+        f"{guarantee}"
+    )
+
+    # مستقیم به خلاصه سفارش (بدون صفحه واسط)
+    _show_order_summary(chat_id, user_id, product, category, pid)
+
+
+
+
+# ================== CLEAN CHAT (DELETE ONLY LAST "DELIVERY" MESSAGE) ==================
+# هدف: فقط پیام تحویل محصول (که شامل اطلاعات/فایل محصول است) پاک شود، نه منوها و پیام‌های عادی.
+LAST_DELIVERY = {}  # chat_id -> message_id
+
+def try_delete_last_delivery(chat_id: int):
+    """Delete the last delivery message we sent to this chat (if any)."""
+    mid = LAST_DELIVERY.get(chat_id)
+    if not mid:
+        return
+    try:
+        bot.delete_message(chat_id, mid)
+    except Exception:
+        pass
+    LAST_DELIVERY.pop(chat_id, None)
+
+def _remember_delivery(msg):
+    try:
+        LAST_DELIVERY[msg.chat.id] = msg.message_id
+    except Exception:
+        pass
+
+
+# ================== PENDING AUTO-DELIVERY QUEUE (WHEN FEED IS EMPTY) ==================
+# هدف: وقتی محصول محصول خالی است، سفارش در صف "pending" ثبت شود و به محض اضافه شدن محصول، خودکار تحویل گردد.
+
+def _db_conn():
+    import sqlite3
+    return sqlite3.connect(DB_FULL_PATH)
+
+def ensure_pending_schema():
+    """Create / migrate pending_deliveries table (best-effort, backward compatible)."""
+    try:
+        conn = _db_conn()
         try:
-            age = int(_t.time()) - int(ts_str)
-            if age > IDLE_TIMEOUT_SECONDS:
-                return None
-        except Exception:
-            return None
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_deliveries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER UNIQUE,
+                    user_id INTEGER,
+                    chat_id INTEGER,
+                    product_id INTEGER,
+                    product_title TEXT,
+                    price INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    feed_id INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    delivered_at TEXT
+                );
+                """
+            )
+            # Add missing columns if table existed before (SQLite safe migration)
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(pending_deliveries);").fetchall()}
+            needed = {
+                "order_id": "INTEGER UNIQUE",
+                "user_id": "INTEGER",
+                "chat_id": "INTEGER",
+                "product_id": "INTEGER",
+                "product_title": "TEXT",
+                "price": "INTEGER",
+                "status": "TEXT DEFAULT 'pending'",
+                "feed_id": "INTEGER",
+                "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP",
+                "delivered_at": "TEXT",
+            }
+            for col, decl in needed.items():
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE pending_deliveries ADD COLUMN {col} {decl};")
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        # never block bot start
+        pass
 
-    if admin_id == "super":
-        return ("super", True, list(ALL_PERMISSIONS.keys()))
+def enqueue_pending_delivery(order_id: int, user_id: int, chat_id: int, product_id: int, title: str, price: int):
+    try:
+        if int(_get_product_chat_enabled(int(product_id))) == 1:
+            return False
+    except Exception:
+        pass
+    ensure_pending_schema()
+    try:
+        conn = _db_conn()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO pending_deliveries
+                    (order_id, user_id, chat_id, product_id, product_title, price, status, feed_id)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL);
+                """,
+                (int(order_id), int(user_id), int(chat_id), int(product_id), str(title), int(price)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+def _mark_pending_delivered(order_id: int, feed_id: int):
+    try:
+        conn = _db_conn()
+        try:
+            conn.execute(
+                "UPDATE pending_deliveries SET status='delivered', feed_id=?, delivered_at=CURRENT_TIMESTAMP WHERE order_id=?;",
+                (int(feed_id), int(order_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+def _send_delivery_to_user(chat_id: int, order_id: int, pid: int, title: str, eff_price: int, feed_id: int, feed_data: str):
+    delivery_text = (
+        "✅ <b>محصول شما آماده شد</b>\n\n"
+        f"Order ID: <b>#{order_id}</b>\n"
+        f"محصول: <b>{html.escape(str(title))}</b> (#{pid})\n"
+        f"Feed ID: <b>{feed_id}</b>\n\n"
+        f"<code>{html.escape(str(feed_data))}</code>"
+    )
+    try_delete_last_delivery(chat_id)
+    _delivery_msg = bot.send_message(chat_id, delivery_text, parse_mode="HTML")
+    _remember_delivery(_delivery_msg)
+
+    # ذخیره دائمی پیام تحویل برای امکان «برگشت» از پنل
+    try:
+        import sqlite3 as _sq3
+        from datetime import datetime as _dt2
+        _c = _sq3.connect(DB_FULL_PATH)
+        try:
+            _c.execute(
+                "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                "VALUES (?,?,?,?,?);",
+                (int(feed_id), int(order_id), int(chat_id), int(_delivery_msg.message_id), _dt2.utcnow().isoformat())
+            )
+            _c.commit()
+        finally:
+            _c.close()
+    except Exception as _ex:
+        logger.error("delivery_messages insert failed: %s", _ex)
+
+    # ذخیره feed_id در orders برای برگشت
+    try:
+        from db import order_set_feed_id
+        order_set_feed_id(int(order_id), int(feed_id))
+    except Exception:
+        pass
+
+def try_dispatch_pending_for_product(product_id: int, limit: int = 50) -> int:
+    """
+    Try to dispatch pending orders for a product using available feed items.
+    Returns number of dispatched orders.
+    """
+    try:
+        if int(_get_product_chat_enabled(int(product_id))) == 1:
+            return 0
+    except Exception:
+        pass
+    ensure_pending_schema()
+    dispatched = 0
+    try:
+        conn = _db_conn()
+        rows = conn.execute(
+            """
+            SELECT order_id, user_id, chat_id, product_id, product_title, COALESCE(price,0)
+            FROM pending_deliveries
+            WHERE product_id=? AND status='pending'
+            ORDER BY id ASC
+            LIMIT ?;
+            """,
+            (int(product_id), int(limit)),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+
+    for order_id, user_id, chat_id, pid, title, price in rows:
+        feed_item = claim_next_feed_item(int(pid))
+        if not feed_item:
+            break
+
+        try:
+            feed_id, feed_data = feed_item
+        except Exception:
+            try:
+                feed_id, feed_data, _ = feed_item
+            except Exception:
+                feed_id, feed_data = (None, None)
+
+        if feed_id is None:
+            break
+
+        try:
+            _send_delivery_to_user(int(chat_id), int(order_id), int(pid), str(title), int(price), int(feed_id), str(feed_data))
+        except Exception:
+            # if delivery fails, revert delivered flag back? keep pending so it can be retried.
+            try:
+                # mark feed item as undelivered (rollback best-effort)
+                set_feed_item_delivered(int(feed_id), 0)
+            except Exception:
+                pass
+            continue
+
+        _mark_pending_delivered(int(order_id), int(feed_id))
+        dispatched += 1
+
+        # notify admin
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                "📤 <b>تحویل خودکار از صف</b>\n\n"
+                f"Order ID: #{int(order_id)}\n"
+                f"User ID: <code>{int(user_id)}</code>\n"
+                f"محصول: {html.escape(str(title))} (#{int(pid)})\n"
+                f"Feed ID: {int(feed_id)}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+        # low stock alert check (reuse existing logic)
+        try:
+            total_f, remaining_f, delivered_f = get_feed_stats(int(pid))
+            threshold_f, last_f = get_feed_alert_setting(int(pid))
+            if remaining_f <= threshold_f and (last_f is None or int(last_f) != int(remaining_f)):
+                bot.send_message(
+                    ADMIN_ID,
+                    "⚠️ <b>هشدار کمبود موجودی</b>\n\n"
+                    f"محصول: {html.escape(str(title))} (#{int(pid)})\n"
+                    f"باقی‌مانده: <b>{remaining_f}</b> از <b>{total_f}</b>\n"
+                    f"آستانه: <b>{threshold_f}</b>",
+                    parse_mode="HTML",
+                )
+                set_feed_alert_last_notified(int(pid), remaining_f)
+        except Exception:
+            pass
+
+    return dispatched
+
+
+# ================== DELIVERY MESSAGE TRACKING (PERSISTENT) ==================
+# هدف: وقتی آیتم محصول «تحویل» شد، پیام تحویل همان آیتم در چت مشتری ذخیره شود تا با «برگشت» از پنل ادمین همان پیام پاک شود.
+# نکته: Order ID با Feed ID فرق دارد. برای جلوگیری از سردرگمی، ارتباط feed_id <-> order_id را هم ذخیره می‌کنیم.
+def _ensure_delivery_table():
+    try:
+        import sqlite3
+        _conn = sqlite3.connect(DB_FULL_PATH)
+        try:
+            _conn.execute(
+                """CREATE TABLE IF NOT EXISTS delivery_messages (
+                    feed_id INTEGER PRIMARY KEY,
+                    order_id INTEGER,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );"""
+            )
+
+            # مهاجرت نرم: اگر جدول قبلاً ساخته شده و ستون order_id ندارد، اضافه‌اش کن.
+            cols = [r[1] for r in _conn.execute("PRAGMA table_info(delivery_messages);").fetchall()]
+            if "order_id" not in cols:
+                try:
+                    _conn.execute("ALTER TABLE delivery_messages ADD COLUMN order_id INTEGER;")
+                except Exception:
+                    pass
+
+            _conn.commit()
+        finally:
+            _conn.close()
+    except Exception:
+        pass
+
+
+
+# ================== PRODUCT CHAT (TICKET) ==================
+# قابلیت چت برای هر محصول (اختیاری). اگر برای محصول فعال شود، بعد از خرید/تحویل یک تیکت باز می‌شود
+# و تا زمانی که کاربر یا ادمین آن را ببندند، پیام‌های کاربر به ادمین و پاسخ ادمین به کاربر ارسال می‌شود.
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TICKET SYSTEM v2 — طراحی از صفر
+# ═══════════════════════════════════════════════════════════════════════════
+
+from db import (
+    ticket_ensure_schema, ticket_create, ticket_get, ticket_get_open_support,
+    ticket_get_open_product, ticket_add_message, ticket_user_sent,
+    ticket_admin_replied, ticket_close, ticket_get_messages,
+    ticket_count_waiting, ticket_get_all, TICKET_MAX_USER_MSGS,
+)
+
+BOT_BASE_URL = os.getenv("BOT_WEBHOOK_URL", "").rstrip("/")
+PANEL_URL = "https://panel.stland.ir/admin"
+
+
+def _get_product_chat_enabled(product_id: int) -> int:
+    """چک chat_enabled برای محصول."""
+    try:
+        import sqlite3 as _sq3
+        _c = _sq3.connect(DB_FULL_PATH)
+        try:
+            row = _c.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
+            return int(row[0] or 0) if row else 0
+        finally:
+            _c.close()
+    except Exception:
+        return 0
+
+
+def _set_product_chat_enabled(product_id: int, enabled: int) -> None:
+    try:
+        import sqlite3 as _sq3
+        _c = _sq3.connect(DB_FULL_PATH)
+        try:
+            _c.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
+            _c.commit()
+        finally:
+            _c.close()
+    except Exception:
+        pass
+
+
+def _tg_send_to_user(user_id: int, text: str, reply_markup=None, parse_mode="HTML") -> bool:
+    """ارسال پیام به کاربر از طریق ربات."""
+    try:
+        bot.send_message(int(user_id), text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return True
+    except Exception as ex:
+        logger.error("_tg_send_to_user(%s) failed: %s", user_id, ex)
+        return False
+
+
+# ─── Keyboards ──────────────────────────────────────────────────────────────
+
+def _ticket_user_kb(ticket_id: int, has_messages: bool = False) -> types.InlineKeyboardMarkup:
+    """هیچ دکمه‌ای نمایش داده نمی‌شه — جریان از طریق پیام‌های متنی مدیریت می‌شه."""
+    return types.InlineKeyboardMarkup()
+
+
+def _is_real_message(msg_text: str, content_type: str) -> bool:
+    """آیا این پیام واقعی و معتبر است؟"""
+    # رسانه‌ها بدون متن هم معتبرن
+    if content_type in ("photo", "document", "voice", "video", "audio"):
+        return True
+    if content_type != "text":
+        return False  # استیکر، animation و... قبول نیست
+    if not msg_text or not msg_text.strip():
+        return False
+    text = msg_text.strip()
+    if len(text) <= 2:
+        return False
+    import unicodedata
+    non_emoji = [c for c in text if unicodedata.category(c) not in ('So','Sk','Sm','Sc')]
+    if len("".join(non_emoji).strip()) <= 1:
+        return False
+    return True
+
+
+def _ticket_has_user_message(ticket_id: int) -> bool:
+    try:
+        from db import _get_connection
+        conn = _get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM ticket_messages WHERE ticket_id=? AND sender='user';",
+            (ticket_id,)
+        )
+        count = cur.fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception:
+        return False
+
+
+def _ticket_real_msg_count(ticket_id: int) -> int:
+    """تعداد پیام‌های واقعی کاربر در تیکت."""
+    try:
+        from db import _get_connection
+        conn = _get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM ticket_messages WHERE ticket_id=? AND sender='user';",
+            (ticket_id,)
+        )
+        count = cur.fetchone()[0]
+        conn.close()
+        return count
+    except Exception:
+        return 0
+
+
+TICKET_MAX_USER_MSGS = 3
+
+
+def _ticket_admin_kb(ticket_id: int, user_id: int) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("✏️ پاسخ از تلگرام", callback_data=f"ticket_v2_reply_{ticket_id}_{user_id}"),
+        types.InlineKeyboardButton("🔒 بستن تیکت", callback_data=f"ticket_v2_admin_close_{ticket_id}"),
+    )
+    kb.add(types.InlineKeyboardButton("🌐 پاسخ از پنل", url=f"{PANEL_URL}/tickets/{ticket_id}"))
+    return kb
+
+
+# ─── Support Ticket Flow (کاربر) ─────────────────────────────────────────────
+
+def _support_ticket_start(chat_id: int, user_id: int) -> None:
+    """ایجاد یا ادامه تیکت پشتیبانی — کاربر مستقیم وارد گفتگو می‌شه."""
+    ticket_ensure_schema()
+    existing = ticket_get_open_support(user_id)
+    if existing:
+        ticket_id = existing["id"]
+        user_states[user_id] = {"mode": "ticket_v2", "ticket_id": ticket_id}
+        has_msg = _ticket_has_user_message(ticket_id)
+        kb = _ticket_user_kb(ticket_id, has_messages=has_msg)
+        bot.send_message(
+            chat_id,
+            f"💬 ادامه مکالمه تیکت <b>#{ticket_id}</b>\n\n"
+            "پیام خود را ارسال کنید، پشتیبانی در اولین فرصت پاسخ خواهد داد.",
+            reply_markup=kb, parse_mode="HTML"
+        )
+    else:
+        ticket_id = ticket_create(user_id, type_="support")
+        user_states[user_id] = {"mode": "ticket_v2", "ticket_id": ticket_id}
+        # ابتدا بدون دکمه پایان — فقط راهنما
+        kb = _ticket_user_kb(ticket_id, has_messages=False)
+        bot.send_message(
+            chat_id,
+            "💬 <b>پشتیبانی آنلاین</b>\n\n"
+            "پیام خود را ارسال کنید، پشتیبانی در اولین فرصت پاسخ خواهد داد.\n\n"
+            "⚠️ لطفاً مشکل خود را در یک پیام کامل توضیح دهید.",
+            reply_markup=kb, parse_mode="HTML"
+        )
+
+
+def _is_menu_or_system_button(text: str) -> bool:
+    """آیا این پیام یک دکمه/دستور است که باید از چت خارج کند؟"""
+    if not text:
+        return False
+    text = text.strip()
+
+    # ۱. هر دستوری که با / شروع شود (/start, /help, ...)
+    if text.startswith("/"):
+        return True
+
+    # ۲. دکمه‌های سیستمی منوی اصلی
+    try:
+        system_keys = (
+            "MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET", "MAIN_BTN_PARTNER_REQUEST",
+            "MAIN_BTN_PARTNER_PANEL", "BTN_PARTNER_GUIDE", "MAIN_BTN_SUPPORT",
+            "MAIN_BTN_OTHER_PRODUCTS", "MAIN_BTN_BUY_APPLE_ID",
+        )
+        for key in system_keys:
+            val = t(key, DEFAULT_UI_TEXTS.get(key, ""))
+            if val and text == val:
+                return True
+    except Exception:
+        pass
+
+    # ۳. دکمه‌های دسته‌بندی (داینامیک)
+    try:
+        from db import get_root_categories
+        for cat in get_root_categories(active_only=True):
+            emoji = (cat["emoji"] or "").strip()
+            label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+            if text == label:
+                return True
+    except Exception:
+        pass
+
+    # ۴. دکمه‌های ثابت شناخته‌شده
+    known_buttons = (
+        "🔙 بازگشت", "🔙 بازگشت به منو", "❌ انصراف", "🏠 منوی اصلی",
+        "بازگشت", "انصراف", "منوی اصلی", "🛒 خرید", "📜 قوانین",
+    )
+    if text in known_buttons:
+        return True
+
+    return False
+
+
+def _exit_chat_if_needed(message) -> bool:
+    """
+    استاندارد سراسری: اگر کاربر وسط چت/تیکت کاری غیر از پیام‌دادن کرد،
+    خودکار از حالت چت خارج شود و پیام در تیکت ثبت نشود.
+    خروجی: True اگر از چت خارج شد (یعنی نباید ادامه داد).
+    """
+    uid = message.from_user.id
+    st  = user_states.get(uid, {})
+    if st.get("mode") != "ticket_v2":
+        return False  # اصلاً در حالت چت نیست
+
+    txt = message.text or ""
+
+    # حالت ۱: دکمه منو یا دستور → خروج + انتقال به handler مربوطه
+    if message.content_type == "text" and _is_menu_or_system_button(txt):
+        clear_user_state(uid)
+        try:
+            bot.process_new_messages([message])
+        except Exception:
+            pass
+        return True
+
+    return False
+
+
+def _ticket_v2_handle_user_message(message) -> None:
+    """handler اصلی پیام کاربر به تیکت."""
+    uid = message.from_user.id
+
+    # ── استاندارد سراسری: اگر کاری غیر چت کرد، خودکار خارج شو ──────────────
+    if _exit_chat_if_needed(message):
+        return  # از چت خارج شد، پیام در تیکت ثبت نشد
+
+    st = user_states.get(uid, {})
+    ticket_id = st.get("ticket_id")
+
+    if not ticket_id:
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
+        return
+
+    ticket = ticket_get(int(ticket_id))
+    if not ticket or ticket["status"] == "closed":
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "این مکالمه بسته شده است.", reply_markup=main_menu(user_id=uid))
+        return
+
+    # ─── Anti-spam: سقف ۳ پیام واقعی متوالی ────────────────────────────────
+    cur_count = int(ticket["user_msg_count"] or 0)
+    if cur_count >= TICKET_MAX_USER_MSGS:
+        bot.reply_to(message,
+            f"⏳ لطفاً منتظر پاسخ پشتیبانی بمانید.\n"
+            "پس از پاسخ، می‌توانید ادامه دهید.")
+        return
+
+    # ─── بررسی واقعی بودن پیام ───────────────────────────────────────────
+    # متن یا caption (برای عکس/ویدیو)
+    txt = (message.text or message.caption or "").strip()
+    if not _is_real_message(txt, message.content_type):
+        bot.reply_to(message,
+            "لطفاً پیام متنی یا عکس/فایل معتبر ارسال کنید.\n"
+            "(استیکر و ایموجی تنها قبول نمی‌شود)")
+        return
+
+    media = message.content_type if message.content_type != "text" else None
+    file_id = None
+    if media:
+        try:
+            if message.content_type == "photo":
+                file_id = message.photo[-1].file_id
+            elif message.content_type == "document":
+                file_id = message.document.file_id
+            elif message.content_type == "video":
+                file_id = message.video.file_id
+            elif message.content_type == "audio":
+                file_id = message.audio.file_id
+            elif message.content_type == "voice":
+                file_id = message.voice.file_id
+        except Exception:
+            pass
+
+    ticket_add_message(
+        int(ticket_id), "user",
+        txt or f"[{message.content_type}]",
+        media_type=media,
+        media_file_id=file_id
+    )
+    new_count = ticket_user_sent(int(ticket_id))
+
+    # بعد از اولین پیام — تأیید
+    if new_count == 1:
+        bot.send_message(message.chat.id,
+            "✅ پیام شما دریافت شد.\n"
+            "پشتیبانی در اولین فرصت پاسخ خواهد داد. 🙏\n\n"
+            f"({TICKET_MAX_USER_MSGS - new_count} پیام دیگر می‌توانید ارسال کنید)"
+        )
+
+    elif new_count >= TICKET_MAX_USER_MSGS:
+        # بستن سهمیه — تا پاسخ ادمین
+        user_states.pop(uid, None)
+        bot.send_message(message.chat.id,
+            "✅ پیام شما ثبت شد.\n\n"
+            "🔒 <b>گفتگو در انتظار پاسخ پشتیبانی است.</b>\n"
+            "پس از پاسخ پشتیبانی، می‌توانید ادامه دهید.",
+            parse_mode="HTML"
+        )
+    else:
+        bot.send_message(message.chat.id,
+            f"✅ پیام دریافت شد. ({TICKET_MAX_USER_MSGS - new_count} پیام دیگر)"
+        )
+
+    # ─── نوتیف به ادمین — فقط اولین پیام از هر batch ─────────────────────
+    if new_count == 1:
+        # تشخیص نوع تیکت برای نمایش بهتر به ادمین
+        try:
+            _tk = ticket_get(int(ticket_id))
+            _ttype = (_tk["type"] if _tk and "type" in _tk.keys() else "support") or "support"
+        except Exception:
+            _ttype = "support"
+        type_label = {
+            "support": "🔵 پشتیبانی",
+            "product_setup": "🟢 راه‌اندازی محصول",
+            "partner_support": "🤝 همکاران",
+        }.get(_ttype, "🔵 پشتیبانی")
+
+        panel_url = f"https://panel.stland.ir/admin/tickets/{ticket_id}"
+        notif_kb = types.InlineKeyboardMarkup()
+        notif_kb.add(types.InlineKeyboardButton("🌐 مشاهده در پنل", url=panel_url))
+        try:
+            bot.send_message(ADMIN_ID,
+                f"🔔 پیام جدید — {type_label}\n"
+                f"تیکت <b>#{ticket_id}</b> | کاربر: <code>{uid}</code>",
+                reply_markup=notif_kb, parse_mode="HTML")
+        except Exception as ex:
+            logger.error("Admin notification failed: %s", ex)
+
+
+# ─── Handler پیام‌های متنی کاربر در حالت تیکت ────────────────────────────────
+
+@bot.message_handler(
+    func=lambda m: (
+        not ensure_admin(m.from_user.id) or
+        user_states.get(m.from_user.id, {}).get("mode") == "ticket_v2"
+    ) and user_states.get(m.from_user.id, {}).get("mode") == "ticket_v2"
+)
+def _handle_ticket_v2_text(message):
+    _ticket_v2_handle_user_message(message)
+
+
+@bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "ticket_v2",
+    content_types=["photo", "document", "video", "audio", "voice", "sticker"]
+)
+def _handle_ticket_v2_media(message):
+    _ticket_v2_handle_user_message(message)
+
+
+# ─── /start و /admin ──────────────────────────────────────────────────────
+
+@bot.message_handler(commands=["admin", "panel"])
+def handle_admin_command(message):
+    uid = message.from_user.id
+    if not ensure_admin(uid):
+        return
+    panel_url = "https://panel.stland.ir/admin/"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("🌐 ورود به پنل مدیریت", url=panel_url),
+        types.InlineKeyboardButton("🎫 تیکت‌ها", url=panel_url + "tickets"),
+        types.InlineKeyboardButton("📦 محصولات", url=panel_url + "products"),
+        types.InlineKeyboardButton("🗃 موجودی", url=panel_url + "feed"),
+        types.InlineKeyboardButton("🧾 سفارش‌ها", url=panel_url + "orders"),
+    )
+    bot.send_message(uid, "🛍 پنل مدیریت استوک لند:", reply_markup=kb)
+
+
+MAINTENANCE_MSG = (
+    "🚧 ربات در حال بروزرسانی است.\n"
+    "به‌زودی با امکانات جدید بازخواهیم گشت.\n"
+    "از شکیبایی شما سپاسگزاریم. ❤️"
+)
+
+# ─── Rate Limiter ─────────────────────────────────────────────────────────────
+# جلوگیری از flood: حداکثر 15 پیام در 10 ثانیه برای هر کاربر
+import collections as _collections, time as _time
+
+_rate_limits: dict = {}  # {user_id: deque of timestamps}
+_RATE_MAX_MSGS = 15
+_RATE_WINDOW   = 10.0   # ثانیه
+_rate_last_cleanup = _time.monotonic()
+
+def _is_rate_limited(uid: int) -> bool:
+    """True اگه کاربر بیش از حد مجاز پیام بفرسته."""
+    global _rate_last_cleanup
+    if uid == ADMIN_ID:
+        return False
+    now = _time.monotonic()
+    # هر ۵ دقیقه یه‌بار کاربرهای قدیمی رو پاک کن
+    if now - _rate_last_cleanup > 300:
+        dead = [k for k, dq in _rate_limits.items()
+                if not dq or dq[-1] < now - _RATE_WINDOW * 3]
+        for k in dead:
+            del _rate_limits[k]
+        _rate_last_cleanup = now
+    dq = _rate_limits.setdefault(uid, _collections.deque())
+    while dq and dq[0] < now - _RATE_WINDOW:
+        dq.popleft()
+    if len(dq) >= _RATE_MAX_MSGS:
+        return True
+    dq.append(now)
+    return False
+
+@bot.message_handler(func=lambda m: _is_rate_limited(m.from_user.id),
+                     content_types=["text","photo","document","voice","video","sticker"])
+def rate_limit_blocker(message):
+    pass  # بدون پاسخ — جلوگیری از amplification attack
+
+@bot.callback_query_handler(func=lambda c: _is_rate_limited(c.from_user.id))
+def rate_limit_blocker_cb(call):
+    try:
+        bot.answer_callback_query(call.id)  # فقط dismiss می‌کنه، پیامی نمی‌ده
+    except Exception:
+        pass
+# ─────────────────────────────────────────────────────────────────────────────
+
+@bot.message_handler(func=lambda m: _check_maintenance(m), content_types=["text","photo","document","voice","video"])
+def maintenance_blocker(message):
+    bot.send_message(message.chat.id, MAINTENANCE_MSG)
+
+@bot.callback_query_handler(func=lambda c: _check_maintenance_cb(c))
+def maintenance_blocker_cb(call):
+    bot.answer_callback_query(call.id, "🚧 ربات در حال بروزرسانی است.", show_alert=True)
+
+def _check_maintenance(message) -> bool:
+    try:
+        if message.from_user.id == ADMIN_ID:
+            return False
+        from db import get_maintenance_mode
+        return get_maintenance_mode()
+    except Exception:
+        return False
+
+def _check_maintenance_cb(call) -> bool:
+    try:
+        if call.from_user.id == ADMIN_ID:
+            return False
+        from db import get_maintenance_mode
+        return get_maintenance_mode()
+    except Exception:
+        return False
+
+
+@bot.message_handler(commands=["start"])
+def handle_start(message):
+    init_db(DB_PATH)
+    ticket_ensure_schema()
+
+    uid       = message.from_user.id
+    username  = message.from_user.username
+    full_name = ((message.from_user.first_name or "") + " " + (message.from_user.last_name or "")).strip()
 
     try:
-        conn = _db()
-        row = conn.execute(
-            "SELECT id, permissions, is_active FROM admins WHERE id=? LIMIT 1;",
-            (int(admin_id),),
-        ).fetchone()
-        conn.close()
-        if not row or not row["is_active"]:
-            return None
-        perms = json.loads(row["permissions"] or "[]")
-        return (str(row["id"]), False, perms)
+        upsert_user(uid, username, full_name)
     except Exception:
-        return None
+        pass
+
+    # بررسی لینک معرفی: /start ref_12345 یا /start STLAND-4521
+    args = message.text.split() if message.text else []
+    if len(args) > 1:
+        arg = args[1]
+        if arg.startswith("ref_"):
+            # سیستم معرفی کاربران عادی
+            try:
+                referrer_id = int(arg[4:])
+                if referrer_id != uid:
+                    from db import register_referral, get_referral_settings, ensure_referral_schema
+                    ensure_referral_schema()
+                    settings = get_referral_settings()
+                    if settings.get("is_active"):
+                        is_new = register_referral(referrer_id, uid)
+                        # اطلاع‌رسانی به معرف — فقط برای عضویت جدید
+                        if is_new:
+                            try:
+                                new_name = (full_name or username or "کاربر جدید").strip()
+                                bot.send_message(
+                                    referrer_id,
+                                    "🎉 <b>خبر خوب!</b>\n\n"
+                                    f"«{new_name}» با لینک دعوت شما به ربات پیوست.\n\n"
+                                    "زیرمجموعه‌های خود را می‌توانید از بخش "
+                                    "«👥 فروشندگان من» در پنل همکاری مشاهده کنید.\n"
+                                    "هرچه شبکه شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪",
+                                    parse_mode="HTML"
+                                )
+                            except Exception:
+                                pass
+            except Exception:
+                pass
 
 
-def _refresh_session(response, admin_info) -> None:
-    """Session را تجدید می‌کند تا مدیر فعال بعد از ۵ دقیقه kick نشود.
-    باید در ابتدای هر GET handler صدا زده شود."""
-    if not admin_info:
+    text = tf("MSG_WELCOME", name=full_name or "دوست عزیز")
+    bot.send_message(message.chat.id, text, reply_markup=main_menu(user_id=uid), parse_mode="HTML")
+
+
+
+@bot.message_handler(commands=["referral", "invite"])
+def handle_referral_cmd(message):
+    uid = message.from_user.id
+    from db import get_referral_stats, get_referral_settings, ensure_referral_schema
+    ensure_referral_schema()
+    settings = get_referral_settings()
+    if not settings.get("is_active"):
+        bot.send_message(message.chat.id, "❌ سیستم معرفی فعلاً غیرفعال است.")
         return
-    admin_id = admin_info[0]
-    new_cookie = _make_session(str(admin_id))
-    response.set_cookie(
-        "adm", new_cookie,
-        max_age=IDLE_TIMEOUT_SECONDS,
-        httponly=True,
-        samesite="lax",
-        secure=False,  # اگه پنل HTTPS داره، True بذار
+    stats    = get_referral_stats(uid)
+    bot_info = bot.get_me()
+    link     = f"https://t.me/{bot_info.username}?start=ref_{uid}"
+    bot.send_message(message.chat.id,
+        f"🔗 <b>لینک معرفی شما:</b>\n<code>{link}</code>\n\n"
+        f"👥 معرفی‌شدگان: <b>{stats['total']}</b>\n"
+        f"✅ پرداخت‌شده: <b>{stats['rewarded']}</b>\n"
+        f"💰 کل درآمد: <b>{stats['earned']:,}</b> تومان\n\n"
+        f"📌 به ازای هر خرید اول دوستی که معرفی می‌کنید "
+        f"<b>{settings.get('reward_amount',5000):,}</b> تومان به کیف‌پول شما اضافه می‌شود.",
+        parse_mode="HTML"
     )
 
 
-def _admin_id_of(admin_info) -> str:
-    return admin_info[0] if admin_info else ""
 
-def _has(admin_info, perm: str) -> bool:
-    if not admin_info:
-        return False
-    _, is_super, perms = admin_info
-    return is_super or perm in perms
 
-def _require(admin_info, perm: str):
-    """Returns 403 redirect if admin lacks permission."""
-    if not admin_info:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not _has(admin_info, perm):
-        return RedirectResponse("/admin/?err=noperm", status_code=303)
-    return None
 
-def _redir(path: str) -> RedirectResponse:
-    return RedirectResponse(path, status_code=303)
-
-# ─────────────────────────── HTML helpers ──────────────────────────────────
-
-def e(s) -> str:
-    return html.escape(str(s or ""))
-
-def _open_ticket_count() -> int:
+def _display_order_no(order_id) -> int | None:
+    """شماره نمایشی سفارش — فعلاً همان ID."""
     try:
-        conn = _db()
-        n = conn.execute("SELECT COUNT(*) FROM tickets WHERE status='waiting_admin';").fetchone()[0]
-        conn.close()
-        return int(n)
+        return int(order_id)
     except Exception:
-        return 0
+        return None
 
 
-def _pending_payout_count() -> int:
+
+
+
+def format_price(amount):
     try:
-        conn = _db()
-        n = conn.execute("SELECT COUNT(*) FROM partner_payouts WHERE status='pending';").fetchone()[0]
-        conn.close()
-        return int(n or 0)
+        amount = int(amount)
     except Exception:
-        return 0
+        return str(amount)
+    return f"{amount:,} تومان"
 
 
-def _pending_card2card_count() -> int:
+def admin_partner_requests_menu():
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("📥 در انتظار", callback_data="admin_partner_list_pending"),
+        types.InlineKeyboardButton("✅ تایید شده", callback_data="admin_partner_list_approved"),
+        types.InlineKeyboardButton("❌ رد شده", callback_data="admin_partner_list_rejected"),
+        types.InlineKeyboardButton("🔍 جستجو", callback_data="admin_partner_search"),
+        types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back"),
+    )
+    return kb
+
+
+def send_partner_list(chat_id: int, status: str | None = None, query: str | None = None):
+    rows = list_partner_requests(status=status, query=query, limit=50, offset=0)
+
+    def h(x):
+        return html.escape(str(x)) if x is not None else "-"
+
+    title_parts = []
+    if status:
+        title_parts.append({"pending": "در انتظار", "approved": "تایید شده", "rejected": "رد شده"}.get(status, status))
+    else:
+        title_parts.append("همه")
+    if query:
+        title_parts.append(f"جستجو: {h(query)}")
+
+    bot.send_message(
+        chat_id,
+        f"🤝 لیست درخواست‌های همکار ({' | '.join(title_parts)})\nنتیجه: {len(rows)}",
+        reply_markup=admin_partner_requests_menu(),
+    )
+    if not rows:
+        return
+
+    for _id, tg_uid, phone, username, full_name, city, shop_name, st, created_at, approved_at in rows:
+        lines = [
+            "📌 درخواست نمایندگی",
+            f"User ID: {h(tg_uid)}",
+            f"Username: @{h(username) if username else '-'}",
+            f"Name: {h(full_name)}",
+            f"Phone: {h(phone)}",
+            f"City: {h(city)}",
+            f"Shop: {h(shop_name)}",
+            f"Status: {h(st)}",
+            f"Created: {h(created_at)}",
+        ]
+        if approved_at:
+            lines.append(f"Approved: {h(approved_at)}")
+        txt = "\n".join(lines)
+
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        kb.add(types.InlineKeyboardButton("✏️ ویرایش", callback_data=f"admin_partner_edit_{tg_uid}"))
+        if st == "pending":
+            kb.add(
+                types.InlineKeyboardButton("✅ تایید", callback_data=f"admin_partner_approve_{tg_uid}"),
+                types.InlineKeyboardButton("❌ رد", callback_data=f"admin_partner_reject_{tg_uid}"),
+            )
+        bot.send_message(chat_id, txt, reply_markup=kb)
+
+
+def safe_int(text):
     try:
-        from db import get_card_receipts, ensure_card_receipts_schema
-        ensure_card_receipts_schema()
-        return len(get_card_receipts("pending"))
+        return int(str(text).strip())
     except Exception:
-        return 0
+        return None
 
 
-def _pending_financial_count() -> int:
-    """تعداد کل درخواست‌های مالی در انتظار (کارت‌به‌کارت + تسویه)."""
-    return _pending_payout_count() + _pending_card2card_count()
+def parse_feed_bulk_items(raw: str) -> list[str]:
+    """Parse admin bulk feed input."""
+    raw = raw or ""
+    lines = raw.splitlines()
+    delim_re = re.compile(r"^\s*\*{3,}\s*$")
+
+    if any(delim_re.match(ln) for ln in lines):
+        blocks: list[list[str]] = []
+        cur: list[str] = []
+        for ln in lines:
+            if delim_re.match(ln):
+                blk = "\n".join(cur).strip()
+                if blk:
+                    blocks.append([blk])
+                cur = []
+            else:
+                cur.append(ln.rstrip("\n"))
+        blk = "\n".join(cur).strip()
+        if blk:
+            blocks.append([blk])
+        return [b[0] for b in blocks]
+
+    return [ln.strip() for ln in lines if ln.strip()]
 
 
-def _pending_partner_count() -> int:
+# ========= WALLET / ZARINPAL =========
+
+
+def can_submit_partner_request(tg_user_id: int, phone: str | None = None):
+    """سیاست درخواست نمایندگی (One-time only)"""
+    if phone:
+        try:
+            row_p = get_partner_by_phone(phone)
+        except Exception as e:
+            logging.exception("get_partner_by_phone failed: %s", e)
+            row_p = None
+        if row_p:
+            status = (row_p[3] or "").strip().lower()
+            if status == "approved":
+                return False, "این شماره قبلاً به عنوان همکار تایید شده است و امکان ارسال درخواست جدید ندارد."
+            if status == "pending":
+                return False, "برای این شماره قبلاً درخواست ثبت شده و در انتظار بررسی ادمین است."
+            if status == "rejected":
+                return False, "برای این شماره قبلاً درخواست رد شده است. برای بررسی مجدد با پشتیبانی تماس بگیرید."
+            return False, "برای این شماره قبلاً درخواست ثبت شده است."
+
     try:
-        conn = _db()
-        n = conn.execute("SELECT COUNT(*) FROM partners WHERE status='pending';").fetchone()[0]
-        conn.close()
-        return int(n)
-    except Exception:
-        return 0
+        row_u = get_partner_by_user_id(tg_user_id)
+    except Exception as e:
+        logging.exception("get_partner_by_user_id failed: %s", e)
+        row_u = None
+
+    if row_u:
+        status = (row_u[3] or "").strip().lower()
+        if status == "approved":
+            return False, "شما قبلاً به عنوان همکار تایید شده‌اید و امکان ارسال درخواست جدید ندارید."
+        if status == "pending":
+            return False, "درخواست نمایندگی شما قبلاً ثبت شده و در انتظار بررسی ادمین است."
+        if status == "rejected":
+            return False, "درخواست شما قبلاً رد شده است. برای بررسی مجدد با پشتیبانی تماس بگیرید."
+        return False, "شما قبلاً درخواست نمایندگی ثبت کرده‌اید."
+
+    return True, None
+
+   #============== رفع محدودیت نام وارد کردن محصول =========
+
+def _make_service_key(title: str) -> str:
+    """
+    تولید کلید سرویس بدون محدودیت خاص.
+    فقط فاصله حذف می‌شود و طول محدود می‌شود.
+    """
+    t = (title or "").strip()
+
+    if not t:
+        return "svc_" + "".join(random.choice(string.digits) for _ in range(6))
+
+    # تبدیل فاصله به _
+    safe = t.replace(" ", "_")
+
+    return safe[:32]
 
 
-# ─── Theme System ──────────────────────────────────────────────────────────
+def start_wallet_charge(message):
+    uid = message.from_user.id
 
-DEFAULT_THEME = {
-    "sidebar_bg":     "#05070A",
-    "sidebar_text":   "#9AA7B8",
-    "sidebar_active": "#2EC4B6",
-    "primary":        "#2EC4B6",
-    "primary_text":   "#ffffff",
-    "accent":         "#F59E0B",
-    "page_bg":        "#F7F8FA",
-    "card_bg":        "#FFFFFF",
-    "text_main":      "#111827",
-    "text_muted":     "#6B7280",
-    "border":         "#E5E7EB",
-}
+    # مبالغ سریع از تنظیمات
+    quick_amounts = _get_quick_amounts()
 
-def _get_theme() -> dict:
-    theme = dict(DEFAULT_THEME)
+    if quick_amounts:
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        btns = [types.InlineKeyboardButton(
+            f"💵 {a:,} تومان", callback_data=f"quick_charge_{a}"
+        ) for a in quick_amounts]
+        kb.add(*btns)
+        kb.add(types.InlineKeyboardButton("✏️ مبلغ دلخواه", callback_data="wallet_charge_custom"))
+        bot.send_message(
+            message.chat.id,
+            tf("MSG_WALLET_AMOUNT_REQUEST", min_amount=f"{MIN_TOPUP_AMOUNT:,}"),
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    else:
+        bot.send_message(
+            message.chat.id,
+            tf("MSG_WALLET_AMOUNT_REQUEST", min_amount=f"{MIN_TOPUP_AMOUNT:,}"),
+            parse_mode="HTML"
+        )
+        user_states[uid] = {"mode": "wallet_charge_amount"}
+        bot.register_next_step_handler(message, process_wallet_charge_amount)
+
+
+def _get_quick_amounts() -> list[int]:
+    """خواندن مبالغ سریع از تنظیمات DB"""
     try:
-        conn = _db()
-        rows = conn.execute("SELECT key, value FROM panel_theme;").fetchall()
-        conn.close()
-        for r in rows:
-            if r["key"] in theme:
-                theme[r["key"]] = r["value"]
+        from db import get_ui_text
+        raw = get_ui_text("WALLET_QUICK_AMOUNTS")
+        if not raw:
+            return [10_000, 50_000, 100_000, 500_000]
+        parts = [p.strip() for p in raw.split(",")]
+        amounts = [int(p) for p in parts if p.isdigit() and int(p) > 0]
+        return amounts
     except Exception:
+        return [10_000, 50_000, 100_000, 500_000]
+
+
+def process_wallet_charge_amount(message):
+    uid = message.from_user.id
+    text = (message.text or "").strip()
+
+    # اگه کاربر دکمه منو یا /cancel زد، state رو پاک کن
+    if text.startswith("/") or get_category_by_button_text(text):
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "عملیات شارژ لغو شد.", reply_markup=main_menu(user_id=uid))
+        # اگه دسته بود، نمایشش بده
+        cat = get_category_by_button_text(text)
+        if cat:
+            _show_category(message.chat.id, cat["id"], user_id=uid)
+        return
+
+    # چک کن متن دکمه‌های سیستمی (کیف‌پول، سفارش و ...) بود
+    system_buttons = [
+        t("MAIN_BTN_MY_ORDERS",      DEFAULT_UI_TEXTS.get("MAIN_BTN_MY_ORDERS", "")),
+        t("MAIN_BTN_WALLET",         DEFAULT_UI_TEXTS.get("MAIN_BTN_WALLET", "")),
+        t("BTN_PARTNER_GUIDE",       DEFAULT_UI_TEXTS.get("BTN_PARTNER_GUIDE", "")),
+        t("MAIN_BTN_SUPPORT",        DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "")),
+        t("MAIN_BTN_PARTNER_REQUEST",DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "")),
+        t("MAIN_BTN_PARTNER_PANEL",  DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "")),
+    ]
+    if text in system_buttons:
+        clear_user_state(uid)
+        bot.send_message(message.chat.id, "عملیات شارژ لغو شد.", reply_markup=main_menu(user_id=uid))
+        return
+
+    text_clean = text.replace(",", "").replace("،", "")
+    amount = safe_int(text_clean)
+
+    if amount is None:
+        bot.reply_to(message, tf("MSG_WALLET_AMOUNT_INVALID"))
+        bot.register_next_step_handler(message, process_wallet_charge_amount)
+        return
+
+    if amount < MIN_TOPUP_AMOUNT:
+        bot.reply_to(message, tf("MSG_WALLET_MIN_AMOUNT", min_amount=f"{MIN_TOPUP_AMOUNT:,}"))
+        bot.register_next_step_handler(message, process_wallet_charge_amount)
+        return
+
+    clear_user_state(uid)
+    start_wallet_charge_payment(bot, message, uid, amount, clear_user_state)
+
+def start_product_payment(
+    bot,
+    message,
+    uid,
+    amount,
+    reserved_wallet_amount=0,
+    product_id=None
+):
+    from services.payments import start_wallet_charge_payment
+
+    # اجبار نوع پرداخت به product
+    start_wallet_charge_payment(
+        bot=bot,
+        message=message,
+        uid=uid,
+        amount=amount,
+        clear_user_state=clear_user_state,
+        payment_type="product",
+        product_id=product_id,
+        wallet_reserved=reserved_wallet_amount
+    )
+
+  
+# ========= PRODUCTS UI =========
+
+
+import sqlite3
+from datetime import datetime
+import html
+
+def _flash_badge(pid, sale, base_price, eff_price) -> str:
+    """بج فروش فوری: تخفیف + شمارش معکوس + موجودی محدود."""
+    if not sale:
+        return ""
+    try:
+        from db import get_feed_stats
+        _tot, _rem, _dlv = get_feed_stats(int(pid))
+        stock = int(_rem or 0)
+    except Exception:
+        stock = None
+    lines = [f"🔥 <b>فروش فوری {sale['percent']}٪</b> — قیمت قبل: <s>{int(base_price):,}</s> تومان",
+             f"⏰ فقط تا <b>{sale['left_str']}</b> دیگر!"]
+    if stock is not None and 0 < stock <= 10:
+        lines.append(f"⚡ تنها <b>{stock}</b> عدد باقی مانده!")
+    return "\n".join(lines) + "\n"
+
+
+def finalize_product_order(call, uid, product, category, eff_price, wallet_used=0):
+
+    pid = int(product[0])
+    title = product[2]
+    buyer_type = "partner" if is_partner_approved(uid) else "customer"
+
+    # جلوگیری از دوباره کلیک
+    try:
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=None
+        )
+    except:
         pass
-    return theme
 
-def _ensure_theme_table():
-    conn = _db()
+    # ----------------------------
+    # بررسی سقف خرید روزانه
+    # ----------------------------
+    daily_lim_c = product[7] if len(product) > 7 else 0
+    daily_lim_p = product[8] if len(product) > 8 else 0
+    limit_val = daily_lim_p if buyer_type == "partner" else daily_lim_c
+    limit_val = int(limit_val or 0)
+
+    if limit_val > 0:
+        cnt = count_user_product_orders_today(uid, pid, buyer_type=buyer_type)
+        if cnt >= limit_val:
+            bot.answer_callback_query(
+                call.id,
+                f"سقف خرید روزانه ({limit_val}) تکمیل شده",
+                show_alert=True
+            )
+            return
+
+    # ----------------------------
+    # بررسی و کسر موجودی (نسخه قطعی)
+    # ----------------------------
+    conn = sqlite3.connect(DB_FULL_PATH)
     try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS panel_theme (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS admin_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_id   INTEGER,
-                admin_name TEXT,
-                action     TEXT NOT NULL,
-                section    TEXT,
-                details    TEXT,
-                ip         TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-            );
-        """)
+        cur = conn.cursor()
+
+        cur.execute("SELECT balance FROM wallets WHERE user_id=?", (uid,))
+        row = cur.fetchone()
+
+        if not row:
+            bot.answer_callback_query(call.id, "کیف پول یافت نشد", show_alert=True)
+            return
+
+        current_balance = int(row[0])
+
+        if current_balance < eff_price:
+            bot.answer_callback_query(call.id, "موجودی کافی نیست", show_alert=True)
+            return
+
+        new_balance = current_balance - eff_price
+
+        cur.execute(
+            "UPDATE wallets SET balance=?, updated_at=? WHERE user_id=?",
+            (new_balance, datetime.utcnow().isoformat(), uid)
+        )
         conn.commit()
     finally:
         conn.close()
 
+    # ----------------------------
+    # ایجاد سفارش
+    # ----------------------------
+    order_id = create_order(
+        uid,
+        category,
+        title,
+        eff_price,
+        product_id=pid,
+        buyer_type=buyer_type
+    )
 
-def _log(request: Request, action: str, section: str = "", details: str = "", admin_info=None, result: str = "ok"):
-    """ثبت فعالیت ادمین — هیچ‌وقت exception نمی‌ده."""
+    # پاداش معرفی — فقط اگه این اولین خرید کاربره
     try:
-        adm = admin_info or _get_admin(request)
-        if not adm:
-            return
-        ip   = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or (request.client.host if request.client else "—")
-        name = adm[3] if len(adm) > 3 else f"admin#{adm[0]}"
-        conn = _db()
-        # اضافه کردن ستون result اگه وجود نداشت
-        try:
-            conn.execute("ALTER TABLE admin_logs ADD COLUMN result TEXT DEFAULT 'ok';")
-            conn.commit()
-        except Exception:
-            pass
-        conn.execute(
-            "INSERT INTO admin_logs (admin_id,admin_name,action,section,details,ip,result) VALUES (?,?,?,?,?,?,?);",
-            (adm[0], name, action, section, details[:500] if details else "", ip, result)
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
-
-# ─── Rate Limiting ─────────────────────────────────────────────────────────
-import time as _time
-_login_attempts: dict = {}  # ip → [timestamps]
-_LOGIN_MAX = 5
-_LOGIN_WINDOW = 900  # 15 دقیقه
-
-def _is_rate_limited(ip: str) -> tuple:
-    """(is_blocked, remaining_seconds)"""
-    now = _time.time()
-    _login_attempts.setdefault(ip, [])
-    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOGIN_WINDOW]
-    if len(_login_attempts[ip]) >= _LOGIN_MAX:
-        return True, int(_LOGIN_WINDOW - (now - _login_attempts[ip][0]))
-    return False, 0
-
-def _record_fail(ip: str):
-    _login_attempts.setdefault(ip, []).append(_time.time())
-
-def _clear_attempts(ip: str):
-    _login_attempts.pop(ip, None)
-
-
-# ─── Low Stock Notification ────────────────────────────────────────────────
-_notified_low: set = set()  # کلیدهایی که قبلاً نوتیف گرفتن
-
-def _notify_low_stock():
-    """بررسی و ارسال اطلاع‌رسانی موجودی کم — توسط scheduler صدا زده می‌شه."""
-    try:
-        bot_token = _env("BOT_TOKEN")
-        admin_id  = _env("ADMIN_ID")
-        if not bot_token or not admin_id:
-            return
-        threshold = int(_env("LOW_STOCK_THRESHOLD", "5"))
-        conn = _db()
-        rows = conn.execute("""
-            SELECT p.id, p.title,
-                   COUNT(CASE WHEN pf.delivered=0 THEN 1 END) AS avail
-            FROM products p
-            LEFT JOIN product_feed pf ON pf.product_id = p.id
-            WHERE p.is_active = 1
-            GROUP BY p.id
-            HAVING avail <= ?
-            ORDER BY avail ASC LIMIT 20;
-        """, (threshold,)).fetchall()
-        conn.close()
-
-        for r in rows:
-            pid, title, avail = r["id"], r["title"], int(r["avail"] or 0)
-            key = f"{pid}:{avail}"
-            if key in _notified_low:
-                continue
-            # پاک کردن کلیدهای قدیمی همین محصول
-            _notified_low.discard(next((k for k in list(_notified_low) if k.startswith(f"{pid}:")), None))
-            icon = "🔴" if avail == 0 else "⚠️"
-            status = "موجودی صفر شد" if avail == 0 else f"موجودی کم ({avail} عدد)"
-            msg = (f"{icon} <b>هشدار موجودی</b>\n"
-                   f"📦 محصول: {title}\n"
-                   f"📉 وضعیت: {status}\n"
-                   f"🔗 /admin/feed/{pid}")
+        from db import process_referral_reward, ensure_referral_schema
+        ensure_referral_schema()
+        ref_result = process_referral_reward(uid, order_id)
+        if ref_result.get("rewarded"):
             try:
-                _requests.post(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    json={"chat_id": int(admin_id), "text": msg, "parse_mode": "HTML"},
-                    timeout=10
-                )
-                _notified_low.add(key)
+                bot.send_message(ref_result["referrer_id"],
+                    f"🎉 یکی از دوستانی که معرفی کردید خرید کرد!\n"
+                    f"💰 <b>{ref_result['amount']:,}</b> تومان به کیف‌پول شما اضافه شد.",
+                    parse_mode="HTML")
             except Exception:
                 pass
     except Exception:
         pass
 
-
-def _layout(title: str, body: str, admin_info=None,
-            flash: str = "", flash_ok: bool = True) -> HTMLResponse:
-
-    theme = _get_theme()
-
-    # بارگذاری تم ذخیره‌شده مدیر
-    saved_dark = ""
-    saved_classic = ""
-    if admin_info:
-        try:
-            conn = _db()
-            rows = conn.execute(
-                "SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');",
-                (str(admin_info[0]),)
-            ).fetchall()
-            conn.close()
-            prefs = {r[0]: r[1] for r in rows}
-            saved_dark = prefs.get("dark_mode", "")
-            saved_classic = prefs.get("classic_mode", "")
-        except Exception:
-            saved_dark = ""; saved_classic = ""
-
-    flash_html = ""
-    if flash:
-        icon = "circle-check" if flash_ok else "circle-alert"
-        flash_html = f"""
-        <div class="flash-msg flash-{'ok' if flash_ok else 'err'}">
-          <i data-lucide="{icon}"></i><span>{e(flash)}</span>
-        </div>"""
-
-    perms = admin_info[2] if admin_info else []
-    is_super = admin_info[1] if admin_info else False
-
-    open_tickets    = _open_ticket_count()    if admin_info else 0
-    pending_partners = _pending_partner_count() if admin_info else 0
+    # پورسانت سطحی — روی «هر» خرید زیرمجموعه (درصد یا مبلغ ثابت سطح معرف)
     try:
-        pending_financial_top = _pending_financial_count() if admin_info else 0
+        from db import process_referral_commission
+        comm = process_referral_commission(uid, order_id, eff_price)
+        if comm.get("paid"):
+            try:
+                bot.send_message(comm["referrer_id"],
+                    f"💸 <b>پورسانت جدید!</b>\n\n"
+                    f"یکی از زیرمجموعه‌های شما خرید کرد و\n"
+                    f"💰 <b>{comm['amount']:,}</b> تومان پورسانت (سطح {comm['tier_name']}) "
+                    f"به کیف‌پول همکاری شما اضافه شد.",
+                    parse_mode="HTML")
+            except Exception:
+                pass
     except Exception:
-        pending_financial_top = 0
-    bell_count = open_tickets + pending_financial_top
+        pass
 
-    def has_perm(perm):
-        return is_super or perm in perms
-
-    def nav_item(href, icon, label, perm=None, badge=0):
-        if perm and not has_perm(perm):
-            return ""
-        badge_html = f'<span class="nav-badge">{badge}</span>' if badge > 0 else ""
-        return f'<a href="{href}" class="nav-item" data-href="{href}"><i data-lucide="{icon}" class="nav-icon"></i><span class="nav-label">{label}</span>{badge_html}</a>'
-
-    sidebar = ""
-    if admin_info:
-        sidebar = f"""
-        <aside id="sidebar" class="sidebar">
-          <div class="sidebar-header" style="justify-content:center">
-            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" style="margin:0 auto">
-              <div class="brand-text-only" style="direction:ltr;text-align:center">
-                <span style="color:#E8EDF2;font-weight:900;letter-spacing:1.5px">STOCK</span>
-                <span style="color:#2EC4B6;font-weight:900;letter-spacing:1.5px"> LAND</span>
-                <small style="display:block;font-size:9.5px;color:#536075;letter-spacing:.8px;font-weight:400;margin-top:3px;direction:rtl">مدیریت فروشگاه</small>
-              </div>
-            </a>
-          </div>
-          <div class="nav-caption">منو اصلی</div>
-          <nav class="sidebar-nav">
-            {nav_item("/admin/", "layout-dashboard", "داشبورد")}
-            <div class="nav-divider"><span>فروشگاه</span></div>
-            {nav_item("/admin/categories", "tag", "دسته‌بندی‌ها", "products")}
-            {nav_item("/admin/products", "package", "محصولات", "products")}
-            {nav_item("/admin/feed", "layers", "موجودی", "feed")}
-            <div class="nav-divider"><span>فروش</span></div>
-            {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
-            {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
-            {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "orders")}
-            <div class="nav-divider"><span>کاربران</span></div>
-            {nav_item("/admin/users", "users", "کاربران", "wallets")}
-            {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
-            {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
-            {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "wallets")}
-            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
-            {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
-            <div class="nav-divider"><span>سیستم</span></div>
-            {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
-            {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
-            {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
-            {nav_item("/admin/logs", "activity", "گزارش فعالیت", "admins")}
-          </nav>
-          <div class="sidebar-footer">
-            <div class="sidebar-status"><span class="status-dot"></span><div><strong>سامانه فعال</strong><small>همه سرویس‌ها پایدارند</small></div></div>
-            <a href="/admin/logout" class="sidebar-logout"><i data-lucide="log-out"></i><span>خروج از پنل</span></a>
-          </div>
-        </aside>
-        <div id="overlay" class="overlay" onclick="toggleSidebar()"></div>"""
-
-    topbar = ""
-    if admin_info:
-        admin_label = "مدیر ارشد" if is_super else f"مدیر #{e(admin_info[0])}"
-        topbar = f"""
-        <header class="topbar">
-          <div class="topbar-context">
-            <button class="icon-button topbar-menu" onclick="toggleSidebar()" aria-label="بازکردن منو"><i data-lucide="menu"></i></button>
-            <div><span class="topbar-eyebrow">STOCKLAND ADMIN</span><h1 class="topbar-title">{e(title)}</h1></div>
-          </div>
-          <div class="global-search-wrap">
-            <i data-lucide="search"></i>
-            <input id="globalSearch" class="global-search" type="search" placeholder="جست‌وجو در پنل..." autocomplete="off">
-            <kbd>⌘ K</kbd>
-          </div>
-          <div class="topbar-actions">
-
-            <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if bell_count == 0 else ''}">{bell_count}</span></a>
-            <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
-            <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
-            <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
-              <span class="profile-avatar"><i data-lucide="user-round"></i></span>
-              <span class="profile-copy"><strong>{admin_label}</strong><small>مدیریت فروشگاه</small></span>
-              <i data-lucide="settings" class="profile-chevron" style="width:14px;height:14px;opacity:.5"></i>
-            </a>
-          </div>
-        </header>"""
-
-    css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items())
-
-    html_response = HTMLResponse(f"""<!DOCTYPE html>
-<html lang="fa" dir="rtl" data-saved-dark="{saved_dark}" data-saved-classic="{saved_classic}">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-  <script>
-    document.addEventListener('gesturestart',function(e){{e.preventDefault();}});
-    document.addEventListener('gesturechange',function(e){{e.preventDefault();}});
-    document.addEventListener('gestureend',function(e){{e.preventDefault();}});
-    document.addEventListener('touchmove',function(e){{if(e.touches.length>1)e.preventDefault();}},{{passive:false}});
-  </script>
-  <title>{e(title)} — استوک لند</title>
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <style>
-    /* ═══════════════════════════════════════════════════════════
-       STOCKLAND ADMIN — DESIGN SYSTEM v2
-       Mobile-First · RTL-Native · Apple-Inspired
-    ═══════════════════════════════════════════════════════════ */
-
-    /* ── Design Tokens ────────────────────────────────────────── */
-    :root {{
-      {css_vars}
-      /* Color Palette */
-      --clr-primary:      #2EC4B6;
-      --clr-primary-dim:  rgba(46,196,182,.10);
-      --clr-success:      #22C55E;
-      --clr-success-dim:  #DCFCE7;
-      --clr-danger:       #EF4444;
-      --clr-danger-dim:   #FEE2E2;
-      --clr-warning:      #F59E0B;
-      --clr-warning-dim:  #FEF3C7;
-      --clr-info:         #3B82F6;
-      --clr-info-dim:     #EFF6FF;
-      --clr-neutral:      #6B7280;
-      --clr-neutral-dim:  #F3F4F6;
-
-      /* Semantic Text */
-      --txt-primary:   #111827;
-      --txt-secondary: #374151;
-      --txt-muted:     #6B7280;
-      --txt-xmuted:    #9CA3AF;
-
-      /* Backgrounds */
-      --bg-page:    #F7F8FA;
-      --bg-card:    #FFFFFF;
-      --bg-input:   #FFFFFF;
-      --bg-subtle:  #F9FAFB;
-
-      /* Borders */
-      --bdr:        #E5E7EB;
-      --bdr-input:  #D1D5DB;
-      --bdr-focus:  var(--clr-primary);
-
-      /* Typography */
-      --font:       'Vazirmatn', Tahoma, 'Segoe UI', sans-serif;
-
-      /* Spacing Scale */
-      --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;  --sp-4: 16px;
-      --sp-5: 20px;  --sp-6: 24px;  --sp-7: 28px;  --sp-8: 32px;
-
-      /* Border Radius */
-      --r-sm: 8px;  --r-md: 12px;  --r-lg: 16px;  --r-xl: 20px;
-
-      /* Shadows */
-      --shadow-card:  0 1px 3px rgba(15,23,42,.06), 0 4px 12px rgba(15,23,42,.04);
-      --shadow-hover: 0 4px 16px rgba(15,23,42,.10);
-      --shadow-modal: 0 20px 60px rgba(15,23,42,.16);
-
-      /* Layout */
-      --sidebar-w:   272px;
-      --topbar-h:    60px;
-      --glass-level: 0;
-
-      /* Legacy compat */
-      --primary:     #2EC4B6;
-      --page-bg:     #F7F8FA;
-      --card-bg:     #FFFFFF;
-      --text-main:   #111827;
-      --text-muted:  #6B7280;
-      --border:      #E5E7EB;
-      --success:     #22C55E;
-      --warning:     #F59E0B;
-      --danger:      #EF4444;
-      --card-shadow: var(--shadow-card);
-    }}
-
-    /* ── Reset ────────────────────────────────────────────────── */
-    *, *::before, *::after {{ box-sizing:border-box; }}
-    html {{ background:var(--bg-page); scroll-behavior:smooth; -webkit-text-size-adjust:100%; }}
-    body {{
-      margin:0; font-family:var(--font); background:var(--bg-page);
-      color:var(--txt-primary); min-height:100vh;
-      -webkit-font-smoothing:antialiased; direction:rtl;
-    }}
-    button,input,select,textarea {{ font-family:var(--font); }}
-    a {{ color:inherit; text-decoration:none; }}
-    svg {{ flex:0 0 auto; display:block; }}
-    img {{ max-width:100%; }}
-    .hidden {{ display:none !important; }}
-
-    /* ── Typography Scale ─────────────────────────────────────── */
-    .t-page   {{ font-size:24px; font-weight:700; line-height:1.2; color:var(--txt-primary); }}
-    .t-section{{ font-size:18px; font-weight:700; line-height:1.3; color:var(--txt-primary); }}
-    .t-card   {{ font-size:15px; font-weight:600; line-height:1.4; color:var(--txt-primary); }}
-    .t-body   {{ font-size:14px; font-weight:400; line-height:1.6; color:var(--txt-secondary); }}
-    .t-label  {{ font-size:12px; font-weight:500; line-height:1.4; color:var(--txt-muted); }}
-    .t-mono   {{ font-family:'SF Mono','Fira Code',monospace; font-size:12px; }}
-
-    /* ── Layout ───────────────────────────────────────────────── */
-    .main-wrap.with-sidebar {{ margin-right:var(--sidebar-w); padding-top:var(--topbar-h); min-height:100vh; }}
-    .main-content {{ padding:var(--sp-6) var(--sp-7); max-width:1600px; }}
-
-    /* ── Sidebar ──────────────────────────────────────────────── */
-    .sidebar {{
-      position:fixed; top:0; right:0; width:var(--sidebar-w); height:100vh; z-index:300;
-      display:flex; flex-direction:column; overflow:hidden;
-      background:linear-gradient(180deg,#0B1320 0%,#05070A 100%);
-      border-left:1px solid rgba(255,255,255,.06);
-      box-shadow:-4px 0 24px rgba(2,6,23,.14);
-      transition:transform .25s cubic-bezier(.4,0,.2,1);
-      color:#8896A8;
-    }}
-    .sidebar-header {{
-      padding:18px 18px 16px; border-bottom:1px solid rgba(255,255,255,.06);
-      display:flex; align-items:center; gap:10px; flex-shrink:0; min-height:68px;
-    }}
-    .brand-text-only {{
-      font-size:20px; font-weight:900; letter-spacing:2px; direction:ltr; color:#E8EDF2;
-    }}
-    .brand-text-only span {{ color:var(--clr-primary); }}
-    .brand-text-only small {{ display:block; font-size:9.5px; font-weight:400; color:#364454; letter-spacing:.6px; margin-top:2px; direction:rtl; }}
-    .sidebar-nav {{ flex:1; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:10px 10px; display:flex; flex-direction:column; gap:1px; scrollbar-width:none; }}
-    .sidebar-nav::-webkit-scrollbar {{ display:none; }}
-    .nav-divider {{
-      display:flex; align-items:center; gap:8px; padding:14px 16px 5px; opacity:.6;
-    }}
-    .nav-divider span {{ font-size:9.5px; font-weight:700; letter-spacing:1.4px; text-transform:uppercase; color:#2D3A4A; white-space:nowrap; }}
-    .nav-divider::after {{ content:""; flex:1; height:1px; background:rgba(255,255,255,.05); }}
-    .nav-item {{
-      display:flex; align-items:center; gap:10px; padding:9px 14px;
-      border-radius:var(--r-md); text-decoration:none; color:#8896A8;
-      font-size:13px; font-weight:500; cursor:pointer; border:none;
-      background:none; width:100%; text-align:right; transition:all .15s;
-      white-space:nowrap; position:relative;
-    }}
-    .nav-item i {{ width:16px; height:16px; flex-shrink:0; }}
-    .nav-item:hover {{ background:rgba(255,255,255,.05); color:#C5CDD8; }}
-    .nav-item.active {{
-      background:rgba(46,196,182,.10); color:var(--clr-primary); font-weight:600;
-      box-shadow:inset 3px 0 0 var(--clr-primary);
-    }}
-    .nav-item.active i {{ filter:drop-shadow(0 0 4px rgba(46,196,182,.5)); }}
-    .nav-badge {{
-      margin-right:auto; background:var(--clr-danger); color:#fff;
-      font-size:9px; font-weight:700; padding:1px 6px; border-radius:20px;
-      min-width:18px; text-align:center; line-height:16px;
-    }}
-    .sidebar-footer {{
-      padding:12px 10px; border-top:1px solid rgba(255,255,255,.06); flex-shrink:0;
-    }}
-    .sidebar-status {{
-      display:flex; align-items:center; gap:10px; padding:8px 14px; margin-bottom:4px;
-      font-size:12px; color:#394A5A;
-    }}
-    .status-dot {{
-      width:7px; height:7px; border-radius:50%; background:var(--clr-success); flex-shrink:0;
-    }}
-    .sidebar-logout {{
-      display:flex; align-items:center; gap:10px; padding:9px 14px;
-      border-radius:var(--r-md); color:#4A5568; text-decoration:none;
-      font-size:13px; font-weight:500; transition:.15s;
-    }}
-    .sidebar-logout:hover {{ background:rgba(239,68,68,.1); color:var(--clr-danger); }}
-    .sidebar-logout i {{ width:16px; height:16px; }}
-    .icon-button {{
-      width:38px; height:38px; border-radius:var(--r-md); background:none;
-      border:1.5px solid var(--bdr); display:flex; align-items:center;
-      justify-content:center; cursor:pointer; color:var(--txt-muted);
-      transition:.15s; position:relative; text-decoration:none; flex-shrink:0;
-    }}
-    .icon-button:hover {{ background:var(--bg-subtle); color:var(--txt-primary); border-color:var(--bdr-input); }}
-    .icon-button i {{ width:17px; height:17px; }}
-    .notification-button {{ position:relative; }}
-    .notification-count {{
-      position:absolute; top:-4px; left:-4px; min-width:17px; height:17px;
-      background:var(--clr-danger); color:#fff; border-radius:20px;
-      font-size:9px; font-weight:700; display:flex; align-items:center;
-      justify-content:center; padding:0 4px; border:2px solid var(--bg-card);
-    }}
-
-    /* ── Overlay ──────────────────────────────────────────────── */
-    .overlay {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:299; backdrop-filter:blur(2px); }}
-    .overlay.open {{ display:block; }}
-
-    /* ── Topbar ───────────────────────────────────────────────── */
-    .topbar {{
-      position:fixed; top:0; right:var(--sidebar-w); left:0; height:var(--topbar-h);
-      background:rgba(255,255,255,.9); backdrop-filter:blur(20px);
-      border-bottom:1px solid var(--bdr); z-index:200;
-      display:grid; grid-template-columns:auto minmax(0,1fr) auto;
-      align-items:center; gap:var(--sp-4); padding:0 24px;
-    }}
-    .topbar-context {{ display:flex; align-items:center; gap:12px; min-width:0; }}
-    .topbar-menu {{ display:none; }}
-    .topbar-eyebrow {{ font-size:9px; font-weight:700; letter-spacing:1.5px; color:var(--txt-xmuted); text-transform:uppercase; }}
-    .topbar-title {{ font-size:15px; font-weight:700; color:var(--txt-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-    .global-search-wrap {{
-      position:relative; display:flex; align-items:center; justify-self:center; width:100%; max-width:480px;
-    }}
-    .global-search-wrap i {{ position:absolute; right:13px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--txt-muted); pointer-events:none; }}
-    .global-search {{
-      width:100%; height:38px; background:var(--bg-subtle); border:1.5px solid var(--bdr);
-      border-radius:var(--r-md); padding:0 40px 0 36px; font-size:13px; color:var(--txt-primary);
-      outline:none; transition:.2s; direction:rtl;
-    }}
-    .global-search:focus {{ border-color:var(--clr-primary); background:#fff; box-shadow:0 0 0 3px var(--clr-primary-dim); }}
-    .global-search-wrap kbd {{
-      position:absolute; left:10px; top:50%; transform:translateY(-50%);
-      font-size:10px; color:var(--txt-xmuted); background:var(--bg-subtle);
-      border:1px solid var(--bdr); border-radius:5px; padding:1px 5px; font-family:inherit;
-    }}
-    .topbar-actions {{ display:flex; align-items:center; gap:6px; flex-shrink:0; }}
-    .profile-trigger {{
-      display:flex; align-items:center; gap:8px; padding:5px 10px 5px 8px;
-      border-radius:var(--r-md); border:1.5px solid var(--bdr); cursor:pointer;
-      text-decoration:none; color:var(--txt-primary); transition:.15s;
-    }}
-    .profile-trigger:hover {{ background:var(--bg-subtle); }}
-    .profile-avatar {{
-      width:28px; height:28px; border-radius:var(--r-sm);
-      background:linear-gradient(135deg,var(--clr-primary),#0066CC);
-      display:flex; align-items:center; justify-content:center; flex-shrink:0;
-    }}
-    .profile-avatar i {{ width:15px; height:15px; color:#fff; }}
-    .profile-copy {{ display:flex; flex-direction:column; gap:1px; }}
-    .profile-copy strong {{ font-size:12px; font-weight:600; color:var(--txt-primary); }}
-    .profile-copy small {{ font-size:10px; color:var(--txt-muted); }}
-    .profile-chevron {{ width:13px !important; height:13px !important; color:var(--txt-muted); flex-shrink:0; }}
-
-    /* ── Flash Messages ───────────────────────────────────────── */
-    .flash-msg {{
-      display:flex; align-items:center; gap:10px; padding:12px 16px; border-radius:var(--r-md);
-      margin-bottom:var(--sp-5); font-size:13.5px; font-weight:500;
-      animation:slideIn .25s ease;
-    }}
-    .flash-msg i {{ width:17px; height:17px; flex-shrink:0; }}
-    .flash-ok  {{ background:#F0FDF4; border:1.5px solid #BBF7D0; color:#166534; }}
-    .flash-err {{ background:#FEF2F2; border:1.5px solid #FECACA; color:#991B1B; }}
-    @keyframes slideIn {{ from {{ opacity:0; transform:translateY(-8px); }} to {{ opacity:1; transform:translateY(0); }} }}
-
-    /* ── Page Header ──────────────────────────────────────────── */
-    .page-header {{ margin-bottom:var(--sp-5); }}
-    .page-header h1 {{ font-size:20px; font-weight:800; color:var(--txt-primary); line-height:1.2; margin:0 0 4px; }}
-    .page-header p  {{ font-size:13px; color:var(--txt-muted); margin:0; }}
-
-    /* ── Cards ────────────────────────────────────────────────── */
-    .card {{
-      background:var(--bg-card); border-radius:var(--r-lg);
-      box-shadow:var(--shadow-card); border:1px solid rgba(229,231,235,.6);
-      transition:box-shadow .2s;
-    }}
-    .card:hover {{ box-shadow:var(--shadow-hover); }}
-    .card-p {{ padding:var(--sp-6) var(--sp-7); }}
-    .card-p h2, .card-p .t-card {{ margin-bottom:var(--sp-5); }}
-
-    /* ── Stat/KPI Cards ───────────────────────────────────────── */
-    .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:var(--sp-4); margin-bottom:var(--sp-6); }}
-    .stat-card {{
-      background:var(--bg-card); border-radius:var(--r-lg);
-      padding:var(--sp-5) var(--sp-6); box-shadow:var(--shadow-card);
-      border:1px solid rgba(229,231,235,.6); transition:.2s;
-    }}
-    .stat-card:hover {{ transform:translateY(-2px); box-shadow:var(--shadow-hover); }}
-
-    /* ── Tables ───────────────────────────────────────────────── */
-    .table-card {{ background:var(--bg-card); border-radius:var(--r-lg); box-shadow:var(--shadow-card); border:1px solid rgba(229,231,235,.6); overflow:hidden; }}
-    .table-head {{ display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--bdr); gap:12px; }}
-    .table-head h2 {{ font-size:14px; font-weight:700; color:var(--txt-primary); margin:0; }}
-    .table-wrap {{ overflow-x:auto; -webkit-overflow-scrolling:touch; }}
-    table {{ width:100%; border-collapse:collapse; min-width:560px; }}
-    thead th {{
-      padding:10px 16px; font-size:10.5px; color:var(--txt-muted); font-weight:700;
-      text-align:right; background:var(--bg-subtle); border-bottom:1.5px solid var(--bdr);
-      text-transform:uppercase; letter-spacing:.4px; white-space:nowrap;
-    }}
-    tbody td {{
-      padding:11px 16px; font-size:13px; color:var(--txt-secondary); border-bottom:1px solid #F3F4F6;
-      vertical-align:middle;
-    }}
-    tbody tr:last-child td {{ border-bottom:none; }}
-    tbody tr:hover td {{ background:#FAFBFC; }}
-
-    /* Mobile: table → horizontal scroll */
-    @media (max-width:640px) {{
-      table {{ min-width:500px; }}
-      tbody td, thead th {{ padding:9px 12px; font-size:12px; }}
-    }}
-
-    /* ── Buttons ──────────────────────────────────────────────── */
-    .btn {{
-      display:inline-flex; align-items:center; justify-content:center; gap:7px;
-      min-height:40px; padding:0 18px; border-radius:var(--r-md);
-      font-size:13px; font-weight:600; font-family:var(--font);
-      border:none; cursor:pointer; transition:.15s; text-decoration:none;
-      white-space:nowrap; flex-shrink:0;
-    }}
-    .btn i {{ width:15px; height:15px; flex-shrink:0; }}
-    .btn-sm {{ min-height:32px; padding:0 12px; font-size:12px; border-radius:var(--r-sm); gap:5px; }}
-    .btn-sm i {{ width:13px; height:13px; }}
-    .btn-primary {{ background:var(--clr-primary); color:#fff; }}
-    .btn-primary:hover {{ opacity:.88; }}
-    .btn-success, .btn-green {{ background:var(--clr-success-dim); color:#166534; border:1.5px solid #BBF7D0; }}
-    .btn-success:hover, .btn-green:hover {{ background:#BBFBD0; }}
-    .btn-danger, .btn-red {{ background:var(--clr-danger-dim); color:#991B1B; border:1.5px solid #FECACA; }}
-    .btn-danger:hover, .btn-red:hover {{ background:#FDD0D0; }}
-    .btn-indigo {{ background:var(--clr-info-dim); color:#3730A3; border:1.5px solid #C7D2FE; }}
-    .btn-indigo:hover {{ background:#E0E7FF; }}
-    .btn-slate {{ background:var(--bg-subtle); color:var(--txt-muted); border:1.5px solid var(--bdr); }}
-    .btn-slate:hover {{ background:#F1F5F9; color:var(--txt-primary); }}
-    .btn-warning {{ background:var(--clr-warning-dim); color:#92400E; border:1.5px solid #FDE68A; }}
-
-    @media (max-width:640px) {{ .btn {{ min-height:44px; padding:0 16px; }} .btn-sm {{ min-height:36px; }} }}
-
-    /* ── Badges ───────────────────────────────────────────────── */
-    .badge {{
-      display:inline-flex; align-items:center; gap:4px;
-      padding:3px 10px; border-radius:20px;
-      font-size:11px; font-weight:600; white-space:nowrap; line-height:1.4;
-    }}
-    .badge i {{ width:10px; height:10px; }}
-    .badge-dot {{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }}
-    .badge-primary {{ background:var(--clr-primary-dim); color:#0891B2; }}
-    .badge-success {{ background:var(--clr-success-dim); color:#15803D; }}
-    .badge-danger   {{ background:var(--clr-danger-dim); color:#B91C1C; }}
-    .badge-warning  {{ background:var(--clr-warning-dim); color:#B45309; }}
-    .badge-info     {{ background:var(--clr-info-dim); color:#1D4ED8; }}
-    .badge-gray, .badge-neutral {{ background:var(--clr-neutral-dim); color:#374151; }}
-
-    /* Status badges (ticket) */
-    .status-badge {{ display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; }}
-    .status-badge span {{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }}
-    .status-danger {{ background:var(--clr-danger-dim); color:#B91C1C; }} .status-danger span {{ background:var(--clr-danger); }}
-    .status-warning {{ background:var(--clr-warning-dim); color:#B45309; }} .status-warning span {{ background:var(--clr-warning); }}
-    .status-success {{ background:var(--clr-success-dim); color:#15803D; }} .status-success span {{ background:var(--clr-success); }}
-    .status-neutral {{ background:var(--clr-neutral-dim); color:#374151; }} .status-neutral span {{ background:var(--clr-neutral); }}
-    .status-info {{ background:var(--clr-info-dim); color:#1D4ED8; }} .status-info span {{ background:var(--clr-info); }}
-
-    /* ── Filter Tabs ──────────────────────────────────────────── */
-    .filter-bar {{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:var(--sp-5); align-items:center; }}
-    .filter-tab {{
-      display:inline-flex; align-items:center; gap:6px;
-      padding:6px 14px; border-radius:var(--r-md); font-size:12.5px; font-weight:500;
-      border:1.5px solid var(--bdr); background:var(--bg-card); color:var(--txt-muted);
-      cursor:pointer; text-decoration:none; transition:.15s; white-space:nowrap;
-    }}
-    .filter-tab:hover {{ background:var(--bg-subtle); color:var(--txt-secondary); }}
-    .filter-tab.active {{ background:var(--clr-primary); color:#000; border-color:var(--clr-primary); font-weight:700; }}
-    .filter-count {{ font-size:10px; padding:1px 6px; border-radius:20px; background:rgba(0,0,0,.1); }}
-    .filter-tab:not(.active) .filter-count {{ background:var(--bg-subtle); }}
-
-    /* ── Forms ────────────────────────────────────────────────── */
-    label {{ font-size:12.5px; color:var(--txt-secondary); display:block; margin-bottom:var(--sp-2); font-weight:600; }}
-    input:not([type=checkbox]):not([type=radio]):not([type=range]),
-    textarea, select {{
-      width:100%; min-height:44px; border:1.5px solid var(--bdr-input);
-      border-radius:var(--r-md); padding:10px 16px 10px 14px;
-      font-size:16px !important; background:var(--bg-input); color:var(--txt-primary);
-      outline:none; transition:border .18s, box-shadow .18s;
-      direction:rtl; text-align:right; font-family:var(--font);
-      -webkit-appearance:none; appearance:none;
-    }}
-    input:not([type=checkbox]):not([type=radio]):not([type=range]):focus,
-    textarea:focus, select:focus {{
-      border-color:var(--clr-primary);
-      box-shadow:0 0 0 3px rgba(46,196,182,.12);
-      background:#fff;
-    }}
-    textarea {{ min-height:110px; resize:vertical; }}
-    select {{ background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236B7280' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:left 14px center; padding-left:36px; }}
-    input[type=checkbox], input[type=radio] {{
-      width:16px !important; height:16px !important; min-height:16px !important;
-      padding:0 !important; border-radius:5px !important; cursor:pointer; flex-shrink:0;
-      -webkit-appearance:auto; appearance:auto;
-    }}
-    input[type=range] {{
-      min-height:unset !important; padding:0 !important; border:none !important;
-      background:none !important; border-radius:0 !important; -webkit-appearance:auto; appearance:auto;
-    }}
-    input::placeholder, textarea::placeholder {{ color:var(--txt-xmuted); opacity:1; }}
-    .perm-grid {{ display:flex; flex-wrap:wrap; gap:6px 18px; padding:14px; background:var(--bg-subtle); border-radius:var(--r-md); }}
-    .perm-label {{ display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:500; color:var(--txt-primary); cursor:pointer; white-space:nowrap; }}
-    .perm-label input {{ margin:0; }}
-
-    /* ── Sidebar Classic Mode ─────────────────────────────────── */
-    body.sl-classic .sidebar {{ background:#FFFFFF !important; border-left:1px solid var(--bdr) !important; box-shadow:none !important; }}
-    body.sl-classic .nav-item {{ color:#374151 !important; }}
-    body.sl-classic .nav-item:hover {{ background:#F3F4F6 !important; color:#111827 !important; }}
-    body.sl-classic .nav-item.active {{ background:#EFF6FF !important; color:#1D4ED8 !important; box-shadow:inset 3px 0 0 #3B82F6 !important; }}
-    body.sl-classic .nav-item.active i {{ filter:none !important; }}
-    body.sl-classic .sidebar-header {{ border-bottom-color:var(--bdr) !important; }}
-    body.sl-classic .brand-text-only {{ color:#111827 !important; }}
-    body.sl-classic .brand-text-only small {{ color:#9CA3AF !important; }}
-    body.sl-classic .nav-divider span {{ color:#CBD5E1 !important; }}
-    body.sl-classic .nav-divider::after {{ background:var(--bdr) !important; }}
-    body.sl-classic .sidebar-footer {{ border-top-color:var(--bdr) !important; }}
-    body.sl-classic .sidebar-status {{ color:#6B7280 !important; }}
-    body.sl-classic .sidebar-logout {{ color:#6B7280 !important; }}
-    body.sl-classic .sidebar-logout:hover {{ background:#FEF2F2 !important; color:#DC2626 !important; }}
-
-    /* ── Dark Mode ────────────────────────────────────────────── */
-    body.sl-dark, body.dark-mode {{
-      --bg-page:#0E1621; --bg-card:#17212B; --bg-input:#1B2530; --bg-subtle:#232E3C;
-      --txt-primary:#F5F5F5; --txt-secondary:#D9E1EA; --txt-muted:#8A99AC;
-      --bdr:#2B3A4C; --bdr-input:#2B3A4C;
-      --shadow-card:0 1px 4px rgba(0,0,0,.35);
-      background:#0E1621; color:#F5F5F5;
-    }}
-    body.sl-dark .topbar, body.dark-mode .topbar {{ background:rgba(14,22,33,.92) !important; border-color:#2B3A4C !important; }}
-    body.sl-dark .global-search, body.dark-mode .global-search {{ background:#17212B !important; border-color:#2B3A4C !important; color:#F5F5F5 !important; }}
-    /* ── کنتراست حالت شب — کیفیت تلگرام ── */
-    body.sl-dark .card, body.dark-mode .card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
-    body.sl-dark .bg-white, body.dark-mode .bg-white {{ background:#17212B !important; }}
-    body.sl-dark .bg-gray-50, body.dark-mode .bg-gray-50 {{ background:#1B2530 !important; }}
-    body.sl-dark .bg-gray-100, body.dark-mode .bg-gray-100 {{ background:#232E3C !important; }}
-    body.sl-dark .text-gray-800, body.sl-dark .text-gray-900,
-    body.dark-mode .text-gray-800, body.dark-mode .text-gray-900 {{ color:#F5F5F5 !important; }}
-    body.sl-dark .text-gray-700, body.dark-mode .text-gray-700 {{ color:#E4EAF1 !important; }}
-    body.sl-dark .text-gray-600, body.sl-dark .text-gray-500,
-    body.dark-mode .text-gray-600, body.dark-mode .text-gray-500 {{ color:#A9B6C6 !important; }}
-    body.sl-dark .text-gray-400, body.dark-mode .text-gray-400 {{ color:#8A99AC !important; }}
-    body.sl-dark .border, body.sl-dark .border-b, body.sl-dark .border-t,
-    body.sl-dark .border-gray-200, body.sl-dark .border-gray-300, body.sl-dark [class*="border-gray-1"],
-    body.dark-mode .border, body.dark-mode .border-b, body.dark-mode .border-t,
-    body.dark-mode .border-gray-200, body.dark-mode .border-gray-300 {{ border-color:#2B3A4C !important; }}
-    body.sl-dark input, body.sl-dark select, body.sl-dark textarea,
-    body.dark-mode input, body.dark-mode select, body.dark-mode textarea {{
-      background:#1B2530 !important; color:#F0F4F8 !important; border-color:#2B3A4C !important;
-    }}
-    body.sl-dark input::placeholder, body.sl-dark textarea::placeholder,
-    body.dark-mode input::placeholder, body.dark-mode textarea::placeholder {{ color:#6B7B8F !important; }}
-    body.sl-dark tr:hover, body.sl-dark .hover\\:bg-gray-50:hover, body.sl-dark .hover\\:bg-gray-100:hover,
-    body.dark-mode tr:hover, body.dark-mode .hover\\:bg-gray-50:hover, body.dark-mode .hover\\:bg-gray-100:hover {{ background:#1F2A38 !important; }}
-    body.sl-dark thead tr, body.dark-mode thead tr {{ background:#1B2530 !important; }}
-    body.sl-dark code, body.dark-mode code {{ background:#232E3C; color:#8FD3F4; padding:1px 5px; border-radius:5px; }}
-    /* بج‌های رنگی: پس‌زمینه شفاف تیره + متن روشن‌تر */
-    body.sl-dark [class*="bg-green-100"], body.sl-dark [class*="bg-green-50"] {{ background:rgba(34,197,94,.16) !important; }}
-    body.sl-dark [class*="text-green-7"] {{ color:#5DDE8A !important; }}
-    body.sl-dark [class*="bg-red-100"], body.sl-dark [class*="bg-red-50"] {{ background:rgba(239,68,68,.16) !important; }}
-    body.sl-dark [class*="text-red-6"], body.sl-dark [class*="text-red-7"], body.sl-dark [class*="text-red-5"] {{ color:#FF7B7B !important; }}
-    body.sl-dark [class*="bg-amber-100"], body.sl-dark [class*="bg-amber-50"],
-    body.sl-dark [class*="bg-yellow-100"], body.sl-dark [class*="bg-yellow-50"] {{ background:rgba(245,158,11,.16) !important; }}
-    body.sl-dark [class*="text-amber-7"], body.sl-dark [class*="text-amber-8"], body.sl-dark [class*="text-yellow-7"] {{ color:#FFC46B !important; }}
-    body.sl-dark [class*="bg-indigo-100"], body.sl-dark [class*="bg-indigo-50"] {{ background:rgba(99,102,241,.18) !important; }}
-    body.sl-dark [class*="text-indigo-7"], body.sl-dark [class*="text-indigo-6"] {{ color:#A5B4FF !important; }}
-    body.sl-dark [class*="bg-blue-100"], body.sl-dark [class*="bg-blue-50"] {{ background:rgba(59,130,246,.16) !important; }}
-    body.sl-dark [class*="text-blue-7"], body.sl-dark [class*="text-blue-6"] {{ color:#7DB8FF !important; }}
-    body.sl-dark [class*="bg-teal-100"], body.sl-dark [class*="bg-teal-50"] {{ background:rgba(20,184,166,.16) !important; }}
-    body.sl-dark [class*="text-teal-7"] {{ color:#5EEAD4 !important; }}
-    body.sl-dark [class*="bg-purple-100"], body.sl-dark [class*="bg-purple-50"] {{ background:rgba(168,85,247,.16) !important; }}
-    body.sl-dark [class*="text-purple-7"] {{ color:#D0A8FF !important; }}
-    body.sl-dark [class*="bg-orange-100"], body.sl-dark [class*="bg-orange-50"] {{ background:rgba(249,115,22,.16) !important; }}
-    body.sl-dark [class*="text-orange-7"] {{ color:#FFAD70 !important; }}
-    body.sl-dark [class*="border-green-2"], body.sl-dark [class*="border-red-2"],
-    body.sl-dark [class*="border-amber-2"], body.sl-dark [class*="border-indigo-2"],
-    body.sl-dark [class*="border-blue-2"], body.sl-dark [class*="border-teal-2"] {{ border-color:#2B3A4C !important; }}
-
-    /* ── Misc Helpers ─────────────────────────────────────────── */
-    .section-title {{ font-size:14px; font-weight:700; color:var(--txt-primary); margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid var(--bdr); }}
-    .empty-state {{ text-align:center; padding:var(--sp-8) var(--sp-6); color:var(--txt-muted); font-size:14px; }}
-    .truncate {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}.no-wrap {{ white-space:nowrap; }}
-    .gap-2 {{ gap:8px; }}.gap-3 {{ gap:12px; }}.gap-4 {{ gap:16px; }}
-    .mb-4 {{ margin-bottom:16px; }}.mb-5 {{ margin-bottom:20px; }}.mb-6 {{ margin-bottom:24px; }}
-    .legacy-lucide {{ width:1em; height:1em; display:inline-block; vertical-align:-.16em; stroke-width:1.9; }}
-
-    /* ── Responsive Breakpoints ───────────────────────────────── */
-    @media (max-width:1100px) {{
-      .topbar {{ grid-template-columns:auto minmax(180px,1fr) auto; padding:0 16px; }}
-      .profile-copy, .profile-chevron {{ display:none; }}
-    }}
-    @media (max-width:820px) {{
-      :root {{ --sidebar-w:0px; }}
-      .sidebar {{ transform:translateX(100%); }}
-      .sidebar.open {{ transform:translateX(0); --sidebar-w:272px; }}
-      .overlay.open {{ display:block; }}
-      .topbar {{ right:0; }}
-      .topbar-menu {{ display:flex !important; align-items:center; justify-content:center; }}
-      .main-wrap.with-sidebar {{ margin-right:0 !important; }}
-      .main-content {{ padding:var(--sp-4) var(--sp-4) var(--sp-8); }}
-      .stat-grid {{ grid-template-columns:repeat(2,1fr); }}
-    }}
-    @media (max-width:640px) {{
-      .topbar {{ grid-template-columns:1fr auto; height:56px; padding:0 12px; }}
-      .global-search-wrap {{ display:none; }}
-      .topbar-eyebrow {{ display:none; }}
-      .topbar-actions {{ gap:4px; }}
-      .profile-trigger {{ padding:4px; border:none; background:none; }}
-      .main-wrap.with-sidebar {{ padding-top:56px; }}
-      .main-content {{ padding:12px 12px 32px; }}
-      .sidebar {{ width:min(86vw,280px); }}
-      .card {{ border-radius:var(--r-lg); }}
-      .card-p {{ padding:var(--sp-4) var(--sp-5); }}
-      .stat-grid {{ grid-template-columns:repeat(2,1fr); gap:10px; }}
-      .page-header h1 {{ font-size:18px; }}
-      .filter-bar {{ gap:5px; }}
-      .filter-tab {{ padding:5px 10px; font-size:11.5px; }}
-      .btn {{ font-size:13px; padding:0 14px; }}
-    }}
-    @media (max-width:375px) {{
-      .main-content {{ padding:10px 10px 28px; }}
-      .stat-grid {{ grid-template-columns:1fr 1fr; gap:8px; }}
-    }}
-
-    /* ── Safe Area (iPhone notch / home indicator) ──────────── */
-    .topbar {{
-      padding-right: max(24px, env(safe-area-inset-right));
-      padding-left:  max(16px, env(safe-area-inset-left));
-    }}
-    .sidebar {{
-      padding-bottom: env(safe-area-inset-bottom);
-    }}
-    .main-content {{
-      padding-bottom: max(32px, calc(env(safe-area-inset-bottom) + 24px));
-    }}
-    @media (max-width:820px) {{
-      .main-wrap.with-sidebar {{
-        padding-top: max(60px, calc(env(safe-area-inset-top) + 56px));
-      }}
-    }}
-
-    /* ── No horizontal scroll on page ──────────────────────── */
-    html, body {{ overflow-x:hidden; max-width:100vw; }}
-    .main-wrap {{ overflow-x:hidden; }}
-    .table-wrap, .overflow-x-auto {{ overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }}
-
-    /* ── Touch targets 44px ─────────────────────────────────── */
-    @media (max-width:820px) {{
-      .btn-sm {{ min-height:36px; padding:0 12px; }}
-      a.btn-sm, button.btn-sm {{ display:inline-flex; align-items:center; justify-content:center; }}
-      .nav-item {{ min-height:44px; }}
-      .icon-button {{ width:44px; height:44px; }}
-    }}
-
-    /* ── Prevent text overflow on mobile ────────────────────── */
-    @media (max-width:640px) {{
-      .truncate-mobile {{ max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-      td {{ word-break:break-word; }}
-    }}
-  </style>
-</head>
-<body>
-{sidebar}
-{topbar}
-<div class="main-wrap {'with-sidebar' if admin_info else 'auth-layout'}">
-  <div class="main-content">
-    {flash_html}
-    {body}
-  </div>
-</div>
-
-<script>
-(function(){{
-  function renderIcons(){{ if(window.lucide) lucide.createIcons({{attrs:{{'aria-hidden':'true'}}}}); }}
-
-  // اعمال glass level از DB هنگام load
-  (function(){{
-    var gl = parseFloat('{theme.get("glass", "0") if admin_info else "0"}') || 0;
-    if(gl > 0) document.documentElement.style.setProperty('--glass-level', gl);
-  }})();
-
-  // Active nav
-  var path = location.pathname;
-  document.querySelectorAll('.nav-item[data-href]').forEach(function(el){{
-    if(el.dataset.href === path || (path !== '/admin/' && el.dataset.href !== '/admin/' && path.startsWith(el.dataset.href))){{
-      el.classList.add('active');
-    }}
-  }});
-
-  // Toggle sidebar
-  window.toggleSidebar = function(){{
-    document.getElementById('sidebar')?.classList.toggle('open');
-    document.getElementById('overlay')?.classList.toggle('open');
-  }};
-
-  // ── Classic / Dark Mode (با پشتیبانی هماهنگی سیستم) ──────────
-  function _prefersDark(){{
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  }}
-  function _resolveDark(){{
-    var m = localStorage.getItem('sl-dark');
-    if(m==='auto' || m===null) return _prefersDark();
-    return m==='1';
-  }}
-  function applyMode(){{
-    var isClassic = localStorage.getItem('sl-classic')==='1';
-    var isDark = _resolveDark();
-    document.body.classList.toggle('sl-classic', isClassic && !isDark);
-    document.body.classList.toggle('sl-dark', isDark);
-    document.body.classList.toggle('dark-mode', isDark);
-  }}
-  window.applyMode = applyMode;
-  // اگر روی حالت خودکار است، با تغییر تم سیستم همگام شو
-  if(window.matchMedia){{
-    try {{
-      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(){{
-        if((localStorage.getItem('sl-dark')||'auto')==='auto') applyMode();
-      }});
-    }} catch(e){{}}
-  }}
-  window.toggleClassic = function(){{
-    var on = localStorage.getItem('sl-classic')==='1';
-    localStorage.setItem('sl-classic', on?'0':'1');
-    applyMode(); renderIcons();
-    fetch('/admin/settings/save-theme?dark='+encodeURIComponent(localStorage.getItem('sl-dark')||'auto')+'&classic='+(on?'0':'1'),{{method:'POST'}}).catch(function(){{}});
-  }};
-  window.toggleDark = function(){{
-    var on = _resolveDark();
-    localStorage.setItem('sl-dark', on?'0':'1');
-    applyMode(); renderIcons();
-    fetch('/admin/settings/save-theme?dark='+(on?'0':'1')+'&classic='+(localStorage.getItem('sl-classic')==='1'?'1':'0'),{{method:'POST'}}).catch(function(){{}});
-  }};
-  // بارگذاری تم ذخیره‌شده از سرور
-  (function(){{
-    var saved = document.documentElement.getAttribute('data-saved-dark');
-    var savedC = document.documentElement.getAttribute('data-saved-classic');
-    if(saved==='1'||saved==='0'||saved==='auto') localStorage.setItem('sl-dark', saved);
-    if(savedC==='1'||savedC==='0') localStorage.setItem('sl-classic', savedC);
-  }})();
-  applyMode();
-
-  var search=document.getElementById('globalSearch');
-  function searchPanel(){{
-    if(!search||!results)return; var q=search.value.trim().toLowerCase(); results.innerHTML='';
-    if(!q){{results.classList.remove('open');return;}}
-    Array.from(document.querySelectorAll('.sidebar-nav .nav-item')).filter(function(a){{return a.textContent.trim().toLowerCase().includes(q);}}).slice(0,7).forEach(function(a){{
-      var item=document.createElement('a'); item.href=a.href; item.innerHTML='<span>'+a.textContent.trim()+'</span><small>'+new URL(a.href).pathname+'</small>'; results.appendChild(item);
-    }});
-    if(!results.children.length) results.innerHTML='<span style="display:block;padding:12px;color:var(--text-muted);font-size:12px">نتیجه‌ای پیدا نشد</span>';
-    results.classList.add('open');
-  }}
-  search?.addEventListener('input',searchPanel);
-  document.addEventListener('keydown',function(ev){{if((ev.metaKey||ev.ctrlKey)&&ev.key.toLowerCase()==='k'){{ev.preventDefault();search?.focus();}}if(ev.key==='Escape')results?.classList.remove('open');}});
-
-  // Convert legacy decorative emoji in rendered UI to Lucide without touching form data or scripts.
-  var emojiIcons={{'✅':'circle-check','❌':'circle-x','⚠️':'triangle-alert','⚠':'triangle-alert','📊':'bar-chart-2','🛒':'shopping-bag','🛍':'shopping-bag','📦':'package','🗂':'folders','🗃':'archive','💼':'briefcase','🧾':'receipt-text','💰':'wallet','💳':'credit-card','👥':'users','🤝':'handshake','🎫':'ticket','📢':'megaphone','⚙️':'settings','⚙':'settings','👤':'user-round','💾':'hard-drive-download','📈':'trending-up','📱':'smartphone','🔑':'key-round','🔴':'circle-alert','🟡':'circle-dot','🟢':'circle-check','🔄':'refresh-cw','👨‍💻':'user-round','🧩':'blocks','←':'arrow-left','↩':'log-out','☰':'menu','✕':'x','▲':'trending-up','▼':'trending-down'}};
-  var emojiRe=/(✅|❌|⚠️|⚠|📊|🛒|🛍|📦|🗂|🗃|💼|🧾|💰|💳|👥|🤝|🎫|📢|⚙️|⚙|👤|💾|📈|📱|🔑|🔴|🟡|🟢|🔄|👨‍💻|🧩|←|↩|☰|✕|▲|▼)/g;
-  var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT); var nodes=[]; while(walker.nextNode()) nodes.push(walker.currentNode);
-  nodes.forEach(function(node){{ var parent=node.parentElement;if(!parent||parent.closest('script,style,input,textarea,select,option,[data-no-icon]')||!emojiRe.test(node.nodeValue)){{emojiRe.lastIndex=0;return;}} emojiRe.lastIndex=0; var frag=document.createDocumentFragment(),last=0,m;while((m=emojiRe.exec(node.nodeValue))){{frag.append(document.createTextNode(node.nodeValue.slice(last,m.index)));var i=document.createElement('i');i.setAttribute('data-lucide',emojiIcons[m[0]]);i.className='legacy-lucide';frag.append(i);last=m.index+m[0].length;}}frag.append(document.createTextNode(node.nodeValue.slice(last)));node.replaceWith(frag);}});
-
-  {"" if not admin_info else """
-  // Idle logout
-  var IDLE = 300000;
-  var timer;
-  function reset(){ clearTimeout(timer); timer = setTimeout(function(){ location.href='/admin/login?flash='+encodeURIComponent('به دلیل عدم فعالیت خارج شدید'); }, IDLE); }
-  ['mousemove','keydown','click','scroll','touchstart'].forEach(function(ev){ document.addEventListener(ev,reset,true); });
-  reset();
-
-  // Badge polling (every 12s)
-  function updateBadge(id, count){
-    var el = document.getElementById(id);
-    if(!el) return;
-    if(count>0){ el.textContent=count; el.classList.remove('hidden'); }
-    else el.classList.add('hidden');
-  }
-  setInterval(function(){
-    fetch('/admin/badges.json').then(function(r){return r.json();}).then(function(d){
-      updateBadge('ticket-badge-top', (d.tickets||0) + (d.financial||0));
-      updateBadge('partner-badge-top', d.partners||0);
-      updateBadge('notes-badge-top', d.notes||0);
-    }).catch(function(){});
-  }, 12000);
-  """}
-  renderIcons();
-}})();
-</script>
-<script>
-/* ─── اعداد فارسی سراسری پنل ─── */
-(function(){{
-  var FA=['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
-  function conv(s){{ return s.replace(/[0-9]/g,function(d){{return FA[+d];}}); }}
-  var SKIP={{SCRIPT:1,STYLE:1,TEXTAREA:1,INPUT:1,SELECT:1,OPTION:1,CODE:1,PRE:1,KBD:1}};
-  function walk(node){{
-    if(node.nodeType===3){{
-      if(/[0-9]/.test(node.nodeValue)) node.nodeValue=conv(node.nodeValue);
-      return;
-    }}
-    if(node.nodeType!==1) return;
-    if(SKIP[node.tagName]) return;
-    if(node.closest && node.closest('code,pre,kbd,.no-fa')) return;
-    for(var i=0;i<node.childNodes.length;i++) walk(node.childNodes[i]);
-  }}
-  function run(){{ walk(document.body); }}
-  run();
-  var mo=new MutationObserver(function(muts){{
-    mo.disconnect();
-    muts.forEach(function(m){{
-      m.addedNodes && m.addedNodes.forEach(function(n){{ walk(n); }});
-      if(m.type==='characterData' && /[0-9]/.test(m.target.nodeValue||'')){{
-        var p=m.target.parentElement;
-        if(p && !SKIP[p.tagName] && !(p.closest&&p.closest('code,pre,kbd,.no-fa')))
-          m.target.nodeValue=conv(m.target.nodeValue);
-      }}
-    }});
-    mo.observe(document.body,{{childList:true,subtree:true,characterData:true}});
-  }});
-  mo.observe(document.body,{{childList:true,subtree:true,characterData:true}});
-}})();
-</script>
-</body>
-</html>""")
-
-    # تجدید session cookie برای مدیر فعال (sliding window)
-    if admin_info:
+    # 🚀 پست کانال + امتیازدهی + Upsell (با تأخیر، بعد از تحویل)
+    try:
+        _cat_for_upsell = None
         try:
-            _refresh_session(html_response, admin_info)
+            _cat_for_upsell = product.get("category_id") if isinstance(product, dict) else None
         except Exception:
             pass
-    return html_response
-
-def _card(title, value, sub="", color="indigo"):
-    colors = {
-        "indigo": "#4f46e5","green":"#16a34a","red":"#dc2626",
-        "amber":"#d97706","blue":"#2563eb","slate":"#475569",
-    }
-    fg = colors.get(color, "#4f46e5")
-    return (
-        f'<div class="card p-5">'
-        f'<div class="text-xs font-semibold mb-1" style="color:{fg}">{e(title)}</div>'
-        f'<div class="text-2xl font-bold" style="color:var(--text-main)">{e(str(value))}</div>'
-        f'{"<div style=\"font-size:12px;color:var(--text-muted);margin-top:3px\">"+e(sub)+"</div>" if sub else ""}'
-        f'</div>'
-    )
-
-def _btn(text, href="", color="indigo", small=False, danger=False):
-    cls = "btn btn-sm " if small else "btn "
-    if danger or color == "red":   cls += "btn-red"
-    elif color == "green":         cls += "btn-green"
-    elif color == "slate":         cls += "btn-slate"
-    else:                          cls += "btn-indigo"
-    if href:
-        return f'<a href="{e(href)}" class="{cls}">{e(text)}</a>'
-    return f'<button type="submit" class="{cls}">{e(text)}</button>'
-
-def _input(name, placeholder="", value="", type_="text", required=False):
-    req = "required" if required else ""
-    return f'<input type="{type_}" name="{name}" value="{e(value)}" placeholder="{e(placeholder)}" {req}>'
-
-def _textarea(name, placeholder="", value="", rows=4):
-    return f'<textarea name="{name}" rows="{rows}" placeholder="{e(placeholder)}">{e(value)}</textarea>'
-
-# ─────────────────────────── Login / Logout ────────────────────────────────
-
-@router.get("/login", response_class=HTMLResponse)
-async def login_get(request: Request, err: str = "", flash: str = ""):
-    adm = _get_admin(request)
-    if adm:
-        return _redir("/admin/")
-
-    err_html = ""
-    if err == "1":
-        err_html = '<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">❌ نام کاربری یا رمز اشتباه است</div>'
-    elif err == "rate":
-        mins = request.query_params.get("mins", "15")
-        err_html = f'<div style="background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">🔒 دسترسی موقتاً مسدود شد. {mins} دقیقه دیگر تلاش کنید.</div>'
-    if flash:
-        err_html += f'<div style="background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">⏱ {e(flash)}</div>'
-
-    body = f"""
-    <div style="min-height:80vh;display:flex;align-items:center;justify-content:center">
-      <div style="background:var(--card-bg);border-radius:24px;box-shadow:0 20px 60px rgba(15,23,42,.12);padding:40px 36px;width:100%;max-width:380px">
-        <div style="text-align:center;margin-bottom:28px">
-          <div style="font-size:24px;font-weight:900;letter-spacing:1.5px;margin-bottom:6px;direction:ltr">
-            <span style="color:#374151">STOCK</span><span style="color:#2EC4B6"> LAND</span>
-          </div>
-          <div style="font-size:12px;color:var(--text-muted)">پنل مدیریت فروشگاه</div>
-        </div>
-        {err_html}
-        <form method="post" action="/admin/login" style="display:flex;flex-direction:column;gap:14px">
-          <div>
-            <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">نام کاربری</label>
-            {_input("username","نام کاربری",required=True)}
-          </div>
-          <div>
-            <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">رمز ورود</label>
-            {_input("password","رمز ورود",type_="password",required=True)}
-          </div>
-          <button type="submit" style="width:100%;padding:12px;background:#2EC4B6;color:#fff;font-weight:700;font-size:14px;border:none;border-radius:12px;cursor:pointer;margin-top:4px">ورود به پنل ←</button>
-        </form>
-      </div>
-    </div>"""
-    return _layout("ورود", body)
-
-@router.post("/login")
-async def login_post(request: Request, username: str = Form(""), password: str = Form("")):
-    ensure_admins_table()
-    _ensure_theme_table()
-    ip = request.client.host if request.client else "unknown"
-
-    blocked, remaining = _is_rate_limited(ip)
-    if blocked:
-        return _redir(f"/admin/login?err=rate&mins={remaining // 60 + 1}")
-
-    username = username.strip()
-    password = password.strip()
-
-    super_un = _env("ADMIN_WEB_USERNAME", "admin")
-    super_pw = _env("ADMIN_WEB_PASSWORD")
-    if username.lower() in (super_un.lower(), "admin", "super") and super_pw and _hmac.compare_digest(password, super_pw):
-        _clear_attempts(ip)
-        resp = _redir("/admin/")
-        resp.set_cookie("adm", _make_session("super"), max_age=300, httponly=True, samesite="lax")
-        _log(request, "ورود", "احراز هویت", f"سوپرادمین از {ip}")
-        return resp
-
-    try:
-        conn = _db()
-        row = conn.execute(
-            "SELECT id, web_password_hash, is_active FROM admins WHERE web_username=? LIMIT 1;",
-            (username,),
-        ).fetchone()
-        conn.close()
-        if row and row["is_active"] and row["web_password_hash"] == _hash_pw(password):
-            _clear_attempts(ip)
-            resp = _redir("/admin/")
-            resp.set_cookie("adm", _make_session(str(row["id"])), max_age=300, httponly=True, samesite="lax")
-            _log(request, "ورود", "احراز هویت", f"ادمین #{row['id']}")
-            return resp
+        _after_purchase_extras(uid, call.message.chat.id, order_id, pid, _cat_for_upsell, title)
     except Exception:
         pass
 
-    _record_fail(ip)
-    _, remaining2 = _is_rate_limited(ip)
-    _log(request, "ورود ناموفق", "احراز هویت", f"یوزرنیم: {username[:30]} از {ip}")
-    return _redir("/admin/login?err=1")
 
-@router.get("/logout")
-async def logout(request: Request):
-    adm = _get_admin(request)
-    if adm:
-        _log(request, "خروج", "احراز هویت", "", admin_info=adm)
-    resp = _redir("/admin/login")
-    resp.delete_cookie("adm")
-    return resp
-
-# ─────────────────────────── Dashboard ─────────────────────────────────────
-
-@router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, err: str = ""):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    flash = "دسترسی کافی ندارید." if err == "noperm" else ""
-
-    conn = _db()
+    # ----------------------------
+    # تحویل فوری در صورت وجود موجودی
+    # ----------------------------
+    # ── اول چک کن نیاز به راه‌اندازی داره یا نه ──────────────────────────
     try:
-        today = datetime.utcnow().date().isoformat()
-        yesterday = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
+        ensure_product_support_schema()
+        if get_product_support_flag(pid):
+            from db import ticket_create, ticket_ensure_schema, ticket_add_message, get_product_setup_message
+            ticket_ensure_schema()
 
-        today_o   = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE created_at LIKE ?;", (today+"%",)).fetchone()
-        yest_o    = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE created_at LIKE ?;", (yesterday+"%",)).fetchone()
-        total_o   = conn.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders;").fetchone()
-        feed_avail = conn.execute("SELECT COUNT(*) FROM product_feed WHERE delivered=0;").fetchone()[0]
-        pending   = conn.execute("SELECT COUNT(*) FROM pending_deliveries WHERE status='pending';").fetchone()[0]
-        partners_pend = conn.execute("SELECT COUNT(*) FROM partners WHERE status='pending';").fetchone()[0]
-        open_tix  = _open_ticket_count()
-        wallets   = conn.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM wallets;").fetchone()
-        products_cnt = conn.execute("SELECT COUNT(*) FROM products WHERE is_active=1;").fetchone()[0]
+            setup_msg = get_product_setup_message(pid) or "اطلاعات مورد نیاز را در این گفتگو ارسال کنید."
 
-        # نمودار ۳۰ روز اخیر
-        chart_data = conn.execute("""
-            SELECT substr(created_at,1,10) as day, COALESCE(SUM(price),0) as total
-            FROM orders WHERE created_at >= date('now','-30 days')
-            GROUP BY day ORDER BY day ASC;
-        """).fetchall()
+            tid = ticket_create(
+                uid, type_="product_setup",
+                product_id=pid, order_id=order_id,
+                feed_id=None,
+                feed_data=None,
+                setup_status="waiting_info"
+            )
+            ticket_add_message(tid, "admin",
+                f"📦 سفارش #{order_id} — {title}\n\n{setup_msg}",
+                media_type=None)
 
-        # محصولات کم موجودی
-        low_stock = conn.execute("""
-            SELECT p.id, p.title, COUNT(CASE WHEN pf.delivered=0 THEN 1 END) as avail
-            FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id
-            WHERE p.is_active=1 GROUP BY p.id HAVING avail<=5 ORDER BY avail ASC LIMIT 5;
-        """).fetchall()
+            kb_setup = types.InlineKeyboardMarkup()
+            kb_setup.add(types.InlineKeyboardButton(
+                "💬 ارسال اطلاعات", callback_data=f"ticket_v2_open_{tid}"
+            ))
+            bot.send_message(
+                call.message.chat.id,
+                f"✅ سفارش #{order_id} ثبت شد.\n\n"
+                f"📦 <b>{title}</b>\n\n"
+                f"🟡 <b>{setup_msg}</b>\n\n"
+                "پشتیبانی پس از دریافت اطلاعات، محصول را تحویل می‌دهد.",
+                parse_mode="HTML", reply_markup=kb_setup
+            )
+            try:
+                bot.send_message(ADMIN_ID,
+                    f"🟢 <b>گفتگوی راه‌اندازی محصول</b>\n"
+                    f"سفارش: #{order_id} | محصول: {title}\n"
+                    f"کاربر: <code>{uid}</code> | تیکت: #{tid}",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+            return  # ← هیچ feed claim نمی‌شه
+    except Exception as _se:
+        logger.error("product_setup error: %s", _se)
 
-        # سفارش‌های اخیر
-        recent = conn.execute("""
-            SELECT id, user_id, title, price, created_at, COALESCE(status,'active') as status
-            FROM orders ORDER BY id DESC LIMIT 8;
-        """).fetchall()
+    # ── محصول معمولی: claim از DB ─────────────────────────────────────────
+    feed_item = claim_next_feed_item(pid, order_id=order_id)
 
-        # آخرین بکاپ خودکار
-        import glob as _g, os as _o
-        auto_backups = sorted(_g.glob("/tmp/stockland_backups/auto_*.sqlite"), reverse=True)
-        last_backup = _o.path.basename(auto_backups[0]).replace("auto_","").replace(".sqlite","") if auto_backups else None
+    if feed_item:
+        feed_id, feed_data = feed_item
 
+        # تحویل عادی
+        bot.send_message(
+            call.message.chat.id,
+            f"سفارش ثبت و تحویل شد ✅\n\n"
+            f"شماره سفارش: #{order_id}\n"
+            f"سرویس: {title}\n"
+            f"مبلغ: {eff_price:,} تومان\n"
+            f"موجودی فعلی: {new_balance:,} تومان\n\n"
+            f"<code>{html.escape(str(feed_data))}</code>",
+            parse_mode="HTML"
+        )
+        # ارسال درخواست امتیازدهی
+        try:
+            _send_rating_request(call.message.chat.id, uid, order_id, pid, title)
+        except Exception:
+            pass
+        try:
+            bot.send_message(ADMIN_ID,
+                f"📦 تحویل فوری\nOrder: #{order_id} | User: {uid}\n{title} — {eff_price:,} ت")
+        except Exception:
+            pass
+
+    else:
+        # ثبت در صف pending
+        enqueue_pending_delivery(order_id, uid, call.message.chat.id, pid, title, eff_price)
+
+        bot.send_message(
+            call.message.chat.id,
+            f"سفارش ثبت شد ✅\n\n"
+            f"اما فعلاً موجودی این محصول تکمیل شده است.\n"
+            f"شکیبا باشید در اولین فرصت توسط ادمین ارسال خواهد شد.\n\n"
+            f"موجودی فعلی: {new_balance:,} تومان"
+        )
+
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                "⚠️ سفارش بدون موجودی\n\n"
+                f"Order ID: #{order_id}\n"
+                f"User ID: {uid}\n"
+                f"محصول: {title} (#{pid})\n"
+                f"مبلغ: {eff_price:,} تومان"
+            )
+        except:
+            pass
+
+def send_products_menu(chat_id, category, admin_view=False, user_id=None):
+    products = get_products_by_category(category)
+    if not products:
+        if admin_view:
+            kb = types.InlineKeyboardMarkup(row_width=1)
+            kb.add(types.InlineKeyboardButton(
+                "➕ افزودن محصول جدید", callback_data=f"admin_new_product_{category}"
+            ))
+            kb.add(types.InlineKeyboardButton(
+                "🔙 بازگشت به دسته‌ها", callback_data="admin_products"
+            ))
+            bot.send_message(chat_id, "محصولی برای این دسته ثبت نشده است.", reply_markup=kb)
+        else:
+            bot.send_message(chat_id, "در حال حاضر محصولی برای این دسته ثبت نشده است.")
+        return
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    partner_ok = (not admin_view) and (user_id is not None) and is_partner_approved(int(user_id))
+    has_visible = False
+    for p in products:
+        pid, _, title, price, desc, is_active, partner_price = p
+        if not admin_view and not is_active:
+            continue
+        has_visible = True
+        if admin_view:
+            status_icon = "✅" if is_active else "❌"
+            text = f"{status_icon} {title} | {price:,} تومان"
+            cb = f"admin_product_{pid}"
+        else:
+            eff_price = partner_price if (partner_ok and partner_price) else price
+            from db import apply_flash_price as _afp
+            eff_price, _flash_sale = _afp(int(pid), int(eff_price))
+            text = f"{title} | {eff_price:,} تومان"
+            cb = f"{category}_select_{pid}"
+        kb.add(types.InlineKeyboardButton(text, callback_data=cb))
+
+    if not has_visible and not admin_view:
+        bot.send_message(chat_id, "در حال حاضر محصولی برای این دسته ثبت نشده است.")
+        return
+
+    if admin_view:
+        kb.add(types.InlineKeyboardButton("➕ افزودن محصول جدید", callback_data=f"admin_new_product_{category}"))
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت به دسته‌ها", callback_data="admin_products"))
+    else:
+        back_cb = "back_main" if category == "apple" else "other_categories"
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb))
+
+    bot.send_message(chat_id, "لطفا یکی از سرویس‌های زیر را انتخاب کنید:", reply_markup=kb)
+
+#======================= ORDER SUMMARY + DISCOUNT =======================
+
+def _get_eff_price(product, uid):
+    """قیمت موثر بر اساس همکار یا مشتری بودن."""
+    price = product[3]
+    partner_price = product[6] if len(product) > 6 else None
+    partner_ok = is_partner_approved(uid)
+    return partner_price if (partner_ok and partner_price) else price
+
+
+def _show_order_summary(chat_id, uid, product, category, pid):
+    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی."""
+    title     = product[2]
+    base      = _get_eff_price(product, uid)
+    state     = user_states.get(uid, {})
+    discount  = int(state.get("applied_discount", 0))
+    code_name = state.get("applied_code", "")
+    final     = max(0, base - discount)
+    wallet_bal = get_wallet_balance(uid)
+
+    lines = [f"🛒 <b>{title}</b>\n"]
+    lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
+    if discount > 0:
+        lines.append(f"🎟 کد تخفیف: <code>{code_name}</code>")
+        lines.append(f"💸 تخفیف: <b>−{discount:,}</b> تومان")
+    lines.append(f"\n💰 مبلغ قابل پرداخت: <b>{final:,}</b> تومان")
+    if 0 < wallet_bal < final:
+        lines.append(f"👛 موجودی کیف‌پول: <b>{wallet_bal:,}</b> تومان")
+        lines.append(f"💳 باقیمانده از درگاه: <b>{final - wallet_bal:,}</b> تومان")
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+
+    if wallet_bal >= final:
+        # پرداخت کامل از کیف‌پول
+        kb.add(types.InlineKeyboardButton(
+            f"💳 پرداخت با کیف‌پول — {final:,} تومان",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
+        kb.add(types.InlineKeyboardButton(
+            "🌐 پرداخت از درگاه",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
+    elif 0 < wallet_bal < final:
+        # پرداخت ترکیبی
+        kb.add(types.InlineKeyboardButton(
+            f"💳 پرداخت ترکیبی (کیف‌پول + {final-wallet_bal:,} ت از درگاه)",
+            callback_data=f"confirm_wallet_{category}_{pid}"
+        ))
+        kb.add(types.InlineKeyboardButton(
+            f"🌐 پرداخت کامل از درگاه — {final:,} تومان",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
+    else:
+        # فقط درگاه
+        kb.add(types.InlineKeyboardButton(
+            f"🌐 پرداخت از درگاه — {final:,} تومان",
+            callback_data=f"confirm_full_{category}_{pid}"
+        ))
+
+    if discount > 0:
+        kb.row(
+            types.InlineKeyboardButton("🔄 تغییر کد", callback_data=f"enter_code_{category}_{pid}"),
+            types.InlineKeyboardButton("🗑 حذف کد",   callback_data=f"remove_code_{category}_{pid}")
+        )
+    else:
+        kb.add(types.InlineKeyboardButton(
+            "🎟 کد تخفیف دارم",
+            callback_data=f"enter_code_{category}_{pid}"
+        ))
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_purchase"))
+    bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+
+
+# ─── ورود کد تخفیف ──────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("enter_code_"))
+def handle_enter_code(call):
+    uid  = call.from_user.id
+    suf  = call.data[len("enter_code_"):]
+    # ذخیره info برای برگشت بعد از کد
+    user_states.setdefault(uid, {})["code_context"] = suf
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data=f"code_cancel_{suf}"))
+    bot.send_message(call.message.chat.id,
+        "🎟 کد تخفیف خود را ارسال کنید:", reply_markup=kb)
+    bot.register_next_step_handler(call.message, _handle_code_input)
+    bot.answer_callback_query(call.id)
+
+
+def _handle_code_input(message):
+    uid  = message.from_user.id
+    code = (message.text or "").strip().upper()
+    if not code:
+        return
+    state   = user_states.get(uid, {})
+    context = state.get("code_context", "")
+    # parse category و pid از context
+    parts = context.rsplit("_", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.send_message(message.chat.id, "❌ خطا — دوباره امتحان کنید"); return
+    category, pid_str = parts[0], parts[1]
+    pid     = int(pid_str)
+    product = get_product_by_id(pid)
+    if not product:
+        bot.send_message(message.chat.id, "❌ محصول یافت نشد"); return
+
+    base   = _get_eff_price(product, uid)
+    result = validate_discount(code, product_id=pid, amount=base, user_id=uid)
+    if not result["valid"]:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت به سفارش",
+            callback_data=f"code_cancel_{context}"))
+        bot.send_message(message.chat.id, f"❌ {result['error']}", reply_markup=kb)
+        return
+
+    use_discount(result["code_id"], user_id=uid)
+    state["applied_discount"]  = result["discount_amount"]
+    state["applied_code"]      = code
+    state["discount_code_id"]  = result["code_id"]
+    user_states[uid]           = state
+    _show_order_summary(message.chat.id, uid, product, category, pid)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("code_cancel_"))
+def handle_code_cancel(call):
+    uid     = call.from_user.id
+    context = call.data[len("code_cancel_"):]
+    parts   = context.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        pid     = int(parts[1])
+        category = parts[0]
+        product  = get_product_by_id(pid)
+        if product:
+            _show_order_summary(call.message.chat.id, uid, product, category, pid)
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("remove_code_"))
+def handle_remove_code(call):
+    uid = call.from_user.id
+    state = user_states.get(uid, {})
+    state.pop("applied_discount", None)
+    state.pop("applied_code", None)
+    user_states[uid] = state
+    context = call.data[len("remove_code_"):]
+    parts   = context.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        product = get_product_by_id(int(parts[1]))
+        if product:
+            _show_order_summary(call.message.chat.id, uid, product, parts[0], int(parts[1]))
+    bot.answer_callback_query(call.id, "کد تخفیف حذف شد")
+
+
+# ─── پرداخت نهایی ────────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("do_pay_"))
+def handle_do_pay(call):
+    uid     = call.from_user.id
+    context = call.data[len("do_pay_"):]
+    parts   = context.rsplit("_", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.answer_callback_query(call.id, "خطا", show_alert=True); return
+    category, pid_str = parts[0], parts[1]
+    pid     = int(pid_str)
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True); return
+
+    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
+    if exceeded:
+        bot.answer_callback_query(call.id, f"سقف روزانه ({limit_val}) تکمیل شد", show_alert=True); return
+
+    base      = _get_eff_price(product, uid)
+    discount  = int(user_states.get(uid, {}).get("applied_discount", 0))
+    eff_price = max(0, base - discount)
+
+    # state رو پاک می‌کنیم (code_id قبلاً در _handle_code_input مصرف شده)
+    state = user_states.get(uid, {})
+    state.pop("applied_discount", None)
+    state.pop("applied_code", None)
+    state.pop("discount_code_id", None)
+    state.pop("pay_type", None)
+    state.pop("code_context", None)
+    state.pop("discount_asked", None)
+    user_states[uid] = state
+
+    wallet_balance = get_wallet_balance(uid)
+
+    if wallet_balance >= eff_price:
+        # کیف‌پول کافیه
+        finalize_product_order(call, uid, product, category, eff_price)
+    else:
+        # ارسال به درگاه
+        from services.payments import start_wallet_charge_payment
+        start_wallet_charge_payment(
+            bot=bot, message=call.message, uid=uid, amount=eff_price,
+            clear_user_state=clear_user_state,
+            payment_type="product", product_id=pid, wallet_reserved=0
+        )
+    bot.answer_callback_query(call.id)
+
+
+# ─── deprecated handlers (backward compat) ───────────────────────────────────
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pay_nodiscount_"))
+def handle_pay_nodiscount(call):
+    uid = call.from_user.id
+    pending_cb = user_states.get(uid, {}).get("pending_cb", "")
+    if not pending_cb:
+        bot.answer_callback_query(call.id, "خطا", show_alert=True); return
+    user_states.setdefault(uid, {})["discount_asked"] = True
+    call.data = pending_cb
+    if pending_cb.startswith("confirm_full_"):
+        handle_confirm_full(call)
+    else:
+        handle_confirm_wallet(call)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_start_"))
+def handle_discount_start(call): pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_skip_"))
+def handle_discount_skip(call): pass
+
+
+def _daily_limit_exceeded(uid, product, pid):
+    """True if the user's daily purchase cap for this product is reached."""
+    partner_ok = is_partner_approved(int(uid))
+    buyer_type = "partner" if partner_ok else "customer"
+    daily_lim_c = product[7] if len(product) > 7 else 0
+    daily_lim_p = product[8] if len(product) > 8 else 0
+    limit_val = int((daily_lim_p if buyer_type == "partner" else daily_lim_c) or 0)
+    if limit_val <= 0:
+        return False, 0
+    cnt = count_user_product_orders_today(int(uid), int(pid), buyer_type=buyer_type)
+    return (cnt >= limit_val), limit_val
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_full_"))
+def handle_confirm_full(call):
+
+    parts = call.data.split("_")
+    if len(parts) < 4:
+        bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True)
+        return
+
+    pid_str = parts[-1]
+    category = "_".join(parts[2:-1])
+
+    if not pid_str.isdigit():
+        bot.answer_callback_query(call.id, "شناسه محصول نامعتبر است", show_alert=True)
+        return
+
+    pid = int(pid_str)
+    uid = call.from_user.id
+
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
+        return
+
+    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
+    if exceeded:
+        bot.answer_callback_query(call.id, f"سقف خرید روزانه ({limit_val}) تکمیل شده است.", show_alert=True)
+        return
+
+    title  = product[2]
+    price  = product[3]
+    partner_price = product[6] if len(product) > 6 else None
+    partner_ok    = is_partner_approved(uid)
+    eff_price     = partner_price if (partner_ok and partner_price) else price
+
+    # تخفیف اعمال شده از _show_order_summary
+    discount  = int(user_states.get(uid, {}).get("applied_discount", 0))
+    eff_price = max(0, eff_price - discount)
+
+    # پاک کردن state
+    user_states.pop(uid, None)
+
+    from services.payments import start_wallet_charge_payment
+    start_wallet_charge_payment(
+        bot=bot,
+        message=call.message,
+        uid=uid,
+        amount=eff_price,
+        clear_user_state=clear_user_state,
+        payment_type="product",
+        product_id=pid,
+        wallet_reserved=0
+    )
+    
+#======================== confirm_wallet =====================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_wallet_"))
+def handle_confirm_wallet(call):
+    parts = call.data.split("_")
+    if len(parts) < 4:
+        bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True)
+        return
+    pid_str = parts[-1]
+    category = "_".join(parts[2:-1])
+    if not pid_str.isdigit():
+        bot.answer_callback_query(call.id, "شناسه محصول نامعتبر است", show_alert=True)
+        return
+    pid = int(pid_str)
+    uid = call.from_user.id
+
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
+        return
+
+    exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
+    if exceeded:
+        bot.answer_callback_query(call.id, f"سقف خرید روزانه ({limit_val}) تکمیل شده است.", show_alert=True)
+        return
+
+    title = product[2]
+    price = product[3]
+    partner_price = product[6] if len(product) > 6 else None
+    partner_ok = is_partner_approved(uid)
+    eff_price = partner_price if (partner_ok and partner_price) else price
+    from db import apply_flash_price as _afp
+    eff_price, _flash_sale = _afp(int(pid), int(eff_price))
+
+    # تخفیف اعمال شده از _show_order_summary
+    discount = int(user_states.get(uid, {}).get("applied_discount", 0))
+    eff_price = max(0, eff_price - discount)
+
+    # پاک کردن state (discount حفظ می‌شه تا finalize)
+    st = user_states.pop(uid, {})
+    wallet_used = 0
+    wallet_balance = get_wallet_balance(uid)
+    if wallet_balance >= eff_price:
+        finalize_product_order(call, uid, product, category, eff_price)
+        return
+
+    # 🔵 پرداخت ترکیبی: بخشی از کیف پول، بقیه از درگاه.
+    # مبلغ درگاه نباید کمتر از حداقل مجاز درگاه شود؛ در غیر این صورت
+    # سهم کیف پول را کم می‌کنیم تا سهم درگاه به حداقل برسد.
+    gateway_amount = max(MIN_TOPUP_AMOUNT, eff_price - wallet_balance)
+    wallet_reserved = eff_price - gateway_amount
+    if wallet_reserved < 0:
+        wallet_reserved = 0
+        gateway_amount = eff_price
+
+    from services.payments import start_wallet_charge_payment
+
+    start_wallet_charge_payment(
+        bot=bot,
+        message=call.message,
+        uid=uid,
+        amount=gateway_amount,
+        clear_user_state=clear_user_state,
+        payment_type="product",
+        product_id=pid,
+        wallet_reserved=wallet_reserved
+    )
+    
+    
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pay_nodiscount_"))
+def handle_pay_nodiscount(call):
+    uid = call.from_user.id
+    pending_cb = user_states.get(uid, {}).get("pending_cb", "")
+    if not pending_cb:
+        bot.answer_callback_query(call.id, "خطا — دوباره امتحان کنید", show_alert=True)
+        return
+    user_states.setdefault(uid, {})["discount_asked"] = True
+    call.data = pending_cb
+    if pending_cb.startswith("confirm_full_"):
+        handle_confirm_full(call)
+    else:
+        handle_confirm_wallet(call)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_start_"))
+def handle_discount_start(call):
+    pass  # deprecated — kept for compat
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("discount_skip_"))
+def handle_discount_skip(call):
+    pass  # deprecated
+
+
+def _process_discount_code(message):
+    """کاربر کد تخفیف تایپ کرد."""
+    uid = message.from_user.id
+    code = (message.text or "").strip()
+
+    # اگه پیام واقعی نیست نادیده بگیر
+    if not code or len(code) < 2:
+        return
+
+    state = user_states.get(uid, {})
+    pid = state.get("pid", 0)
+    category = state.get("category", "")
+    eff_price = state.get("eff_price", 0)
+    pending_cb = state.get("pending_cb", "")
+
+    result = validate_discount(code, product_id=pid, amount=eff_price, user_id=uid)
+
+    if not result["valid"]:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton(
+            f"✅ ادامه بدون تخفیف — {eff_price:,} تومان",
+            callback_data=f"pay_nodiscount_{category}_{pid}"
+        ))
+        bot.send_message(message.chat.id,
+            f"❌ {result['error']}", reply_markup=kb)
+        return
+
+    discount = result["discount_amount"]
+    use_discount(result["code_id"], user_id=uid)
+    final_price = max(0, eff_price - discount)
+
+    state["applied_discount"] = discount
+    state["eff_price"] = final_price
+    user_states[uid] = state
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton(
+        f"✅ پرداخت — {final_price:,} تومان",
+        callback_data=pending_cb
+    ))
+    bot.send_message(message.chat.id,
+        f"✅ کد تخفیف اعمال شد!\n"
+        f"🎟 تخفیف: <b>{discount:,}</b> تومان\n"
+        f"💳 مبلغ نهایی: <b>{final_price:,}</b> تومان",
+        parse_mode="HTML", reply_markup=kb
+    )
+
+
+# ─── کد تخفیف ───────────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("apply_discount_"))
+def handle_discount_prompt(call):
+    """ارسال prompt برای دریافت کد تخفیف."""
+    uid = call.from_user.id
+    # save callback data so we can resume after discount
+    state = user_states.get(uid, {})
+    state["discount_resume_cb"] = call.data.replace("apply_discount_", "")
+    user_states[uid] = state
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ بدون تخفیف", callback_data="skip_discount"))
+    bot.send_message(call.message.chat.id,
+        "🎟 کد تخفیف خود را ارسال کنید:\n(در صورت نداشتن، گزینه «بدون تخفیف» را انتخاب کنید)",
+        reply_markup=kb)
+    bot.register_next_step_handler(call.message, _process_discount_code)
+
+
+def _process_discount_code(message):
+    uid = message.from_user.id
+    code = (message.text or "").strip()
+    state = user_states.get(uid, {})
+
+    pid = state.get("pid", 0)
+    category = state.get("category", "")
+    eff_price = state.get("eff_price", 0)
+
+    result = validate_discount(code, product_id=pid, amount=eff_price, user_id=uid)
+    if not result["valid"]:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton(
+            "❌ بدون تخفیف ← ادامه",
+            callback_data=f"discount_skip_{category}_{pid}"
+        ))
+        bot.send_message(message.chat.id,
+            f"❌ {result['error']}",
+            reply_markup=kb)
+        return
+
+    discount = result["discount_amount"]
+    use_discount(result["code_id"], user_id=uid)
+    state["applied_discount"] = discount
+    user_states[uid] = state
+
+    final_price = max(0, eff_price - discount)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton(
+        f"✅ ادامه خرید — {final_price:,} تومان",
+        callback_data=f"confirm_wallet_{category}_{pid}"
+    ))
+    bot.send_message(message.chat.id,
+        f"✅ کد تخفیف اعمال شد!\n"
+        f"💰 تخفیف: <b>{discount:,}</b> تومان\n"
+        f"💳 مبلغ نهایی: <b>{final_price:,}</b> تومان",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "skip_discount")
+def handle_skip_discount(call):
+    uid = call.from_user.id
+    resume_cb = user_states.get(uid, {}).get("discount_resume_cb", "")
+    if resume_cb:
+        call.data = resume_cb
+        if resume_cb.startswith("confirm_wallet_"):
+            handle_confirm_wallet(call)
+        elif resume_cb.startswith("confirm_full_"):
+            handle_confirm_full(call)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("resume_buy_"))
+def handle_resume_buy(call):
+    original_cb = call.data[len("resume_buy_"):]
+    call.data = original_cb
+    if original_cb.startswith("confirm_wallet_"):
+        handle_confirm_wallet(call)
+    elif original_cb.startswith("confirm_full_"):
+        handle_confirm_full(call)
+
+
+# ─── اشتراک موجودی ───────────────────────────────────────────────────────────
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("notify_stock_"))
+def handle_notify_stock(call):
+    uid = call.from_user.id
+    pid = int(call.data.split("_")[-1])
+    added = subscribe_stock(uid, pid)
+    if added:
+        bot.answer_callback_query(call.id, "✅ به‌محض موجود شدن اطلاع داده می‌شود", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, "قبلاً ثبت شده‌اید", show_alert=False)
+
+
+# ─── پشتیبانی محصول پس از خرید ───────────────────────────────────────────────
+
+
+
+def send_admin_categories(chat_id):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton(
+            "سایر محصولات فروشگاه🛍", callback_data="admin_other_products"
+        ),
+        types.InlineKeyboardButton(
+            "📱 سرویس‌های اپل آیدی", callback_data="admin_products_cat_apple"
+        ),
+    )
+    
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back"))
+    bot.send_message(chat_id, "یکی از دسته‌بندی‌های محصولات را انتخاب کنید:", reply_markup=kb)
+
+
+def send_admin_product_detail(call_message, product, edit=False):
+    pid = int(product[0])
+    try:
+        import sqlite3
+        _conn = sqlite3.connect(DB_FULL_PATH)
+        try:
+            _row = _conn.execute(
+                'SELECT daily_limit_customer, daily_limit_partner FROM products WHERE id=?',
+                (pid,)
+            ).fetchone()
+        finally:
+            _conn.close()
+        _lim_c = _row[0] if _row else None
+        _lim_p = _row[1] if _row else None
+    except Exception:
+        _lim_c, _lim_p = None, None
+
+    pid, category, title, price, description, is_active = product[0:6]
+    partner_price = product[6] if len(product) > 6 else None
+    daily_lim_c = product[7] if len(product) > 7 else None
+    daily_lim_p = product[8] if len(product) > 8 else None
+
+    status = "✅ فعال" if is_active else "❌ غیرفعال"
+    lim_c_show = 'نامحدود' if (_lim_c is None or int(_lim_c) == 0) else str(int(_lim_c))
+    lim_p_show = 'نامحدود' if (_lim_p is None or int(_lim_p) == 0) else str(int(_lim_p))
+
+    text = (
+        f"مدیریت محصول #{pid}\n\n"
+        f"دسته: <b>{category}</b>\n"
+        f"عنوان: <b>{title}</b>\n"
+        f"قیمت: <b>{price:,}</b> تومان\n"
+        f"قیمت همکار: <b>{(partner_price if partner_price is not None else price):,}</b> تومان\n"
+        f"حد خرید روزانه مشتری: <b>{lim_c_show}</b>\n"
+        f"حد خرید روزانه همکار: <b>{lim_p_show}</b>\n"
+        f"وضعیت: {status}\n\n"
+        f"توضیحات:\n{description or '---'}"
+    )
+    total, remaining, delivered = get_feed_stats(pid)
+    threshold, _last = get_feed_alert_setting(pid)
+    text += (
+        "\n\n📦 موجودی خودکار:\n"
+        f"کل: <b>{total}</b> | باقی‌مانده: <b>{remaining}</b> | تحویل‌شده: <b>{delivered}</b>\n"
+        f"⚠️ آستانه هشدار: <b>{threshold}</b>"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"admin_edit_title_{pid}"),
+        types.InlineKeyboardButton("✏️ ویرایش قیمت", callback_data=f"admin_edit_price_{pid}"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("🤝 ویرایش قیمت همکار", callback_data=f"admin_edit_partner_price_{pid}"),
+        types.InlineKeyboardButton("🧾 ویرایش توضیحات", callback_data=f"admin_edit_desc_{pid}"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("⛔️ حد خرید مشتری", callback_data=f"admin_set_limit_c_{pid}"),
+        types.InlineKeyboardButton("⛔️ حد خرید همکار", callback_data=f"admin_set_limit_p_{pid}"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("📦 بارگذار محصول", callback_data=f"admin_feed_bulk_{pid}"),
+        types.InlineKeyboardButton("⚠️ تنظیم هشدار موجودی", callback_data=f"admin_feed_alert_{pid}"),
+    )
+    # product chat toggle
+    try:
+        _chat_on = _get_product_chat_enabled(pid)
+    except Exception:
+        _chat_on = 0
+    chat_label = ("💬 چت محصول: ✅ روشن" if int(_chat_on)==1 else "💬 چت محصول: ❌ خاموش")
+    kb.add(types.InlineKeyboardButton(chat_label, callback_data=f"admin_toggle_chat_{pid}"))
+    kb.add(types.InlineKeyboardButton("✏️ تنظیم متن چت", callback_data=f"admin_set_chattext_{pid}"))
+    kb.add(
+        types.InlineKeyboardButton(
+            "🔴 غیرفعال کردن" if is_active else "🟢 فعال کردن",
+            callback_data=f"admin_toggle_active_{pid}"
+        )
+    )
+    
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_products_back"))
+    # Stack navigation policy: always send a new message; do not edit the previous one.
+    bot.send_message(call_message.chat.id, text, reply_markup=kb)
+
+
+FEED_PAGE_SIZE = 5
+
+def _feed_item_preview(data: str, max_len: int = 80) -> str:
+    data = (data or "").strip()
+    if not data:
+        return "---"
+    first_line = data.splitlines()[0].strip()
+    if len(first_line) > max_len:
+        return first_line[: max_len - 1] + "…"
+    return first_line
+
+
+def send_admin_feed_list(chat_id: int, product_id: int, page: int = 0, mode: int = 0, message_id: int | None = None):
+    pid = int(product_id)
+    page = max(int(page or 0), 0)
+    mode = int(mode or 0)
+
+    delivered_filter = 0 if mode == 0 else None
+    total = count_feed_items(pid, delivered_filter)
+    pages = max((total + FEED_PAGE_SIZE - 1) // FEED_PAGE_SIZE, 1)
+    if page >= pages:
+        page = pages - 1
+
+    offset = page * FEED_PAGE_SIZE
+    rows = list_feed_items(pid, delivered_filter, limit=FEED_PAGE_SIZE, offset=offset)
+
+    feed_ids = [int(r[0]) for r in rows] if rows else []
+    order_map = _get_order_id_map(feed_ids) if feed_ids else {}
+
+    total_all, remaining, delivered = get_feed_stats(pid)
+    header_mode = "فقط تحویل‌نشده" if mode == 0 else "همه"
+
+    text = (
+        f"📦 مدیریت بارگذاری محصول (Product ID) #{pid}\n"
+        f"حالت نمایش: <b>{header_mode}</b>\n"
+        f"صفحه: <b>{page+1}</b> / <b>{pages}</b>\n\n"
+        f"آمار: کل <b>{total_all}</b> | باقی‌مانده <b>{remaining}</b> | تحویل‌شده <b>{delivered}</b>\n"
+        f"نمایش فعلی: <b>{total}</b> آیتم\n"
+        f"شناسه‌های داخل لیست: <b>Feed ID</b> (Order ID فقط برای آیتم‌های تحویل‌شده نمایش داده می‌شود)\n\n"
+    )
+
+    if not rows:
+        text += "فعلاً آیتمی برای این حالت وجود ندارد."
+    else:
+        for rid, data, is_del, created_at in rows:
+            status = "✅" if int(is_del) == 1 else "📦"
+            prev = html.escape(_feed_item_preview(data))
+            oid = order_map.get(int(rid))
+            dn = _display_order_no(oid)
+            suffix = f" — <b>Order #{dn}</b>" if dn is not None else ""
+            text += f"{status} <b>Feed #{rid}</b>{suffix} — <code>{prev}</code>\n"
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    if rows:
+        for rid, data, is_del, created_at in rows:
+            kb.add(
+                types.InlineKeyboardButton(f"👁 Feed #{rid}", callback_data=f"admin_feed_view_{rid}_{pid}_{page}_{mode}"),
+                types.InlineKeyboardButton(
+                    ("✅ موجود" if int(is_del) == 0 else "♻️ برگشت"),
+                    callback_data=f"admin_feed_toggle_{rid}_{pid}_{page}_{mode}",
+                ),
+            )
+            kb.add(
+                types.InlineKeyboardButton("🗑 حذف", callback_data=f"admin_feed_delete_{rid}_{pid}_{page}_{mode}"),
+            )
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(types.InlineKeyboardButton("⬅️ قبلی", callback_data=f"admin_feed_list_{pid}_{page-1}_{mode}"))
+    if page < pages - 1:
+        nav_row.append(types.InlineKeyboardButton("بعدی ➡️", callback_data=f"admin_feed_list_{pid}_{page+1}_{mode}"))
+    if nav_row:
+        kb.add(*nav_row)
+
+    kb.add(
+        types.InlineKeyboardButton("📃 تحویل‌نشده‌ها", callback_data=f"admin_feed_list_{pid}_0_0"),
+        types.InlineKeyboardButton("📃 همه", callback_data=f"admin_feed_list_{pid}_0_1"),
+    )
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت به محصول", callback_data=f"admin_product_{pid}"))
+
+    if message_id:
+        safe_edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb, parse_mode="HTML")
+    else:
+        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+
+
+# ========= FEED MANAGEMENT (GLOBAL PANEL) =========
+
+FEED_GLOBAL_PAGE_SIZE = 10
+
+def admin_feed_panel_menu():
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("📊 آمار دسته‌بندی / موجودی", callback_data="admin_feed_panel_stats"),
+        types.InlineKeyboardButton("📃 همه", callback_data="admin_feed_panel_0_0"),
+        types.InlineKeyboardButton("✅ محصولات ارسال‌شده", callback_data="admin_feed_panel_1_0"),
+        types.InlineKeyboardButton("📦 محصولات ارسال‌نشده", callback_data="admin_feed_panel_2_0"),
+        types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back"),
+    )
+    return kb
+
+
+
+def count_feed_items_global(delivered_filter: int | None, category_key: str | None = None):
+    import sqlite3
+    conn = sqlite3.connect(DB_FULL_PATH)
+    try:
+        cur = conn.cursor()
+
+        where = []
+        params = []
+        if delivered_filter is not None:
+            where.append("pf.delivered=?")
+            params.append(int(delivered_filter))
+        if category_key:
+            where.append("p.category=?")
+            params.append(str(category_key))
+
+        if where:
+            cur.execute(
+                "SELECT COUNT(*) FROM product_feed pf LEFT JOIN products p ON p.id=pf.product_id WHERE " + " AND ".join(where),
+                tuple(params),
+            )
+        else:
+            cur.execute("SELECT COUNT(*) FROM product_feed")
+        total = cur.fetchone()[0]
+        return int(total or 0)
     finally:
         conn.close()
 
-    # محاسبه درصد تغییر نسبت به دیروز (فقط برای نمایش KPI)
-    rev_change = 0
-    if yest_o[1] > 0:
-        rev_change = round(((today_o[1] - yest_o[1]) / yest_o[1]) * 100, 1)
-    cnt_change = today_o[0] - yest_o[0]
 
-    def pct_badge(value, suffix="%"):
-        if value > 0:
-            return f'<span class="trend trend-up"><i data-lucide="trending-up"></i>{value}{suffix}</span>'
-        if value < 0:
-            return f'<span class="trend trend-down"><i data-lucide="trending-down"></i>{abs(value)}{suffix}</span>'
-        return '<span class="trend trend-flat"><i data-lucide="minus"></i>بدون تغییر</span>'
+def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset: int = 0, category_key: str | None = None):
+    import sqlite3
+    conn = sqlite3.connect(DB_FULL_PATH)
+    try:
+        cur = conn.cursor()
 
-    def status_badge(status):
-        styles = {
-            "active":   ("success", "ارسال شد"),
-            "returned": ("danger", "برگشتی"),
-            "pending":  ("warning", "در انتظار"),
-        }
-        tone, label = styles.get(status, ("neutral", status))
-        return f'<span class="status-badge status-{tone}"><span></span>{e(label)}</span>'
+        where = []
+        params = []
+        if delivered_filter is not None:
+            where.append("pf.delivered=?")
+            params.append(int(delivered_filter))
+        if category_key:
+            where.append("p.category=?")
+            params.append(str(category_key))
 
-    chart_labels = json.dumps([r["day"][5:] for r in chart_data], ensure_ascii=False)
-    chart_values = json.dumps([int(r["total"]) for r in chart_data])
+        base_sql = '''
+            SELECT pf.id, pf.product_id, COALESCE(p.category,''), COALESCE(p.title,''), pf.data, pf.delivered, pf.created_at
+            FROM product_feed pf
+            LEFT JOIN products p ON p.id = pf.product_id
+        '''
+        if where:
+            base_sql += " WHERE " + " AND ".join(where)
+        base_sql += " ORDER BY pf.id DESC LIMIT ? OFFSET ?"
 
-    low_rows = "".join(f"""
-    <a href="/admin/feed/{r['id']}" class="compact-row">
-      <span class="row-icon {'danger' if r['avail'] == 0 else 'warning'}"><i data-lucide="package-minus"></i></span>
-      <span class="row-copy"><strong>{e(r['title'])}</strong><small>نیازمند تأمین موجودی</small></span>
-      <span class="stock-count {'out' if r['avail'] == 0 else ''}">{r['avail']} عدد</span>
-    </a>""" for r in low_stock)
+        params.extend([int(limit), int(offset)])
+        cur.execute(base_sql, tuple(params))
 
-    recent_rows = "".join(f"""
-    <tr>
-      <td><a class="order-id" href="/admin/orders/{o['id']}/edit">#{o['id']}</a></td>
-      <td><div class="table-product"><span><i data-lucide="package"></i></span><strong>{e(o['title'][:34])}</strong></div></td>
-      <td><span class="muted-cell">{o['user_id']}</span></td>
-      <td><strong class="money-cell">{int(o['price']):,}</strong><small class="currency">تومان</small></td>
-      <td>{status_badge(o['status'] or 'active')}</td>
-      <td><a class="table-action" href="/admin/orders/{o['id']}/edit" aria-label="مشاهده سفارش"><i data-lucide="arrow-up-left"></i></a></td>
-    </tr>""" for o in recent)
+        rows = cur.fetchall()
+        return rows
+    finally:
+        conn.close()
 
-    # مشتق‌شده از همان سفارش‌های اخیر؛ بدون query یا تغییر منطق داده.
-    product_summary = {}
-    for order in recent:
-        product_title = str(order["title"] or "بدون عنوان")
-        if product_title not in product_summary:
-            product_summary[product_title] = {"count": 0, "revenue": 0}
-        product_summary[product_title]["count"] += 1
-        product_summary[product_title]["revenue"] += int(order["price"] or 0)
 
-    top_product_rows = "".join(f"""
-      <div class="rank-row"><span class="rank-number">{index}</span><span class="rank-copy"><strong>{e(name[:30])}</strong><small>{data['count']} سفارش اخیر</small></span><strong class="rank-value">{data['revenue']:,}</strong></div>
-    """ for index, (name, data) in enumerate(sorted(product_summary.items(), key=lambda item: (item[1]["count"], item[1]["revenue"]), reverse=True)[:5], 1))
+def get_feed_stats_by_category():
+    """Return list of dicts: category, total, delivered, undelivered."""
+    import sqlite3
+    conn = sqlite3.connect(DB_FULL_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            SELECT COALESCE(p.category,'') AS category,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN pf.delivered=1 THEN 1 ELSE 0 END) AS delivered,
+                   SUM(CASE WHEN pf.delivered=0 THEN 1 ELSE 0 END) AS undelivered
+            FROM product_feed pf
+            LEFT JOIN products p ON p.id = pf.product_id
+            GROUP BY COALESCE(p.category,'')
+            ORDER BY total DESC
+            '''
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    out = []
+    for cat, total, deliv, undel in rows:
+        out.append(
+            {
+                "category": str(cat or "").strip() or "uncategorized",
+                "total": int(total or 0),
+                "delivered": int(deliv or 0),
+                "undelivered": int(undel or 0),
+            }
+        )
+    return out
 
-    activity_rows = "".join(f"""
-      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {e(str(o['created_at'])[:16])}</small></span></div>
-    """ for o in recent[:5])
 
-    def command_item(icon, label, value, meta, tone="cyan", href="#"):
-        return f"""
-        <a href="{href}" class="command-item command-{tone}">
-          <span class="command-icon"><i data-lucide="{icon}"></i></span>
-          <span class="command-copy"><small>{label}</small><strong>{value}</strong><em>{meta}</em></span>
-          <i data-lucide="arrow-up-left" class="command-arrow"></i>
-        </a>"""
+def send_admin_feed_panel_stats(chat_id: int, message_id: int | None = None):
+    stats = get_feed_stats_by_category()
+    total_all = sum(s["total"] for s in stats)
+    delivered_all = sum(s["delivered"] for s in stats)
+    undelivered_all = sum(s["undelivered"] for s in stats)
 
-    command_items = "".join([
-        command_item("clock-3", "سفارش‌های معلق", pending, "نیازمند پیگیری", "warning" if pending else "success", "/admin/orders"),
-        command_item("package-search", "کمبود موجودی", len(low_stock), "محصول در آستانه اتمام", "danger" if low_stock else "success", "/admin/feed"),
-        command_item("message-square", "تیکت‌های باز", open_tix, "در انتظار پاسخ مدیر", "danger" if open_tix else "success", "/admin/tickets"),
-        command_item("handshake", "همکاران معلق", partners_pend, "درخواست بررسی‌نشده", "warning" if partners_pend else "success", "/admin/partners"),
-        command_item("database-backup", "آخرین بکاپ", "ثبت شده" if last_backup else "ناموجود", last_backup or "هنوز بکاپی ثبت نشده", "success" if last_backup else "warning", "/admin/database"),
-    ])
+    text = (
+        "📊 <b>آمار بارگذاری محصول / موجودی (بر اساس دسته‌بندی)</b>\n\n"
+        f"کل آیتم‌ها: <b>{total_all}</b>\n"
+        f"ارسال‌شده: <b>{delivered_all}</b>\n"
+        f"ارسال‌نشده (موجودی): <b>{undelivered_all}</b>\n\n"
+        "—\n"
+    )
 
-    tasks = "".join([
-        f'<a href="/admin/feed" class="task-row"><span class="task-status danger"><i data-lucide="package-minus"></i></span><span><strong>تأمین موجودی محصولات</strong><small>{len(low_stock)} محصول نیازمند بررسی</small></span><i data-lucide="chevron-left"></i></a>',
-        f'<a href="/admin/tickets" class="task-row"><span class="task-status warning"><i data-lucide="message-circle"></i></span><span><strong>پاسخ به تیکت‌ها</strong><small>{open_tix} تیکت منتظر پاسخ</small></span><i data-lucide="chevron-left"></i></a>',
-        f'<a href="/admin/orders" class="task-row"><span class="task-status cyan"><i data-lucide="truck"></i></span><span><strong>تحویل‌های معلق</strong><small>{pending} سفارش در صف ارسال</small></span><i data-lucide="chevron-left"></i></a>',
-        '<a href="/admin/database" class="task-row"><span class="task-status success"><i data-lucide="server"></i></span><span><strong>وضعیت سرور</strong><small>سرویس در دسترس است</small></span><i data-lucide="chevron-left"></i></a>',
-        ('<a href="/admin/database" class="task-row">'
-         f'<span class="task-status {"success" if last_backup else "warning"}">'
-         '<i data-lucide="hard-drive-download"></i></span>'
-         f'<span><strong>نسخه پشتیبان</strong><small>{e(last_backup or "هنوز ثبت نشده")}</small></span>'
-         '<i data-lucide="chevron-left"></i></a>'),
-        '<a href="/admin/broadcast" class="task-row"><span class="task-status success"><i data-lucide="bot"></i></span><span><strong>ربات استوک‌لند</strong><small>فعال و آماده پاسخ‌گویی</small></span><i data-lucide="chevron-left"></i></a>',
-    ])
+    if not stats:
+        text += "هیچ آیتمی ثبت نشده است."
+    else:
+        for s in stats:
+            text += (
+                f"• <b>{html.escape(s['category'])}</b>: "
+                f"کل <b>{s['total']}</b> | "
+                f"ارسال‌شده <b>{s['delivered']}</b> | "
+                f"موجودی <b>{s['undelivered']}</b>\n"
+            )
 
-    body = f"""
-    <style>
-      .dashboard {{ display:flex; flex-direction:column; gap:28px; }}
-      .dashboard-head {{ display:flex; align-items:flex-end; justify-content:space-between; gap:20px; }}
-      .dashboard-head h2 {{ margin:0; color:var(--text-main); font-size:25px; font-weight:800; letter-spacing:-.02em; }}
-      .dashboard-head p {{ margin:6px 0 0; color:var(--text-muted); font-size:12px; }}
-      .date-chip {{ display:flex; align-items:center; gap:8px; padding:9px 13px; border:1px solid var(--border); border-radius:12px; background:var(--card-bg); color:var(--text-muted); font-size:11px; }}
-      .date-chip svg {{ width:16px; color:#0891b2; }}
-      .section-heading {{ display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:14px; }}
-      .section-heading h3 {{ margin:0; color:var(--text-main); font-size:16px; font-weight:750; }}
-      .section-heading p {{ margin:4px 0 0; color:var(--text-muted); font-size:10.5px; }}
-      .section-link {{ display:inline-flex; align-items:center; gap:5px; color:#0891b2; font-size:11px; font-weight:650; text-decoration:none; }} .section-link svg {{ width:14px; }}
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    # quick category drill-down buttons (all items for that category)
+    if stats:
+        for s in stats[:8]:  # avoid huge keyboards
+            cat = s["category"]
+            # category keys are short (e.g. apple/gmail). if not safe, skip.
+            if len(cat) <= 20 and re.fullmatch(r"[A-Za-z0-9_-]+", cat):
+                kb.add(types.InlineKeyboardButton(f"📂 {cat}", callback_data=f"admin_feed_panel_cat_{cat}_0_0"))
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت به مدیریت محصول", callback_data="admin_feed_panel"))
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back"))
 
-      .command-center {{ position:relative; overflow:hidden; padding:22px; border-radius:26px; background:linear-gradient(130deg,#07111b 0%,#091827 58%,#0a2631 100%); box-shadow:0 24px 65px rgba(4,12,23,.18); }}
-      .command-center::before {{ content:""; position:absolute; top:-130px; left:15%; width:380px; height:280px; border-radius:50%; background:rgba(0,215,255,.10); filter:blur(70px); }}
-      .command-head {{ position:relative; display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; color:#fff; }}
-      .command-title {{ display:flex; align-items:center; gap:11px; }} .command-title>span {{ width:36px; height:36px; display:grid; place-items:center; border-radius:12px; background:rgba(0,215,255,.1); color:#42e2ff; border:1px solid rgba(0,215,255,.12); }}
-      .command-title svg {{ width:18px; }} .command-title h3 {{ margin:0; font-size:15px; }} .command-title p {{ margin:3px 0 0; color:#74849a; font-size:9.5px; }}
-      .live-pill {{ display:flex; align-items:center; gap:7px; padding:7px 10px; border-radius:999px; color:#9de9bd; background:rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.12); font-size:9px; }}
-      .live-pill span {{ width:6px; height:6px; border-radius:50%; background:#22c55e; box-shadow:0 0 10px #22c55e; }}
-      .command-grid {{ position:relative; display:grid; grid-template-columns:repeat(7,minmax(145px,1fr)); gap:9px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin; }}
-      .command-item {{ min-width:145px; min-height:142px; display:flex; flex-direction:column; position:relative; padding:15px; border:1px solid rgba(255,255,255,.07); border-radius:18px; background:rgba(255,255,255,.035); text-decoration:none; transition:200ms; }}
-      .command-item:hover {{ background:rgba(255,255,255,.065); border-color:rgba(0,215,255,.18); transform:translateY(-2px); }}
-      .command-icon {{ width:33px; height:33px; display:grid; place-items:center; border-radius:11px; background:rgba(0,215,255,.08); color:#42e2ff; }} .command-icon svg {{ width:17px; }}
-      .command-warning .command-icon {{ background:rgba(245,158,11,.09); color:#fbbf24; }} .command-danger .command-icon {{ background:rgba(239,68,68,.09); color:#fb7185; }} .command-success .command-icon {{ background:rgba(34,197,94,.09); color:#4ade80; }}
-      .command-copy {{ margin-top:auto; }} .command-copy small,.command-copy strong,.command-copy em {{ display:block; font-style:normal; }} .command-copy small {{ color:#8290a3; font-size:9.5px; }} .command-copy strong {{ color:#f8fafc; font-size:17px; margin-top:3px; }} .command-copy em {{ color:#65758a; font-size:8.5px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-      .command-arrow {{ position:absolute; top:16px; left:14px; width:13px; color:#465568; }}
+    if message_id:
+        safe_edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb, parse_mode="HTML")
+    else:
+        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
-      .kpi-grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }}
-      .kpi-card {{ min-height:188px; padding:20px; overflow:hidden; position:relative; }} .kpi-card::after {{ content:""; position:absolute; top:-55px; left:-45px; width:130px; height:130px; border-radius:50%; background:rgba(0,215,255,.035); }}
-      .kpi-top {{ display:flex; align-items:center; justify-content:space-between; }} .kpi-icon {{ width:40px; height:40px; display:grid; place-items:center; border-radius:13px; color:#0891b2; background:#ecfeff; }} .kpi-icon svg {{ width:19px; }}
-      .kpi-label {{ color:var(--text-muted); font-size:10.5px; font-weight:600; }} .kpi-value {{ margin:15px 0 3px; color:var(--text-main); font-size:25px; font-weight:800; letter-spacing:-.025em; direction:ltr; text-align:right; }} .kpi-unit {{ color:var(--text-muted); font-size:9px; font-weight:500; margin-right:3px; }}
-      .trend {{ display:inline-flex; align-items:center; gap:3px; font-size:9px; font-weight:700; direction:ltr; }} .trend svg {{ width:12px; }} .trend-up {{ color:#16a34a; }} .trend-down {{ color:#e11d48; }} .trend-flat {{ color:#94a3b8; }}
-      .sparkline {{ position:absolute; right:15px; left:15px; bottom:11px; height:43px; opacity:.9; }} .sparkline path.line {{ fill:none; stroke:#06b6d4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }} .sparkline path.area {{ fill:url(#sparkFill); opacity:.55; }}
 
-      .chart-card {{ padding:22px 24px 18px; }} .chart-toolbar {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }} .chart-legend {{ display:flex; align-items:center; gap:7px; color:var(--text-muted); font-size:10px; }} .chart-legend span {{ width:7px; height:7px; border-radius:50%; background:#00d7ff; box-shadow:0 0 0 4px rgba(0,215,255,.08); }} .chart-period {{ padding:7px 10px; border:1px solid var(--border); border-radius:10px; color:var(--text-muted); font-size:9px; background:var(--card-bg); }}
-      .chart-shell {{ position:relative; height:400px; }}
-      .two-column {{ display:grid; grid-template-columns:minmax(0,3fr) minmax(320px,2fr); gap:18px; }} .panel-card {{ overflow:hidden; }} .panel-header {{ min-height:68px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid var(--border); }} .panel-header h3 {{ margin:0; font-size:14px; }} .panel-header p {{ margin:3px 0 0; color:var(--text-muted); font-size:9.5px; }} .table-wrap {{ overflow:auto; max-height:500px; }}
-      .order-id {{ color:#0891b2; font:700 11px/1 Inter,sans-serif !important; text-decoration:none; }} .table-product {{ display:flex; align-items:center; gap:9px; min-width:180px; }} .table-product>span {{ width:31px; height:31px; display:grid; place-items:center; border-radius:10px; background:#f1f5f9; color:#64748b; }} .table-product svg {{ width:15px; }} .table-product strong {{ font-size:11px; font-weight:600; }} .muted-cell {{ color:var(--text-muted); font-size:10px; }} .money-cell {{ display:block; font-size:11px; direction:ltr; text-align:right; }} .currency {{ color:var(--text-muted); font-size:8px; }}
-      .status-badge {{ display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border-radius:999px; font-size:9px; font-weight:650; white-space:nowrap; }} .status-badge>span {{ width:5px; height:5px; border-radius:50%; }} .status-success {{ color:#15803d; background:#ecfdf3; }} .status-success>span {{ background:#22c55e; }} .status-warning {{ color:#a16207; background:#fffbeb; }} .status-warning>span {{ background:#f59e0b; }} .status-danger {{ color:#be123c; background:#fff1f2; }} .status-danger>span {{ background:#ef4444; }} .status-neutral {{ color:#475569; background:#f1f5f9; }} .status-neutral>span {{ background:#94a3b8; }}
-      .table-action {{ width:30px; height:30px; display:grid; place-items:center; border:1px solid var(--border); border-radius:9px; color:#64748b; }} .table-action svg {{ width:14px; }}
-      .tasks-list {{ padding:8px 12px 12px; }} .task-row {{ min-height:67px; display:grid; grid-template-columns:38px 1fr 16px; align-items:center; gap:10px; padding:7px 8px; border-bottom:1px solid #eef0f3; text-decoration:none; transition:160ms; }} .task-row:last-child {{ border:0; }} .task-row:hover {{ background:var(--page-bg); border-radius:12px; }} .task-row>svg {{ width:14px; color:#b1b7c2; }} .task-row strong,.task-row small {{ display:block; }} .task-row strong {{ color:var(--text-main); font-size:10.5px; }} .task-row small {{ color:var(--text-muted); font-size:8.5px; margin-top:3px; }}
-      .task-status {{ width:36px; height:36px; display:grid; place-items:center; border-radius:11px; }} .task-status svg {{ width:16px; }} .task-status.danger {{ color:#e11d48; background:#fff1f2; }} .task-status.warning {{ color:#d97706; background:#fffbeb; }} .task-status.cyan {{ color:#0891b2; background:#ecfeff; }} .task-status.success {{ color:#16a34a; background:#f0fdf4; }}
+def send_admin_feed_panel_list_by_category(chat_id: int, category_key: str, page: int = 0, mode: int = 0, message_id: int | None = None):
+    # wrapper so callbacks remain distinct
+    send_admin_feed_panel_list(chat_id, page=page, mode=mode, message_id=message_id, category_key=category_key)
 
-      .three-column {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; }} .mini-panel {{ padding-bottom:12px; overflow:hidden; }} .mini-panel .panel-header {{ min-height:64px; }} .rank-row {{ min-height:56px; display:grid; grid-template-columns:28px 1fr auto; align-items:center; gap:9px; padding:7px 18px; }} .rank-number {{ width:25px; height:25px; display:grid; place-items:center; border-radius:8px; background:#f1f5f9; color:#64748b; font:700 9px/1 Inter,sans-serif !important; }} .rank-copy strong,.rank-copy small {{ display:block; }} .rank-copy strong {{ font-size:10px; }} .rank-copy small {{ color:var(--text-muted); font-size:8px; margin-top:3px; }} .rank-value {{ color:#0891b2; font-size:9px; direction:ltr; }}
-      .compact-row {{ min-height:58px; display:grid; grid-template-columns:36px 1fr auto; align-items:center; gap:9px; padding:7px 16px; text-decoration:none; }} .row-icon {{ width:34px; height:34px; display:grid; place-items:center; border-radius:10px; }} .row-icon svg {{ width:15px; }} .row-icon.warning {{ color:#d97706; background:#fffbeb; }} .row-icon.danger {{ color:#e11d48; background:#fff1f2; }} .row-copy strong,.row-copy small {{ display:block; }} .row-copy strong {{ font-size:9.5px; }} .row-copy small {{ color:var(--text-muted); font-size:8px; margin-top:3px; }} .stock-count {{ padding:4px 7px; border-radius:999px; color:#a16207; background:#fffbeb; font-size:8px; font-weight:700; }} .stock-count.out {{ color:#be123c; background:#fff1f2; }}
-      .activity-row {{ min-height:58px; display:grid; grid-template-columns:35px 1fr; align-items:center; gap:9px; padding:7px 16px; }} .activity-icon {{ width:34px; height:34px; display:grid; place-items:center; border-radius:50%; color:#0891b2; background:#ecfeff; position:relative; }} .activity-icon svg {{ width:15px; }} .activity-row strong,.activity-row small {{ display:block; }} .activity-row strong {{ font-size:9.5px; }} .activity-row small {{ color:var(--text-muted); font-size:8px; margin-top:3px; }} .empty-state {{ padding:38px 18px; color:var(--text-muted); text-align:center; font-size:10px; }}
-      body.dark-mode .kpi-icon,body.dark-mode .table-product>span,body.dark-mode .rank-number {{ background:#172330; }} body.dark-mode .task-row,body.dark-mode .panel-header {{ border-color:#273244; }} body.dark-mode .status-success {{ background:rgba(34,197,94,.1); }} body.dark-mode .status-warning {{ background:rgba(245,158,11,.1); }} body.dark-mode .status-danger {{ background:rgba(239,68,68,.1); }}
-      @media(max-width:1200px) {{ .kpi-grid {{ grid-template-columns:repeat(2,1fr); }} .three-column {{ grid-template-columns:1fr 1fr; }} .three-column>*:last-child {{ grid-column:1/-1; }} }}
-      @media(max-width:940px) {{ .two-column {{ grid-template-columns:1fr; }} .command-grid {{ grid-template-columns:repeat(7,155px); }} }}
-      @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
-    </style>
+def _date_key(created_at: str | None) -> str:
+    if not created_at:
+        return "بدون تاریخ"
+    # supports ISO or 'YYYY-MM-DD HH:MM:SS'
+    if "T" in created_at:
+        return created_at.split("T")[0]
+    return created_at.split(" ")[0]
 
-    <main class="dashboard">
-      <div class="dashboard-head">
-        <div><h2>مرکز مدیریت استوک‌لند</h2><p>نمای یکپارچه فروش، عملیات و سلامت سرویس‌های فروشگاه</p></div>
-        <div class="date-chip"><i data-lucide="calendar-days"></i><span>{today}</span></div>
-      </div>
 
-      <section class="command-center" aria-labelledby="command-title">
-        <div class="command-head"><div class="command-title"><span><i data-lucide="command"></i></span><div><h3 id="command-title">مرکز فرمان</h3><p>مواردی که همین حالا به توجه شما نیاز دارند</p></div></div><div class="live-pill"><span></span>به‌روزرسانی زنده</div></div>
-        <div class="command-grid">{command_items}</div>
-      </section>
+def send_admin_feed_panel_list(chat_id: int, page: int = 0, mode: int = 0, message_id: int | None = None, category_key: str | None = None):
+    page = max(int(page or 0), 0)
+    mode = int(mode or 0)
 
-      <section aria-labelledby="kpi-title">
-        <div class="section-heading"><div><h3 id="kpi-title">شاخص‌های کلیدی</h3><p>خلاصه عملکرد امروز و وضعیت فروشگاه</p></div></div>
-        <div class="kpi-grid">
-          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="banknote"></i></span>{pct_badge(rev_change)}</div><div class="kpi-value">{int(today_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">درآمد امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00d7ff" stop-opacity=".24"/><stop offset="1" stop-color="#00d7ff" stop-opacity="0"/></linearGradient></defs><path class="area" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10 L240,45 L0,45Z"/><path class="line" d="M0,37 C24,34 35,18 58,24 S93,39 118,23 S154,11 178,18 S210,7 240,10"/></svg></article>
-          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="shopping-cart"></i></span>{pct_badge(cnt_change, "")}</div><div class="kpi-value">{today_o[0]:,}<span class="kpi-unit">سفارش</span></div><div class="kpi-label">سفارش‌های امروز</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7 L240,45 L0,45Z"/><path class="line" d="M0,31 C25,14 48,38 72,26 S112,8 137,20 S175,32 199,17 S223,13 240,7"/></svg></article>
-          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="boxes"></i></span><span class="trend trend-flat"><i data-lucide="package-check"></i>{products_cnt} محصول فعال</span></div><div class="kpi-value">{feed_avail:,}<span class="kpi-unit">آیتم</span></div><div class="kpi-label">موجودی قابل تحویل</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,28 C22,24 42,27 65,19 S105,30 129,21 S162,12 187,17 S218,10 240,14 L240,45 L0,45Z"/><path class="line" d="M0,28 C22,24 42,27 65,19 S105,30 129,21 S162,12 187,17 S218,10 240,14"/></svg></article>
-          <article class="card kpi-card"><div class="kpi-top"><span class="kpi-icon"><i data-lucide="trending-up"></i></span><span class="trend trend-flat"><i data-lucide="receipt-text"></i>{total_o[0]:,} سفارش</span></div><div class="kpi-value">{int(total_o[1]):,}<span class="kpi-unit">تومان</span></div><div class="kpi-label">کل درآمد</div><svg class="sparkline" viewBox="0 0 240 45" preserveAspectRatio="none"><path class="area" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9 L240,45 L0,45Z"/><path class="line" d="M0,39 C26,34 38,30 62,31 S101,20 124,23 S160,15 181,16 S216,5 240,9"/></svg></article>
-        </div>
-      </section>
+    if mode == 1:
+        delivered_filter = 1
+        header_mode = "محصولات ارسال‌شده"
+    elif mode == 2:
+        delivered_filter = 0
+        header_mode = "محصولات ارسال‌نشده"
+    else:
+        delivered_filter = None
+        header_mode = "همه"
 
-      <section class="card chart-card" aria-labelledby="sales-title">
-        <div class="chart-toolbar"><div class="section-heading" style="margin:0"><div><h3 id="sales-title">تحلیل فروش</h3><p>روند درآمد در ۳۰ روز اخیر</p></div></div><div style="display:flex;align-items:center;gap:14px"><span class="chart-legend"><span></span>فروش روزانه</span><span class="chart-period">۳۰ روز اخیر</span></div></div>
-        <div class="chart-shell"><canvas id="salesChart"></canvas></div>
-      </section>
+    if category_key:
+        header_mode = f"{header_mode} | دسته: {category_key}"
 
-      <section class="two-column">
-        <article class="card panel-card"><div class="panel-header"><div><h3>سفارش‌های اخیر</h3><p>آخرین تراکنش‌های ثبت‌شده در فروشگاه</p></div><a href="/admin/orders" class="section-link">مشاهده همه<i data-lucide="arrow-left"></i></a></div><div class="table-wrap"><table><thead><tr><th>شناسه</th><th>محصول</th><th>کاربر</th><th>مبلغ</th><th>وضعیت</th><th></th></tr></thead><tbody>{recent_rows or '<tr><td colspan="6" class="empty-state">هنوز سفارشی ثبت نشده است</td></tr>'}</tbody></table></div></article>
-        <article class="card panel-card"><div class="panel-header"><div><h3>وظایف مرکز فرمان</h3><p>اولویت‌های عملیاتی امروز</p></div><span class="status-badge status-warning"><span></span>نیازمند توجه</span></div><div class="tasks-list">{tasks}</div></article>
-      </section>
+    total = count_feed_items_global(delivered_filter, category_key=category_key)
+    pages = max((total + FEED_GLOBAL_PAGE_SIZE - 1) // FEED_GLOBAL_PAGE_SIZE, 1)
+    if page >= pages:
+        page = pages - 1
 
-      <section class="three-column">
-        <article class="card mini-panel"><div class="panel-header"><div><h3>محصولات برتر</h3><p>بر اساس سفارش‌های اخیر</p></div><i data-lucide="trophy" style="width:18px;color:#f59e0b"></i></div>{top_product_rows or '<div class="empty-state">داده‌ای برای نمایش وجود ندارد</div>'}</article>
-        <article class="card mini-panel"><div class="panel-header"><div><h3>موجودی رو به اتمام</h3><p>محصولات نیازمند تأمین</p></div><a href="/admin/feed" class="section-link">مدیریت<i data-lucide="arrow-left"></i></a></div>{low_rows or '<div class="empty-state">موجودی همه محصولات کافی است</div>'}</article>
-        <article class="card mini-panel"><div class="panel-header"><div><h3>فعالیت‌های اخیر</h3><p>رویدادهای تازه فروشگاه</p></div><i data-lucide="history" style="width:18px;color:#0891b2"></i></div>{activity_rows or '<div class="empty-state">فعالیت تازه‌ای ثبت نشده است</div>'}</article>
-      </section>
-    </main>
+    offset = page * FEED_GLOBAL_PAGE_SIZE
+    rows = list_feed_items_global(delivered_filter, limit=FEED_GLOBAL_PAGE_SIZE, offset=offset, category_key=category_key)
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-    <script>
-    (function(){{
-      var canvas=document.getElementById('salesChart'); if(!canvas||!window.Chart)return;
-      var context=canvas.getContext('2d'); var gradient=context.createLinearGradient(0,0,0,400); gradient.addColorStop(0,'rgba(0,215,255,.22)'); gradient.addColorStop(1,'rgba(0,215,255,0)');
-      new Chart(context, {{
-        type: 'line',
-        data: {{
-          labels: {chart_labels},
-          datasets: [{{
-            label: 'فروش روزانه', data: {chart_values}, borderColor: '#2EC4B6',
-            backgroundColor: gradient, borderWidth: 2.5, fill: true, tension: .42,
-            pointRadius: 0, pointHoverRadius: 5, pointHoverBackgroundColor: '#2EC4B6',
-            pointHoverBorderColor: '#fff', pointHoverBorderWidth: 3
-          }}]
-        }},
-        options: {{
-          responsive: true, maintainAspectRatio: false,
-          interaction: {{ intersect: false, mode: 'index' }},
-          plugins: {{
-            legend: {{ display: false }},
-            tooltip: {{
-              rtl: true, titleFont: {{ family: 'Vazirmatn', size: 11 }},
-              bodyFont: {{ family: 'Vazirmatn', size: 11 }}, backgroundColor: 'rgba(5,7,10,.94)',
-              padding: 12, cornerRadius: 12, displayColors: false,
-              callbacks: {{ label: function(ctx) {{ return Number(ctx.raw || 0).toLocaleString('fa-IR') + ' تومان'; }} }}
-            }}
-          }},
-          scales: {{
-            y: {{
-              beginAtZero: true, border: {{ display: false }},
-              grid: {{ color: 'rgba(148,163,184,.12)', drawTicks: false }},
-              ticks: {{
-                padding: 12, color: '#94A3B8', font: {{ family: 'Vazirmatn', size: 9 }},
-                callback: function(v) {{ return v >= 1000000 ? (v / 1000000).toLocaleString('fa-IR') + ' م' : v.toLocaleString('fa-IR'); }}
-              }}
-            }},
-            x: {{
-              border: {{ display: false }}, grid: {{ display: false }},
-              ticks: {{ color: '#94A3B8', font: {{ family: 'Vazirmatn', size: 9 }}, maxRotation: 0, autoSkip: true, maxTicksLimit: 10 }}
-            }}
-          }}
-        }}
-      }});
-    }})();
-    </script>"""
+    feed_ids = [int(r[0]) for r in rows] if rows else []
+    order_map = _get_order_id_map(feed_ids) if feed_ids else {}
 
-    return _layout("داشبورد", body, adm, flash=flash, flash_ok=False)
+    text = (
+        "📦 مدیریت محصولات (سراسری)\n"
+        f"حالت نمایش: <b>{header_mode}</b>\n"
+        f"صفحه: <b>{page+1}</b> / <b>{pages}</b>\n"
+        f"تعداد آیتم: <b>{total}</b>\n\n"
+        "نمایش به‌صورت مرتب‌سازی بر اساس زمان/شناسه بارگذاری (جدیدترین بالا).\n"
+        "شناسه: <b>Feed ID</b> و در صورت ارسال‌شده بودن، <b>Order ID</b> همان سفارش است.\n\n"
+    )
 
-# ─────────────────────────── Settings ──────────────────────────────────────
+    if not rows:
+        text += "فعلاً آیتمی وجود ندارد."
+    else:
+        last_day = None
+        for rid, pid, cat, title, data, is_del, created_at in rows:
+            day = _date_key(created_at)
+            if day != last_day:
+                text += f"\n🗓 <b>{html.escape(day)}</b>\n"
+                last_day = day
+            status = "✅" if int(is_del) == 1 else "📦"
+            prev = html.escape(_feed_item_preview(data))
+            oid = order_map.get(int(rid))
+            dn = _display_order_no(oid)
+            suffix = f" — <b>Order #{dn}</b>" if dn is not None else ""
+            prod = f"محصول #{pid} | {html.escape(title)}"
+            if cat:
+                prod = f"{html.escape(cat)} | {prod}"
+            text += f"{status} <b>Feed #{rid}</b>{suffix} — {prod} — <code>{prev}</code>\n"
 
-DEFAULT_UI_TEXTS = {
-    "MAIN_BTN_OTHER_PRODUCTS": "سایر محصولات فروشگاه 🛍",
-    "MAIN_BTN_BUY_APPLE_ID":  "سرویس اپل آیدی 📱",
-    "MAIN_BTN_MY_ORDERS":     "خرید های من 🧾",
-    "MAIN_BTN_WALLET":        "کیف پول 💰",
-    "MAIN_BTN_PARTNER_REQUEST":"درخواست نمایندگی 📝",
-    "MAIN_BTN_PARTNER_PANEL": "پنل همکار 🤝",
-    "MAIN_BTN_GUIDE":         "راهنما 🔑",
-    "MAIN_BTN_SUPPORT":       "پشتیبانی 👨‍💻",
-    "SUPPORT_TEXT":           "متن پشتیبانی...",
-    "HELP_TEXT":              "متن راهنما...",
-    "TXT_MAIN_MENU_TITLE":    "منوی اصلی",
+    panel_prefix = (f"admin_feed_panel_cat_{category_key}_" if category_key else "admin_feed_panel_")
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+
+    if rows:
+        for rid, pid, cat, title, data, is_del, created_at in rows:
+            kb.add(
+                types.InlineKeyboardButton(f"👁 Feed #{rid}", callback_data=(f"admin_feed_panel_view_{rid}_{page}_{mode}_{category_key}" if category_key else f"admin_feed_panel_view_{rid}_{page}_{mode}")),
+                types.InlineKeyboardButton(
+                    ("✅ موجود" if int(is_del) == 0 else "♻️ برگشت"),
+                    callback_data=(f"admin_feed_panel_toggle_{rid}_{page}_{mode}_{category_key}" if category_key else f"admin_feed_panel_toggle_{rid}_{page}_{mode}"),
+                ),
+            )
+            kb.add(types.InlineKeyboardButton("🗑 حذف", callback_data=(f"admin_feed_panel_delete_{rid}_{page}_{mode}_{category_key}" if category_key else f"admin_feed_panel_delete_{rid}_{page}_{mode}")))
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(types.InlineKeyboardButton("⬅️ قبلی", callback_data=f"{panel_prefix}{mode}_{page-1}"))
+    if page < pages - 1:
+        nav_row.append(types.InlineKeyboardButton("بعدی ➡️", callback_data=f"{panel_prefix}{mode}_{page+1}"))
+    if nav_row:
+        kb.add(*nav_row)
+
+    kb.add(
+        types.InlineKeyboardButton("📃 همه", callback_data=(f"{panel_prefix}0_0")),
+        types.InlineKeyboardButton("✅ ارسال‌شده", callback_data=(f"{panel_prefix}1_0")),
+        types.InlineKeyboardButton("📦 ارسال‌نشده", callback_data=(f"{panel_prefix}2_0")),
+    )
+    if category_key:
+        kb.add(types.InlineKeyboardButton("🧹 پاک کردن فیلتر دسته", callback_data="admin_feed_panel_0_0"))
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back"))
+
+    #if message_id:
+        #safe_edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb, parse_mode="HTML")
+    #else:
+       #bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+    if message_id:
+        try:
+            bot.edit_message_text(
+                text=text,
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        except Exception:
+            bot.send_message(
+                chat_id,
+                text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+    else:
+        bot.send_message(
+            chat_id,
+            text,
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+
+def send_admin_feed_panel_view(chat_id: int, feed_id: int, page: int = 0, mode: int = 0, message_id: int | None = None, category_key: str | None = None):
+    import sqlite3
+    fid = int(feed_id)
+    conn = sqlite3.connect(DB_FULL_PATH)
+    try:
+        row = conn.execute(
+            '''
+            SELECT pf.id, pf.product_id, COALESCE(p.category,''), COALESCE(p.title,''), pf.data, pf.delivered, pf.created_at
+            FROM product_feed pf
+            LEFT JOIN products p ON p.id = pf.product_id
+            WHERE pf.id=?
+            ''',
+            (fid,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        bot.send_message(chat_id, "این آیتم یافت نشد.")
+        return
+
+    rid, pid, cat, title, data, is_del, created_at = row
+    # Resolve Order ID (if this feed was delivered). Prefer persistent delivery_messages mapping.
+    oid = None
+    try:
+        _info = _get_delivery_message(int(rid))
+        if _info and len(_info) >= 3:
+            oid = _info[2]
+    except Exception:
+        oid = None
+    # Backward-compat: if an older helper exists in some versions, try it.
+    if oid is None:
+        try:
+            oid = _get_order_id_by_feed_id(int(rid))  # type: ignore[name-defined]
+        except Exception:
+            oid = None
+
+    dn = _display_order_no(oid)
+    order_line = f"Order ID: <b>{dn}</b>\n" if dn is not None else ""
+
+    text = (
+        f"👁 مشاهده محصولات\n\n"
+        f"Feed ID: <b>{rid}</b>\n"
+        f"Product ID: <b>{pid}</b>\n"
+        f"Category: <b>{html.escape(cat)}</b>\n"
+        f"Title: <b>{html.escape(title)}</b>\n"
+        f"{order_line}"
+        f"Status: <b>{('ارسال‌شده ✅' if int(is_del)==1 else 'ارسال‌نشده 📦')}</b>\n"
+        f"Created: <b>{html.escape(str(created_at or ''))}</b>\n\n"
+        f"<pre>{html.escape(str(data or ''))}</pre>"
+    )
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton(
+            ("✅ تحویل" if int(is_del) == 0 else "♻️ برگشت"),
+            callback_data=(f"admin_feed_panel_toggle_{rid}_{page}_{mode}_{category_key}" if category_key else f"admin_feed_panel_toggle_{rid}_{page}_{mode}"),
+        ),
+        types.InlineKeyboardButton("🗑 حذف", callback_data=(f"admin_feed_panel_delete_{rid}_{page}_{mode}_{category_key}" if category_key else f"admin_feed_panel_delete_{rid}_{page}_{mode}")),
+    )
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت به لیست", callback_data=(f"admin_feed_panel_cat_{category_key}_{mode}_{page}" if category_key else f"admin_feed_panel_{mode}_{page}")))
+
+    if message_id:
+        safe_edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb, parse_mode="HTML")
+    else:
+        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+
+@bot.message_handler(commands=["myid"])
+def handle_myid(message):
+    bot.send_message(
+        message.chat.id, f"آیدی عددی شما: <code>{message.from_user.id}</code>"
+    )
+
+
+@bot.message_handler(commands=["admin"])
+def handle_admin_cmd(message):
+    if not ensure_admin(message.from_user.id):
+        return
+    bot.send_message(
+        message.chat.id,
+        "پنل مدیریت 👇",
+        reply_markup=admin_main_inline(),
+    )
+
+
+# ========= TEXT HANDLERS (USER) =========
+
+
+def _show_category(chat_id: int, cat_id: int, user_id: int = None, msg_id: int = None):
+    """نمایش محتوای یک دسته — زیردسته‌ها یا محصولات"""
+    cat = get_category(cat_id)
+    if not cat:
+        bot.send_message(chat_id, "دسته‌بندی یافت نشد.")
+        return
+
+    emoji = (cat["emoji"] or "").strip()
+    title = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+
+    # breadcrumb
+    path = get_category_path(cat_id)
+    breadcrumb = " › ".join(
+        f"{(c['emoji'] or '').strip()} {c['name']}".strip() for c in path
+    )
+
+    subcats = get_subcategories(cat_id, active_only=True)
+    if subcats:
+        text = f"📂 {breadcrumb}\n\nیکی از دسته‌بندی‌های زیر را انتخاب کنید:"
+    else:
+        prods = get_category_products(cat_id, active_only=True)
+        if not prods:
+            text = f"📂 {breadcrumb}\n\nدر حال حاضر محصولی در این دسته موجود نیست."
+        else:
+            text = f"📂 {breadcrumb}\n\nیکی از محصولات زیر را انتخاب کنید:"
+
+    kb = category_inline_keyboard(cat_id, user_id=user_id)
+
+    if msg_id:
+        try:
+            bot.edit_message_text(text, chat_id, msg_id, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
+# هندلر داینامیک دسته‌بندی‌ها (Reply Keyboard)
+@bot.message_handler(func=lambda m: bool(get_category_by_button_text(m.text or "")))
+def handle_category_button(message):
+    cat = get_category_by_button_text(message.text)
+    if not cat:
+        return
+    _show_category(message.chat.id, cat["id"], user_id=message.from_user.id)
+
+
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_WALLET"))
+def handle_wallet(message):
+    if not is_main_button_enabled("MAIN_BTN_WALLET"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+
+    uid = message.from_user.id
+    balance = get_wallet_balance(uid)
+    text = tf("MSG_WALLET_BALANCE", balance=f"{balance:,}")
+    bot.send_message(message.chat.id, text, reply_markup=wallet_inline_keyboard(), parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_MY_ORDERS"))
+def handle_my_orders_menu(message):
+    if not is_main_button_enabled("MAIN_BTN_MY_ORDERS"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+    uid = message.from_user.id
+    _show_my_orders(message.chat.id, uid)
+
+
+def _show_my_orders(chat_id, uid):
+    """نمایش ۵ خرید آخر با inline keyboard کشویی."""
+    orders = get_recent_orders_by_user(uid, limit=5)
+    if not orders:
+        bot.send_message(chat_id, t("MSG_NO_ORDERS", "هنوز خریدی انجام نداده‌اید."))
+        return
+
+    text = "🛒 <b>خریدهای من</b>\n\nبرای مشاهده محصول روی هر سفارش بزنید:"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for o in orders:
+        oid, title, price, created_at = o
+        date_str = (created_at or "")[:10]
+        kb.add(types.InlineKeyboardButton(
+            f"📦 {title[:35]} — {int(price):,} ت | {date_str}",
+            callback_data=f"order_detail_{oid}"
+        ))
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("order_detail_"))
+def cb_order_detail(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        oid = int(call.data.split("_")[-1])
+    except ValueError:
+        return
+
+    import sqlite3 as _sq
+    from config import DB_PATH as _DBP
+    conn = _sq.connect(_DBP)
+    conn.row_factory = _sq.Row
+    try:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id=? AND CAST(user_id AS INTEGER)=? "
+            "AND COALESCE(status,'active') != 'returned';",
+            (oid, uid)
+        ).fetchone()
+        if not order:
+            bot.answer_callback_query(call.id, "سفارش یافت نشد", show_alert=True)
+            return
+        # محتوای محصول از product_feed
+        feed = conn.execute(
+            "SELECT data FROM product_feed WHERE order_id=? LIMIT 1;",
+            (oid,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    title     = order["title"] or "—"
+    price     = int(order["price"] or 0)
+    date_str  = (order["created_at"] or "")[:10]
+    feed_data = feed["data"] if feed else None
+
+    if feed_data:
+        text = (
+            f"📦 <b>سفارش #{oid}</b>\n\n"
+            f"محصول: {title}\n"
+            f"مبلغ: {price:,} تومان\n"
+            f"تاریخ: {date_str}\n\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"<code>{feed_data}</code>"
+        )
+    else:
+        text = (
+            f"📦 <b>سفارش #{oid}</b>\n\n"
+            f"محصول: {title}\n"
+            f"مبلغ: {price:,} تومان\n"
+            f"تاریخ: {date_str}\n\n"
+            f"ℹ️ محتوای این سفارش توسط پشتیبانی تحویل داده می‌شود."
+        )
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت به خریدها", callback_data="my_orders_back"))
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id,
+            parse_mode="HTML", reply_markup=kb
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "my_orders_back")
+def cb_my_orders_back(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    _show_my_orders(call.message.chat.id, uid)
+
+
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_SUPPORT"))
+def handle_support(message):
+    if not is_main_button_enabled("MAIN_BTN_SUPPORT"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+
+    uid = message.from_user.id
+    text_support = t("SUPPORT_TEXT", DEFAULT_UI_TEXTS.get("SUPPORT_TEXT", ""))
+    ticket_ensure_schema()
+    existing = ticket_get_open_support(uid)
+
+    kb = types.InlineKeyboardMarkup()
+    if existing:
+        kb.add(types.InlineKeyboardButton(
+            f"💬 ادامه مکالمه (تیکت #{existing['id']})",
+            callback_data=f"ticket_v2_continue_{existing['id']}"
+        ))
+    else:
+        kb.add(types.InlineKeyboardButton(
+            "📩 ارسال پیام به پشتیبانی",
+            callback_data="ticket_v2_new"
+        ))
+
+    bot.send_message(message.chat.id, text_support, reply_markup=kb)
+
+
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_PARTNER_PANEL"))
+def handle_partner_panel(message):
+    if not is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+
+    uid = message.from_user.id
+    if not is_partner_approved(uid):
+        bot.send_message(message.chat.id,
+            "🤝 پنل همکار\n\n"
+            "شما هنوز به‌عنوان همکار تایید نشده‌اید.\n"
+            "برای ثبت درخواست از «📝 درخواست نمایندگی» استفاده کنید.")
+        return
+
+    _show_partner_dashboard(message.chat.id, uid)
+
+
+def _partner_edit(call, text, kb):
+    """edit پیام داشبورد همکار — photo یا text."""
+    cid, mid = call.message.chat.id, call.message.message_id
+    try:
+        bot.edit_message_text(text, cid, mid, parse_mode="HTML", reply_markup=kb)
+        return
+    except Exception:
+        pass
+    try:
+        bot.edit_message_caption(caption=text, chat_id=cid, message_id=mid,
+                                 parse_mode="HTML", reply_markup=kb)
+        return
+    except Exception:
+        pass
+    try:
+        bot.delete_message(cid, mid)
+    except Exception:
+        pass
+    bot.send_message(cid, text, parse_mode="HTML", reply_markup=kb)
+
+
+def _show_partner_dashboard(chat_id, uid):
+    """داشبورد کامل همکار با سطح، آمار و لینک معرفی."""
+    from db import (get_partner_order_count, get_partner_tier_for, get_partner_tiers,
+                    get_referral_stats_for, ensure_partner_system_schema,
+                    ensure_partner_tiers_extended)
+    ensure_partner_system_schema()
+    ensure_partner_tiers_extended()
+
+    order_count = get_partner_order_count(uid)
+    tier        = get_partner_tier_for(order_count)
+    all_tiers   = get_partner_tiers()
+    ref_stats   = get_referral_stats_for(uid)
+
+    # سطح بعدی و پیشرفت
+    next_tier = None
+    for t_ in all_tiers:
+        if t_["min_orders"] > order_count:
+            next_tier = t_
+            break
+
+    if next_tier:
+        prev_min = tier.get("min_orders", 0)
+        span     = next_tier["min_orders"] - prev_min
+        done     = order_count - prev_min
+        pct      = int((done / span) * 100) if span > 0 else 0
+        filled   = int(pct / 10)
+        bar      = "▓" * filled + "░" * (10 - filled)
+        next_line = (
+            f"\n📈 پیشرفت تا {next_tier['icon']} {next_tier['name']}:\n"
+            f"<code>{bar}</code> {pct}%\n"
+            f"({next_tier['min_orders'] - order_count} خرید دیگر تا ارتقا)"
+        )
+    else:
+        next_line = "\n🎉 شما در بالاترین سطح هستید!"
+
+    conn = None
+    partner_total = 0
+    try:
+        import sqlite3 as _sq
+        from config import DB_PATH as _DBP
+        conn = _sq.connect(_DBP)
+        row = conn.execute(
+            "SELECT COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
+            (uid,)).fetchone()
+        partner_total = int(row[0] or 0) if row else 0
+    except Exception:
+        pass
+    finally:
+        if conn: conn.close()
+
+    text = (
+        f"🤝 <b>داشبورد همکار</b>\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"سطح فعلی: <b>{tier['icon']} {tier['name']}</b>\n"
+        f"🛒 خریدهای همکاری: <b>{order_count}</b>\n"
+        f"💰 مجموع خرید: <b>{partner_total:,}</b> تومان"
+        f"{next_line}\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👥 <b>زیرمجموعه‌ها</b>\n"
+        f"معرفی‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
+    )
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    from ui_texts import t as _t, DEFAULT_UI_TEXTS as _D
+    kb.row(
+        types.InlineKeyboardButton(_t("BTN_PARTNER_MY_SELLERS",  _D.get("BTN_PARTNER_MY_SELLERS",  "👥 فروشندگان من")),  callback_data="partner_sub_stats"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_PROFILE",     _D.get("BTN_PARTNER_PROFILE",     "👤 پروفایل")),        callback_data="partner_profile"),
+    )
+    kb.row(
+        types.InlineKeyboardButton(_t("BTN_PARTNER_WALLET",      _D.get("BTN_PARTNER_WALLET",      "💼 کیف‌پول همکاری")), callback_data="partner_wallet"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_REF_LINK",    _D.get("BTN_PARTNER_REF_LINK",    "🔗 لینک معرفی من")),  callback_data="partner_ref_link"),
+    )
+    kb.row(
+        types.InlineKeyboardButton(_t("BTN_PARTNER_CHAT",        _D.get("BTN_PARTNER_CHAT",        "💬 چت با پشتیبان")), callback_data="partner_support"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_PROMO",       _D.get("BTN_PARTNER_PROMO",       "📣 ابزار تبلیغ")),   callback_data="partner_promo"),
+    )
+
+    # بنر سطح
+    tier_photo = None
+    try:
+        tier_photo = (tier.get("photo_file_id") or "").strip() or None
+    except Exception:
+        pass
+
+    if tier_photo:
+        try:
+            bot.send_photo(chat_id, tier_photo, caption=text, parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_profile")
+def cb_partner_profile(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    _show_partner_profile(call.message.chat.id, uid, edit_msg=call.message.message_id)
+
+def _show_partner_profile(chat_id, uid, edit_msg=None):
+    from db import get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_bank_address
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+    import sqlite3 as _sq4
+    from config import DB_PATH as _DBP4
+    partner = None
+    try:
+        _c = _sq4.connect(_DBP4); _c.row_factory = _sq4.Row
+        try:
+            partner = _c.execute("SELECT * FROM partners WHERE tg_user_id=?;", (uid,)).fetchone()
+        finally:
+            _c.close()
+    except Exception:
+        pass
+    bank = get_partner_bank_info(uid)
+    def _v(val): return val or "—"
+    text = (
+        f"👤 <b>پروفایل همکار</b>\n{'─'*20}\n\n"
+        f"<b>اطلاعات فروشگاه</b>\n"
+        f"👤 نام: {_v(partner['full_name'] if partner else None)}\n"
+        f"🏪 فروشگاه: {_v(partner['shop_name'] if partner else None)}\n"
+        f"🏙 شهر: {_v(partner['city'] if partner else None)}\n"
+        f"📍 آدرس: {_v(bank['address'] if bank else None)}\n\n"
+        f"<b>اطلاعات بانکی</b>\n"
+        f"👤 صاحب حساب: {_v(bank['full_name'] if bank else None)}\n"
+        f"💳 کارت: <code>{_v(bank['card_number'] if bank else None)}</code>\n"
+        f"🏦 شبا: <code>{_v(bank['iban'] if bank else None)}</code>"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("✏️ نام", callback_data="pedit_name"),
+        types.InlineKeyboardButton("✏️ فروشگاه", callback_data="pedit_shop"),
+    )
+    kb.row(
+        types.InlineKeyboardButton("✏️ شهر", callback_data="pedit_city"),
+        types.InlineKeyboardButton("✏️ آدرس", callback_data="pedit_address"),
+    )
+    kb.row(
+        types.InlineKeyboardButton("✏️ کارت", callback_data="pedit_card"),
+        types.InlineKeyboardButton("✏️ شبا", callback_data="pedit_iban"),
+    )
+    kb.row(types.InlineKeyboardButton("✏️ نام صاحب حساب", callback_data="pedit_bankname"))
+    kb.row(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    if edit_msg:
+        try:
+            bot.edit_message_text(text, chat_id, edit_msg, parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+
+_PEDIT_MAP = {
+    "pedit_name":     ("partner_name",    "نام و نام خانوادگی"),
+    "pedit_shop":     ("partner_shop",    "نام فروشگاه"),
+    "pedit_city":     ("partner_city",    "شهر"),
+    "pedit_address":  ("partner_address", "آدرس"),
+    "pedit_card":     ("partner_card",    "شماره کارت (۱۶ رقم)"),
+    "pedit_iban":     ("partner_iban",    "شماره شبا (با یا بدون IR)"),
+    "pedit_bankname": ("partner_bankname","نام صاحب حساب"),
 }
 
-MAIN_BUTTONS = [
-    "MAIN_BTN_OTHER_PRODUCTS",
-    "MAIN_BTN_BUY_APPLE_ID",
-    "MAIN_BTN_MY_ORDERS",
-    "MAIN_BTN_WALLET",
-    "MAIN_BTN_PARTNER_REQUEST",
-    "MAIN_BTN_PARTNER_PANEL",
-    "MAIN_BTN_GUIDE",
-    "MAIN_BTN_SUPPORT",
-]
+@bot.callback_query_handler(func=lambda c: c.data in _PEDIT_MAP)
+def cb_pedit(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    mode, label = _PEDIT_MAP[call.data]
+    user_states[uid] = {"mode": mode}
+    bot.send_message(call.message.chat.id, f"✏️ <b>{label}</b> را وارد کنید:", parse_mode="HTML")
 
-def _get_ui(conn, key: str) -> str:
+def _pedit_save(uid, chat_id, table, col, val):
+    import sqlite3 as _sqe
+    from config import DB_PATH as _DBPe
+    from db import ensure_partner_bank_schema, ensure_partner_bank_address, get_partner_bank_info
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+    conn = _sqe.connect(_DBPe)
     try:
-        row = conn.execute("SELECT value FROM ui_texts WHERE key=? LIMIT 1;", (key,)).fetchone()
-        return row["value"] if row else DEFAULT_UI_TEXTS.get(key, "")
-    except Exception:
-        return DEFAULT_UI_TEXTS.get(key, "")
-
-def _set_ui(conn, key: str, value: str) -> None:
-    now = datetime.utcnow().isoformat()
-    conn.execute(
-        "INSERT INTO ui_texts(key,value,updated_at) VALUES(?,?,?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;",
-        (key, value, now),
-    )
-
-@router.post("/settings/save-theme")
-async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0"):
-    adm = _get_admin(request)
-    if not adm:
-        return JSONResponse({"ok": False})
-    try:
-        conn = _db()
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS admin_preferences (
-                admin_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT,
-                PRIMARY KEY (admin_id, key)
-            );
-        """)
-        conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
-                     (str(adm[0]), "dark_mode", dark if dark in ("1", "0", "auto") else "0"))
-        conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
-                     (str(adm[0]), "classic_mode", "1" if classic == "1" else "0"))
-        conn.commit(); conn.close()
-    except Exception:
-        pass
-    return JSONResponse({"ok": True})
-
-
-@router.get("/receipts", response_class=HTMLResponse)
-async def card_receipts_page(request: Request, status: str = "pending", flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_card_receipts, ensure_card_receipts_schema
-    ensure_card_receipts_schema()
-    receipts = get_card_receipts(status)
-
-    tabs = ''.join(
-        f'<a href="/admin/receipts?status={s}" class="px-3 py-1.5 rounded-lg text-xs border '
-        f'{"bg-indigo-600 text-white" if status==s else "bg-white text-gray-500"}">{l}</a>'
-        for s, l in [("pending","⏳ در انتظار"),("approved","✅ تأیید شده"),("rejected","❌ رد شده"),("","همه")]
-    )
-
-    rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-3 text-xs text-gray-400">#{r['id']}</td>
-      <td class="px-3 py-3">{e(r['full_name'] or r['username'] or str(r['user_id']))}</td>
-      <td class="px-3 py-3 font-bold text-green-600">{int(r['amount'] or 0):,}</td>
-      <td class="px-3 py-3">
-        <a href="/admin/receipts/{r['id']}/view" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده رسید</a>
-      </td>
-      <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs
-        {'bg-amber-100 text-amber-700' if r['status']=='pending' else 'bg-green-100 text-green-700' if r['status']=='approved' else 'bg-red-100 text-red-600'}">
-        {'⏳' if r['status']=='pending' else '✅' if r['status']=='approved' else '❌'}
-      </span></td>
-      <td class="px-3 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:16]}</td>
-      {'<td class="px-3 py-3 flex gap-1"><form method="post" action="/admin/receipts/' + str(r["id"]) + '/approve"><button class="px-2 py-1 bg-green-600 text-white rounded text-xs">✅ تأیید</button></form><form method="post" action="/admin/receipts/' + str(r["id"]) + '/reject"><button class="px-2 py-1 bg-red-50 text-red-600 border border-red-200 rounded text-xs">❌ رد</button></form></td>' if r['status']=='pending' else '<td></td>'}
-    </tr>""" for r in receipts) or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>رسیدی یافت نشد</td></tr>"
-
-    body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-4">💳 رسیدهای کارت‌به‌کارت</h1>
-    <div class="flex gap-2 mb-4">{tabs}</div>
-    <div class="card overflow-hidden"><div class="overflow-x-auto">
-      <table class="w-full text-right min-w-max">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-3 py-2">#</th><th class="px-3 py-2">کاربر</th>
-          <th class="px-3 py-2">مبلغ (ت)</th><th class="px-3 py-2">رسید</th>
-          <th class="px-3 py-2">وضعیت</th><th class="px-3 py-2">تاریخ</th><th></th>
-        </tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </div></div>"""
-    return _layout("رسیدهای کارت", body, adm, flash=flash)
-
-
-@router.get("/receipts/{rid}/view", response_class=HTMLResponse)
-async def receipt_view(request: Request, rid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_card_receipts
-    all_r = [r for r in get_card_receipts("") if r["id"] == rid]
-    if not all_r:
-        return _redir("/admin/tickets?flash=رسید+یافت+نشد#financial")
-    r = all_r[0]
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← مرکز مالی", "/admin/tickets#financial", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">رسید #{rid}</h1>
-    </div>
-    <div class="grid md:grid-cols-2 gap-4">
-      <div class="card p-5">
-        <h2 class="font-bold text-gray-700 mb-3">اطلاعات پرداخت</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between"><span class="text-gray-400">کاربر</span><span>{e(r['full_name'] or str(r['user_id']))}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span class="font-bold text-green-600">{int(r['amount']):,} تومان</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{r['status']}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">تاریخ</span><span>{(r['created_at'] or '')[:16]}</span></div>
-        </div>
-        {'''<div class="mt-4 space-y-3">
-          <label class="text-sm font-medium text-gray-700 block">مبلغ تأیید شده (تومان)</label>
-          <form method="post" action="/admin/receipts/''' + str(rid) + '''/approve" class="flex gap-2">
-            <input type="number" name="confirmed_amount" value="''' + str(int(r['amount'])) + '''" required
-              class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="مبلغ واقعی واریز شده">
-            <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium whitespace-nowrap">✅ تأیید و شارژ</button>
-          </form>
-          <form method="post" action="/admin/receipts/''' + str(rid) + '''/reject">
-            <button class="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm w-full">❌ رد درخواست</button>
-          </form>
-        </div>''' if r['status']=='pending' else '<p class="mt-3 text-sm text-gray-400">این رسید قبلاً بررسی شده است.</p>'}
-        <div class="mt-4 pt-4 border-t border-gray-100">
-          <form method="post" action="/admin/receipts/{rid}/delete" onsubmit="return confirm('⚠️ این رسید برای همیشه حذف می‌شود. ادامه؟')">
-            <button class="px-4 py-2 bg-red-50 text-red-500 border border-red-200 rounded-lg text-sm w-full">🗑 حذف این رسید</button>
-          </form>
-        </div>
-      </div>
-      <div class="card p-5 text-center">
-        <h2 class="font-bold text-gray-700 mb-3">تصویر رسید</h2>
-        <img src="/admin/receipts/{rid}/image" alt="رسید" class="max-w-full rounded-xl border border-gray-200">
-      </div>
-    </div>"""
-    return _layout(f"رسید #{rid}", body, adm)
-
-
-@router.post("/receipts/delete-all")
-async def receipts_delete_all(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import delete_all_card_receipts
-    delete_all_card_receipts()
-    _log(request, "حذف همه رسیدهای کارت‌به‌کارت", "کیف‌پول", "bulk delete")
-    return _redir("/admin/tickets?fin_type=card2card&flash=همه+رسیدها+حذف+شدند#financial")
-
-
-@router.post("/receipts/{rid}/delete")
-async def receipt_delete(request: Request, rid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import delete_card_receipt
-    delete_card_receipt(rid)
-    _log(request, f"حذف رسید #{rid}", "کیف‌پول", f"receipt:{rid}")
-    return _redir("/admin/tickets?flash=رسید+حذف+شد#financial")
-
-
-@router.get("/receipts/{rid}/image")
-async def receipt_image(request: Request, rid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_card_receipts
-    all_r = [r for r in get_card_receipts("") if r["id"] == rid]
-    if not all_r:
-        from fastapi.responses import Response
-        return Response("not found", 404)
-    r = all_r[0]
-    try:
-        import requests as _req
-        token = _env("BOT_TOKEN","")
-        file_info = _req.get(f"https://api.telegram.org/bot{token}/getFile?file_id={r['file_id']}").json()
-        file_path = file_info["result"]["file_path"]
-        img = _req.get(f"https://api.telegram.org/file/bot{token}/{file_path}").content
-        from fastapi.responses import Response
-        return Response(img, media_type="image/jpeg")
-    except Exception:
-        from fastapi.responses import Response
-        return Response("error", 500)
-
-
-@router.post("/receipts/{rid}/approve")
-async def receipt_approve(request: Request, rid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    form = await request.form()
-    confirmed_amount = int(form.get("confirmed_amount") or 0)
-    from db import get_card_receipts, update_card_receipt, add_wallet_balance
-    all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
-    if not all_r:
-        return _redir("/admin/tickets?flash=رسید+یافت+نشد#financial")
-    r = all_r[0]
-    # از مبلغ وارد شده استفاده کن، اگه نبود از مبلغ اصلی
-    amount = confirmed_amount if confirmed_amount > 0 else int(r["amount"] or 0)
-    update_card_receipt(rid, "approved", f"تأیید ادمین — مبلغ: {amount:,}", amount=amount)
-    add_wallet_balance(r["user_id"], amount)
-    _log(request, f"تأیید رسید #{rid}", "کیف‌پول", f"user:{r['user_id']} amount:{amount:,}")
-    try:
-        _tg_send(r["user_id"],
-            f"✅ پرداخت شما تأیید شد!\n"
-            f"مبلغ <b>{amount:,}</b> تومان به کیف پول شما اضافه شد.")
-    except Exception:
-        pass
-    return _redir(f"/admin/tickets?flash=رسید+{rid}+تأیید+شد#financial")
-
-
-@router.post("/receipts/{rid}/reject")
-async def receipt_reject(request: Request, rid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_card_receipts, update_card_receipt
-    all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
-    if not all_r:
-        return _redir("/admin/tickets?flash=رسید+یافت+نشد#financial")
-    r = all_r[0]
-    update_card_receipt(rid, "rejected", "رد ادمین")
-    _log(request, f"رد رسید #{rid}", "کیف‌پول", f"user:{r['user_id']}")
-    try:
-        _tg_send(r["user_id"],
-            "❌ متأسفانه رسید پرداخت شما تأیید نشد.\n"
-            "لطفاً با پشتیبانی تماس بگیرید.")
-    except Exception: pass
-    return _redir(f"/admin/tickets?flash=رسید+{rid}+رد+شد#financial")
-
-
-@router.get("/settings/panel", response_class=HTMLResponse)
-async def settings_hub(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-
-    # تم فعلی
-    saved_dark = "auto"; saved_classic = "0"
-    try:
-        conn = _db()
-        for r in conn.execute("SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');", (str(adm[0]),)).fetchall():
-            if r[0] == "dark_mode":    saved_dark = r[1] or "auto"
-            if r[0] == "classic_mode": saved_classic = r[1] or "0"
-        conn.close()
-    except Exception:
-        pass
-
-    body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">⚙️ تنظیمات</h1>
-    <div class="grid md:grid-cols-2 gap-4">
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">🌗 حالت نمایش</h2>
-        <p class="text-sm text-gray-500 mb-4">انتخاب شما ذخیره می‌شود و پس از خروج و ورود مجدد هم باقی می‌ماند.</p>
-
-        <button id="btn-daynight" onclick="hubToggleDark()"
-          class="w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
-
-        <button id="btn-classic" onclick="hubToggleClassic()"
-          class="w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
-
-        <button id="btn-auto" onclick="hubSetAuto()"
-          class="w-full py-3 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
-
-        <p class="text-xs text-gray-400 mt-3">🖥 در حالت «هماهنگ با سیستم»، پنل به‌صورت خودکار با تم روز/شب دستگاه شما هماهنگ می‌شود.</p>
-
-        <script>
-        function _hubMode(){{ return localStorage.getItem('sl-dark') || '{saved_dark}' || 'auto'; }}
-        function _hubIsDark(){{
-          var m=_hubMode();
-          if(m==='auto') return window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
-          return m==='1';
-        }}
-        function _hubSave(){{
-          fetch('/admin/settings/save-theme?dark='+encodeURIComponent(localStorage.getItem('sl-dark')||'auto')
-            +'&classic='+(localStorage.getItem('sl-classic')==='1'?'1':'0'), {{method:'POST'}}).catch(function(){{}});
-        }}
-        function hubRender(){{
-          var m=_hubMode(), dark=_hubIsDark(), classic=localStorage.getItem('sl-classic')==='1';
-          var dn=document.getElementById('btn-daynight');
-          if(dark){{
-            dn.textContent='☀️ رفتن به حالت روز';
-            dn.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100';
-          }} else {{
-            dn.textContent='🌙 رفتن به حالت شب';
-            dn.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 bg-gray-800 text-gray-100 border-gray-600 hover:bg-gray-700';
-          }}
-          var bc=document.getElementById('btn-classic');
-          bc.textContent = classic ? '🎨 حالت کلاسیک: روشن — بازگشت به پیش‌فرض' : '🎨 فعال‌کردن حالت کلاسیک';
-          bc.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 '
-            +(classic?'bg-blue-600 text-white border-blue-600 hover:bg-blue-700':'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100');
-          var ba=document.getElementById('btn-auto');
-          ba.textContent = m==='auto' ? '🖥 هماهنگ با سیستم: فعال ✓' : '🖥 هماهنگ با سیستم';
-          ba.className='w-full py-3 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 '
-            +(m==='auto'?'bg-teal-600 text-white border-teal-600':'bg-teal-50 text-teal-700 border-teal-200 hover:bg-teal-100');
-        }}
-        function hubToggleDark(){{
-          localStorage.setItem('sl-dark', _hubIsDark()?'0':'1');
-          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
-        }}
-        function hubToggleClassic(){{
-          var on=localStorage.getItem('sl-classic')==='1';
-          localStorage.setItem('sl-classic', on?'0':'1');
-          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
-        }}
-        function hubSetAuto(){{
-          localStorage.setItem('sl-dark','auto');
-          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
-        }}
-        hubRender();
-        </script>
-      </div>
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">🔘 مدیریت دکمه‌ها</h2>
-        <p class="text-sm text-gray-500 mb-4">ویرایش برچسب دکمه‌ها، فعال/غیرفعال‌سازی و تنظیمات متنی مهم.</p>
-        <a href="/admin/settings" class="block w-full py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-sm font-medium text-center hover:bg-indigo-100 transition">
-          رفتن به تنظیمات دکمه‌ها ←
-        </a>
-      </div>
-      <!-- حالت تعمیرات -->
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">🚧 حالت تعمیرات</h2>
-        <p class="text-sm text-gray-500 mb-4">وقتی فعاله، فقط ادمین می‌تونه ربات رو استفاده کنه.</p>
-        {'<div class="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 font-medium">⚠️ ربات الان در حالت تعمیرات است</div>' if __import__("db").get_maintenance_mode() else '<div class="mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">✅ ربات فعال است</div>'}
-        <div class="flex gap-3">
-          <form method="post" action="/admin/settings/maintenance?enable=1">
-            <button class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">🚧 فعال‌کردن تعمیرات</button>
-          </form>
-          <form method="post" action="/admin/settings/maintenance?enable=0">
-            <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">✅ بازگشایی ربات</button>
-          </form>
-        </div>
-      </div>
-    </div>"""
-    return _layout("تنظیمات", body, adm, flash=flash)
-
-
-@router.get("/settings", response_class=HTMLResponse)
-async def settings_get(request: Request, group: str = "", flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-
-    try:
-        from ui_texts import (
-            DEFAULT_UI_TEXTS as _D,
-            EDITABLE_BUTTON_GROUPS as _BG,
-            CRITICAL_TEXT_KEYS as _CTK,
-            CRITICAL_TEXT_LABELS as _CTL,
-            BUTTON_ICONS as _BICONS,
-            MAIN_BUTTON_KEYS as _BK,
-        )
-    except ImportError:
-        _D = {}; _BG = {}; _CTK = []; _CTL = {}; _BICONS = {}; _BK = []
-
-    conn = _db()
-    try:
-        db_texts = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ui_texts;").fetchall()}
-        btn_states = {k: db_texts.get(f"MAIN_BTN_ENABLED_{k}", "1") not in ("0","false","off","no") for k in _BK}
-    finally:
-        conn.close()
-
-    def gv(k): return db_texts.get(k, _D.get(k, ""))
-
-    # ─── Toggle switch CSS ─────────────────────────────────────────────────
-    tog_css = """<style>
-.tog{display:inline-flex;align-items:center;cursor:pointer;flex-shrink:0}
-.tog input{display:none}
-.tog-track{width:44px;height:24px;background:#d1d5db;border-radius:12px;position:relative;transition:background .22s;flex-shrink:0}
-.tog-track::after{content:'';position:absolute;width:18px;height:18px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .22s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
-.tog input:checked~.tog-track{background:#6366f1}
-.tog input:checked~.tog-track::after{transform:translateX(20px)}
-.tog-off .tog-track{background:#ef4444}
-.field-row{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid #f1f5f9;border-radius:12px;transition:background .15s}
-.field-row:hover{background:#f8fafc}
-.field-inp{flex:1;border:1px solid #e2e8f0;border-radius:8px;padding:7px 12px;font-size:.85rem;background:#fff;outline:none;transition:border-color .15s,box-shadow .15s;direction:rtl}
-.field-inp:focus{border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
-.save-btn{display:inline-flex;align-items:center;gap:6px;padding:9px 22px;background:#6366f1;color:#fff;border:none;border-radius:10px;font-size:.9rem;font-weight:600;cursor:pointer;transition:opacity .2s,transform .1s}
-.save-btn:disabled{opacity:.35;cursor:not-allowed}
-.save-btn:not(:disabled):hover{opacity:.9}
-.save-btn:not(:disabled):active{transform:scale(.97)}
-.sec-hdr{font-weight:700;color:#374151;font-size:1rem;display:flex;align-items:center;gap:8px;margin-bottom:4px}
-.sec-sub{font-size:.78rem;color:#9ca3af;margin-bottom:14px}
-</style>"""
-
-    # ─── Section 1: دکمه‌های منوی اصلی (با toggle + برچسب) ──────────────
-    main_rows = ""
-    for key in _BG.get("دکمه‌های منوی اصلی", []):
-        en = btn_states.get(key, True)
-        val = gv(key)
-        icon = _BICONS.get(key, "")
-        main_rows += f"""
-      <div class="field-row">
-        <label class="tog" title="{'فعال' if en else 'غیرفعال'}">
-          <input type="checkbox" name="enable_{e(key)}" {"checked" if en else ""} onchange="markDirty();this.closest('.tog').classList.toggle('tog-off',!this.checked)">
-          <span class="tog-track"></span>
-        </label>
-        <span style="font-size:1.1rem;width:22px;text-align:center;flex-shrink:0">{icon}</span>
-        <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()" placeholder="برچسب دکمه">
-      </div>"""
-
-    # ─── Section 2: دکمه‌های پنل همکار (فقط برچسب) ──────────────────────
-    partner_rows = ""
-    for key in _BG.get("دکمه‌های پنل همکار", []):
-        val = gv(key)
-        icon = _BICONS.get(key, "")
-        partner_rows += f"""
-      <div class="field-row" style="padding:8px 14px">
-        <span style="font-size:1rem;width:20px;text-align:center;flex-shrink:0">{icon}</span>
-        <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()">
-      </div>"""
-
-    # ─── Section 3: دکمه‌های کیف‌پول (فقط برچسب) ────────────────────────
-    wallet_rows = ""
-    for key in _BG.get("دکمه‌های کیف‌پول و پرداخت", []):
-        val = gv(key)
-        icon = _BICONS.get(key, "")
-        wallet_rows += f"""
-      <div class="field-row" style="padding:8px 14px">
-        <span style="font-size:1rem;width:20px;text-align:center;flex-shrink:0">{icon}</span>
-        <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()">
-      </div>"""
-
-    # ─── Section 4: تنظیمات متنی مهم ─────────────────────────────────────
-    text_fields = ""
-    for key in _CTK:
-        val = gv(key)
-        lbl = _CTL.get(key, key)
-        if key == "WALLET_QUICK_AMOUNTS":
-            fld = f'<input type="text" class="field-inp" style="width:100%;box-sizing:border-box" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()" placeholder="10000,50000,100000,500000">'
+        if table == "partners":
+            conn.execute(f"UPDATE partners SET {col}=? WHERE tg_user_id=?;", (val, uid))
         else:
-            fld = f'<textarea class="field-inp" style="width:100%;box-sizing:border-box;resize:vertical;min-height:110px" name="field_{e(key)}" oninput="markDirty()" dir="rtl">{e(val)}</textarea>'
-        text_fields += f"""
-      <div style="margin-bottom:18px">
-        <label style="display:block;font-size:.82rem;font-weight:600;color:#4b5563;margin-bottom:6px">{e(lbl)}</label>
-        {fld}
-      </div>"""
-
-    body = f"""
-    {tog_css}
-
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px">
-      <h1 style="font-size:1.4rem;font-weight:700;color:#1f2937;margin:0">⚙️ تنظیمات ربات</h1>
-      <button id="sbtn-top" form="sf" type="submit" class="save-btn" disabled>💾 ذخیره تغییرات</button>
-    </div>
-
-    <form id="sf" method="post" action="/admin/settings/save-all">
-      <input type="hidden" name="is_combined" value="1">
-
-      <!-- ─── دکمه‌های منوی اصلی ─────────────────────────────────────── -->
-      <div class="card" style="padding:20px;margin-bottom:16px">
-        <div class="sec-hdr">🔘 دکمه‌های منوی اصلی</div>
-        <div class="sec-sub">دکمه‌های Reply Keyboard در منوی کاربران — می‌توانید نمایش هر دکمه را فعال یا غیرفعال کنید.</div>
-        <div style="display:flex;flex-direction:column;gap:6px">
-          {main_rows}
-        </div>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end">
-          <button type="button" onclick="resetSection('main')"
-            style="font-size:.76rem;color:#9ca3af;background:none;border:none;cursor:pointer;transition:color .15s"
-            onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'">
-            🔄 بازگردانی این بخش به پیش‌فرض
-          </button>
-        </div>
-      </div>
-
-      <!-- ─── دکمه‌های پنل همکار + کیف‌پول (۲ ستون) ─────────────────── -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" class="two-col-grid">
-        <div class="card" style="padding:20px">
-          <div class="sec-hdr">🤝 دکمه‌های پنل همکار</div>
-          <div class="sec-sub">Inline Keyboard — داشبورد همکاران</div>
-          <div style="display:flex;flex-direction:column;gap:6px">
-            {partner_rows}
-          </div>
-        </div>
-        <div class="card" style="padding:20px">
-          <div class="sec-hdr">💰 دکمه‌های کیف‌پول</div>
-          <div class="sec-sub">Inline Keyboard — بخش کیف‌پول</div>
-          <div style="display:flex;flex-direction:column;gap:6px">
-            {wallet_rows}
-          </div>
-        </div>
-      </div>
-
-      <!-- ─── تنظیمات متنی مهم ─────────────────────────────────────────── -->
-      <div class="card" style="padding:20px;margin-bottom:20px">
-        <div class="sec-hdr">📝 تنظیمات متنی</div>
-        <div class="sec-sub">این متن‌ها مستقیماً در ربات نمایش داده می‌شوند — بقیه متن‌ها ثابت و پیش‌فرض هستند.</div>
-        {text_fields}
-      </div>
-
-      <!-- ─── دکمه‌های پایین صفحه ──────────────────────────────────────── -->
-      <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:32px;flex-wrap:wrap;gap:10px">
-        <button type="button" onclick="confirmResetAll()"
-          style="font-size:.82rem;color:#9ca3af;background:none;border:none;cursor:pointer;transition:color .15s;padding:0"
-          onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'">
-          🔄 بازگردانی همه به پیش‌فرض
-        </button>
-        <button id="sbtn-bot" form="sf" type="submit" class="save-btn" disabled>💾 ذخیره همه تغییرات</button>
-      </div>
-    </form>
-
-    <style>
-    @media(max-width:640px){{
-      .two-col-grid{{grid-template-columns:1fr !important}}
-    }}
-    </style>
-
-    <script>
-    var _dirty = false;
-    function markDirty() {{
-      if (_dirty) return;
-      _dirty = true;
-      ['sbtn-top','sbtn-bot'].forEach(function(id){{
-        var b=document.getElementById(id);
-        if(b){{b.disabled=false;}}
-      }});
-    }}
-    window.addEventListener('beforeunload', function(e){{
-      if(_dirty){{e.preventDefault();e.returnValue='';}}
-    }});
-    document.getElementById('sf').addEventListener('submit',function(){{_dirty=false;}});
-
-    function resetSection(sec) {{
-      if(!confirm('تنظیمات این بخش به پیش‌فرض برگردانده شود؟')) return;
-      var fd = new FormData();
-      fd.append('section', sec);
-      fetch('/admin/settings/reset-section', {{method:'POST', body:fd}})
-        .then(function(){{location.reload();}});
-    }}
-    function confirmResetAll() {{
-      if(!confirm('همه تنظیمات دکمه‌ها و متن‌ها به حالت اولیه بازگردانده شوند؟')) return;
-      fetch('/admin/settings/reset-all', {{method:'POST'}})
-        .then(function(){{location.reload();}});
-    }}
-    </script>"""
-
-    return _layout("تنظیمات", body, adm, flash=flash)
-
-
-@router.post("/settings/maintenance")
-async def settings_maintenance(request: Request, enable: str = "0"):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    from db import set_maintenance_mode
-    on = enable == "1"
-    set_maintenance_mode(on)
-    _log(request, "حالت تعمیرات", "تنظیمات", "فعال" if on else "غیرفعال")
-    msg = "تعمیرات+فعال+شد" if on else "ربات+فعال+شد"
-    return _redir(f"/admin/settings/panel?flash={msg}")
-
-
-def _settings_action_bar():
-    return """
-      <div class="flex items-center gap-3 pt-4 border-t">
-        <button type="submit" id="save-btn" disabled
-          style="opacity:.5;cursor:not-allowed"
-          class="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold transition">
-          💾 ذخیره تغییرات
-        </button>
-        <button type="submit" formaction="/admin/settings/reset-group" onclick="return confirmReset()"
-          class="px-5 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200 transition">
-          🔄 بازگردانی پیش‌فرض
-        </button>
-      </div>"""
-
-
-@router.post("/settings/theme")
-async def settings_theme_save(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    _ensure_theme_table()
-    form = await request.form()
-    conn = _db()
-    try:
-        for key in ("primary", "glass"):
-            val = str(form.get(key) or "").strip()
-            if val:
-                conn.execute(
-                    "INSERT INTO panel_theme (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
-                    (key, val)
-                )
+            bank = get_partner_bank_info(uid)
+            if bank:
+                conn.execute(f"UPDATE partner_bank_info SET {col}=?,updated_at=datetime('now') WHERE user_id=?;", (val, uid))
+            else:
+                conn.execute(f"INSERT OR REPLACE INTO partner_bank_info (user_id,{col}) VALUES (?,?);", (uid, val))
         conn.commit()
     finally:
         conn.close()
-    return _redir("/admin/settings?flash=تنظیمات+رنگ+ذخیره+شد")
+    bot.send_message(chat_id, "✅ ذخیره شد.")
+    _show_partner_profile(chat_id, uid)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_name")
+def _ph_name(message):
+    uid=message.from_user.id; val=(message.text or "").strip()
+    if not val: bot.reply_to(message,"نام نمی‌تواند خالی باشد:"); return
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partners","full_name",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_shop")
+def _ph_shop(message):
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partners","shop_name",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_city")
+def _ph_city(message):
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partners","city",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_address")
+def _ph_address(message):
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","address",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_card")
+def _ph_card(message):
+    uid=message.from_user.id; val=(message.text or "").replace("-","").replace(" ","").strip()
+    if not (val.isdigit() and len(val)==16):
+        bot.reply_to(message,"شماره کارت باید ۱۶ رقم باشد:"); return
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","card_number",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_iban")
+def _ph_iban(message):
+    uid=message.from_user.id; val=(message.text or "").strip().upper().replace(" ","")
+    if not val.startswith("IR"): val="IR"+val
+    if len(val)!=26: bot.reply_to(message,"شماره شبا باید ۲۴ رقم (بدون IR) باشد:"); return
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","iban",val)
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id,{}).get("mode")=="partner_bankname")
+def _ph_bankname(message):
+    uid=message.from_user.id; val=(message.text or "").strip()
+    user_states.pop(uid,None); _pedit_save(uid,message.chat.id,"partner_bank_info","full_name",val)
 
 
-@router.get("/settings/theme/reset")
-async def settings_theme_reset(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    conn = _db()
+@bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
+def cb_partner_ref_link(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    from db import get_referral_stats_for, get_referral_settings
+    settings = get_referral_settings()
+    stats    = get_referral_stats_for(uid)
     try:
-        conn.execute("DELETE FROM panel_theme;")
-        conn.commit()
-    finally:
+        bot_username = bot.get_me().username
+    except Exception:
+        bot_username = "your_bot"
+    link = f"https://t.me/{bot_username}?start=ref_{uid}"
+    reward = settings.get("reward_amount", 5000)
+
+    text = (
+        f"🔗 <b>لینک معرفی شما</b>\n\n"
+        f"کد معرفی: <code>{uid}</code>\n\n"
+        f"لینک اختصاصی:\n<code>{link}</code>\n\n"
+        f"💰 با هر معرفی موفق <b>{reward:,}</b> تومان پاداش بگیرید!\n\n"
+        f"📊 آمار شما:\n"
+        f"• کل معرفی‌ها: {stats['total']}\n"
+        f"• پاداش دریافتی: {stats['total_reward']:,} تومان"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton(
+        "📤 ارسال لینک به دوستان",
+        switch_inline_query=f"با این لینک ثبت‌نام کن!\n{link}"
+    ))
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    _partner_edit(call, text, kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_sub_stats")
+def cb_partner_sub_stats(call):
+    """نمای شبکه‌ای — کاربر بالا، زیرمجموعه‌ها با آمار خرید زیرش (سبک نتورک)"""
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    import sqlite3 as _sq
+    from config import DB_PATH as _DBP
+
+    my_name = (call.from_user.first_name or "شما").strip()
+    subs, total_orders, total_purchase = [], 0, 0
+    try:
+        conn = _sq.connect(_DBP)
+        conn.row_factory = _sq.Row
+        # زیرمجموعه‌ها + آمار خرید هرکدام + تعداد زیرمجموعه‌ی خودشان (سطح ۲)
+        subs = conn.execute("""
+            SELECT r.referred_id AS sid,
+                   COALESCE(u.full_name, u.username, 'کاربر ' || r.referred_id) AS name,
+                   COALESCE(o.cnt, 0)   AS order_count,
+                   COALESCE(o.total, 0) AS total_spent,
+                   COALESCE(r2.cnt, 0)  AS own_subs
+            FROM referrals r
+            LEFT JOIN users u ON CAST(u.user_id AS INTEGER) = r.referred_id
+            LEFT JOIN (
+                SELECT CAST(user_id AS INTEGER) AS ouid, COUNT(*) AS cnt, SUM(price) AS total
+                FROM orders WHERE COALESCE(status,'active') != 'returned'
+                GROUP BY CAST(user_id AS INTEGER)
+            ) o ON o.ouid = r.referred_id
+            LEFT JOIN (
+                SELECT referrer_id, COUNT(*) AS cnt FROM referrals GROUP BY referrer_id
+            ) r2 ON r2.referrer_id = r.referred_id
+            WHERE r.referrer_id = ?
+            ORDER BY total_spent DESC, order_count DESC
+            LIMIT 30;
+        """, (uid,)).fetchall()
         conn.close()
-    return _redir("/admin/settings?flash=رنگ‌های+پیش‌فرض+بازگردانده+شد")
+        total_orders   = sum(int(s["order_count"]) for s in subs)
+        total_purchase = sum(int(s["total_spent"]) for s in subs)
+    except Exception:
+        subs = []
+
+    # ─── ساخت درخت شبکه ───
+    lines = [
+        f"👥 <b>فروشندگان من</b>\n",
+        f"👤 <b>{my_name}</b>  (شما)",
+    ]
+    if not subs:
+        lines.append("\n└ هنوز زیرمجموعه‌ای ندارید.\n\n🔗 لینک معرفی خود را به اشتراک بگذارید تا شبکه‌تان رشد کند!")
+    else:
+        for i, s in enumerate(subs):
+            is_last = (i == len(subs) - 1)
+            branch  = "└" if is_last else "├"
+            medal   = "🥇" if i == 0 and s["order_count"] > 0 else ("🥈" if i == 1 and s["order_count"] > 0 else ("🥉" if i == 2 and s["order_count"] > 0 else "👤"))
+            own     = f" | 👥{s['own_subs']}" if s["own_subs"] else ""
+            if s["order_count"] > 0:
+                lines.append(f"{branch} {medal} {s['name']}\n{'   ' if is_last else '│  '}🛒 {s['order_count']} خرید | 💰 {int(s['total_spent']):,} ت{own}")
+            else:
+                lines.append(f"{branch} {medal} {s['name']} — بدون خرید{own}")
+        lines.append(
+            f"\n━━━━━━━━━━━━━━━\n"
+            f"📊 جمع شبکه: <b>{len(subs)}</b> نفر | "
+            f"🛒 <b>{total_orders}</b> خرید | 💰 <b>{total_purchase:,}</b> ت"
+        )
+
+    text = "\n".join(lines)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    _partner_edit(call, text, kb)
 
 
-def _clear_ui_cache():
+@bot.callback_query_handler(func=lambda c: c.data == "partner_wallet")
+def cb_partner_wallet(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    from db import get_partner_wallet_balance, get_partner_transactions, ensure_partner_wallet_schema
+    ensure_partner_wallet_schema()
+    bal = get_partner_wallet_balance(uid)
+    txns = get_partner_transactions(uid, 5)
+
+    type_map = {
+        "credit": "💚 واریز پورسانت",
+        "transfer_out": "🔄 انتقال به کیف‌پول اصلی",
+        "payout_request": "📤 درخواست تسویه",
+        "payout_rejected": "↩️ برگشت تسویه",
+    }
+    txn_lines = "\n".join(
+        f"{'+'if tx['type'] in ('credit','payout_rejected') else '-'}"
+        f"{int(tx['amount']):,} ت — {type_map.get(tx['type'],tx['type'])} ({(tx['created_at'] or '')[:10]})"
+        for tx in txns
+    ) if txns else "تراکنشی ثبت نشده"
+
+    text = (
+        f"💼 <b>کیف‌پول همکاری</b>\n\n"
+        f"موجودی: <b>{bal:,}</b> تومان\n\n"
+        f"📋 <b>آخرین تراکنش‌ها:</b>\n{txn_lines}"
+    )
+    from ui_texts import t as _t, DEFAULT_UI_TEXTS as _D
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton(_t("BTN_WALLET_TRANSFER", _D.get("BTN_WALLET_TRANSFER", "🔄 انتقال به کیف‌پول اصلی")), callback_data="partner_transfer"),
+        types.InlineKeyboardButton(_t("BTN_WALLET_PAYOUT",   _D.get("BTN_WALLET_PAYOUT",   "📤 درخواست تسویه")),          callback_data="partner_payout"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
+    )
+    _partner_edit(call, text, kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_transfer")
+def cb_partner_transfer(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    from db import get_partner_wallet_balance
+    bal = get_partner_wallet_balance(uid)
+    if bal <= 0:
+        bot.answer_callback_query(call.id, "موجودی کیف‌پول همکاری صفر است", show_alert=True)
+        return
+    user_states[uid] = {"mode": "partner_transfer", "max": bal}
+    bot.send_message(call.message.chat.id,
+        f"🔄 <b>انتقال به کیف‌پول اصلی</b>\n\n"
+        f"موجودی: <b>{bal:,}</b> تومان\n\n"
+        "مبلغ مورد نظر را وارد کنید (تومان):\n"
+        "(یا «همه» برای انتقال کل موجودی)",
+        parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_transfer")
+def handle_partner_transfer(message):
+    uid = message.from_user.id
+    if _exit_chat_if_needed(message):
+        return
+    st = user_states.pop(uid, {})
+    max_bal = st.get("max", 0)
+    txt = (message.text or "").strip()
+    if txt == "همه":
+        amount = max_bal
+    elif txt.isdigit():
+        amount = int(txt)
+    else:
+        bot.reply_to(message, "مبلغ نامعتبر. عدد وارد کنید.")
+        return
+    from db import transfer_partner_to_main
+    result = transfer_partner_to_main(uid, amount)
+    if result["ok"]:
+        bot.send_message(message.chat.id,
+            f"✅ <b>{amount:,}</b> تومان به کیف‌پول اصلی منتقل شد.",
+            parse_mode="HTML", reply_markup=main_menu(user_id=uid))
+    else:
+        bot.reply_to(message, f"❌ {result['error']}")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_payout")
+def cb_partner_payout(call):
+    uid = call.from_user.id
+    from db import get_partner_wallet_balance, get_partner_payout_settings, ensure_partner_wallet_schema
+    ensure_partner_wallet_schema()
+    settings = get_partner_payout_settings()
+    if not settings.get("is_active"):
+        bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
+        return
+    bal = get_partner_wallet_balance(uid)
+    min_a = int(settings.get("min_amount") or 0)
+    if min_a and bal < min_a:
+        bot.answer_callback_query(call.id,
+            f"حداقل موجودی برای تسویه {min_a:,} تومان است.\nموجودی شما: {bal:,} تومان",
+            show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    max_a = int(settings.get("max_amount") or 0)
+    max_pm = int(settings.get("max_per_month") or 0)
+    user_states[uid] = {"mode": "partner_payout", "bal": bal}
+    text = (
+        f"📤 <b>درخواست تسویه</b>\n\n"
+        f"موجودی: <b>{bal:,}</b> تومان\n"
+        f"{'حداقل: '+format(min_a,',')+'تومان' if min_a else ''}\n"
+        f"{'حداکثر: '+format(max_a,',')+'تومان' if max_a else ''}\n"
+        f"{'سقف ماهانه: '+str(max_pm)+' درخواست' if max_pm else ''}\n\n"
+        "مبلغ درخواستی را وارد کنید:"
+    )
+    bot.send_message(call.message.chat.id, text, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_payout")
+def handle_partner_payout(message):
+    uid = message.from_user.id
+    if _exit_chat_if_needed(message):
+        return
+    st = user_states.pop(uid, {})
+    txt = (message.text or "").strip()
+    if not txt.isdigit():
+        bot.reply_to(message, "مبلغ نامعتبر. عدد وارد کنید.")
+        return
+    amount = int(txt)
+    from db import request_partner_payout
+    result = request_partner_payout(uid, amount)
+    if result["ok"]:
+        bot.send_message(message.chat.id,
+            f"✅ درخواست تسویه <b>{amount:,}</b> تومان ثبت شد.\n"
+            "پس از بررسی، نتیجه اعلام می‌شود.",
+            parse_mode="HTML", reply_markup=main_menu(user_id=uid))
+        try:
+            bot.send_message(ADMIN_ID,
+                f"📤 <b>درخواست تسویه همکار</b>\n"
+                f"کاربر: <code>{uid}</code>\n"
+                f"مبلغ: <b>{amount:,}</b> تومان\n\n"
+                f"برای بررسی: /admin → همکاران → تسویه‌ها",
+                parse_mode="HTML")
+        except Exception:
+            pass
+    else:
+        bot.reply_to(message, f"❌ {result['error']}")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_guide")
+def cb_partner_guide(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    guide_text = t("PARTNER_GUIDE_TEXT",
+        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
+        "متن راهنما توسط مدیر تنظیم نشده است.\n"
+        "لطفاً با پشتیبانی تماس بگیرید.")
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    _partner_edit(call, guide_text, kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_support")
+def cb_partner_support(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    # باز کردن تیکت با نوع «همکاران»
+    from db import ticket_create, ticket_ensure_schema, ticket_get_open_support
+    ticket_ensure_schema()
+    # اگه تیکت همکاری باز داره، ادامه بده
+    existing = None
     try:
-        from ui_texts import ui_cache_clear
-        ui_cache_clear()
+        import sqlite3 as _sq
+        from config import DB_PATH as _DBP
+        _c = _sq.connect(_DBP); _c.row_factory = _sq.Row
+        try:
+            existing = _c.execute(
+                "SELECT * FROM tickets WHERE user_id=? AND type='partner_support' AND status!='closed' ORDER BY id DESC LIMIT 1;",
+                (uid,)
+            ).fetchone()
+        finally:
+            _c.close()
+    except Exception:
+        pass
+
+    if existing:
+        tid = existing["id"]
+        try:
+            cur_cnt = int(existing["user_msg_count"] or 0)
+        except Exception:
+            cur_cnt = 0
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid}
+        if cur_cnt >= TICKET_MAX_USER_MSGS:
+            bot.send_message(call.message.chat.id,
+                f"💬 <b>گفتگوی همکاری #{tid}</b>\n\n"
+                "🔒 گفتگو در انتظار پاسخ پشتیبانی است.\n"
+                "پس از پاسخ، می‌توانید ادامه دهید.",
+                parse_mode="HTML")
+        else:
+            bot.send_message(call.message.chat.id,
+                f"💬 <b>ادامه گفتگوی همکاری #{tid}</b>\n\n"
+                "پیام خود را ارسال کنید.",
+                parse_mode="HTML")
+    else:
+        tid = ticket_create(uid, type_="partner_support")
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid}
+        bot.send_message(call.message.chat.id,
+            f"💬 <b>چت با پشتیبان همکاران</b> (تیکت #{tid})\n\n"
+            "پیام خود را ارسال کنید. تیم پشتیبانی به‌زودی پاسخ می‌دهد.",
+            parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_back")
+def cb_partner_back(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    _show_partner_dashboard(call.message.chat.id, uid)
+
+
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_PARTNER_REQUEST"))
+def handle_reseller_request(message):
+    if not is_main_button_enabled("MAIN_BTN_PARTNER_REQUEST"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+    uid = message.from_user.id
+    ok, msg = can_submit_partner_request(uid)
+    if not ok:
+        bot.send_message(message.chat.id, msg)
+        return
+
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(types.KeyboardButton("📱 ارسال شماره تلفن", request_contact=True))
+    kb.add(types.KeyboardButton("❌ انصراف"))
+    bot.send_message(
+        message.chat.id,
+        "🏪 <b>درخواست فروشندگی StockLand</b>\n\n"
+        "با ثبت درخواست فروشنده می‌شوید و از مزایا زیر بهره‌مند می‌شوید:\n"
+        "• لینک اختصاصی فروش\n"
+        "• پورسانت به ازای هر فروش\n"
+        "• قیمت ویژه محصولات\n"
+        "• پنل اختصاصی آمار\n\n"
+        "ابتدا شماره تلفن خود را ارسال کنید:",
+        reply_markup=kb, parse_mode="HTML"
+    )
+    bot.register_next_step_handler(message, process_reseller_contact)
+
+
+def process_reseller_contact(message):
+    uid = message.from_user.id
+
+    if message.text and message.text.strip() == "❌ انصراف":
+        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu(user_id=uid))
+        return
+    if message.content_type != "contact" or not message.contact:
+        bot.send_message(message.chat.id, "لطفاً شماره را فقط با دکمه «📱 ارسال شماره تلفن» ارسال کنید.",
+                         reply_markup=main_menu(user_id=uid))
+        return
+    if message.contact.user_id and message.contact.user_id != uid:
+        bot.send_message(message.chat.id, "شماره ارسالی متعلق به همین اکانت نیست.",
+                         reply_markup=main_menu(user_id=uid))
+        return
+
+    phone = (message.contact.phone_number or "").strip()
+    ok, msg = can_submit_partner_request(uid, phone=phone)
+    if not ok:
+        bot.send_message(message.chat.id, msg, reply_markup=main_menu(user_id=uid))
+        return
+
+    full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
+    reseller_signup[uid] = {
+        "phone": phone, "username": message.from_user.username or "",
+        "full_name": full_name, "city": "", "shop_name": "",
+    }
+
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(types.KeyboardButton("❌ انصراف"))
+    bot.send_message(message.chat.id, "شهر فعالیت خود را وارد کنید:", reply_markup=kb)
+    bot.register_next_step_handler(message, process_reseller_city)
+
+
+def process_reseller_city(message):
+    uid = message.from_user.id
+    if message.text and message.text.strip() == "❌ انصراف":
+        reseller_signup.pop(uid, None)
+        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu(user_id=uid))
+        return
+    city = (message.text or "").strip()
+    if not city or len(city) < 2:
+        bot.send_message(message.chat.id, "نام شهر نامعتبر است. دوباره ارسال کنید:")
+        bot.register_next_step_handler(message, process_reseller_city)
+        return
+    if uid not in reseller_signup:
+        bot.send_message(message.chat.id, "درخواست شما منقضی شد. دوباره شروع کنید.",
+                         reply_markup=main_menu(user_id=uid))
+        return
+    reseller_signup[uid]["city"] = city
+
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(types.KeyboardButton("❌ انصراف"))
+    bot.send_message(message.chat.id, "نام فروشگاه / پیج / مجموعه را وارد کنید:", reply_markup=kb)
+    bot.register_next_step_handler(message, process_reseller_shop)
+
+
+def process_reseller_shop(message):
+    uid = message.from_user.id
+    if message.text and message.text.strip() == "❌ انصراف":
+        reseller_signup.pop(uid, None)
+        bot.send_message(message.chat.id, "لغو شد.", reply_markup=main_menu(user_id=uid))
+        return
+    shop_name = (message.text or "").strip()
+    if not shop_name or len(shop_name) < 2:
+        bot.send_message(message.chat.id, "نام فروشگاه نامعتبر است. دوباره ارسال کنید:")
+        bot.register_next_step_handler(message, process_reseller_shop)
+        return
+
+    data = reseller_signup.pop(uid, None)
+    if not data:
+        bot.send_message(message.chat.id, "درخواست شما منقضی شد. دوباره شروع کنید.",
+                         reply_markup=main_menu(user_id=uid))
+        return
+
+    upsert_partner_request(uid, data["phone"], username=data["username"],
+                           full_name=data["full_name"], note="",
+                           city=data["city"], shop_name=shop_name)
+
+    bot.send_message(message.chat.id,
+        "✅ <b>درخواست فروشندگی شما ثبت شد!</b>\n\n"
+        "پس از بررسی توسط ادمین، نتیجه به شما اعلام می‌شود.\n"
+        "معمولاً در کمتر از ۲۴ ساعت پاسخ داده می‌شود.",
+        parse_mode="HTML", reply_markup=main_menu(user_id=uid))
+
+    # نوتیف به ادمین
+    try:
+        kb_adm = types.InlineKeyboardMarkup()
+        kb_adm.add(types.InlineKeyboardButton("🌐 بررسی در پنل", url="https://panel.stland.ir/admin/sellers"))
+        bot.send_message(ADMIN_ID,
+            f"🔔 <b>درخواست فروشندگی جدید</b>\n"
+            f"کاربر: <code>{uid}</code> — {data['full_name']}\n"
+            f"شهر: {data['city']} | فروشگاه: {shop_name}",
+            reply_markup=kb_adm, parse_mode="HTML")
     except Exception:
         pass
 
 
-@router.post("/settings/save-all")
-async def settings_save_all(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    form = await request.form()
-    is_combined = form.get("is_combined") == "1"
-
-    try:
-        from ui_texts import (
-            DEFAULT_UI_TEXTS as _D,
-            EDITABLE_BUTTON_GROUPS as _BG,
-            CRITICAL_TEXT_KEYS as _CTK,
-            MAIN_BUTTON_KEYS as _BK,
-        )
-    except ImportError:
-        _D = {}; _BG = {}; _CTK = []; _BK = []
-
-    conn = _db()
-    try:
-        if is_combined:
-            # ─── ذخیره برچسب همه دکمه‌ها ───────────────────────────────
-            all_btn_keys = [k for keys in _BG.values() for k in keys]
-            for key in all_btn_keys:
-                new_val = form.get(f"field_{key}")
-                if new_val is None:
-                    continue
-                new_val = str(new_val).strip()
-                default = _D.get(key, "")
-                if new_val == "" or new_val == default:
-                    conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
-                else:
-                    conn.execute(
-                        "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) "
-                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now');",
-                        (key, new_val)
-                    )
-
-            # ─── ذخیره وضعیت فعال/غیرفعال دکمه‌های منو ─────────────────
-            for key in _BK:
-                enabled = form.get(f"enable_{key}") is not None  # checkbox: present=True
-                conn.execute(
-                    "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now');",
-                    (f"MAIN_BTN_ENABLED_{key}", "1" if enabled else "0")
-                )
-
-            # ─── ذخیره متن‌های مهم ──────────────────────────────────────
-            for key in _CTK:
-                new_val = form.get(f"field_{key}")
-                if new_val is None:
-                    continue
-                new_val = str(new_val).strip()
-                default = _D.get(key, "")
-                if new_val == "" or new_val == default:
-                    conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
-                else:
-                    conn.execute(
-                        "INSERT INTO ui_texts (key,value,updated_at) VALUES (?,?,datetime('now')) "
-                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now');",
-                        (key, new_val)
-                    )
-        conn.commit()
-    finally:
-        conn.close()
-    _clear_ui_cache()
-    _log(request, "ذخیره تنظیمات", "تنظیمات", "combined")
-    return _redir("/admin/settings?flash=✅+تغییرات+ذخیره+شد")
+@bot.message_handler(func=lambda m: m.text == t("BTN_PARTNER_GUIDE") and is_partner_approved(m.from_user.id))
+def handle_partner_guide_reply(message):
+    """همکار دکمه «راهنما و قوانین» را در Reply Keyboard فشرد"""
+    guide_text = t(
+        "PARTNER_GUIDE_TEXT",
+        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
+        "متن راهنما توسط مدیر تنظیم نشده است.\n"
+        "برای اطلاعات بیشتر با پشتیبانی در تماس باشید."
+    )
+    kb = types.InlineKeyboardMarkup()
+    bot.send_message(message.chat.id, guide_text, reply_markup=kb, parse_mode="HTML")
 
 
-@router.post("/settings/reset-section")
-async def settings_reset_section(request: Request):
-    """بازگردانی یک بخش خاص به پیش‌فرض"""
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    form = await request.form()
-    section = str(form.get("section", ""))
-    try:
-        from ui_texts import EDITABLE_BUTTON_GROUPS as _BG, MAIN_BUTTON_KEYS as _BK
-    except ImportError:
-        _BG = {}; _BK = []
+@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
+def handle_admin_text(message):
+    aid = message.from_user.id
 
-    conn = _db()
-    try:
-        if section == "main":
-            for k in _BG.get("دکمه‌های منوی اصلی", []):
-                conn.execute("DELETE FROM ui_texts WHERE key=?;", (k,))
-            for k in _BK:
-                conn.execute("DELETE FROM ui_texts WHERE key=?;", (f"MAIN_BTN_ENABLED_{k}",))
-        conn.commit()
-    finally:
-        conn.close()
-    _clear_ui_cache()
-    _log(request, "بازگردانی بخش", "تنظیمات", section)
-    return _redir("/admin/settings?flash=🔄+به+پیش‌فرض+بازگردانده+شد")
+    # ─── اگه ادمین در حالت تیکت کاربر (تست) باشه → به handler تیکت برو ──
+    user_st = user_states.get(aid, {})
+    if user_st.get("mode") == "ticket_support":
+        handle_ticket_chat_user(message)
+        return
 
+    state = admin_states.get(aid)
+    if not state:
+        return
 
-@router.post("/settings/reset-all")
-async def settings_reset_all(request: Request):
-    """بازگردانی همه تنظیمات دکمه‌ها و متن‌ها به پیش‌فرض"""
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    try:
-        from ui_texts import EDITABLE_BUTTON_GROUPS as _BG, CRITICAL_TEXT_KEYS as _CTK, MAIN_BUTTON_KEYS as _BK
-    except ImportError:
-        _BG = {}; _CTK = []; _BK = []
+    mode = state.get("mode")
 
-    conn = _db()
-    try:
-        all_keys = [k for keys in _BG.values() for k in keys] + _CTK
-        for k in all_keys:
-            conn.execute("DELETE FROM ui_texts WHERE key=?;", (k,))
-        for k in _BK:
-            conn.execute("DELETE FROM ui_texts WHERE key=?;", (f"MAIN_BTN_ENABLED_{k}",))
-        conn.commit()
-    finally:
-        conn.close()
-    _clear_ui_cache()
-    _log(request, "بازگردانی همه", "تنظیمات", "all")
-    return _redir("/admin/settings?flash=🔄+همه+تنظیمات+به+پیش‌فرض+بازگردانده+شد")
+    # ─── پاسخ ادمین به تیکت از تلگرام (v2) ──────────────────────────────
+    if mode == "ticket_v2_admin_reply":
+        tid_val = int(state.get("ticket_id") or 0)
+        target_uid = int(state.get("target_uid") or 0)
+        if not tid_val or not target_uid:
+            clear_admin_state(aid)
+            bot.reply_to(message, "تیکت نامعتبر.")
+            return
 
+        txt = (message.text or "").strip()
+        if txt == "/done":
+            clear_admin_state(aid)
+            bot.reply_to(message, "پایان حالت پاسخ.")
+            return
+        if not txt:
+            bot.reply_to(message, "پیام خالی — دوباره ارسال کنید:")
+            return
 
-@router.post("/settings/reset-group")
-async def settings_reset_group(request: Request):
-    """backward compat — همه را به پیش‌فرض برمی‌گرداند"""
-    return await settings_reset_all(request)
+        ticket = ticket_get(tid_val)
+        if not ticket or ticket["status"] == "closed":
+            clear_admin_state(aid)
+            bot.reply_to(message, "این تیکت بسته شده است.")
+            return
 
+        # ذخیره پاسخ ادمین در DB
+        ticket_add_message(tid_val, "admin", txt, source="telegram")
+        ticket_admin_replied(tid_val)
 
-@router.post("/settings/save-field")
-async def settings_save_field(request: Request, key: str = Form(""), value: str = Form(""),
-                               group: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-
-    if key:
-        conn = _db()
+        # ارسال به کاربر
         try:
-            now = datetime.now().isoformat()
-            conn.execute("INSERT INTO ui_texts(key,value,updated_at) VALUES(?,?,?) "
-                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;",
-                        (key, value.strip(), now))
-            conn.commit()
-        finally:
-            conn.close()
-        try:
-            from ui_texts import ui_cache_clear; ui_cache_clear()
-        except Exception: pass
-
-    return _redir(f"/admin/settings?group={e(group)}&flash=ذخیره+شد")
-
-
-@router.post("/settings/save-group")
-async def settings_save_group(request: Request, group: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-
-    try:
-        from ui_texts import TEXT_GROUPS as _GROUPS
-    except ImportError:
-        _GROUPS = {}
-
-    form = await request.form()
-    keys = _GROUPS.get(group, [])
-    conn = _db()
-    try:
-        now = datetime.now().isoformat()
-        for key in keys:
-            val = (form.get(key) or "").strip()
-            if val:
-                conn.execute("INSERT INTO ui_texts(key,value,updated_at) VALUES(?,?,?) "
-                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;",
-                            (key, val, now))
-        conn.commit()
-    finally:
-        conn.close()
-    try:
-        from ui_texts import ui_cache_clear; ui_cache_clear()
-    except Exception: pass
-    return _redir(f"/admin/settings?group={e(group)}&flash=همه+فیلدهای+این+بخش+ذخیره+شدند")
-
-
-@router.post("/settings/reset-field")
-async def settings_reset_field(request: Request, key: str = Form(""), group: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-
-    if key:
-        conn = _db()
-        try:
-            conn.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
-            conn.commit()
-        finally:
-            conn.close()
-        try:
-            from ui_texts import ui_cache_clear; ui_cache_clear()
-        except Exception: pass
-
-    return _redir(f"/admin/settings?group={e(group)}&flash={e(key)}+به+پیش‌فرض+بازگشت")
-
-
-@router.post("/settings/toggle-btn")
-async def settings_toggle_btn(request: Request, key: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-
-    if key not in MAIN_BUTTONS:
-        return _redir("/admin/settings?tab=buttons")
-    flag_key = f"MAIN_BTN_ENABLED_{key}"
-    conn = _db()
-    try:
-        cur_val = _get_ui(conn, flag_key)
-        is_on = cur_val not in ("0", "false", "off", "no")
-        # prevent disabling last button
-        if is_on:
-            enabled_count = sum(
-                1 for k in MAIN_BUTTONS
-                if _get_ui(conn, f"MAIN_BTN_ENABLED_{k}") not in ("0", "false", "off", "no")
+            _tg_send_to_user(
+                target_uid,
+                f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid_val}):\n\n{html.escape(txt)}"
             )
-            if enabled_count <= 1:
-                conn.close()
-                return _redir("/admin/settings?tab=buttons&flash=حداقل+یک+دکمه+باید+فعال+بماند")
-        _set_ui(conn, flag_key, "0" if is_on else "1")
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/settings?tab=buttons&flash=وضعیت+دکمه+تغییر+کرد")
-
-@router.post("/settings/add-svc")
-async def settings_add_svc(request: Request, title: str = Form(""), emoji: str = Form("🧩")):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-
-    title = title.strip()
-    if not title:
-        return _redir("/admin/settings?tab=services")
-    key = title.replace(" ", "_")[:32]
-    conn = _db()
-    try:
-        now = datetime.utcnow().isoformat()
-        conn.execute(
-            "INSERT OR IGNORE INTO other_services (service_key, title, emoji, is_active, created_at) VALUES (?,?,?,1,?);",
-            (key, title, emoji.strip() or "🧩", now),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/settings?tab=services&flash=دسته+اضافه+شد")
-
-@router.post("/settings/toggle-svc")
-async def settings_toggle_svc(request: Request, key: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE other_services SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE service_key=?;", (key,))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/settings?tab=services&flash=وضعیت+تغییر+کرد")
-
-@router.post("/settings/delete-svc")
-async def settings_delete_svc(request: Request, key: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    if key == "general":
-        return _redir("/admin/settings?tab=services")
-    conn = _db()
-    try:
-        conn.execute("DELETE FROM product_feed WHERE product_id IN (SELECT id FROM products WHERE category=?);", (key,))
-        conn.execute("DELETE FROM products WHERE category=?;", (key,))
-        conn.execute("DELETE FROM other_services WHERE service_key=?;", (key,))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/settings?tab=services&flash=دسته+حذف+شد")
-
-# ─────────────────────────── Database ──────────────────────────────────────
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ─── بکاپ / ریستور / ریست (فرمت اختصاصی .stbak) ─────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ─── Backup / Restore / Reset ────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-import threading as _threading, uuid as _uuid, tempfile as _tempfile
-
-_JOB_DIR = "/tmp/stbak_jobs"
-try:
-    os.makedirs(_JOB_DIR, exist_ok=True)
-except Exception:
-    _JOB_DIR = "/tmp"
-
-
-def _job_write(job_id: str, data: dict):
-    try:
-        import json as _j
-        path = f"{_JOB_DIR}/{job_id}.json"
-        tmp  = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            _j.dump(data, f)
-        os.replace(tmp, path)
-    except Exception:
-        pass  # بی‌صدا fail کن
-
-
-def _job_read(job_id: str) -> dict:
-    try:
-        import json as _j
-        path = f"{_JOB_DIR}/{job_id}.json"
-        with open(path, encoding="utf-8") as f:
-            return _j.load(f)
-    except Exception:
-        return {"status": "not_found", "progress": 0}
-
-
-def _job_start(fn, *args, **kwargs) -> str:
-    job_id = str(_uuid.uuid4())[:8]
-    _job_write(job_id, {"status": "running", "progress": 5, "message": "", "result": None})
-
-    def _worker():
-        try:
-            def _cb(pct):
-                _job_write(job_id, {"status": "running", "progress": int(pct), "message": "", "result": None})
-            result = fn(*args, progress_cb=_cb, **kwargs)
-            if isinstance(result, bytes):
-                fpath = f"{_JOB_DIR}/{job_id}.stbak"
-                with open(fpath, "wb") as f:
-                    f.write(result)
-                _job_write(job_id, {"status": "done", "progress": 100, "message": "", "result": {"file": fpath}})
-            else:
-                _job_write(job_id, {"status": "done", "progress": 100, "message": "", "result": result})
-        except Exception as ex:
-            _job_write(job_id, {"status": "error", "progress": 0, "message": str(ex), "result": None})
-
-    _threading.Thread(target=_worker, daemon=True).start()
-    return job_id
-
-
-@router.get("/database", response_class=HTMLResponse)
-async def database_page(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-
-    from stbak_engine import MODULES, SECTION_LABELS
-    import glob as _gl, os as _os
-
-    # لیست بکاپ‌های خودکار
-    _auto_dir = "/tmp/stockland_backups"
-    _auto_files = sorted(_gl.glob(f"{_auto_dir}/auto_*.stbak"), reverse=True)[:5]
-    _auto_rows = ""
-    for _f in _auto_files:
-        _fn  = _os.path.basename(_f)
-        _sz  = _os.path.getsize(_f)
-        _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
-        _ts  = _fn.replace("auto_","").replace(".stbak","")
-        try:
-            from datetime import datetime as _dt
-            _dto = _dt.strptime(_ts, "%Y%m%d_%H%M%S")
-            _tfa = _dto.strftime("%Y/%m/%d — %H:%M")
         except Exception:
-            _tfa = _ts
-        _auto_rows += f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-sm">{_tfa}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">خودکار</td>
-          <td class="px-4 py-3 text-xs text-gray-500">{_szs}</td>
-          <td class="px-4 py-3">
-            <a href="/admin/database/download/{e(_fn)}"
-               class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">⬇ دانلود</a>
-          </td>
-        </tr>"""
+            pass
 
-    _auto_section = ""
-    if _auto_files:
-        _auto_section = f"""<div class="card overflow-hidden mb-4">
-          <button onclick="var d=this.nextElementSibling;d.classList.toggle('hidden');this.querySelector('.arr').textContent=d.classList.contains('hidden')?'▼':'▲'"
-            class="w-full px-5 py-4 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition text-sm font-medium text-gray-700">
-            <span>🕐 بکاپ‌های خودکار <span class="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">{len(_auto_files)}</span></span>
-            <span class="arr">▼</span>
-          </button>
-          <div class="hidden overflow-x-auto">
-            <table class="w-full text-right min-w-max">
-              <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-                <th class="px-4 py-3">تاریخ و ساعت</th>
-                <th class="px-4 py-3">نوع</th>
-                <th class="px-4 py-3">حجم</th>
-                <th class="px-4 py-3">دانلود</th>
-              </tr></thead>
-              <tbody>{_auto_rows}</tbody>
-            </table>
-          </div>
-        </div>"""
+        bot.reply_to(message, "✅ پاسخ ارسال شد.")
+        return
 
-    # لیست بکاپ‌های خودکار برای dropdown بازیابی
-    _restore_options = ""
-    for _f in _auto_files:
-        _fn = _os.path.basename(_f)
-        _ts = _fn.replace("auto_","").replace(".stbak","")
-        try:
-            from datetime import datetime as _dt2
-            _dto = _dt2.strptime(_ts, "%Y%m%d_%H%M%S")
-            _label = _dto.strftime("%Y/%m/%d — %H:%M")
-        except Exception:
-            _label = _ts
-        _sz = _os.path.getsize(_f)
-        _szs = f"{_sz//1024} KB"
-        _restore_options += f'<option value="{e(_fn)}">{_label} ({_szs})</option>'
+    if mode == "ticket_reply":  # backward compat
+        clear_admin_state(aid)
+        bot.reply_to(message, "لطفاً از پنل یا دستور /ticket پاسخ دهید.")
+        return
 
-    def _chk(name, checked=True):
-        mods_html = "".join(
-            f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50 transition">'
-            f'<input type="checkbox" name="{name}" value="{k}"'
-            f'{" checked" if checked else ""} class="w-4 h-4 rounded">'
-            f'<span>{v["label"]}</span></label>'
-            for k, v in MODULES.items()
-        )
-        acc_chk = (f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-red-50 transition col-span-2 border-t border-dashed border-red-100 mt-1">'
-                   f'<input type="checkbox" name="{name}" value="__accounting__"'
-                   f'{" checked" if checked else ""} class="w-4 h-4 rounded text-red-500">'
-                   f'<span class="text-red-600 font-medium">💰 داده‌های حسابداری (هزینه‌ها + قیمت خرید)</span></label>')
-        return mods_html + acc_chk
-
-    backup_checks = _chk("sections", checked=True)
-    reset_checks  = _chk("reset_sections", checked=False)
-
-    _js = """
-    function toggle(id,chk){document.getElementById(id).classList.toggle('hidden',!chk.checked);}
-    var _busy=false;
-    function ovShow(t,sub){
-      document.getElementById('bk-overlay').style.display='block';
-      document.getElementById('ov-icon').textContent='\u23f3';
-      document.getElementById('ov-title').textContent=t;
-      document.getElementById('ov-msg').textContent=sub||'';
-      document.getElementById('ov-close').style.display='none';
-      var b=document.getElementById('ov-bar');
-      b.style.transition='none';b.style.width='3%';b.style.background='#6366f1';
-      setTimeout(function(){b.style.transition='width 2s ease';b.style.width='88%';},80);
-    }
-    function ovResult(ok,t,msg){
-      document.getElementById('ov-icon').textContent=ok?'\u2705':'\u274c';
-      document.getElementById('ov-title').textContent=t;
-      document.getElementById('ov-msg').textContent=msg;
-      var b=document.getElementById('ov-bar');b.style.transition='width .3s';
-      b.style.width='100%';b.style.background=ok?'#22c55e':'#ef4444';
-      document.getElementById('ov-close').style.display='inline-block';
-    }
-    function getSelected(n){
-      return Array.from(document.querySelectorAll('input[name="'+n+'"]:checked')).map(function(i){return i.value;});
-    }
-    async function runJob(type){
-      if(_busy)return;_busy=true;
-      try{
-        if(type==='backup'){
-          ovShow('در حال ساخت بکاپ...','لطفاً صبر کنید');
-          var fd=new FormData();
-          if(document.getElementById('b-toggle').checked) getSelected('sections').forEach(function(v){fd.append('sections',v);});
-          else fd.append('full','1');
-          var r=await fetch('/admin/database/backup/full-sync',{method:'POST',body:fd});
-          if(!r.ok) throw new Error('خطای سرور: '+r.status);
-          var blob=await r.blob();
-          var cd=r.headers.get('Content-Disposition')||'';
-          var m=cd.match(/filename="([^"]+)"/);
-          var url=URL.createObjectURL(blob);
-          var a=document.createElement('a');a.href=url;a.download=m?m[1]:'backup.stbak';
-          document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-          ovResult(true,'بکاپ آماده شد','فایل دانلود شد');
-        }else{
-          ovShow('در حال ریست...','لطفاً صبر کنید');
-          var fd2=new FormData();
-          if(document.getElementById('r-toggle').checked) getSelected('reset_sections').forEach(function(v){fd2.append('reset_sections',v);});
-          else fd2.append('full','1');
-          var r2=await fetch('/admin/database/reset/sync',{method:'POST',body:fd2});
-          var d2=await r2.json();
-          if(d2.error) throw new Error(d2.error);
-          ovResult(true,'ریست انجام شد',(d2.total_deleted||0)+' رکورد حذف شد');
-        }
-      }catch(err){ovResult(false,'عملیات ناموفق',err.message||'خطا');}
-      finally{_busy=false;}
-    }
-    async function runAutoRestore(){
-      var sel=document.getElementById('auto-restore-select');
-      if(!sel||!sel.value){alert('یک بکاپ انتخاب کنید');return;}
-      if(!confirm('⚠️ این عملیات داده‌های فعلی را با بکاپ جایگزین می‌کند. ادامه؟'))return;
-      ovShow('بازیابی بکاپ خودکار','در حال بازیابی...');
-      var fd=new FormData(); fd.append('filename',sel.value);
-      var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
-      var d=await r.json();
-      if(d.ok){ovDone('✅','بازیابی موفق','بکاپ با موفقیت بازیابی شد');}
-      else{ovDone('❌','خطا',d.error||'مشکلی پیش آمد');}
-    }
-    async function runRestore(){
-      if(_busy)return;
-      var file=document.getElementById('restore-file').files[0];
-      if(!file){alert('فایل انتخاب نشده');return;}
-      if(!file.name.endsWith('.stbak')){alert('فقط .stbak مجاز است');return;}
-      _busy=true;ovShow('در حال بازیابی...','لطفاً صبر کنید');
-      try{
-        var fd=new FormData();fd.append('backup_file',file);
-        var r=await fetch('/admin/database/restore/sync',{method:'POST',body:fd});
-        var d=await r.json();
-        if(d.error) throw new Error(d.error);
-        ovResult(true,'بازیابی موفق',(d.total||0)+' رکورد بازیابی شد');
-      }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
-      finally{_busy=false;}
-    }
-    """
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">💾 پشتیبان‌گیری و بازیابی</h1>
-    </div>
-
-    <!-- پشتیبان‌گیری -->
-    <div class="card p-6 mb-4">
-      <div class="flex items-center gap-3 mb-5">
-        <span class="w-10 h-10 bg-indigo-100 text-indigo-700 rounded-xl flex items-center justify-center text-xl">📦</span>
-        <div><h2 class="font-bold text-gray-800 text-lg">پشتیبان‌گیری</h2>
-             <p class="text-xs text-gray-400">فرمت اختصاصی .stbak — با checksum و manifest</p></div>
-      </div>
-      <label class="flex items-center gap-2 cursor-pointer mb-4 select-none p-3 bg-gray-50 rounded-xl">
-        <input type="checkbox" id="b-toggle" onchange="toggle('b-secs',this)"
-          class="w-4 h-4 rounded text-indigo-600">
-        <div>
-          <span class="text-sm font-medium text-gray-700">انتخاب سفارشی</span>
-          <span class="text-xs text-gray-400 block">پیش‌فرض: بکاپ کامل از همه بخش‌ها</span>
-        </div>
-      </label>
-      <div id="b-secs" class="hidden grid grid-cols-2 gap-0.5 bg-white border border-gray-100 rounded-xl p-3 mb-4 max-h-56 overflow-y-auto">
-        {backup_checks}
-      </div>
-      <button onclick="runJob('backup')"
-        class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
-        ⬇ دریافت فایل بکاپ
-      </button>
-    </div>
-
-    <!-- بکاپ‌های خودکار -->
-    {_auto_section}
-
-    <!-- بازیابی -->
-    <div class="card p-6 mb-4">
-      <div class="flex items-center gap-3 mb-5">
-        <span class="w-10 h-10 bg-green-100 text-green-700 rounded-xl flex items-center justify-center text-xl">♻️</span>
-        <div><h2 class="font-bold text-gray-800 text-lg">بازیابی پشتیبان</h2>
-             <p class="text-xs text-gray-400">فقط فایل‌های .stbak پذیرفته می‌شوند</p></div>
-      </div>
-
-      {f'''<!-- بکاپ‌های خودکار موجود -->
-      <div class="mb-4">
-        <label class="text-sm font-medium text-gray-700 block mb-2">🕐 بازیابی از بکاپ خودکار</label>
-        <div class="flex gap-2">
-          <select id="auto-restore-select" class="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white">
-            <option value="">انتخاب بکاپ خودکار...</option>
-            {_restore_options}
-          </select>
-          <button onclick="runAutoRestore()"
-            class="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition whitespace-nowrap">
-            ♻️ بازیابی
-          </button>
-        </div>
-      </div>
-      <div class="border-t border-gray-100 my-4"><p class="text-xs text-gray-400 text-center mt-3">یا بارگذاری فایل دستی</p></div>''' if _restore_options else ''}
-
-      <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center mb-4">
-        <p class="text-sm text-gray-400 mb-3">فایل .stbak را انتخاب کنید</p>
-        <input type="file" id="restore-file" accept=".stbak"
-          class="text-sm text-gray-600 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-green-50 file:text-green-700">
-      </div>
-      <button onclick="runRestore()"
-        class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">
-        ♻️ بازیابی از فایل
-      </button>
-    </div>
-
-    <!-- ریست -->
-    <div class="card p-6 border-2 border-red-100">
-      <div class="flex items-center gap-3 mb-5">
-        <span class="w-10 h-10 bg-red-100 text-red-700 rounded-xl flex items-center justify-center text-xl">🗑</span>
-        <div><h2 class="font-bold text-red-700 text-lg">ریست سیستم</h2>
-             <p class="text-xs text-red-400">این عملیات برگشت‌ناپذیر است</p></div>
-      </div>
-      <label class="flex items-center gap-2 cursor-pointer mb-4 select-none p-3 bg-red-50 rounded-xl">
-        <input type="checkbox" id="r-toggle" onchange="toggle('r-secs',this)"
-          class="w-4 h-4 rounded text-red-500">
-        <div>
-          <span class="text-sm font-medium text-gray-700">انتخاب سفارشی</span>
-          <span class="text-xs text-gray-400 block">پیش‌فرض: ریست کامل سیستم</span>
-        </div>
-      </label>
-      <div id="r-secs" class="hidden grid grid-cols-2 gap-0.5 bg-white border border-red-100 rounded-xl p-3 mb-4 max-h-56 overflow-y-auto">
-        {reset_checks}
-      </div>
-      <button onclick="if(confirm('⚠️ این عملیات برگشت‌ناپذیر است. ادامه می‌دهید؟')) runJob('reset')"
-        class="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition">
-        🗑 اجرای ریست
-      </button>
-    </div>
-
-    <!-- Progress overlay -->
-    <div id="bk-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.6);z-index:99999">
-      <div id="ov-modal" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:20px;padding:36px 24px;width:calc(100% - 48px);max-width:340px;text-align:center;box-shadow:0 25px 80px rgba(0,0,0,.4)">
-        <div style="font-size:52px;margin-bottom:12px;line-height:1" id="ov-icon">⏳</div>
-        <h3 style="font-weight:700;color:#111827;font-size:17px;margin:0 0 6px 0;font-family:inherit" id="ov-title">در حال انجام...</h3>
-        <p style="font-size:12px;color:#6b7280;margin:0 0 18px 0" id="ov-msg">لطفاً صبر کنید</p>
-        <div style="direction:ltr;background:#e5e7eb;border-radius:999px;height:8px;overflow:hidden;margin-bottom:20px">
-          <div id="ov-bar" style="background:#6366f1;height:8px;border-radius:999px;width:5%;transition:width .5s ease"></div>
-        </div>
-        <button id="ov-close" onclick="document.getElementById('bk-overlay').style.display='none'"
-          style="display:none;padding:11px 36px;background:#6366f1;color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">
-          بستن
-        </button>
-      </div>
-    </div>
-
-    <script>
-    {_js}
-    </script>"""
-
-    return _layout("پشتیبان‌گیری", body, adm, flash=flash)
-
-
-@router.post("/database/backup/full-sync")
-async def backup_full_sync(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    from fastapi.responses import Response as FResponse
-    from stbak_engine import create_stbak, stbak_filename, resolve_sections
-    form = await request.form()
-    is_full = form.get("full") == "1"
-    secs = None if is_full else (form.getlist("sections") or None)
-    if secs: secs = resolve_sections(secs)
-    raw   = create_stbak(_DB_PATH(), modules=secs)
-    fname = stbak_filename("full" if is_full else "custom")
-    _log(request, "بکاپ", "دیتابیس", fname)
-    return FResponse(content=raw, media_type="application/octet-stream",
-                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
-
-
-@router.post("/database/restore-auto")
-async def restore_auto(request: Request):
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return JSONResponse({"error": "unauthorized"})
-    form = await request.form()
-    filename = str(form.get("filename","")).strip()
-    if not filename or ".." in filename or "/" in filename:
-        return JSONResponse({"error": "فایل نامعتبر"})
-    import os
-    path = f"/tmp/stockland_backups/{filename}"
-    if not os.path.exists(path):
-        return JSONResponse({"error": "فایل یافت نشد"})
-    try:
-        with open(path, "rb") as f:
-            raw = f.read()
-        from stbak_engine import restore_stbak
-        restore_stbak(raw, _DB_PATH())
-        _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename)
-        return JSONResponse({"ok": True})
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:100]})
-
-
-@router.post("/database/restore/sync")
-async def restore_sync(request: Request, backup_file: UploadFile = None):
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return JSONResponse({"error": "unauthorized"})
-    if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
-        return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
-    raw = await backup_file.read()
-    from stbak_engine import restore_stbak, validate_stbak, StbakError
-    try:
-        validate_stbak(raw)
-        result = restore_stbak(raw, _DB_PATH())
-        _log(request, "بازیابی", "دیتابیس", f"{result['total']} رکورد")
-        return JSONResponse({"ok": True, "total": result["total"], "errors": result["errors"]})
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:100]})
-
-
-@router.post("/database/reset/sync")
-async def reset_sync(request: Request):
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return JSONResponse({"error": "unauthorized"})
-    form = await request.form()
-    is_full = form.get("full") == "1"
-    all_secs = form.getlist("reset_sections") or []
-
-    # جداسازی حسابداری از بقیه
-    reset_accounting = is_full or "__accounting__" in all_secs
-    secs = None if is_full else ([s for s in all_secs if s != "__accounting__"] or None)
-
-    from stbak_engine import factory_reset
-    total_deleted = 0
-    try:
-        result = factory_reset(_DB_PATH(), modules=secs)
-        total_deleted += result["total_deleted"]
-        # ریست حسابداری
-        if reset_accounting:
-            conn = _db()
+    if mode == "ui_edit":
+        k = state.get("ui_key")
+        if not k:
+            admin_states.pop(aid, None)
+            bot.reply_to(message, "خطا در وضعیت. دوباره از تنظیمات اقدام کنید.")
+            return
+        txt = (message.text or "").strip()
+        if not txt:
+            bot.reply_to(message, "متن خالی قابل ذخیره نیست. دوباره ارسال کنید:")
+            return
+        if txt == "/reset":
             try:
-                conn.execute("DELETE FROM expenses;")
-                try: conn.execute("DELETE FROM feed_batches;")
-                except Exception: pass
+                delete_ui_text(k)
+                ui_cache_clear()
+            except Exception:
+                pass
+            admin_states.pop(aid, None)
+            bot.reply_to(message, f"✅ بازنشانی شد: {t(k, DEFAULT_UI_TEXTS.get(k, k))}")
+            return
+        try:
+            set_ui_text(k, txt)
+            ui_cache_clear()
+        except Exception as e:
+            bot.reply_to(message, f"خطا در ذخیره: {e}")
+            return
+        admin_states.pop(aid, None)
+        bot.reply_to(message, f"✅ ذخیره شد: {t(k, DEFAULT_UI_TEXTS.get(k, k))}")
+        return
+
+    if mode == "product_chat_text":
+        pid = int(state.get("product_id") or 0)
+        txt = (message.text or "").strip()
+        if not pid:
+            admin_states.pop(aid, None)
+            bot.reply_to(message, "خطا در وضعیت. دوباره از پنل محصول اقدام کنید.")
+            return
+        if not txt:
+            bot.reply_to(message, "متن خالی قابل ذخیره نیست. دوباره ارسال کنید:")
+            return
+        if txt == "/reset":
+            _set_product_chat_text(pid, "")
+            admin_states.pop(aid, None)
+            bot.reply_to(message, "✅ متن چت این محصول پاک شد.")
+            try:
+                product = get_product_by_id(pid)
+                if product:
+                    send_admin_product_detail(message, product)
+            except Exception:
+                pass
+            return
+        _set_product_chat_text(pid, txt)
+        admin_states.pop(aid, None)
+        bot.reply_to(message, "✅ متن چت این محصول ذخیره شد.")
+        try:
+            product = get_product_by_id(pid)
+            if product:
+                send_admin_product_detail(message, product)
+        except Exception:
+            pass
+        return
+
+    if mode == "partner_search":
+        q = (message.text or "").strip()
+        if not q:
+            bot.reply_to(message, "عبارت جستجو معتبر نیست. دوباره ارسال کنید:")
+            return
+        admin_states.pop(aid, None)
+        send_partner_list(message.chat.id, status=None, query=q)
+        return
+
+    if mode == "partner_edit_city":
+        new_city = (message.text or "").strip()
+        if not new_city:
+            bot.reply_to(message, "شهر معتبر نیست. دوباره ارسال کنید (یا - برای عدم تغییر):")
+            return
+        if new_city in ("-", "—", "_", "ـ"):
+            new_city = ""
+        state["new_city"] = new_city
+        state["mode"] = "partner_edit_shop"
+        bot.reply_to(message, "✏️ نام فروشگاه/پیج جدید را وارد کنید (برای عدم تغییر: - ):")
+        return
+
+    if mode == "partner_edit_shop":
+        new_shop = (message.text or "").strip()
+        if not new_shop:
+            bot.reply_to(message, "نام فروشگاه معتبر نیست. دوباره ارسال کنید (یا - برای عدم تغییر):")
+            return
+        if new_shop in ("-", "—", "_", "ـ"):
+            new_shop = ""
+        target_uid = int(state.get("target_user_id") or 0)
+        if not target_uid:
+            admin_states.pop(aid, None)
+            bot.reply_to(message, "هدف ویرایش نامعتبر است.")
+            return
+        new_city = state.get("new_city", "")
+        admin_states.pop(aid, None)
+
+        update_partner_city_shop(target_uid, city=new_city, shop_name=new_shop)
+        bot.send_message(message.chat.id, "✅ اطلاعات همکار بروزرسانی شد.")
+        return
+
+    if mode == "wallet_credit_user_id":
+        target = safe_int(message.text)
+        if not target:
+            bot.reply_to(message, "آیدی کاربر باید فقط عدد باشد. دوباره ارسال کنید.")
+            return
+        admin_states[aid] = {"mode": "wallet_credit_amount", "target_user_id": target}
+        bot.reply_to(message, "مبلغ شارژ (تومان) را ارسال کنید:")
+        return
+
+    if mode == "wallet_credit_amount":
+        amount = safe_int(message.text.replace(",", ""))
+        if not amount or amount <= 0:
+            bot.reply_to(message, "مبلغ نامعتبر است. فقط عدد مثبت ارسال کنید.")
+            return
+        target_id = state["target_user_id"]
+        new_balance = add_wallet_balance(target_id, amount)
+        clear_admin_state(aid)
+        bot.reply_to(
+            message,
+            f"کیف پول کاربر {target_id} به مقدار {amount:,} تومان شارژ شد.\n"
+            f"موجودی جدید: {new_balance:,} تومان",
+        )
+        try:
+            bot.send_message(
+                target_id,
+                f"کیف پول شما توسط ادمین به مقدار <b>{amount:,}</b> تومان شارژ شد.\n"
+                f"موجودی فعلی: <b>{new_balance:,}</b> تومان",
+            )
+        except Exception:
+            logger.info("could not notify target user about manual credit")
+        return
+
+    if mode == "wallet_debit_user_id":
+        target = safe_int(message.text)
+        if not target:
+            bot.reply_to(message, "آیدی کاربر باید فقط عدد باشد. دوباره ارسال کنید.")
+            return
+        admin_states[aid] = {"mode": "wallet_debit_amount", "target_user_id": target}
+        bot.reply_to(message, "مبلغ کسر (تومان) را ارسال کنید:")
+        return
+
+    if mode == "wallet_debit_amount":
+        amount = safe_int(message.text.replace(",", ""))
+        if not amount or amount <= 0:
+            bot.reply_to(message, "مبلغ نامعتبر است. فقط عدد مثبت ارسال کنید.")
+            return
+        target_id = state["target_user_id"]
+        ok = subtract_wallet_balance(target_id, amount)
+        if not ok:
+            current_balance = get_wallet_balance(target_id)
+            bot.reply_to(
+                message,
+                f"موجودی کاربر برای کسر این مبلغ کافی نیست.\n"
+                f"موجودی فعلی: {current_balance:,} تومان",
+            )
+            return
+        new_balance = get_wallet_balance(target_id)
+        clear_admin_state(aid)
+        bot.reply_to(
+            message,
+            f"از کیف پول کاربر {target_id} مقدار {amount:,} تومان کسر شد.\n"
+            f"موجودی جدید: {new_balance:,} تومان",
+        )
+        try:
+            bot.send_message(
+                target_id,
+                f"از کیف پول شما توسط ادمین مقدار <b>{amount:,}</b> تومان کسر شد.\n"
+                f"موجودی فعلی: <b>{new_balance:,}</b> تومان",
+            )
+        except Exception:
+            logger.info("could not notify target user about manual debit")
+        return
+
+    if mode == "wallet_set_user_id":
+        target = safe_int(message.text)
+        if not target:
+            bot.reply_to(message, "آیدی کاربر باید فقط عدد باشد. دوباره ارسال کنید.")
+            return
+        admin_states[aid] = {"mode": "wallet_set_amount", "target_user_id": target}
+        bot.reply_to(message, "موجودی نهایی (تومان) را ارسال کنید:")
+        return
+
+    if mode == "wallet_set_amount":
+        new_balance_val = safe_int(message.text.replace(",", ""))
+        if new_balance_val is None or new_balance_val < 0:
+            bot.reply_to(message, "موجودی نامعتبر است. فقط عدد ۰ یا مثبت ارسال کنید.")
+            return
+        target_id = state["target_user_id"]
+        final_balance = set_wallet_balance(target_id, new_balance_val)
+        clear_admin_state(aid)
+        bot.reply_to(
+            message,
+            f"موجودی کیف پول کاربر {target_id} روی {final_balance:,} تومان تنظیم شد.",
+        )
+        try:
+            bot.send_message(
+                target_id,
+                f"موجودی کیف پول شما توسط ادمین روی <b>{final_balance:,}</b> تومان تنظیم شد.",
+            )
+        except Exception:
+            logger.info("could not notify target user about wallet set")
+        return
+
+    if mode == "edit_title":
+        pid = state["product_id"]
+        update_product_field(pid, "title", message.text.strip())
+        clear_admin_state(aid)
+        bot.reply_to(message, "عنوان محصول به‌روزرسانی شد.")
+        return
+
+    if mode == "edit_price":
+        pid = state["product_id"]
+        amount = safe_int(message.text.replace(",", ""))
+        if not amount or amount <= 0:
+            bot.reply_to(message, "قیمت نامعتبر است. فقط عدد مثبت ارسال کنید.")
+            return
+        update_product_field(pid, "price", amount)
+        clear_admin_state(aid)
+        bot.reply_to(message, "قیمت محصول به‌روزرسانی شد.")
+        return
+
+    if mode == "edit_partner_price":
+        pid = int(state.get("product_id") or 0)
+        amount = safe_int((message.text or "").replace(",", "").strip())
+
+        if amount is None:
+            bot.reply_to(message, "عدد ارسال کنید. برای قیمت عادی، 0 بفرستید.")
+            return
+        if amount < 0:
+            bot.reply_to(message, "عدد منفی مجاز نیست. برای قیمت عادی، 0 بفرستید.")
+            return
+
+        update_product_field(pid, "partner_price", None if amount == 0 else int(amount))
+        clear_admin_state(aid)
+        bot.reply_to(message, "✅ قیمت همکار به‌روزرسانی شد.")
+
+        product = get_product_by_id(pid)
+        if product:
+            send_admin_product_detail(message, product)
+        return
+
+    if mode in ("edit_limit_c", "edit_limit_p"):
+        raw = (message.text or "").replace(",", "").strip()
+        lim = safe_int(raw)
+        if lim is None or lim < 0:
+            bot.reply_to(message, "عدد نامعتبر است. فقط عدد 0 یا مثبت ارسال کنید.")
+            return
+
+        pid = int(state.get("product_id") or 0)
+        if not pid:
+            clear_admin_state(aid)
+            bot.reply_to(message, "محصول نامعتبر است.")
+            return
+
+        field = "daily_limit_customer" if mode == "edit_limit_c" else "daily_limit_partner"
+        update_product_field(pid, field, int(lim))
+        clear_admin_state(aid)
+        bot.send_message(message.chat.id, "✅ حد خرید روزانه بروزرسانی شد.")
+
+        product = get_product_by_id(pid)
+        if product:
+            send_admin_product_detail(message, product)
+        return
+
+    if mode == "edit_desc":
+        pid = state["product_id"]
+        update_product_field(pid, "description", message.text.strip())
+        clear_admin_state(aid)
+        bot.reply_to(message, "توضیحات محصول به‌روزرسانی شد.")
+        return
+
+    if mode == "feed_bulk":
+        if message.text and message.text.strip() == "/cancel":
+            clear_admin_state(aid)
+            bot.reply_to(message, "لغو شد.")
+            return
+        pid = state["product_id"]
+        raw = message.text or ""
+        items = parse_feed_bulk_items(raw)
+        if not items:
+            bot.reply_to(message, "هیچ آیتمی دریافت نشد. هر خط یک آیتم ارسال کنید یا /cancel")
+            return
+        add_feed_items(pid, items)
+        reset_feed_alert_notification(pid)
+        dispatched_from_queue = try_dispatch_pending_for_product(pid)
+        total, remaining, delivered = get_feed_stats(pid)
+        clear_admin_state(aid)
+        bot.reply_to(
+            message,
+            f"✅ {len(items)} آیتم به محصول اضافه شد.\n"
+            f"📦 وضعیت فعلی: کل={total} | باقی‌مانده={remaining} | تحویل‌شده={delivered}"
+            + (f"\n📤 تحویل خودکار از صف: {dispatched_from_queue}" if dispatched_from_queue else "")
+        )
+        return
+
+    if mode == "feed_alert":
+        if message.text and message.text.strip() == "/cancel":
+            clear_admin_state(aid)
+            bot.reply_to(message, "لغو شد.")
+            return
+        pid = state["product_id"]
+        th = safe_int((message.text or "").replace(",", "").strip())
+        if th is None or th < 0:
+            bot.reply_to(message, "عدد نامعتبر است. یک عدد 0 یا بزرگ‌تر ارسال کنید یا /cancel")
+            return
+        set_feed_alert_threshold(pid, th)
+        reset_feed_alert_notification(pid)
+        clear_admin_state(aid)
+        bot.reply_to(message, f"✅ آستانه هشدار روی {th} تنظیم شد.")
+        return
+
+    if mode == "new_other_service_title":
+        title = message.text.strip()
+        if not title:
+            bot.reply_to(message, "عنوان نمی‌تواند خالی باشد. دوباره ارسال کنید.")
+            return
+
+        skey = _make_service_key(title)
+        ok = add_other_service(skey, title, "")
+        if not ok:
+            bot.reply_to(message, "این سرویس قبلاً ثبت شده یا کلید تکراری است. یک عنوان دیگر ارسال کنید.")
+            return
+
+        clear_admin_state(aid)
+        bot.reply_to(message, f"سرویس «{title}» اضافه شد.")
+        bot.send_message(message.chat.id, "سایر محصولات (ادمین):", reply_markup=admin_other_products_menu())
+        return
+
+    if mode == "new_product_title":
+        category = state["category"]
+        title = message.text.strip()
+        admin_states[aid] = {
+            "mode": "new_product_price",
+            "category": category,
+            "title": title,
+        }
+        bot.reply_to(message, "قیمت محصول (تومان) را ارسال کنید:")
+        return
+
+    if mode == "new_product_price":
+        category = state["category"]
+        title = state["title"]
+        amount = safe_int(message.text.replace(",", ""))
+        if not amount or amount <= 0:
+            bot.reply_to(message, "قیمت نامعتبر است. فقط عدد مثبت ارسال کنید.")
+            return
+        admin_states[aid] = {
+            "mode": "new_product_partner_price",
+            "category": category,
+            "title": title,
+            "price": amount,
+        }
+        bot.reply_to(message, "قیمت همکار (تومان) را ارسال کنید. برای استفاده از قیمت عادی، 0 بفرستید:")
+        return
+
+    if mode == "new_product_partner_price":
+        category = state["category"]
+        title = state["title"]
+        price = state["price"]
+        pp = safe_int(message.text.replace(",", ""))
+        if pp is None:
+            bot.reply_to(message, "عدد ارسال کنید. برای قیمت عادی، 0 بفرستید.")
+            return
+        if pp < 0:
+            bot.reply_to(message, "عدد منفی مجاز نیست. برای قیمت عادی، 0 بفرستید.")
+            return
+        partner_price = None if pp == 0 else pp
+        admin_states[aid] = {
+            "mode": "new_product_desc",
+            "category": category,
+            "title": title,
+            "price": price,
+            "partner_price": partner_price,
+        }
+        bot.reply_to(message, "توضیحات محصول را ارسال کنید (یا خط تیره -):")
+        return
+
+    if mode == "new_product_desc":
+        category = state["category"]
+        title = state["title"]
+        price = state["price"]
+        partner_price = state.get("partner_price")
+        desc = message.text.strip()
+        if desc == "-":
+            desc = ""
+        pid = add_product(category, title, price, desc, is_active=1, partner_price=partner_price)
+        clear_admin_state(aid)
+        bot.reply_to(
+            message,
+            f"محصول جدید با شناسه #{pid} اضافه شد.\n"
+            f"دسته: {category}\n"
+            f"عنوان: {title}\n"
+            f"قیمت: {price:,} تومان",
+        )
+        return
+
+                    # ========= CALLBACKS =========
+@bot.callback_query_handler(func=lambda c: bool(getattr(c, "data", None)) and c.data.startswith("admin_toggle_chat_"))
+def cb_admin_toggle_chat(call: types.CallbackQuery):
+    """Toggle per-product chat flag from admin product detail UI."""
+    uid = call.from_user.id
+    if not ensure_admin(uid):
+        bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+
+    # ensure schema exists even if bot started before migrations ran
+    try:
+        ticket_ensure_schema()
+    except Exception:
+        pass
+
+    pid = safe_int(call.data.replace("admin_toggle_chat_", "", 1))
+    if not pid:
+        bot.answer_callback_query(call.id, "داده نامعتبر", show_alert=True)
+        return
+
+    cur = _get_product_chat_enabled(int(pid))
+    newv = 0 if int(cur) == 1 else 1
+    _set_product_chat_enabled(int(pid), int(newv))
+
+    # refresh admin product detail
+    product = get_product_by_id(int(pid))
+    if product:
+        try:
+            send_admin_product_detail(call.message, product, edit=True)
+        except Exception:
+            try:
+                send_admin_product_detail(call.message, product)
+            except Exception:
+                pass
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── فاز ۱: امتیازدهی ────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _send_rating_request(chat_id: int, uid: int, order_id: int, pid: int, title: str):
+    """ارسال درخواست امتیازدهی ۳۰ ثانیه بعد از تحویل."""
+    import threading as _th
+    def _delayed():
+        import time as _t; _t.sleep(30)
+        try:
+            from db import get_social_settings
+            if not int(get_social_settings().get("rating") or 0):
+                return
+        except Exception:
+            pass
+        from db import has_rated_order
+        if has_rated_order(order_id):
+            return
+        kb = types.InlineKeyboardMarkup(row_width=5)
+        kb.add(*[types.InlineKeyboardButton(
+            s, callback_data=f"rate_{order_id}_{pid}_{i}"
+        ) for i, s in enumerate(["⭐️1","⭐️2","⭐️3","⭐️4","⭐️5"], 1)])
+        kb.add(types.InlineKeyboardButton("بعداً", callback_data=f"rate_skip_{order_id}"))
+        try:
+            bot.send_message(chat_id,
+                f"🌟 <b>نظر شما مهمه!</b>\n\n"
+                f"از خرید «{title}» راضی بودید؟\n"
+                f"یه امتیاز بدید (چند ثانیه وقت می‌بره):",
+                parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
+    _th.Thread(target=_delayed, daemon=True).start()
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rate_") and not c.data.startswith("rate_skip_"))
+def cb_rating(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    try:
+        _, order_id, pid, rating = call.data.split("_")
+        order_id = int(order_id); pid = int(pid); rating = int(rating)
+    except Exception:
+        return
+    from db import save_rating, has_rated_order
+    if has_rated_order(order_id):
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception: pass
+        return
+    stars = "⭐️" * rating
+    # ذخیره امتیاز
+    if save_rating(uid, order_id, pid, rating):
+        if rating >= 4:
+            # امتیاز بالا — پیام تشکر
+            try:
+                bot.edit_message_text(
+                    f"✅ ممنون از نظر شما!\n{stars}\n\nخوشحالیم که راضی بودید 🙏",
+                    call.message.chat.id, call.message.message_id, parse_mode="HTML"
+                )
+            except Exception: pass
+        else:
+            # امتیاز پایین — بپرس چرا
+            user_states[uid] = {"mode": "rating_comment", "order_id": order_id, "pid": pid, "rating": rating}
+            try:
+                bot.edit_message_text(
+                    f"{stars} ثبت شد. می‌خوایم بهتر بشیم!\n\n"
+                    f"اگه مشکلی داشتید بنویسید (یا /skip بزنید):",
+                    call.message.chat.id, call.message.message_id, parse_mode="HTML"
+                )
+            except Exception: pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rate_skip_"))
+def cb_rating_skip(call):
+    bot.answer_callback_query(call.id)
+    try: bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception: pass
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "rating_comment")
+def handle_rating_comment(message):
+    uid = message.from_user.id
+    st = user_states.pop(uid, {})
+    comment = (message.text or "").strip()
+    if comment and comment != "/skip":
+        from db import save_rating
+        # آپدیت کامنت
+        try:
+            import sqlite3 as _sqr
+            from config import DB_PATH as _DBPR
+            conn = _sqr.connect(_DBPR)
+            conn.execute("UPDATE product_ratings SET comment=? WHERE order_id=?;",
+                         (comment, st["order_id"]))
+            conn.commit(); conn.close()
+        except Exception: pass
+        # اطلاع به ادمین
+        try:
+            bot.send_message(ADMIN_ID,
+                f"⭐️ نظر جدید (امتیاز {st['rating']})\n"
+                f"Product #{st['pid']}\n"
+                f"کامنت: {comment}")
+        except Exception: pass
+    bot.reply_to(message, "✅ نظر شما ثبت شد. ممنون از بازخوردتون 🙏")
+
+
+# ─── نمایش FAQ در محصول ──────────────────────────────────────────────────────
+
+def _build_faq_text(pid: int) -> str:
+    """ساخت متن FAQ برای محصول."""
+    from db import get_product_faqs
+    faqs = get_product_faqs(pid)
+    if not faqs:
+        return ""
+    lines = ["\n\n❓ <b>سوالات متداول</b>"]
+    for i, f in enumerate(faqs, 1):
+        lines.append(f"\n<b>{i}. {f['question']}</b>\n{f['answer']}")
+    return "\n".join(lines)
+
+
+def _build_guarantee_text() -> str:
+    """متن ضمانت بازگشت وجه."""
+    return t("MSG_GUARANTEE_TEXT",
+        "\n\n🛡 <b>ضمانت بازگشت وجه</b>\n"
+        "در صورت هرگونه مشکل، ظرف ۲۴ ساعت وجه بازگشت داده می‌شود.")
+
+
+@bot.callback_query_handler(func=lambda c: True)
+def handle_callbacks(call: types.CallbackQuery):
+    data = call.data
+    uid = call.from_user.id
+    # --- toggle active/inactive for other_services ---
+    if data.startswith("toggle_other_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        service_key = data.replace("toggle_other_", "")
+
+        import sqlite3
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE other_services
+                SET is_active = CASE WHEN is_active=1 THEN 0 ELSE 1 END
+                WHERE service_key = ?
+            """, (service_key,))
+            conn.commit()
+
+        bot.answer_callback_query(call.id, "وضعیت دسته تغییر کرد")
+        return
+    # ---------------------------------------------------
+    
+    # ─── TICKET v2 callbacks ──────────────────────────────────────────────
+    if data == "ticket_v2_new":
+        bot.answer_callback_query(call.id)
+        _support_ticket_start(call.message.chat.id, uid)
+        return
+
+    if data.startswith("ticket_v2_open_"):
+        # باز کردن تیکت راه‌اندازی — کاربر می‌تونه پیام بفرسته
+        bot.answer_callback_query(call.id)
+        try:
+            tid_val = int(data.split("_")[-1])
+        except ValueError:
+            return
+        ticket = ticket_get(tid_val)
+        if not ticket:
+            bot.send_message(call.message.chat.id, "❌ تیکت یافت نشد.")
+            return
+        if ticket["status"] == "closed":
+            bot.send_message(call.message.chat.id, "این سفارش قبلاً تکمیل شده است.", reply_markup=main_menu(user_id=uid))
+            return
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid_val}
+        bot.send_message(
+            call.message.chat.id,
+            f"💬 <b>گفتگوی راه‌اندازی #{tid_val}</b>\n\n"
+            "اطلاعات مورد نیاز را ارسال کنید.\n"
+            "می‌توانید متن، عکس، فایل یا اسکرین‌شات بفرستید.",
+            parse_mode="HTML"
+        )
+        return
+
+    if data.startswith("ticket_v2_continue_"):
+        bot.answer_callback_query(call.id)
+        try:
+            tid_val = int(data.split("_")[-1])
+        except ValueError:
+            return
+        ticket = ticket_get(tid_val)
+        if not ticket:
+            bot.send_message(call.message.chat.id, "❌ تیکت یافت نشد.")
+            return
+        if ticket["status"] == "closed":
+            bot.send_message(call.message.chat.id,
+                "این گفتگو بسته شده است.", reply_markup=main_menu(user_id=uid))
+            return
+        # بازگشت به حالت چت تیکت
+        user_states[uid] = {"mode": "ticket_v2", "ticket_id": tid_val}
+        bot.send_message(
+            call.message.chat.id,
+            f"💬 <b>گفتگوی #{tid_val} ادامه دارد</b>\n\nپیام خود را ارسال کنید:",
+            parse_mode="HTML"
+        )
+        return
+
+    if data.startswith("ticket_v2_close_"):
+        bot.answer_callback_query(call.id)
+        try:
+            tid_val = int(data.split("_")[-1])
+        except ValueError:
+            return
+        clear_user_state(uid)
+        ticket_close(tid_val)
+        bot.send_message(call.message.chat.id, "✅ مکالمه پشتیبانی پایان یافت.", reply_markup=main_menu(user_id=uid))
+        return
+
+    if data.startswith("ticket_v2_reply_"):
+        # ادمین می‌خواد از تلگرام پاسخ بده
+        bot.answer_callback_query(call.id)
+        if not ensure_admin(uid):
+            return
+        parts = data.split("_")
+        try:
+            tid_val = int(parts[3])
+            target_uid = int(parts[4])
+        except (IndexError, ValueError):
+            return
+        admin_states[uid] = {"mode": "ticket_v2_admin_reply", "ticket_id": tid_val, "target_uid": target_uid}
+        bot.send_message(
+            uid,
+            f"✏️ پاسخ به تیکت #{tid_val} (کاربر {target_uid}):\n\n"
+            "پیام خود را ارسال کنید. برای لغو: /done",
+            reply_markup=types.ForceReply(selective=True)
+        )
+        return
+
+    if data.startswith("ticket_v2_admin_close_"):
+        bot.answer_callback_query(call.id, "تیکت بسته شد ✅")
+        if not ensure_admin(uid):
+            return
+        try:
+            tid_val = int(data.split("_")[-1])
+        except ValueError:
+            return
+        ticket_close(tid_val)
+        ticket_row = ticket_get(tid_val)
+        if ticket_row:
+            try:
+                _tg_send_to_user(
+                    ticket_row["user_id"],
+                    f"✅ تیکت #{tid_val} توسط پشتیبانی بسته شد."
+                )
+            except Exception:
+                pass
+        return
+
+    if data == "create_support_ticket" or data.startswith("continue_support_ticket_"):
+        # backward compat — هدایت به سیستم جدید
+        bot.answer_callback_query(call.id)
+        _support_ticket_start(call.message.chat.id, uid)
+        return
+
+    if data == "noop":
+        bot.answer_callback_query(call.id)
+        return
+
+    if data == "cancel_purchase":
+        bot.answer_callback_query(call.id)
+        clear_user_state(uid)
+        # برگشت به لیست محصولات (نه منوی اصلی)
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception:
+            pass
+        bot.send_message(call.message.chat.id,
+            t("MSG_BUY_CANCELLED", "خرید لغو شد."))
+        return
+
+    # ─── ناوبری دسته‌بندی داینامیک ────────────────────────────────────────
+    if data == "wallet_charge_custom":
+        bot.answer_callback_query(call.id)
+        user_states[uid] = {"mode": "wallet_charge_amount"}
+        bot.send_message(
+            call.message.chat.id,
+            tf("MSG_WALLET_AMOUNT_REQUEST", min_amount=f"{MIN_TOPUP_AMOUNT:,}"),
+            parse_mode="HTML"
+        )
+        bot.register_next_step_handler(call.message, process_wallet_charge_amount)
+        return
+
+    if data.startswith("quick_charge_"):
+        bot.answer_callback_query(call.id)
+        try:
+            amount = int(data.replace("quick_charge_", ""))
+        except ValueError:
+            return
+        if amount < MIN_TOPUP_AMOUNT:
+            amount = MIN_TOPUP_AMOUNT
+        start_wallet_charge_payment(bot, call.message, uid, amount, clear_user_state)
+        return
+
+    if data.startswith("cat_"):
+        bot.answer_callback_query(call.id)
+        parts = data.split("_")
+        # cat_{id}
+        if len(parts) == 2:
+            cat_id = int(parts[1])
+            _show_category(call.message.chat.id, cat_id, user_id=uid, msg_id=call.message.message_id)
+            return
+        # cat_{cat_id}_p_{pid}  →  نمایش جزئیات محصول
+        if len(parts) == 4 and parts[2] == "p":
+            cat_id = int(parts[1])
+            pid = int(parts[3])
+            product = get_product_by_id(pid)
+            if not product:
+                bot.send_message(call.message.chat.id, "محصول یافت نشد.")
+                return
+            # نمایش جزئیات با استفاده از تابع موجود — user_id برای قیمت همکار
+            send_product_detail(call.message, product, user_id=uid, cat_id=cat_id)
+            return
+        return
+
+    if data.startswith("ticket_close_"):
+        # backward compat → v2
+        bot.answer_callback_query(call.id)
+        tid = safe_int(data.replace("ticket_close_", "", 1))
+        if tid:
+            ticket_close(int(tid))
+            clear_user_state(uid)
+        bot.send_message(call.message.chat.id, "✅ چت بسته شد.", reply_markup=main_menu(user_id=uid))
+        return
+
+    if data.startswith("ticket_admin_close_"):
+        # backward compat → v2
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        tid = safe_int(data.replace("ticket_admin_close_", "", 1))
+        if tid:
+            t_row = ticket_get(int(tid))
+            ticket_close(int(tid))
+            if t_row:
+                clear_user_state(int(t_row["user_id"]))
+                try:
+                    bot.send_message(int(t_row["user_id"]), "⛔️ چت بسته شد.", reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
+                except Exception:
+                    pass
+        return
+
+    if data.startswith("ticket_reply_"):
+        # backward compat → v2
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        parts = data.split("_")
+        tid = safe_int(parts[2]) if len(parts) >= 3 else None
+        target_uid_old = safe_int(parts[3]) if len(parts) >= 4 else None
+        if tid and target_uid_old:
+            admin_states[uid] = {"mode": "ticket_v2_admin_reply", "ticket_id": int(tid), "target_uid": int(target_uid_old)}
+            bot.send_message(uid, f"✏️ پاسخ به تیکت #{tid}: پیام بفرست. /done برای لغو.")
+        return
+    if data.startswith("admin_toggle_chat_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        pid = safe_int(data.replace("admin_toggle_chat_", "", 1))
+        if not pid:
+            bot.answer_callback_query(call.id, "داده نامعتبر", show_alert=True)
+            return
+        cur = _get_product_chat_enabled(int(pid))
+        newv = 0 if int(cur) == 1 else 1
+        _set_product_chat_enabled(int(pid), int(newv))
+        # refresh product detail UI
+        product = get_product_by_id(int(pid))
+        if product:
+            try:
+                send_admin_product_detail(call.message, product, edit=True)
+            except Exception:
+                # fallback: send new message if edit fails
+                send_admin_product_detail(call.message, product)
+        bot.answer_callback_query(call.id, "✅ انجام شد")
+        return
+
+    if data.startswith("admin_set_chattext_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        pid = safe_int(data.replace("admin_set_chattext_", "", 1))
+        if not pid:
+            bot.answer_callback_query(call.id, "داده نامعتبر", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        admin_states[uid] = {"mode": "product_chat_text", "product_id": int(pid)}
+        current = _get_product_chat_text(int(pid))
+        hint = ("(فعلی: " + (current[:80] + ("…" if len(current)>80 else "")) + ")\n\n") if current else ""
+        bot.send_message(call.message.chat.id, "✏️ متن چت این محصول را ارسال کنید.\nبرای پاک کردن: /reset\n" + hint)
+        return
+    if data == "wallet_charge":
+        from ui_texts import t as _t, DEFAULT_UI_TEXTS as _D
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton(
+                _t("BTN_WALLET_CARD",    _D.get("BTN_WALLET_CARD",    "💳 کارت به کارت")), callback_data="wallet_card2card"
+            ),
+            types.InlineKeyboardButton(
+                _t("BTN_WALLET_GATEWAY", _D.get("BTN_WALLET_GATEWAY", "🌐 درگاه پرداخت")), callback_data="wallet_gateway"
+            ),
+        )
+        try:
+            from db import get_crypto_settings
+            if int(get_crypto_settings().get("enabled") or 0):
+                kb.add(types.InlineKeyboardButton(
+                    _t("BTN_WALLET_CRYPTO", _D.get("BTN_WALLET_CRYPTO", "₿ پرداخت رمزارز")),
+                    callback_data="wallet_crypto"))
+        except Exception:
+            pass
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            "لطفاً روش پرداخت را انتخاب کنید:",
+            reply_markup=kb,
+        )
+        return
+
+    if data == "wallet_gateway":
+        bot.answer_callback_query(call.id)
+        start_wallet_charge(call.message)
+        return
+
+    if data == "wallet_card2card":
+        bot.answer_callback_query(call.id)
+        user_states[uid] = {"mode": "card2card_receipt"}
+        text_msg = (
+            "برای افزایش موجودی کیف پول، مبلغ مورد نظر را به حساب زیر واریز کرده و سپس عکس رسید را در همین چت ارسال کنید:\n\n"
+            "💳 شماره کارت:\n"
+            "<code>6037701608004393</code>\n"
+            "به نام: <b>سید فیروز ایازی</b>\n\n"
+            "📍 پس از بررسی، موجودی کیف پول شما شارژ خواهد شد.\n\n"
+            "⚠️ فقط عکس واضح از رسید را ارسال کنید.\n"
+        )
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton(
+                "❌ انصراف", callback_data="wallet_cancel_card2card"
+            )
+        )
+        bot.send_message(call.message.chat.id, text_msg, reply_markup=kb)
+        return
+
+    if data == "wallet_cancel_card2card":
+        bot.answer_callback_query(call.id, "درخواست کارت به کارت لغو شد.")
+        clear_user_state(uid)
+        try:
+            bot.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+        return
+
+    if data.startswith("other_cat_"):
+        bot.answer_callback_query(call.id)
+        category = data[len("other_cat_") :]
+        send_products_menu(call.message.chat.id, category, user_id=uid)
+        return
+
+    if data == "other_categories":
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            "لطفا یکی از دسته‌بندی‌های زیر را انتخاب کنید:",
+            reply_markup=other_products_menu(),
+        )
+        return
+
+    if data.startswith("back_list_"):
+        bot.answer_callback_query(call.id)
+        category = data[len("back_list_") :]
+        send_products_menu(call.message.chat.id, category, user_id=uid)
+        return
+
+    if data == "back_main":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
+        return
+
+    if data == "other_back":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, t("TXT_MAIN_MENU_TITLE","منوی اصلی"), reply_markup=main_menu(user_id=message.from_user.id if hasattr(message,"from_user") else None))
+        return
+
+    if data == "admin_products_back":
+        data = "admin_products"
+
+    if data == "admin_back":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "پنل مدیریت 👇", reply_markup=admin_main_inline())
+        return
+
+    if data == "admin_settings":
+        bot.answer_callback_query(call.id)
+        panel_url = f"https://panel.stland.ir/admin/settings"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل تنظیمات", url=panel_url))
+        bot.send_message(call.message.chat.id, "تنظیمات به پنل وب منتقل شده است:", reply_markup=kb)
+        return
+
+    if data in ("admin_main_btn_manage", "admin_ui_main_buttons", "admin_ui_texts",
+                "admin_ui_captions", "admin_backup_menu"):
+        bot.answer_callback_query(call.id)
+        panel_url = f"https://panel.stland.ir/admin/"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🌐 باز کردن پنل مدیریت", url=panel_url))
+        bot.send_message(call.message.chat.id, "این بخش به پنل وب منتقل شده:", reply_markup=kb)
+        return
+
+    if (data.startswith("admin_main_btn_toggle_") or data.startswith("admin_ui_edit_") or
+            data in ("admin_export_backup", "admin_import_backup",
+                     "admin_full_reset_1", "admin_full_reset_2", "admin_full_reset_do")):
+        bot.answer_callback_query(call.id)
+        panel_url = "https://panel.stland.ir/admin/"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🌐 پنل مدیریت وب", url=panel_url))
+        bot.send_message(call.message.chat.id, "این بخش از پنل وب مدیریت می‌شود:", reply_markup=kb)
+        return
+
+    if data == "admin_feed_panel":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "مدیریت محصول 👇", reply_markup=admin_feed_panel_menu())
+        return
+
+    if data == "admin_feed_panel_stats":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        send_admin_feed_panel_stats(call.message.chat.id, message_id=call.message.message_id)
+        return
+
+    mcat = re.fullmatch(r"admin_feed_panel_cat_([A-Za-z0-9_-]+)_([0-9]+)_([0-9]+)", data)
+    if mcat:
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        try:
+            cat = str(mcat.group(1))
+            mode = int(mcat.group(2))
+            page = int(mcat.group(3))
+        except Exception:
+            bot.answer_callback_query(call.id, "فرمت نامعتبر", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        send_admin_feed_panel_list(call.message.chat.id, page=page, mode=mode, message_id=call.message.message_id, category_key=cat)
+        return
+
+    m = re.fullmatch(r"admin_feed_panel_([0-9]+)_([0-9]+)", data)
+    if m:
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        try:
+            mode = int(m.group(1))
+            page = int(m.group(2))
+        except Exception:
+            bot.answer_callback_query(call.id, "فرمت نامعتبر", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        send_admin_feed_panel_list(call.message.chat.id, page=page, mode=mode, message_id=call.message.message_id, category_key=None)
+        return
+
+    if data.startswith("admin_feed_panel_view_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        try:
+            _parts = data.split("_")
+            # admin_feed_panel_view_{feed_id}_{page}_{mode}(_{category_key})?
+            fid = int(_parts[4]); page = int(_parts[5]); mode = int(_parts[6])
+            category_key = _parts[7] if len(_parts) > 7 else None
+        except Exception:
+            bot.answer_callback_query(call.id, "فرمت نامعتبر", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        send_admin_feed_panel_view(call.message.chat.id, fid, page=page, mode=mode, message_id=call.message.message_id, category_key=category_key)
+        return
+
+    if data.startswith("admin_feed_panel_toggle_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        try:
+            _parts = data.split("_")
+            # admin_feed_panel_toggle_{feed_id}_{page}_{mode}(_{category_key})?
+            fid = int(_parts[4]); page = int(_parts[5]); mode = int(_parts[6])
+            category_key = _parts[7] if len(_parts) > 7 else None
+        except Exception:
+            bot.answer_callback_query(call.id, "فرمت نامعتبر", show_alert=True)
+            return
+        # toggle delivered flag only (safely)
+        try:
+            import sqlite3
+            conn = sqlite3.connect(DB_FULL_PATH)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT delivered FROM product_feed WHERE id=?", (fid,))
+                r = cur.fetchone()
+                if not r:
+                    bot.answer_callback_query(call.id, "یافت نشد", show_alert=True)
+                    return
+                new_val = 0 if int(r[0]) == 1 else 1
+
+                # اگر از حالت «ارسال‌شده» به «برگشت/ارسال‌نشده» می‌رویم،
+                # پیام تحویل مرتبط با همین Feed را از چت مشتری پاک کن و رکوردش را هم حذف کن.
+                if int(r[0]) == 1 and int(new_val) == 0:
+                    _info = _get_delivery_message(int(fid))
+                    if _info:
+                        _chat_id, _msg_id = _info[0], _info[1]
+                        try:
+                            bot.delete_message(int(_chat_id), int(_msg_id))
+                        except Exception:
+                            pass
+                        _delete_delivery_message_record(int(fid))
+
+                cur.execute("UPDATE product_feed SET delivered=? WHERE id=?", (new_val, fid))
                 conn.commit()
-                total_deleted += 1
             finally:
                 conn.close()
-        _log(request, "ریست", "دیتابیس", f"{total_deleted} رکورد")
-        return JSONResponse({"ok": True, "total_deleted": total_deleted})
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:100]})
-
-
-@router.get("/database/job/{job_id}")
-async def job_status(request: Request, job_id: str):
-    from fastapi.responses import JSONResponse
-    return JSONResponse(_job_read(job_id))
-
-
-@router.post("/database/backup/start")
-async def backup_start(request: Request):
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    if not adm: return JSONResponse({"error": "unauthorized"})
-    form = await request.form()
-    is_full = form.get("full") == "1"
-    sections = None if is_full else form.getlist("sections") or None
-    db = _DB_PATH()
-    from stbak_engine import create_stbak
-    job_id = _job_start(create_stbak, db, modules=sections)
-    _log(request, "شروع بکاپ", "دیتابیس", f"job:{job_id} mode:{'full' if is_full else 'custom'}")
-    return JSONResponse({"job_id": job_id})
-
-
-@router.get("/database/backup/download/{job_id}")
-async def backup_download_job(request: Request, job_id: str):
-    from fastapi.responses import Response as FResponse
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    job = _job_read(job_id)
-    if job.get("status") != "done":
-        return _redir("/admin/database?flash=بکاپ+هنوز+آماده+نشده")
-    fpath = job.get("result", {}).get("file")
-    if not fpath or not os.path.exists(fpath):
-        return _redir("/admin/database?flash=فایل+بکاپ+یافت+نشد")
-    raw = open(fpath, "rb").read()
-    from stbak_engine import stbak_filename
-    fname = stbak_filename("full")
-    return FResponse(content=raw, media_type="application/octet-stream",
-                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
-
-
-@router.post("/database/restore/start")
-async def restore_start(request: Request, backup_file: UploadFile = None):
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    if not adm: return JSONResponse({"error": "unauthorized"})
-    if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
-        return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
-    raw = await backup_file.read()
-    db  = _DB_PATH()
-    from stbak_engine import restore_stbak, validate_stbak, StbakError
-    try:
-        validate_stbak(raw)
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
-    job_id = _job_start(restore_stbak, raw, db)
-    _log(request, "شروع بازیابی", "دیتابیس", f"job:{job_id}")
-    return JSONResponse({"job_id": job_id})
-
-
-@router.post("/database/reset/start")
-async def reset_start(request: Request):
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    if not adm: return JSONResponse({"error": "unauthorized"})
-    form = await request.form()
-    is_full = form.get("full") == "1"
-    sections = None if is_full else form.getlist("reset_sections") or None
-    db = _DB_PATH()
-    from stbak_engine import factory_reset
-    job_id = _job_start(factory_reset, db, modules=sections)
-    _log(request, "شروع ریست", "دیتابیس",
-         f"job:{job_id} mode:{'full' if is_full else 'custom'}")
-    return JSONResponse({"job_id": job_id})
-
-
-@router.get("/admins", response_class=HTMLResponse)
-async def admins_list(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "admins")
-    if guard: return guard
-
-    ensure_admins_table()
-    conn = _db()
-    try:
-        admins = conn.execute("SELECT * FROM admins ORDER BY id DESC;").fetchall()
-    finally:
-        conn.close()
-
-    rows = ""
-    for a in admins:
-        perms_list = json.loads(a["permissions"] or "[]")
-        badges = " ".join(f'<span class="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">{ALL_PERMISSIONS.get(p,p)}</span>' for p in perms_list) or '<span class="text-xs text-gray-400">بدون اختیار</span>'
-        status_b = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if a["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
-        rows += f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(a["name"])}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{e(a["telegram_id"] or "—")}</td>
-          <td class="px-4 py-3 text-xs text-gray-500">{e(a["web_username"] or "—")}</td>
-          <td class="px-4 py-3"><div class="flex flex-wrap gap-1">{badges}</div></td>
-          <td class="px-4 py-3">{status_b}</td>
-          <td class="px-4 py-3">
-            <div class="flex gap-1">
-              <a href="/admin/admins/{a['id']}/edit" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">ویرایش</a>
-              <form method="post" action="/admin/admins/{a['id']}/toggle" class="inline">
-                <button class="btn-sm {"bg-red-50 text-red-600 border border-red-200" if a["is_active"] else "bg-green-50 text-green-600 border border-green-200"} rounded px-2 py-1 text-xs">{"غیرفعال" if a["is_active"] else "فعال"}</button>
-              </form>
-              <form method="post" action="/admin/admins/{a['id']}/delete" class="inline" onsubmit="return confirm('حذف شود؟')">
-                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded px-2 py-1 text-xs">حذف</button>
-              </form>
-            </div>
-          </td>
-        </tr>"""
-
-    perm_checks = '<div class="flex flex-wrap gap-3 p-4 bg-gray-50 rounded-lg">' + "".join(
-        f'<label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" name="perm_{k}" value="1" class="rounded">{v}</label>'
-        for k, v in ALL_PERMISSIONS.items()
-    ) + '</div>'
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">👥 مدیریت ادمین‌ها</h1>
-    </div>
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن ادمین جدید</h2>
-      <form method="post" action="/admin/admins/add" class="space-y-4">
-        <div class="grid grid-cols-2 gap-4">
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">نام نمایشی *</label>{_input("name","مثلاً: پشتیبانی",required=True)}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">آیدی تلگرام</label>{_input("telegram_id","مثلاً: 123456789",type_="number")}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">یوزرنیم *</label>{_input("web_username","مثلاً: support1",required=True)}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">رمز *</label>{_input("web_password","رمز قوی",type_="password",required=True)}</div>
-        </div>
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">اختیارات دسترسی</label>{perm_checks}</div>
-        {_btn("افزودن ادمین","",color="green")}
-      </form>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="px-5 py-3 border-b bg-gray-50 flex items-center justify-between">
-        <span class="font-medium text-gray-700">ادمین‌های فعلی ({len(admins)})</span>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">نام</th><th class="px-4 py-3">تلگرام</th>
-            <th class="px-4 py-3">یوزرنیم</th><th class="px-4 py-3">اختیارات</th>
-            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400 text-sm'>ادمینی اضافه نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-    return _layout("ادمین‌ها", body, adm, flash=flash)
-
-
-@router.get("/account", response_class=HTMLResponse)
-async def account_page(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    if not adm or not adm[1]:
-        return _redir("/admin/")
-    current_username = _env("ADMIN_WEB_USERNAME", "admin")
-    body = f"""
-    <div style="max-width:560px">
-      <div class="page-header"><h1>تنظیمات حساب</h1><p>اطلاعات امنیتی مدیر ارشد</p></div>
-      <div class="card card-p" style="margin-bottom:16px">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر نام کاربری</h2>
-        <form method="post" action="/admin/account/username" style="display:flex;flex-direction:column;gap:14px">
-          <div><label>نام کاربری فعلی</label>
-            <input type="text" value="{e(current_username)}" disabled style="background:var(--page-bg);color:var(--text-muted);cursor:not-allowed">
-          </div>
-          <div><label>نام کاربری جدید</label>{_input("new_username","فقط a-z, 0-9, _ (حداقل ۳ کاراکتر)",required=True)}</div>
-          {_btn("ذخیره نام کاربری","",color="indigo")}
-        </form>
-      </div>
-      <div class="card card-p" style="margin-bottom:16px">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر رمز پنل</h2>
-        <form method="post" action="/admin/admins/super/password" style="display:flex;flex-direction:column;gap:14px">
-          <div><label>رمز جدید</label>{_input("new_password","رمز قوی",type_="password",required=True)}</div>
-          <div><label>تکرار رمز</label>{_input("confirm_password","تکرار رمز",type_="password",required=True)}</div>
-          {_btn("ذخیره رمز","",color="green")}
-        </form>
-      </div>
-      <div class="card card-p">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر آیدی تلگرام</h2>
-        <form method="post" action="/admin/admins/super/telegram_id" style="display:flex;flex-direction:column;gap:14px">
-          <div><label>آیدی عددی تلگرام</label>{_input("new_telegram_id","مثلاً: 638469407",type_="number",required=True)}</div>
-          {_btn("ذخیره آیدی","",color="green")}
-        </form>
-      </div>
-    </div>"""
-    return _layout("تنظیمات حساب", body, adm, flash=flash)
-
-
-@router.post("/account/username")
-async def account_change_username(request: Request, new_username: str = Form("")):
-    adm = _get_admin(request)
-    if not adm or not adm[1]:
-        return _redir("/admin/login")
-    new_username = new_username.strip().lower()
-    import re as _re
-    if not new_username or not _re.match(r'^[a-z0-9_]{3,32}$', new_username):
-        return _redir("/admin/account?flash=نام+کاربری+نامعتبر+است+(فقط+حروف+انگلیسی+کوچک+و+عدد)")
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    try:
-        lines = open(env_path, encoding="utf-8").readlines() if os.path.exists(env_path) else []
-        found = False
-        new_lines = []
-        for line in lines:
-            if line.startswith("ADMIN_WEB_USERNAME="):
-                new_lines.append(f"ADMIN_WEB_USERNAME={new_username}\n")
-                found = True
-            else:
-                new_lines.append(line)
-        if not found:
-            new_lines.append(f"ADMIN_WEB_USERNAME={new_username}\n")
-        open(env_path, "w", encoding="utf-8").writelines(new_lines)
-        os.environ["ADMIN_WEB_USERNAME"] = new_username
-    except Exception as ex:
-        return _redir(f"/admin/account?flash=خطا:+{str(ex)[:40]}")
-    return _redir("/admin/account?flash=نام+کاربری+تغییر+کرد")
-
-
-@router.post("/admins/super/password")
-async def super_change_password(request: Request, new_password: str = Form(""), confirm_password: str = Form("")):
-    adm = _get_admin(request)
-    if not adm or not adm[1]:  # فقط سوپرادمین
-        return _redir("/admin/login")
-    if not new_password or new_password != confirm_password:
-        return _redir("/admin/admins?flash=رمزها+یکسان+نیستند+یا+خالی+است")
-    # آپدیت .env
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    try:
-        lines = open(env_path, encoding="utf-8").readlines()
-        new_lines = []
-        found = False
-        for line in lines:
-            if line.startswith("ADMIN_WEB_PASSWORD="):
-                new_lines.append(f"ADMIN_WEB_PASSWORD={new_password}\n")
-                found = True
-            else:
-                new_lines.append(line)
-        if not found:
-            new_lines.append(f"ADMIN_WEB_PASSWORD={new_password}\n")
-        open(env_path, "w", encoding="utf-8").writelines(new_lines)
-        os.environ["ADMIN_WEB_PASSWORD"] = new_password
-    except Exception as ex:
-        return _redir(f"/admin/admins?flash=خطا:+{str(ex)[:40]}")
-    return _redir("/admin/admins?flash=رمز+سوپرادمین+تغییر+کرد")
-
-
-@router.post("/admins/super/telegram_id")
-async def super_change_telegram_id(request: Request, new_telegram_id: str = Form("")):
-    adm = _get_admin(request)
-    if not adm or not adm[1]:
-        return _redir("/admin/login")
-    try:
-        int(new_telegram_id)
-    except ValueError:
-        return _redir("/admin/admins?flash=آیدی+نامعتبر")
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    try:
-        lines = open(env_path, encoding="utf-8").readlines()
-        new_lines = []
-        found = False
-        for line in lines:
-            if line.startswith("ADMIN_ID="):
-                new_lines.append(f"ADMIN_ID={new_telegram_id}\n")
-                found = True
-            else:
-                new_lines.append(line)
-        if not found:
-            new_lines.append(f"ADMIN_ID={new_telegram_id}\n")
-        open(env_path, "w", encoding="utf-8").writelines(new_lines)
-        os.environ["ADMIN_ID"] = new_telegram_id
-    except Exception as ex:
-        return _redir(f"/admin/admins?flash=خطا:+{str(ex)[:40]}")
-    return _redir("/admin/admins?flash=آیدی+تلگرام+تغییر+کرد+—+ربات+را+ریستارت+کنید")
-
-
-@router.post("/admins/add")
-async def admins_add(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "admins")
-    if guard: return guard
-
-    form = await request.form()
-    name         = (form.get("name") or "").strip()
-    web_username = (form.get("web_username") or "").strip()
-    web_password = (form.get("web_password") or "").strip()
-    telegram_id  = form.get("telegram_id") or None
-    notes        = (form.get("notes") or "").strip()
-
-    if not name or not web_username or not web_password:
-        return _redir("/admin/admins?flash=فیلدهای+اجباری+را+پر+کنید")
-
-    perms = [p.replace("perm_", "") for p in form.keys() if p.startswith("perm_")]
-
-    try:
-        tg_id = int(telegram_id) if telegram_id else None
-    except ValueError:
-        tg_id = None
-
-    ensure_admins_table()
-    conn = _db()
-    try:
-        conn.execute(
-            """INSERT INTO admins (telegram_id, name, web_username, web_password_hash, permissions, notes, created_at)
-               VALUES (?,?,?,?,?,?,?);""",
-            (tg_id, name, web_username, _hash_pw(web_password), json.dumps(perms), notes, datetime.utcnow().isoformat()),
-        )
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        return _redir("/admin/admins?flash=یوزرنیم+یا+تلگرام+تکراری+است")
-    finally:
-        try: conn.close()
-        except: pass
-
-    _log(request, "ایجاد ادمین", "ادمین‌ها", f"یوزرنیم: {web_username}")
-    _log(request, "ایجاد ادمین", "ادمین‌ها", f"یوزرنیم: {web_username}")
-    return _redir("/admin/admins?flash=ادمین+جدید+اضافه+شد")
-
-@router.get("/admins/{aid}/edit", response_class=HTMLResponse)
-async def admins_edit_get(request: Request, aid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "admins")
-    if guard: return guard
-
-    ensure_admins_table()
-    conn = _db()
-    try:
-        a = conn.execute("SELECT * FROM admins WHERE id=? LIMIT 1;", (aid,)).fetchone()
-    finally:
-        conn.close()
-
-    if not a:
-        return _redir("/admin/admins")
-
-    cur_perms = json.loads(a["permissions"] or "[]")
-    perm_checks = ""
-    for perm_key, perm_label in ALL_PERMISSIONS.items():
-        checked = "checked" if perm_key in cur_perms else ""
-        perm_checks += f"""
-        <label class="flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" name="perm_{perm_key}" {checked}
-            class="rounded border-gray-300 text-indigo-600">
-          {e(perm_label)}
-        </label>"""
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/admins", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش ادمین: {e(a["name"])}</h1>
-    </div>
-    <div class="bg-white rounded-xl shadow p-6 max-w-2xl">
-      <form method="post" action="/admin/admins/{aid}/edit" class="space-y-4">
-        <div class="grid md:grid-cols-2 gap-4">
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">نام نمایشی</label>
-            {_input("name", "", str(a["name"] or ""), required=True)}
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">آیدی تلگرام</label>
-            {_input("telegram_id", "", str(a["telegram_id"] or ""), type_="number")}
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">یوزرنیم پنل</label>
-            {_input("web_username", "", str(a["web_username"] or ""))}
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 block mb-1">رمز جدید (خالی = بدون تغییر)</label>
-            {_input("web_password", "رمز جدید (اختیاری)", type_="password")}
-          </div>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-2">اختیارات</label>
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-2 p-4 bg-gray-50 rounded-lg">
-            {perm_checks}
-          </div>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">یادداشت</label>
-          {_input("notes", "", str(a["notes"] or ""))}
-        </div>
-        {_btn("ذخیره تغییرات", color="green")}
-      </form>
-    </div>"""
-
-    return _layout(f"ویرایش ادمین #{aid}", body, adm, flash=flash)
-
-@router.post("/admins/{aid}/edit")
-async def admins_edit_post(request: Request, aid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "admins")
-    if guard: return guard
-
-    form = await request.form()
-    name         = (form.get("name") or "").strip()
-    web_username = (form.get("web_username") or "").strip()
-    web_password = (form.get("web_password") or "").strip()
-    telegram_id  = form.get("telegram_id") or None
-    notes        = (form.get("notes") or "").strip()
-    perms        = [p.replace("perm_", "") for p in form.keys() if p.startswith("perm_")]
-
-    try:
-        tg_id = int(telegram_id) if telegram_id else None
-    except ValueError:
-        tg_id = None
-
-    ensure_admins_table()
-    conn = _db()
-    try:
-        if web_password:
-            conn.execute(
-                "UPDATE admins SET name=?,telegram_id=?,web_username=?,web_password_hash=?,permissions=?,notes=? WHERE id=?;",
-                (name, tg_id, web_username, _hash_pw(web_password), json.dumps(perms), notes, aid),
-            )
-        else:
-            conn.execute(
-                "UPDATE admins SET name=?,telegram_id=?,web_username=?,permissions=?,notes=? WHERE id=?;",
-                (name, tg_id, web_username, json.dumps(perms), notes, aid),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-    return _redir(f"/admin/admins/{aid}/edit?flash=ذخیره+شد")
-
-@router.post("/admins/{aid}/toggle")
-async def admins_toggle(request: Request, aid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "admins")
-    if guard: return guard
-    ensure_admins_table()
-    conn = _db()
-    try:
-        conn.execute("UPDATE admins SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE id=?;", (aid,))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/admins?flash=وضعیت+تغییر+کرد")
-
-@router.post("/admins/{aid}/delete")
-async def admins_delete(request: Request, aid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "admins")
-    if guard: return guard
-    ensure_admins_table()
-    conn = _db()
-    try:
-        conn.execute("DELETE FROM admins WHERE id=?;", (aid,))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "حذف ادمین", "ادمین‌ها", f"id: {aid}")
-    return _redir("/admin/admins?flash=ادمین+حذف+شد")
-
-# ─────────────────────────── Categories ────────────────────────────────────
-
-def _render_cat_tree(cats_all: list, parent_id=None, depth=0) -> str:
-    """رندر درختی دسته‌بندی‌ها"""
-    rows = ""
-    children = [c for c in cats_all if c["parent_id"] == parent_id]
-    for cat in children:
-        indent = "　" * depth
-        emoji = (cat["emoji"] or "").strip()
-        label = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
-        active_badge = '<span class="text-xs text-green-600">فعال</span>' if cat["is_active"] else '<span class="text-xs text-red-500">غیرفعال</span>'
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-2 text-sm">{indent}{'└ ' if depth else ''}{e(label)}</td>
-          <td class="px-4 py-2">{active_badge}</td>
-          <td class="px-4 py-2 text-xs text-gray-400">{cat['sort_order']}</td>
-          <td class="px-4 py-2 flex gap-1 flex-wrap">
-            {_btn("ویرایش", f"/admin/categories/{cat['id']}/edit", "indigo", small=True)}
-            <form method="post" action="/admin/categories/{cat['id']}/toggle" class="inline">
-              <button class="btn-sm {"bg-red-100 text-red-700" if cat["is_active"] else "bg-green-100 text-green-700"} rounded">{"غیرفعال" if cat["is_active"] else "فعال"}</button>
-            </form>
-            <form method="post" action="/admin/categories/{cat['id']}/delete" onsubmit="return confirm('حذف شود؟ همه زیردسته‌ها و محصولات هم حذف می‌شوند.')" class="inline">
-              <button class="btn-sm bg-red-100 text-red-700 rounded">حذف</button>
-            </form>
-          </td>
-        </tr>"""
-        rows += _render_cat_tree(cats_all, parent_id=cat["id"], depth=depth + 1)
-    return rows
-
-
-def _cat_select_options(cats_all: list, selected_id=None, exclude_id=None, parent_id=None, depth=0) -> str:
-    opts = ""
-    children = [c for c in cats_all if c["parent_id"] == parent_id]
-    for cat in children:
-        if cat["id"] == exclude_id:
-            continue
-        indent = "── " * depth
-        sel = "selected" if cat["id"] == selected_id else ""
-        opts += f'<option value="{cat["id"]}" {sel}>{indent}{e(cat["name"])}</option>'
-        opts += _cat_select_options(cats_all, selected_id, exclude_id, parent_id=cat["id"], depth=depth + 1)
-    return opts
-
-
-@router.get("/categories", response_class=HTMLResponse)
-async def categories_list(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        cats = conn.execute("SELECT * FROM categories ORDER BY parent_id NULLS FIRST, sort_order, name;").fetchall()
-    finally:
-        conn.close()
-
-    tree_rows = _render_cat_tree(cats)
-    cat_opts = '<option value="">— بدون والد (دسته ریشه) —</option>' + _cat_select_options(cats)
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">🗂 دسته‌بندی‌ها</h1>
-    </div>
-
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن دسته جدید</h2>
-      <form method="post" action="/admin/categories/add" class="grid md:grid-cols-4 gap-4 items-end">
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">نام دسته *</label>
-          {_input("name", "مثلاً: هوش مصنوعی", required=True)}
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">ایموجی</label>
-          {_input("emoji", "🧩")}
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">والد (زیردسته‌ی چه چیزی؟)</label>
-          <select name="parent_id">
-            {cat_opts}
-          </select>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">ترتیب نمایش</label>
-          {_input("sort_order", "0", "0", "number")}
-        </div>
-        <div class="md:col-span-4">{_btn("➕ افزودن دسته", color="green")}</div>
-      </form>
-    </div>
-
-    <div class="card overflow-hidden">
-      <div class="px-5 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">
-        ساختار دسته‌بندی‌ها ({len(cats)} دسته)
-        <span class="text-xs text-gray-400 mr-2">دسته‌های ریشه در منوی اصلی ربات نمایش داده می‌شوند</span>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">نام</th><th class="px-4 py-3">وضعیت</th>
-            <th class="px-4 py-3">ترتیب</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead>
-          <tbody>{tree_rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>هنوز دسته‌ای اضافه نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-
-    return _layout("دسته‌بندی‌ها", body, adm, flash=flash)
-
-
-@router.post("/categories/add")
-async def categories_add(request: Request, name: str = Form(""), emoji: str = Form(""),
-                          parent_id: str = Form(""), sort_order: str = Form("0")):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    name = name.strip()
-    if not name:
-        return _redir("/admin/categories?flash=نام+دسته+الزامی+است")
-
-    pid = int(parent_id) if parent_id.strip().isdigit() else None
-    slug = "".join(c if c.isalnum() else "_" for c in name).lower()[:40]
-    now = datetime.now().isoformat()
-
-    conn = _db()
-    try:
-        conn.execute(
-            "INSERT INTO categories (name, slug, parent_id, emoji, sort_order, is_active, created_at) VALUES (?,?,?,?,?,1,?);",
-            (name, slug, pid, emoji.strip() or "", int(sort_order or 0), now)
-        )
-        conn.commit()
-    except Exception as ex:
-        return _redir(f"/admin/categories?flash=خطا: {str(ex)[:50]}")
-    finally:
-        conn.close()
-    return _redir("/admin/categories?flash=دسته+اضافه+شد")
-
-
-@router.get("/categories/{cid}/edit", response_class=HTMLResponse)
-async def categories_edit_get(request: Request, cid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        cat = conn.execute("SELECT * FROM categories WHERE id=? LIMIT 1;", (cid,)).fetchone()
-        cats_all = conn.execute("SELECT * FROM categories ORDER BY parent_id NULLS FIRST, sort_order, name;").fetchall()
-    finally:
-        conn.close()
-
-    if not cat:
-        return _redir("/admin/categories")
-
-    cat_opts = '<option value="">— بدون والد (دسته ریشه) —</option>' + _cat_select_options(
-        cats_all, selected_id=cat["parent_id"], exclude_id=cid
-    )
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/categories", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش: {e(cat["name"])}</h1>
-    </div>
-    <div class="card p-6 max-w-xl">
-      <form method="post" action="/admin/categories/{cid}/edit" class="space-y-4">
-        <div>
-          <label class="text-sm font-medium text-gray-700 block mb-1">نام دسته</label>
-          {_input("name", "", str(cat["name"]), required=True)}
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="text-sm font-medium text-gray-700 block mb-1">ایموجی</label>
-            {_input("emoji", "🧩", str(cat["emoji"] or ""))}
-          </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700 block mb-1">ترتیب نمایش</label>
-            {_input("sort_order", "0", str(cat["sort_order"] or 0), "number")}
-          </div>
-        </div>
-        <div>
-          <label class="text-sm font-medium text-gray-700 block mb-1">والد</label>
-          <select name="parent_id" class="w-full border border-gray-300 rounded-lg px-3 py-2">{cat_opts}</select>
-        </div>
-        <div class="flex items-center gap-3">
-          <label class="text-sm font-medium text-gray-700">فعال</label>
-          <input type="checkbox" name="is_active" value="1" {"checked" if cat["is_active"] else ""} class="rounded">
-        </div>
-        {_btn("ذخیره تغییرات", color="green")}
-      </form>
-    </div>"""
-
-    return _layout(f"ویرایش دسته #{cid}", body, adm, flash=flash)
-
-
-@router.post("/categories/{cid}/edit")
-async def categories_edit_post(request: Request, cid: int,
-    name: str = Form(""), emoji: str = Form(""), parent_id: str = Form(""),
-    sort_order: str = Form("0"), is_active: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    pid = int(parent_id) if parent_id.strip().isdigit() else None
-    active = 1 if is_active == "1" else 0
-
-    conn = _db()
-    try:
-        conn.execute(
-            "UPDATE categories SET name=?, emoji=?, parent_id=?, sort_order=?, is_active=? WHERE id=?;",
-            (name.strip(), emoji.strip(), pid, int(sort_order or 0), active, cid)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir(f"/admin/categories/{cid}/edit?flash=ذخیره+شد")
-
-
-@router.post("/categories/{cid}/toggle")
-async def categories_toggle(request: Request, cid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE categories SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE id=?;", (cid,))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/categories?flash=وضعیت+تغییر+کرد")
-
-
-@router.post("/categories/{cid}/delete")
-async def categories_delete(request: Request, cid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    def collect_ids(conn, cat_id):
-        ids = [cat_id]
-        children = conn.execute("SELECT id FROM categories WHERE parent_id=?;", (cat_id,)).fetchall()
-        for ch in children:
-            ids.extend(collect_ids(conn, ch[0]))
-        return ids
-
-    conn = _db()
-    try:
-        all_ids = collect_ids(conn, cid)
-        placeholders = ",".join("?" * len(all_ids))
-        conn.execute(f"DELETE FROM product_feed WHERE product_id IN (SELECT id FROM products WHERE category_id IN ({placeholders}));", all_ids)
-        conn.execute(f"DELETE FROM products WHERE category_id IN ({placeholders});", all_ids)
-        conn.execute(f"DELETE FROM categories WHERE id IN ({placeholders});", all_ids)
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/categories?flash=دسته+و+زیردسته‌ها+حذف+شدند")
-
-
-# ─────────────────────────── Products ──────────────────────────────────────
-
-@router.get("/products", response_class=HTMLResponse)
-async def products_list(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        products = conn.execute("""
-            SELECT p.*, COUNT(CASE WHEN pf.delivered=0 THEN 1 END) as feed_avail,
-                   COUNT(pf.id) as feed_total
-            FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id
-            GROUP BY p.id ORDER BY p.category, p.id;
-        """).fetchall()
-    finally:
-        conn.close()
-
-    rows = ""
-    for p in products:
-        avail = int(p["feed_avail"] or 0)
-        ac = "red" if avail==0 else ("yellow" if avail<5 else "green")
-        status_badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if p["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(p["title"])}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{e(p["category"])}</td>
-          <td class="px-4 py-3 text-sm font-medium text-indigo-700">{int(p["price"]):,}</td>
-          <td class="px-4 py-3">{status_badge}</td>
-          <td class="px-4 py-3">
-            <span class="px-2 py-0.5 text-xs rounded-full bg-{ac}-100 text-{ac}-700">{avail}/{int(p["feed_total"] or 0)}</span>
-          </td>
-          <td class="px-4 py-3">
-            <div class="flex gap-1">
-              <a href="/admin/products/{p['id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">✏️</a>
-              <a href="/admin/feed/{p['id']}" class="btn-sm bg-teal-50 text-teal-700 border border-teal-200 rounded px-2 py-1 text-xs">📦</a>
-              <form method="post" action="/admin/products/{p['id']}/toggle" class="inline">
-                <button class="btn-sm {"bg-red-50 text-red-600 border border-red-200" if p["is_active"] else "bg-green-50 text-green-600 border border-green-200"} rounded px-2 py-1 text-xs">
-                  {"⊘" if p["is_active"] else "✓"}
-                </button>
-              </form>
-              <form method="post" action="/admin/products/{p['id']}/delete" class="inline"
-                onsubmit="return confirm('حذف شود؟')">
-                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded px-2 py-1 text-xs">🗑</button>
-              </form>
-            </div>
-          </td>
-        </tr>"""
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">📦 محصولات</h1>
-      {_btn("➕ محصول جدید", "/admin/products/new", "green")}
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">عنوان</th><th class="px-4 py-3">دسته</th>
-            <th class="px-4 py-3">قیمت</th><th class="px-4 py-3">وضعیت</th>
-            <th class="px-4 py-3">موجودی</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-
-    return _layout("محصولات", body, adm, flash=flash)
-
-@router.get("/products/new", response_class=HTMLResponse)
-async def product_new_get(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        cats_all = conn.execute("SELECT * FROM categories WHERE is_active=1 ORDER BY parent_id NULLS FIRST, sort_order, name;").fetchall()
-    finally:
-        conn.close()
-
-    if not cats_all:
-        body = f"""
-        <div class="flex items-center gap-3 mb-6">
-          {_btn("← بازگشت", "/admin/products", "slate", small=True)}
-          <h1 class="text-2xl font-bold text-gray-800">➕ محصول جدید</h1>
-        </div>
-        <div class="card p-6">
-          <p class="text-amber-600">⚠️ ابتدا باید دسته‌بندی بسازید.</p>
-          <div class="mt-4">{_btn("← ساخت دسته‌بندی", "/admin/categories", "indigo")}</div>
-        </div>"""
-        return _layout("محصول جدید", body, adm)
-
-    cat_opts = _cat_select_options(cats_all)
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/products", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">➕ محصول جدید</h1>
-    </div>
-    <form method="post" action="/admin/products/new" class="card p-6 max-w-2xl space-y-4">
-      <div>
-        <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی *</label>
-        <select name="category_id" required class="w-full border border-gray-300 rounded-lg px-3 py-2">
-          <option value="">انتخاب کنید...</option>
-          {cat_opts}
-        </select>
-      </div>
-      <div><label class="text-sm font-medium text-gray-700 block mb-1">عنوان محصول *</label>
-        {_input("title", "عنوان محصول", required=True)}</div>
-      <div class="grid grid-cols-2 gap-4">
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">قیمت (تومان) *</label>
-          {_input("price", "250000", type_="number", required=True)}</div>
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">قیمت همکار (0=یکسان)</label>
-          {_input("partner_price", "0", type_="number")}</div>
-      </div>
-      <div class="grid grid-cols-2 gap-4">
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف روزانه مشتری</label>
-          {_input("limit_c", "0", type_="number")}</div>
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف روزانه همکار</label>
-          {_input("limit_p", "0", type_="number")}</div>
-      </div>
-      <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>
-        {_textarea("description", "توضیحات محصول...", rows=3)}</div>
-      <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
-        <label class="perm-label" style="font-size:13px">
-          <input type="checkbox" name="support_after_purchase" value="1"
-            id="setup_chk_new" onchange="document.getElementById('setup_msg_new').style.display=this.checked?'block':'none'"
-            style="width:16px;height:16px;min-height:16px;cursor:pointer">
-          <div>
-            <strong>نیاز به راه‌اندازی / دریافت اطلاعات مشتری</strong>
-            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">پس از خرید، به جای تحویل مستقیم، گفتگوی راه‌اندازی باز می‌شود</div>
-          </div>
-        </label>
-        <div id="setup_msg_new" style="display:none;margin-top:12px">
-          <label style="font-size:12px;font-weight:600;color:var(--text-muted)">
-            متن راهنما برای مشتری — چه اطلاعاتی باید بفرستد؟
-          </label>
-          {_textarea("setup_message","مثلاً: لطفاً ایمیل اپل، شماره موبایل و کد تأیید دو مرحله‌ای را ارسال کنید.",rows=3)}
-        </div>
-      </div>
-      <div class="flex gap-3">{_btn("ذخیره محصول", color="green")} {_btn("انصراف", "/admin/products", "slate")}</div>
-    </form>"""
-
-    return _layout("محصول جدید", body, adm)
-
-@router.post("/products/new")
-async def product_new_post(request: Request,
-    category_id: str=Form(""), title: str=Form(""), price: str=Form("0"),
-    partner_price: str=Form("0"), limit_c: str=Form("0"), limit_p: str=Form("0"),
-    description: str=Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-    form = await request.form()
-    support_after = 1 if form.get("support_after_purchase") == "1" else 0
-
-    if not category_id.strip().isdigit():
-        return _redir("/admin/products/new?flash=دسته‌بندی+انتخاب+کنید")
-
-    # migration: اطمینان از وجود ستون قبل از ذخیره
-    try:
-        from db import ensure_product_support_schema
-        ensure_product_support_schema()
-    except Exception:
-        pass
-
-    cat_id = int(category_id)
-    pp = int(partner_price or 0)
-    slug = "".join(c if c.isalnum() else "_" for c in title).lower()[:40] or "product"
-
-    conn = _db()
-    try:
-        cat = conn.execute("SELECT slug, name FROM categories WHERE id=?;", (cat_id,)).fetchone()
-        cat_slug = cat["slug"] if cat else str(cat_id)
-        conn.execute("""
-            INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message)
-            VALUES (?,?,?,?,?,?,?,?,?,1,?,?);""",
-            (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
-             int(limit_c or 0), int(limit_p or 0), description.strip(), support_after,
-             str(form.get("setup_message","")).strip()))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/products?flash=محصول+اضافه+شد")
-
-@router.get("/products/{pid}/faqs", response_class=HTMLResponse)
-async def product_faqs_page(request: Request, pid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-    from db import get_product_faqs, get_product_ratings_list, get_product_rating, ensure_faq_schema, ensure_ratings_schema
-    ensure_faq_schema(); ensure_ratings_schema()
-    conn = _db()
-    try:
-        prod = conn.execute("SELECT title FROM products WHERE id=?;", (pid,)).fetchone()
-    finally:
-        conn.close()
-    if not prod:
-        return _redir("/admin/products")
-    faqs = get_product_faqs(pid)
-    ratings = get_product_ratings_list(pid, 20)
-    rstat = get_product_rating(pid)
-
-    faq_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-      <td class="px-4 py-3 text-sm font-medium">{e(f['question'])}</td>
-      <td class="px-4 py-3 text-sm text-gray-500">{e(f['answer'][:60])}...</td>
-      <td class="px-4 py-3">
-        <form method="post" action="/admin/products/{pid}/faqs/{f['id']}/delete" onsubmit="return confirm('حذف؟')">
-          <button class="text-xs text-red-400 hover:text-red-600">حذف</button>
-        </form>
-      </td>
-    </tr>""" for f in faqs) or "<tr><td colspan='3' class='text-center py-4 text-gray-400'>سوالی ثبت نشده</td></tr>"
-
-    rating_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2">{"⭐️"*r['rating']}</td>
-      <td class="px-3 py-2">{e(r['full_name'] or '—')}</td>
-      <td class="px-3 py-2 text-gray-500">{e(r['comment'] or '—')}</td>
-      <td class="px-3 py-2 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
-    </tr>""" for r in ratings) or "<tr><td colspan='4' class='text-center py-4 text-gray-400'>نظری ثبت نشده</td></tr>"
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← محصولات", "/admin/products", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">📦 {e(prod[0])}</h1>
-    </div>
-
-    <div class="grid md:grid-cols-2 gap-4 mb-6">
-      <!-- FAQ -->
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">❓ سوالات متداول</h2>
-        <form method="post" action="/admin/products/{pid}/faqs/new" class="space-y-3 mb-4">
-          <input type="text" name="question" placeholder="سوال..." required
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-          {_textarea("answer", "جواب...", rows=3)}
-          {_btn("افزودن سوال","",color="indigo",small=True)}
-        </form>
-        <div class="overflow-x-auto"><table class="w-full text-right text-sm">
-          <thead><tr class="text-xs text-gray-500 border-b">
-            <th class="px-4 py-2">سوال</th><th class="px-4 py-2">جواب</th><th></th>
-          </tr></thead>
-          <tbody>{faq_rows}</tbody>
-        </table></div>
-      </div>
-
-      <!-- امتیازها -->
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-2">⭐️ نظرات کاربران</h2>
-        <div class="text-3xl font-bold text-amber-500 mb-1">{rstat['avg']}/5</div>
-        <div class="text-xs text-gray-400 mb-4">{rstat['count']} نظر ثبت‌شده</div>
-        <div class="overflow-x-auto"><table class="w-full text-right">
-          <thead><tr class="text-xs text-gray-500 border-b">
-            <th class="px-3 py-2">امتیاز</th><th class="px-3 py-2">کاربر</th>
-            <th class="px-3 py-2">نظر</th><th class="px-3 py-2">تاریخ</th>
-          </tr></thead>
-          <tbody>{rating_rows}</tbody>
-        </table></div>
-      </div>
-    </div>"""
-    return _layout(f"FAQ — {prod[0]}", body, adm, flash=flash)
-
-
-@router.post("/products/{pid}/faqs/new")
-async def product_faq_new(request: Request, pid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-    from db import add_product_faq, ensure_faq_schema
-    ensure_faq_schema()
-    form = await request.form()
-    q = str(form.get("question","")).strip()
-    a = str(form.get("answer","")).strip()
-    if q and a:
-        add_product_faq(pid, q, a)
-        _log(request, "افزودن FAQ", "محصولات", f"product:{pid}")
-    return _redir(f"/admin/products/{pid}/faqs?flash=سوال+اضافه+شد")
-
-
-@router.post("/products/{pid}/faqs/{fid}/delete")
-async def product_faq_delete(request: Request, pid: int, fid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-    from db import delete_product_faq
-    delete_product_faq(fid)
-    return _redir(f"/admin/products/{pid}/faqs?flash=حذف+شد")
-
-
-@router.get("/products/{pid}", response_class=HTMLResponse)
-async def product_edit_get(request: Request, pid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        p = conn.execute("SELECT * FROM products WHERE id=?;", (pid,)).fetchone()
-        services = conn.execute("SELECT service_key, title FROM other_services ORDER BY title;").fetchall()
-        feed = conn.execute("SELECT COUNT(*) as t, COUNT(CASE WHEN delivered=0 THEN 1 END) as a FROM product_feed WHERE product_id=?;", (pid,)).fetchone()
-    finally:
-        conn.close()
-
-    if not p:
-        return _redir("/admin/products")
-
-    cats = ""
-    for s in [("apple","سرویس‌های اپل آیدی")] + [(r["service_key"],r["title"]) for r in services]:
-        sel = "selected" if s[0]==p["category"] else ""
-        cats += f'<option value="{e(s[0])}" {sel}>{e(s[1])}</option>'
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/products", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش محصول #{pid}</h1>
-    </div>
-    <div class="grid md:grid-cols-3 gap-6">
-      <div class="md:col-span-2">
-        <form method="post" action="/admin/products/{pid}/edit" class="bg-white rounded-xl shadow p-6 space-y-4">
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">دسته</label>
-            <select name="category" class="w-full border border-gray-300 rounded-lg px-3 py-2">{cats}</select></div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">عنوان</label>
-            {_input("title","",str(p["title"] or ""),required=True)}</div>
-          <div class="grid grid-cols-2 gap-4">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">قیمت</label>
-              {_input("price","",str(p["price"] or 0),"number",True)}</div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">قیمت همکار</label>
-              {_input("partner_price","",str(p["partner_price"] or 0),"number")}</div>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف مشتری</label>
-              {_input("limit_c","",str(p["daily_limit_customer"] or 0),"number")}</div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف همکار</label>
-              {_input("limit_p","",str(p["daily_limit_partner"] or 0),"number")}</div>
-          </div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>
-            {_textarea("description","",str(p["description"] or ""),rows=3)}</div>
-          <div class="p-4 bg-gray-50 rounded-lg">
-            <label class="flex items-center gap-3 cursor-pointer mb-3">
-              <input type="checkbox" name="support_after_purchase" value="1"
-                id="setup_chk_edit"
-                onchange="document.getElementById('setup_msg_edit').style.display=this.checked?'block':'none'"
-                {"checked" if int(p["support_after_purchase"] if "support_after_purchase" in p.keys() else 0) else ""}>
-              <div>
-                <div class="text-sm font-medium text-gray-800">نیاز به راه‌اندازی / دریافت اطلاعات مشتری</div>
-                <div class="text-xs text-gray-400 mt-0.5">پس از خرید، محصول مستقیم ارسال نمی‌شود — گفتگوی راه‌اندازی باز می‌شود</div>
-              </div>
-            </label>
-            <div id="setup_msg_edit" style="display:{"block" if int(p["support_after_purchase"] if "support_after_purchase" in p.keys() else 0) else "none"}">
-              <label class="text-xs font-medium text-gray-600 block mb-1">
-                متن راهنما برای مشتری — چه اطلاعاتی باید بفرستد؟
-              </label>
-              {_textarea("setup_message","مثلاً: ایمیل اپل، شماره موبایل و کد تأیید را ارسال کنید.",
-                         value=str(p["setup_message"] if "setup_message" in p.keys() else ""),rows=3)}
-            </div>
-          </div>
-          {_btn("ذخیره", color="green")}
-        </form>
-      </div>
-      <div class="space-y-4">
-        <div class="bg-white rounded-xl shadow p-5">
-          <h3 class="font-bold text-gray-700 mb-2">📦 موجودی</h3>
-          <div class="text-3xl font-bold text-indigo-700">{int(feed["a"] or 0)}</div>
-          <div class="text-xs text-gray-400 mb-3">از {int(feed["t"] or 0)} کل</div>
-          {_btn("مدیریت موجودی →", f"/admin/feed/{pid}", "teal")}
-          {_btn("❓ FAQ و نظرات", f"/admin/products/{pid}/faqs", "amber")}
-        </div>
-        <div class="bg-white rounded-xl shadow p-5 space-y-2">
-          <form method="post" action="/admin/products/{pid}/toggle">
-            <button type="submit" class="w-full py-2 text-sm rounded-lg border-2 border-{"red" if p["is_active"] else "green"}-300 text-{"red" if p["is_active"] else "green"}-700 hover:bg-{"red" if p["is_active"] else "green"}-50">
-              {"🔴 غیرفعال کردن" if p["is_active"] else "🟢 فعال کردن"}
-            </button>
-          </form>
-          <form method="post" action="/admin/products/{pid}/delete" onsubmit="return confirm('حذف شود؟')">
-            <button type="submit" class="w-full py-2 text-sm rounded-lg border-2 border-red-200 text-red-600 hover:bg-red-50">🗑 حذف</button>
-          </form>
-        </div>
-      </div>
-    </div>"""
-
-    return _layout(f"محصول #{pid}", body, adm, flash=flash)
-
-@router.post("/products/{pid}/edit")
-async def product_edit_post(request: Request, pid: int,
-    category: str=Form(""), title: str=Form(""), price: str=Form("0"),
-    partner_price: str=Form("0"), limit_c: str=Form("0"), limit_p: str=Form("0"),
-    description: str=Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-    form = await request.form()
-    support_after = 1 if form.get("support_after_purchase") == "1" else 0
-    pp = int(partner_price or 0)
-    # migration: اطمینان از وجود ستون
-    try:
-        from db import ensure_product_support_schema
-        ensure_product_support_schema()
-    except Exception:
-        pass
-    conn = _db()
-    try:
-        conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-            daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=? WHERE id=?;""",
-            (category,title.strip(),int(price or 0),pp if pp>0 else None,
-             int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-             str(form.get("setup_message","")).strip(),pid))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir(f"/admin/products/{pid}?flash=ذخیره+شد")
-
-@router.post("/products/{pid}/toggle")
-async def product_toggle(request: Request, pid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE products SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE id=?;", (pid,))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir(f"/admin/products/{pid}?flash=وضعیت+تغییر+کرد")
-
-@router.post("/products/{pid}/delete")
-async def product_delete(request: Request, pid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "products")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        # چک feed — اگه موجودی داشت اجازه حذف نده
-        avail = conn.execute(
-            "SELECT COUNT(*) FROM product_feed WHERE product_id=? AND delivered=0;", (pid,)
-        ).fetchone()[0]
-        if avail > 0:
-            conn.close()
-            return _redir(f"/admin/products/{pid}?flash=⚠️+محصول+{avail}+موجودی+دارد.+ابتدا+موجودی+را+از+بخش+فید+پاک+کنید")
-
-        conn.execute("DELETE FROM product_feed WHERE product_id=?;", (pid,))
-        conn.execute("DELETE FROM products WHERE id=?;", (pid,))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "حذف محصول", "محصولات", f"id: {pid}")
-    return _redir("/admin/products?flash=محصول+حذف+شد")
-
-# ─────────────────────────── Feed ──────────────────────────────────────────
-
-@router.get("/feed", response_class=HTMLResponse)
-async def feed_overview(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        products = conn.execute("""
-            SELECT p.id, p.title, p.category,
-                   COUNT(CASE WHEN pf.delivered=0 THEN 1 END) as avail,
-                   COUNT(pf.id) as total,
-                   COALESCE(fas.threshold, 5) as threshold
-            FROM products p
-            LEFT JOIN product_feed pf ON pf.product_id=p.id
-            LEFT JOIN feed_alert_settings fas ON fas.product_id=p.id
-            GROUP BY p.id ORDER BY avail ASC, p.title;
-        """).fetchall()
-    finally:
-        conn.close()
-
-    rows = ""
-    for p in products:
-        avail = int(p["avail"] or 0)
-        total = int(p["total"] or 0)
-        pct = int(avail/max(total,1)*100)
-        c = "red" if avail==0 else ("yellow" if avail<=int(p["threshold"]) else "green")
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 font-medium text-sm">{e(p["title"])}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{e(p["category"])}</td>
-          <td class="px-4 py-3">
-            <div class="flex items-center gap-2">
-              <div class="flex-1 bg-gray-100 rounded-full h-2" style="direction:ltr">
-                <div class="bg-{c}-500 h-2 rounded-full" style="width:{pct}%"></div>
-              </div>
-              <span class="text-sm font-medium text-{c}-700 w-16">{avail}/{total}</span>
-            </div>
-          </td>
-          <td class="px-4 py-3">{_btn("مدیریت →", f"/admin/feed/{p['id']}", "indigo", small=True)}</td>
-        </tr>"""
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">🗃 مدیریت موجودی</h1>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">محصول</th><th class="px-4 py-3">دسته</th>
-            <th class="px-4 py-3">موجودی</th><th class="px-4 py-3"></th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-
-    return _layout("موجودی", body, adm)
-
-@router.get("/feed/{pid}", response_class=HTMLResponse)
-async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-
-    PAGE = 20
-    conn = _db()
-    try:
-        product = conn.execute("SELECT * FROM products WHERE id=?;", (pid,)).fetchone()
-        if not product:
-            return _redir("/admin/feed")
-        total = conn.execute("SELECT COUNT(*) FROM product_feed WHERE product_id=?;", (pid,)).fetchone()[0]
-        avail = conn.execute("SELECT COUNT(*) FROM product_feed WHERE product_id=? AND delivered=0;", (pid,)).fetchone()[0]
-        items = conn.execute("""
-            SELECT id, data, delivered, created_at FROM product_feed
-            WHERE product_id=? ORDER BY id DESC LIMIT ? OFFSET ?;
-        """, (pid, PAGE, page*PAGE)).fetchall()
-        # تعداد برگشتی این محصول
-        try:
-            returned_cnt = conn.execute(
-                "SELECT COUNT(*) FROM orders WHERE product_id=? AND status='returned';", (str(pid),)
-            ).fetchone()[0]
         except Exception:
-            returned_cnt = 0
-    finally:
-        conn.close()
+            bot.answer_callback_query(call.id, "خطا در تغییر وضعیت", show_alert=True)
+            return
 
-    pages = max((total+PAGE-1)//PAGE, 1)
-    # پیدا کردن تکراری‌ها برای نمایش برچسب
-    conn2 = _db()
-    try:
-        dup_data = set(
-            row[0] for row in conn2.execute("""
-                SELECT data FROM product_feed WHERE product_id=? AND delivered=0
-                GROUP BY data HAVING COUNT(*)>1;
-            """, (pid,)).fetchall()
+        bot.answer_callback_query(call.id, "انجام شد ✅", show_alert=False)
+        # refresh list
+        send_admin_feed_panel_list(call.message.chat.id, page=page, mode=mode, message_id=call.message.message_id, category_key=None)
+        return
+
+    if data.startswith("admin_feed_panel_delete_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        try:
+            _parts = data.split("_")
+            # admin_feed_panel_delete_{feed_id}_{page}_{mode}(_{category_key})?
+            fid = int(_parts[4]); page = int(_parts[5]); mode = int(_parts[6])
+            category_key = _parts[7] if len(_parts) > 7 else None
+        except Exception:
+            bot.answer_callback_query(call.id, "فرمت نامعتبر", show_alert=True)
+            return
+        try:
+            import sqlite3
+            conn = sqlite3.connect(DB_FULL_PATH)
+            try:
+                # اگر پیام تحویل برای این محصول ذخیره شده، قبل از حذف آیتم تلاش کن آن پیام را پاک کنی
+                _info = _get_delivery_message(int(fid))
+                if _info:
+                    try:
+                        bot.delete_message(int(_info[0]), int(_info[1]))
+                    except Exception:
+                        pass
+                    _delete_delivery_message_record(int(fid))
+                conn.execute("DELETE FROM product_feed WHERE id=?", (fid,))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            bot.answer_callback_query(call.id, "خطا در حذف", show_alert=True)
+            return
+
+        bot.answer_callback_query(call.id, "حذف شد 🗑", show_alert=False)
+        send_admin_feed_panel_list(call.message.chat.id, page=page, mode=mode, message_id=call.message.message_id)
+        return
+
+    if data == "admin_products":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton(" سایر محصولات فروشگاه 🛍", callback_data="admin_other_products"),
+            types.InlineKeyboardButton(" سرویس‌های اپل آیدی 📱", callback_data="admin_products_cat_apple"),
         )
-    except Exception:
-        dup_data = set()
-    finally:
-        conn2.close()
+        kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back"))
+        safe_edit_message_text(
+            "یکی از دسته‌بندی‌های محصولات را انتخاب کنید:",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=kb,
+        )
+        return
 
-    items_html = ""
-    for item in items:
-        preview = str(item["data"] or "").splitlines()[0][:80] if item["data"] else "---"
-        badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">تحویل‌شده</span>' if item["delivered"] else '<span class="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">موجود</span>'
-        dup_badge = ' <span class="px-1.5 py-0.5 text-xs bg-red-100 text-red-600 rounded-full font-bold">تکراری</span>' if (not item["delivered"] and item["data"] in dup_data) else ""
-        items_html += f"""
-        <tr class="border-b hover:bg-gray-50 text-sm">
-          <td class="px-4 py-2 text-gray-400 font-mono">#{item["id"]}</td>
-          <td class="px-4 py-2 font-mono text-xs truncate max-w-xs">{e(preview)}{dup_badge}</td>
-          <td class="px-4 py-2">{badge}</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(item["created_at"] or "")[:10]}</td>
-          <td class="px-4 py-2 flex gap-1">
-            {_btn("ویرایش", f"/admin/feed/item/{item['id']}/edit", "indigo", small=True)}
-            <form method="post" action="/admin/feed/item/{item['id']}/delete" onsubmit="return confirm('حذف شود؟')" class="inline">
-              <button class="btn-sm bg-red-100 text-red-600 rounded">حذف</button>
-            </form>
-          </td>
-        </tr>"""
+    if data == "admin_partner_requests":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "مدیریت درخواست‌های همکار 👇", reply_markup=admin_partner_requests_menu())
+        return
 
-    pager = '<div class="flex gap-2 mt-4 justify-center">' + "".join(
-        f'<a href="/admin/feed/{pid}?page={i}" class="px-3 py-1 rounded border text-sm {"bg-indigo-600 text-white" if i==page else "bg-white text-gray-600"}">{i+1}</a>'
-        for i in range(min(pages, 10))
-    ) + "</div>" if pages > 1 else ""
+    if data.startswith("admin_partner_list_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        suffix = data.replace("admin_partner_list_", "", 1)
+        status = None
+        if suffix in ("pending", "approved", "rejected"):
+            status = suffix
+        send_partner_list(call.message.chat.id, status=status, query=None)
+        return
 
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/feed", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">🗃 موجودی: {e(product["title"])}</h1>
-    </div>
-    <div class="grid grid-cols-4 gap-4 mb-6">
-      {_card("کل آیتم‌ها", str(total), "", "slate")}
-      {_card("موجود", str(avail), "", "green")}
-      {_card("تحویل‌شده", str(total-avail), "", "indigo")}
-      {_card("برگشتی ↩️", str(returned_cnt), "بازگردانده‌شده", "red")}
-    </div>
+    if data == "admin_partner_search":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        admin_states[uid] = {"mode": "partner_search"}
+        bot.send_message(call.message.chat.id, "عبارت جستجو را ارسال کنید (شماره/شهر/نام فروشگاه/نام/یوزرنیم):")
+        return
 
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">➕ افزودن موجودی</h2>
+    if data == "admin_other_products":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            "سایر محصولات (ادمین):",
+            reply_markup=admin_other_products_menu(),
+        )
+        return
 
-      <!-- اطلاعات حسابداری (مشترک) -->
-      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
-        <h3 class="text-sm font-semibold text-amber-800 mb-3">📊 اطلاعات حسابداری (اختیاری)</h3>
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <div><label class="text-xs text-gray-600 block mb-1">قیمت خرید هر واحد (ت) <span class="text-red-500">*</span></label>
-            <input type="number" id="acc_purchase" name="purchase_price" value="0" min="0"
-              class="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm bg-amber-50" placeholder="اجباری"></div>
-          <div><label class="text-xs text-gray-600 block mb-1">هزینه‌های جانبی (ت)</label>
-            <input type="number" id="acc_side" name="side_cost" value="0"
-              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-          <div><label class="text-xs text-gray-600 block mb-1">یادداشت</label>
-            <input type="text" id="acc_notes" name="batch_notes" placeholder="مثلاً: خرید دوره‌ای"
-              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-        </div>
-      </div>
+    if data == "admin_other_add_service":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        admin_states[uid] = {"mode": "new_other_service_title"}
+        bot.send_message(call.message.chat.id, "عنوان سرویس جدید را ارسال کنید:")
+        return
 
-      <!-- افزودن متنی -->
-      <form method="post" action="/admin/feed/{pid}/upload" class="mb-4">
-        <input type="hidden" name="purchase_price" id="txt_pp" value="0">
-        <input type="hidden" name="side_cost" id="txt_sc" value="0">
-        <input type="hidden" name="batch_notes" id="txt_bn" value="">
-        <div class="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg mb-3">
-          هر خط = یک آیتم | برای چندخطی: <code class="bg-gray-200 px-1 rounded">***</code> بین آیتم‌ها
-        </div>
-        {_textarea("items", "آیتم‌ها را اینجا paste کنید...", rows=6)}
-        <div class="mt-3">{_btn("افزودن متنی", color="green")}</div>
-      </form>
+    if data == "admin_other_delete_service":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
 
-      <!-- آپلود فایل -->
-      <form method="post" action="/admin/feed/{pid}/bulk-upload" enctype="multipart/form-data">
-        <input type="hidden" name="purchase_price" id="file_pp" value="0">
-        <input type="hidden" name="side_cost" id="file_sc" value="0">
-        <input type="hidden" name="batch_notes" id="file_bn" value="">
-        <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center">
-          <div class="text-3xl mb-2">📁</div>
-          <div class="text-sm font-semibold text-gray-700 mb-1">آپلود فایل (CSV / TXT)</div>
-          <div class="text-xs text-gray-400 mb-4">هر خط یک آیتم</div>
-          <input type="file" name="file" accept=".txt,.csv" required
-            class="block w-full text-sm text-gray-600 mb-4 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-          <button type="submit"
-            class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
-            ⬆ آپلود و افزودن
-          </button>
-        </div>
-      </form>
-      <script>
-      // sync accounting fields to hidden inputs
-      function syncAcc(){{
-        var pp=document.getElementById('acc_purchase').value;
-        var sc=document.getElementById('acc_side').value;
-        var bn=document.getElementById('acc_notes').value;
-        ['txt_pp','file_pp'].forEach(id=>document.getElementById(id).value=pp);
-        ['txt_sc','file_sc'].forEach(id=>document.getElementById(id).value=sc);
-        ['txt_bn','file_bn'].forEach(id=>document.getElementById(id).value=bn);
-      }}
-      document.getElementById('acc_purchase').addEventListener('input',syncAcc);
-      document.getElementById('acc_side').addEventListener('input',syncAcc);
-      document.getElementById('acc_notes').addEventListener('input',syncAcc);
-      </script>
-    </div>
+        bot.answer_callback_query(call.id)
 
-    <div class="card overflow-hidden">
-      <div class="px-5 py-3 border-b bg-gray-50 flex flex-wrap justify-between items-center gap-2">
-        <span class="text-sm font-medium">لیست آیتم‌ها ({total})</span>
-        <div class="flex gap-2 overflow-x-auto pb-1">
-          <form method="post" action="/admin/feed/{pid}/clear-delivered" onsubmit="return confirm('تحویل‌شده‌ها پاک شوند؟')">
-            <button class="px-3 py-1.5 text-xs text-red-400 hover:text-red-600 border border-red-200 rounded-lg">🗑 پاک‌سازی تحویل‌شده‌ها</button>
-          </form>
-          <form method="post" action="/admin/feed/{pid}/delete-all" onsubmit="return confirm('⚠️ همه {total} آیتم حذف شوند؟')">
-            <button class="px-3 py-1.5 text-xs text-red-600 hover:text-red-800 font-bold border border-red-300 rounded-lg">🗑🗑 حذف کل موجودی ({total})</button>
-          </form>
-        </div>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">ID</th>
-            <th class="px-4 py-3">پیش‌نمایش</th>
-            <th class="px-4 py-3">وضعیت</th>
-            <th class="px-4 py-3">تاریخ</th>
-            <th class="px-4 py-3"></th>
-          </tr></thead>
-          <tbody>{items_html or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>آیتمی ثبت نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-      {pager}
-    </div>"""
+        services = list_other_services(active_only=False)
+        kb = types.InlineKeyboardMarkup(row_width=1)
 
-    return _layout(f"موجودی #{pid}", body, adm, flash=flash)
+        has_deletable = False
 
-@router.post("/feed/{pid}/upload")
-async def feed_upload(request: Request, pid: int, items: str=Form(""),
-                      purchase_price: int=Form(0), side_cost: int=Form(0), batch_notes: str=Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-
-    import re as _re
-    raw = items.strip()
-    if _re.search(r"^\s*\*{3,}\s*$", raw, _re.MULTILINE):
-        blocks = [b.strip() for b in _re.split(r"^\s*\*{3,}\s*$", raw, flags=_re.MULTILINE) if b.strip()]
-    else:
-        blocks = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-
-    if not blocks:
-        return _redir(f"/admin/feed/{pid}?flash=آیتمی+یافت+نشد")
-
-    now = datetime.utcnow().isoformat()
-    conn = _db()
-    try:
-        # ثبت batch حسابداری اگه قیمت خرید داده شده
-        batch_id = None
-        if purchase_price > 0:
-            from db import create_feed_batch, link_batch_to_feed, ensure_feed_batch_schema
-            ensure_feed_batch_schema()
-            batch_id = create_feed_batch(pid, purchase_price, side_cost, len(blocks), batch_notes)
-
-        conn.executemany("INSERT INTO product_feed (product_id,data,delivered,created_at) VALUES (?,?,0,?);",
-                         [(pid, b, now) for b in blocks])
-        conn.execute("INSERT INTO feed_alert_settings (product_id,threshold,last_notified_remaining,updated_at) VALUES (?,5,NULL,?) "
-                     "ON CONFLICT(product_id) DO UPDATE SET last_notified_remaining=NULL, updated_at=excluded.updated_at;", (pid, now))
-        conn.commit()
-
-        if batch_id:
-            from db import link_batch_to_feed
-            link_batch_to_feed(pid, batch_id, 0, len(blocks))
-    finally:
-        conn.close()
-
-    # بررسی تکراری
-    from db import add_feed_items as _check_dup
-    dup_count = 0
-    # (تکراری‌ها قبلاً ثبت شدن، فقط شمارش)
-    conn2 = _db()
-    try:
-        dup_count = sum(1 for b in blocks if conn2.execute(
-            "SELECT COUNT(*) FROM product_feed WHERE product_id=? AND data=? AND delivered=0;", (pid, b)
-        ).fetchone()[0] > 1)
-    except Exception:
-        pass
-    finally:
-        conn2.close()
-
-    dispatched = 0
-    try:
-        from bot import try_dispatch_pending_for_product
-        dispatched = try_dispatch_pending_for_product(pid, limit=len(blocks))
-    except Exception:
-        pass
-
-    msg = f"{len(blocks)}+آیتم+اضافه+شد"
-    if dup_count:
-        msg += f"+({dup_count}+تکراری)"
-    if dispatched:
-        msg += f"+و+{dispatched}+سفارش+معلق+تحویل+داده+شد"
-    _log(request, f"افزودن {len(blocks)} آیتم به موجودی", "موجودی", f"product:{pid}")
-    return _redir(f"/admin/feed/{pid}?flash={msg}")
-
-@router.post("/feed/{pid}/bulk-upload")
-async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-    if not file or not file.filename:
-        return _redir(f"/admin/feed/{pid}?flash=فایلی+انتخاب+نشد")
-    # خواندن batch cost از form
-    form = await request.form()
-    purchase_price = int(form.get("purchase_price") or 0)
-    side_cost      = int(form.get("side_cost") or 0)
-    batch_notes    = str(form.get("batch_notes") or "").strip()
-
-    try:
-        raw = await file.read()
-        text = raw.decode("utf-8", errors="ignore")
-    except Exception:
-        return _redir(f"/admin/feed/{pid}?flash=خطا+در+خواندن+فایل")
-
-    # پشتیبانی از دو فرمت:
-    items = []
-    if "***" in text:
-        parts = text.split("***")
-        for part in parts:
-            item = part.strip()
-            if item and item not in ("", "\n"):
-                items.append(item)
-    else:
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
+        for skey, title, emoji, _is_active in services:
+            # جلوگیری کامل از نمایش general در لیست حذف
+            if skey == "general":
                 continue
-            item = line.split(",")[0].strip()
-            if item:
-                items.append(item)
 
-    if not items:
-        return _redir(f"/admin/feed/{pid}?flash=فایل+خالی+است")
+            has_deletable = True
+            label = (
+                f"🗑 {emoji.strip()} {title}".strip()
+                if (emoji and str(emoji).strip())
+                else f"🗑 {str(title).strip()}"
+            )
 
-    conn = _db()
-    try:
-        conn.executemany(
-            "INSERT INTO product_feed (product_id, data, delivered, created_at) VALUES (?,?,0,datetime('now'));",
-            [(pid, item) for item in items]
+            kb.add(
+                types.InlineKeyboardButton(
+                    label,
+                    callback_data=f"admin_other_del_{skey}"
+                )
+            )
+
+        if not has_deletable:
+            kb.add(
+                types.InlineKeyboardButton(
+                    "هیچ زیر‌دسته‌ای برای حذف وجود ندارد",
+                    callback_data="noop"
+                )
+            )
+
+        kb.add(
+            types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_other_back")
         )
-        conn.commit()
-        # ثبت batch حسابداری
-        if purchase_price > 0:
-            from db import create_feed_batch, link_batch_to_feed, ensure_feed_batch_schema
-            ensure_feed_batch_schema()
-            batch_id = create_feed_batch(pid, purchase_price, side_cost, len(items), batch_notes)
-            link_batch_to_feed(pid, batch_id, 0, len(items))
-    finally:
-        conn.close()
 
-    _log(request, "آپلود موجودی", "موجودی", f"محصول #{pid} — {len(items)} آیتم", admin_info=adm)
+        bot.send_message(
+            call.message.chat.id,
+            "کدام زیر‌دسته حذف شود؟",
+            reply_markup=kb
+        )
+        return
 
-    # ارسال خودکار به سفارشات معلق (FIFO)
-    dispatched = 0
-    try:
-        import sys, os
-        app_dir = os.path.dirname(__file__)
-        if app_dir not in sys.path:
-            sys.path.insert(0, app_dir)
-        from bot import try_dispatch_pending_for_product
-        dispatched = try_dispatch_pending_for_product(pid, limit=len(items))
-        if dispatched > 0:
-            _log(request, "ارسال خودکار سفارش معلق", "موجودی",
-                 f"محصول #{pid} — {dispatched} سفارش تحویل داده شد")
-    except Exception as _ex:
-        _tg_logger.warning("pending dispatch error: %s", _ex)
+    if data.startswith("admin_other_del_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
 
-    # اطلاع‌رسانی به مشترکان
-    try:
-        from db import get_stock_subscribers, mark_subscriptions_notified, reset_subscriptions_on_restock
-        from db import get_product_by_id as _gpbi
-        subs = get_stock_subscribers(pid)
-        if subs:
-            _prod = _gpbi(pid)
-            _title = _prod[2] if _prod else f"محصول #{pid}"
-            bot_token = _env("BOT_TOKEN")
-            for sub_uid in subs:
+        skey = data[len("admin_other_del_"):]
+
+        if skey == "general":
+            bot.answer_callback_query(call.id, "امکان حذف این دسته وجود ندارد", show_alert=True)
+            return
+
+        delete_other_service(skey)
+
+        bot.answer_callback_query(call.id, "سرویس حذف شد.")
+        bot.send_message(
+            call.message.chat.id,
+            "سایر محصولات (ادمین):",
+            reply_markup=admin_other_products_menu()
+        )
+        return
+
+    if data == "admin_other_back":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        send_admin_categories(call.message.chat.id)
+        return
+
+    if data.startswith("admin_partner_edit_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        target_uid = safe_int(data.replace("admin_partner_edit_", "", 1))
+        if not target_uid:
+            bot.answer_callback_query(call.id, "داده نامعتبر", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        admin_states[uid] = {"mode": "partner_edit_city", "target_user_id": int(target_uid)}
+        bot.send_message(call.message.chat.id, "✏️ شهر جدید را وارد کنید (برای عدم تغییر: - )")
+        return
+
+    if data.startswith("admin_partner_approve_") or data.startswith("admin_partner_reject_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        parts = data.split("_")
+        action = parts[2] if len(parts) >= 3 else ""
+        target_uid = safe_int(parts[-1])
+        if not target_uid:
+            bot.answer_callback_query(call.id, "داده نامعتبر", show_alert=True)
+            return
+        if action == "approve":
+            ok = approve_partner(target_uid)
+            bot.answer_callback_query(call.id, "تایید شد" if ok else "یافت نشد", show_alert=True)
+            if ok:
                 try:
-                    _requests.post(
-                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                        json={"chat_id": sub_uid,
-                              "text": f"🔔 محصول <b>{_title}</b> موجود شد!\nهم‌اکنون می‌توانید خرید کنید.",
-                              "parse_mode": "HTML"},
-                        timeout=5
+                    # فقط keyboard رو آپدیت کن — دکمه همکاری تبدیل به پنل همکار
+                    new_kb = main_menu(user_id=target_uid)
+                    bot.send_message(
+                        target_uid,
+                        t("MSG_PARTNER_APPROVED",
+                          "✅ تبریک! درخواست همکاری شما تأیید شد.\n"
+                          "قیمت ویژه همکار برای شما فعال است."),
+                        reply_markup=new_kb
                     )
                 except Exception:
                     pass
-            mark_subscriptions_notified(pid)
-            reset_subscriptions_on_restock(pid)
-    except Exception:
-        pass
-
-    flash_msg = f"✅+{len(items)}+آیتم+اضافه+شد"
-    if dispatched > 0:
-        flash_msg += f"+و+{dispatched}+سفارش+معلق+تحویل+داده+شد"
-
-    # اگر قیمت خرید ثبت نشده → صفحه قیمت‌گذاری batch باز شود
-    if purchase_price <= 0:
-        return _redir(f"/admin/feed/{pid}/batch-pricing?n={len(items)}")
-    return _redir(f"/admin/feed/{pid}?flash={flash_msg}")
-
-
-@router.get("/feed/{pid}/batch-pricing", response_class=HTMLResponse)
-async def feed_batch_pricing_get(request: Request, pid: int, n: int = 0):
-    """صفحه قیمت‌گذاری بعد از آپلود فایل — قیمت خرید + هزینه جانبی + یادداشت"""
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        prod = conn.execute("SELECT title FROM products WHERE id=?;", (pid,)).fetchone()
-    finally:
-        conn.close()
-    title = prod["title"] if prod else f"#{pid}"
-
-    body = f"""
-    <div class="max-w-lg mx-auto">
-      <div class="card p-6">
-        <div class="text-center mb-5">
-          <div class="text-4xl mb-2">✅</div>
-          <h1 class="text-lg font-bold text-gray-800">{n} آیتم به «{e(title)}» اضافه شد</h1>
-          <p class="text-sm text-gray-500 mt-1">حالا اطلاعات حسابداری این محموله را ثبت کنید</p>
-        </div>
-        <form method="post" action="/admin/feed/{pid}/batch-pricing" class="space-y-4">
-          <input type="hidden" name="n" value="{n}">
-          <div>
-            <label class="text-sm font-medium text-gray-700 block mb-1">قیمت خرید هر واحد (تومان) <span class="text-red-500">*</span></label>
-            <input type="number" name="purchase_price" required min="1" placeholder="مثلاً 45000"
-              class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
-          </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700 block mb-1">هزینه‌های جانبی (تومان)</label>
-            <input type="number" name="side_cost" value="0" min="0"
-              class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
-          </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700 block mb-1">یادداشت</label>
-            <input type="text" name="batch_notes" placeholder="مثلاً: خرید دوره‌ای از تأمین‌کننده"
-              class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
-          </div>
-          <div class="flex gap-3 pt-2">
-            <button type="submit" class="flex-1 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">💾 ثبت و پایان</button>
-            <a href="/admin/feed/{pid}" class="px-5 py-2.5 bg-gray-100 text-gray-500 rounded-xl text-sm text-center hover:bg-gray-200 transition">رد شدن</a>
-          </div>
-        </form>
-      </div>
-    </div>"""
-    return _layout("قیمت‌گذاری محموله", body, adm)
-
-
-@router.post("/feed/{pid}/batch-pricing")
-async def feed_batch_pricing_post(request: Request, pid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-    form = await request.form()
-    purchase_price = int(form.get("purchase_price") or 0)
-    side_cost      = int(form.get("side_cost") or 0)
-    batch_notes    = str(form.get("batch_notes") or "").strip()
-    n              = int(form.get("n") or 0)
-
-    if purchase_price > 0 and n > 0:
-        from db import create_feed_batch, link_batch_to_feed, ensure_feed_batch_schema
-        ensure_feed_batch_schema()
-        batch_id = create_feed_batch(pid, purchase_price, side_cost, n, batch_notes)
-        link_batch_to_feed(pid, batch_id, 0, n)
-        _log(request, "قیمت‌گذاری محموله", "موجودی", f"محصول #{pid} — {n} آیتم @ {purchase_price:,}ت", admin_info=adm)
-
-    return _redir(f"/admin/feed/{pid}?flash=✅+اطلاعات+حسابداری+ثبت+شد")
-
-
-@router.post("/feed/{pid}/delete-all")
-async def feed_delete_all(request: Request, pid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-    conn = _db()
-    try:
-        count = conn.execute("SELECT COUNT(*) FROM product_feed WHERE product_id=?;", (pid,)).fetchone()[0]
-        conn.execute("DELETE FROM product_feed WHERE product_id=?;", (pid,))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "حذف کل موجودی", "موجودی", f"محصول #{pid} — {count} آیتم حذف شد")
-    return _redir(f"/admin/feed/{pid}?flash=✅+{count}+آیتم+حذف+شد")
-
-
-@router.post("/feed/{pid}/clear-delivered")
-async def feed_clear(request: Request, pid: int, background_tasks: BackgroundTasks):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-
-    def _do_clear(product_id: int):
-        conn = _db()
+        else:
+            ok = reject_partner(target_uid)
+            bot.answer_callback_query(call.id, "رد شد" if ok else "یافت نشد", show_alert=True)
+            if ok:
+                try:
+                    bot.send_message(target_uid, "❌ درخواست نمایندگی شما رد شد.")
+                except Exception:
+                    pass
         try:
-            # حذف دسته‌ای با LIMIT برای جلوگیری از قفل شدن DB
-            while True:
-                r = conn.execute(
-                    "DELETE FROM product_feed WHERE rowid IN "
-                    "(SELECT rowid FROM product_feed WHERE product_id=? AND delivered=1 LIMIT 500);",
-                    (product_id,)
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception:
+            pass
+        return
+
+
+    if data.startswith("admin_other_toggle_"):
+        if not ensure_admin(uid):
+            return
+
+        skey = data.replace("admin_other_toggle_", "")
+
+        import sqlite3
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT is_active FROM other_services WHERE service_key=?",
+                (skey,)
+            ).fetchone()
+
+            if row:
+                new_status = 0 if int(row[0]) == 1 else 1
+                conn.execute(
+                    "UPDATE other_services SET is_active=? WHERE service_key=?",
+                    (new_status, skey)
                 )
                 conn.commit()
-                if r.rowcount == 0:
-                    break
         finally:
             conn.close()
 
-    # شمارش قبل از حذف
-    conn = _db()
-    try:
-        n = conn.execute("SELECT COUNT(*) FROM product_feed WHERE product_id=? AND delivered=1;", (pid,)).fetchone()[0]
-    finally:
-        conn.close()
-
-    background_tasks.add_task(_do_clear, pid)
-    return _redir(f"/admin/feed/{pid}?flash={n}+آیتم+در+حال+پاکسازی+است")
-
-@router.post("/feed/item/{fid}/delete")
-async def feed_item_delete(request: Request, fid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-    conn = _db()
-    try:
-        row = conn.execute("SELECT product_id FROM product_feed WHERE id=?;", (fid,)).fetchone()
-        pid = row["product_id"] if row else 0
-        conn.execute("DELETE FROM product_feed WHERE id=?;", (fid,))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir(f"/admin/feed/{pid}?flash=آیتم+حذف+شد")
+        bot.answer_callback_query(call.id, "وضعیت تغییر کرد")
+        bot.send_message(call.message.chat.id, "سایر محصولات (ادمین):", reply_markup=admin_other_products_menu())
+        return
 
 
-@router.get("/feed/item/{fid}/edit", response_class=HTMLResponse)
-async def feed_item_edit_get(request: Request, fid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
+    if data.startswith("admin_products_cat_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        cat_key = data.split("_")[-1]
+        if cat_key == "apple":
+            category = "apple"
+        else:
+            keys = {row[0] for row in list_other_services(active_only=True)}
+            if cat_key not in keys:
+                bot.answer_callback_query(call.id, "دسته‌بندی نامعتبر است.", show_alert=True)
+                return
+            category = cat_key
 
-    conn = _db()
-    try:
-        item = conn.execute("SELECT * FROM product_feed WHERE id=? LIMIT 1;", (fid,)).fetchone()
-        if not item:
-            return _redir("/admin/feed")
-        product = conn.execute("SELECT title FROM products WHERE id=? LIMIT 1;", (item["product_id"],)).fetchone()
-        product_title = product["title"] if product else f"#{item['product_id']}"
-        # اطلاعات batch
-        batch = None
-        if item["batch_id"]:
-            batch = conn.execute("SELECT * FROM feed_batches WHERE id=?;", (item["batch_id"],)).fetchone()
-    finally:
-        conn.close()
+        bot.answer_callback_query(call.id)
 
-    batch_section = ""
-    if batch:
-        batch_section = f"""
-        <div class="border-t pt-4 mt-2">
-          <h3 class="text-sm font-semibold text-gray-700 mb-3">📊 اطلاعات حسابداری Batch #{batch['id']}</h3>
-          <div class="grid grid-cols-2 gap-3">
-            <div><label class="text-xs text-gray-500 block mb-1">قیمت خرید هر واحد (ت)</label>
-              <input type="number" name="purchase_price" value="{batch['purchase_price']}"
-                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">هزینه جانبی (ت)</label>
-              <input type="number" name="side_cost" value="{batch['side_cost']}"
-                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-          </div>
-          <input type="hidden" name="batch_id" value="{batch['id']}">
-        </div>"""
+        products = get_products_by_category(category)
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        if products:
+            for p in products:
+                pid, _, title, price, _desc, is_active, _partner_price = p
+                status_icon = "✅" if is_active else "❌"
+                label = f"{status_icon} {title} | {price:,} تومان"
+                kb.add(types.InlineKeyboardButton(label, callback_data=f"admin_product_{pid}"))
+            kb.add(types.InlineKeyboardButton("➕ افزودن محصول جدید", callback_data=f"admin_new_product_{category}"))
+            kb.add(types.InlineKeyboardButton("🔙 بازگشت به دسته‌ها", callback_data="admin_products"))
+            text_msg = f"🧾 مدیریت محصولات دسته: {category}\n\nبرای مدیریت، روی هر محصول بزنید."
+        else:
+            kb.add(types.InlineKeyboardButton("➕ افزودن محصول جدید", callback_data=f"admin_new_product_{category}"))
+            kb.add(types.InlineKeyboardButton("🔙 بازگشت به دسته‌ها", callback_data="admin_products"))
+            text_msg = f"🧾 مدیریت محصولات دسته: {category}\n\nمحصولی برای این دسته ثبت نشده است."
 
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", f"/admin/feed/{item['product_id']}", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">✏️ ویرایش آیتم فید #{fid}</h1>
-      <span class="text-sm text-gray-400">{e(product_title)}</span>
-    </div>
-    <div class="card p-6 max-w-2xl">
-      <form method="post" action="/admin/feed/item/{fid}/edit" class="space-y-4">
-        <div>
-          <label class="text-sm font-medium text-gray-700 block mb-1">محتوای آیتم</label>
-          {_textarea("data", "", str(item["data"] or ""), rows=6)}
-        </div>
-        <div class="flex items-center gap-3">
-          <label class="text-sm font-medium text-gray-700">تحویل داده شده</label>
-          <input type="checkbox" name="delivered" value="1" {"checked" if item["delivered"] else ""}>
-        </div>
-        {batch_section}
-        <div class="flex gap-3">
-          {_btn("ذخیره", color="green")}
-          {_btn("انصراف", f"/admin/feed/{item['product_id']}", "slate")}
-        </div>
-      </form>
-    </div>"""
-    return _layout(f"ویرایش فید #{fid}", body, adm, flash=flash)
-
-
-@router.post("/feed/item/{fid}/edit")
-async def feed_item_edit_post(request: Request, fid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-    form = await request.form()
-    data      = str(form.get("data","")).strip()
-    delivered = 1 if form.get("delivered") == "1" else 0
-    batch_id  = form.get("batch_id")
-    pp        = int(form.get("purchase_price") or 0)
-    sc        = int(form.get("side_cost") or 0)
-
-    conn = _db()
-    try:
-        row = conn.execute("SELECT product_id FROM product_feed WHERE id=?;", (fid,)).fetchone()
-        pid = row["product_id"] if row else 0
-        conn.execute("UPDATE product_feed SET data=?, delivered=? WHERE id=?;",
-                     (data, delivered, fid))
-        if batch_id:
-            conn.execute("UPDATE feed_batches SET purchase_price=?, side_cost=? WHERE id=?;",
-                         (pp, sc, int(batch_id)))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir(f"/admin/feed/{pid}?flash=آیتم+ویرایش+شد")
-
-# ─────────────────────────── Orders ────────────────────────────────────────
-
-@router.get("/discounts", response_class=HTMLResponse)
-async def discounts_list(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    from db import ensure_discount_table
-    ensure_discount_table()
-    conn = _db()
-    try:
-        try:
-            codes = conn.execute("""
-                SELECT dc.*,
-                       (SELECT COUNT(*) FROM discount_usage du WHERE du.code_id=dc.id) as real_uses
-                FROM discount_codes dc ORDER BY id DESC;
-            """).fetchall()
-        except Exception:
-            codes = conn.execute("SELECT * FROM discount_codes ORDER BY id DESC;").fetchall()
-        products   = conn.execute("SELECT id,title FROM products WHERE is_active=1 ORDER BY title;").fetchall()
-        categories = conn.execute("SELECT id,name FROM categories WHERE is_active=1 ORDER BY name;").fetchall()
-    finally:
-        conn.close()
-
-    prod_opts = '<option value="">— همه محصولات —</option>' + "".join(f'<option value="{p["id"]}">{e(p["title"])}</option>' for p in products)
-    cat_opts  = '<option value="">— همه دسته‌ها —</option>'  + "".join(f'<option value="{c["id"]}">{e(c["name"])}</option>'  for c in categories)
-
-    rows = ""
-    for c in codes:
-        type_fa  = {"percent":"درصد","fixed":"ثابت (تومان)","wallet":"اعتبار کیف‌پول"}.get(c["type"],"")
-        status_b = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if c["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
-        flags    = []
-        try:
-            if c["first_buy_only"]: flags.append('<span class="px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded">اولین خرید</span>')
-            if c["vip_only"]:       flags.append('<span class="px-1.5 py-0.5 text-xs bg-yellow-100 text-yellow-700 rounded">VIP</span>')
-        except Exception: pass
-        try: max_v = c["max_value"]
-        except: max_v = 0
-        try: real_u = c["real_uses"]
-        except: real_u = c["used_count"] or 0
-        flag_html = " ".join(flags) or "—"
-        rows += f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3"><code class="text-sm font-bold text-indigo-700">{e(c['code'])}</code></td>
-          <td class="px-4 py-3 text-sm text-gray-700">{c['value']} {type_fa}{f" (سقف {max_v:,})" if max_v else ""}</td>
-          <td class="px-4 py-3 text-xs text-gray-500">{real_u} / {c['max_uses'] or '∞'}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(c['expires_at'] or '—')[:10]}</td>
-          <td class="px-4 py-3">{flag_html}</td>
-          <td class="px-4 py-3">{status_b}</td>
-          <td class="px-4 py-3">
-            <div class="flex gap-1">
-              <form method="post" action="/admin/discounts/{c['id']}/toggle" class="inline">
-                <button class="btn-sm {'bg-red-50 text-red-600 border border-red-200' if c['is_active'] else 'bg-green-50 text-green-600 border border-green-200'} rounded px-2 py-1 text-xs">{'غیرفعال' if c['is_active'] else 'فعال'}</button>
-              </form>
-              <form method="post" action="/admin/discounts/{c['id']}/delete" class="inline" onsubmit="return confirm('حذف شود؟')">
-                <button class="btn-sm bg-red-50 text-red-600 border border-red-200 rounded px-2 py-1 text-xs">حذف</button>
-              </form>
-            </div>
-          </td>
-        </tr>"""
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">🏷 کدهای تخفیف</h1>
-    </div>
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">➕ کد جدید</h2>
-      <form method="post" action="/admin/discounts/add" class="space-y-4">
-        <div class="grid grid-cols-2 gap-4">
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">کد *</label>{_input("code","مثلاً: STLAND20",required=True)}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">نوع</label>
-            <select name="type"><option value="percent">درصدی (%)</option><option value="fixed">ثابت (تومان)</option><option value="wallet">اعتبار کیف‌پول</option></select></div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">مقدار *</label>{_input("value","مثلاً: 20",type_="number",required=True)}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف تخفیف (درصدی — ۰=نامحدود)</label>{_input("max_value","0",type_="number")}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ سفارش</label>{_input("min_amount","0",type_="number")}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف کل (۰=نامحدود)</label>{_input("max_uses","0",type_="number")}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف هر کاربر</label>{_input("max_uses_per_user","0",type_="number")}</div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">تاریخ انقضا</label><input type="date" name="expires_at"></div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">محصول خاص</label><select name="product_id">{prod_opts}</select></div>
-          <div><label class="text-sm font-medium text-gray-700 block mb-1">دسته خاص</label><select name="category_id">{cat_opts}</select></div>
-        </div>
-        <div class="flex flex-wrap gap-4 p-4 bg-gray-50 rounded-lg">
-          <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" name="first_buy_only" value="1"> فقط اولین خرید</label>
-          <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" name="vip_only" value="1"> فقط VIP</label>
-        </div>
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>{_input("description","مناسبت، هدف...")}</div>
-        {_btn("➕ افزودن","",color="green")}
-      </form>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">کد</th><th class="px-4 py-3">تخفیف</th>
-            <th class="px-4 py-3">استفاده</th><th class="px-4 py-3">انقضا</th>
-            <th class="px-4 py-3">ویژگی</th><th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>کدی اضافه نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-    return _layout("کدهای تخفیف", body, adm, flash=flash)
-
-
-@router.post("/discounts/add")
-async def discounts_add(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    from db import ensure_discount_table
-    ensure_discount_table()
-    form     = await request.form()
-    code     = str(form.get("code","")).strip().upper()
-    dtype    = str(form.get("type","percent"))
-    value    = int(form.get("value") or 0)
-    max_val  = int(form.get("max_value") or 0)
-    min_amt  = int(form.get("min_amount") or 0)
-    max_uses = int(form.get("max_uses") or 0)
-    max_per  = int(form.get("max_uses_per_user") or 0)
-    exp      = str(form.get("expires_at","")).strip() or None
-    pid      = form.get("product_id") or None
-    cid      = form.get("category_id") or None
-    fbo      = 1 if form.get("first_buy_only") == "1" else 0
-    vip      = 1 if form.get("vip_only") == "1" else 0
-    desc     = str(form.get("description","")).strip()
-    if not code or not value:
-        return _redir("/admin/discounts?flash=کد+و+مقدار+اجباری+است")
-    conn = _db()
-    try:
-        try:
-            conn.execute("""INSERT INTO discount_codes
-                (code,type,value,max_value,min_amount,max_uses,max_uses_per_user,
-                 product_id,category_id,first_buy_only,vip_only,expires_at,description)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);""",
-                (code,dtype,value,max_val,min_amt,max_uses,max_per,
-                 pid or None, cid or None, fbo, vip, exp, desc))
-        except Exception:
-            # fallback برای schema قدیمی
-            conn.execute("INSERT INTO discount_codes (code,type,value,max_uses,min_amount,expires_at) VALUES (?,?,?,?,?,?);",
-                (code,dtype,value,max_uses,min_amt,exp))
-        conn.commit()
-    except Exception as ex:
-        return _redir(f"/admin/discounts?flash=خطا:+{str(ex)[:40]}")
-    finally:
-        conn.close()
-    _log(request, "ایجاد کد تخفیف", "تخفیف", f"کد: {code} | نوع: {dtype} | مقدار: {value}")
-    return _redir("/admin/discounts?flash=کد+تخفیف+اضافه+شد")
-
-
-@router.post("/discounts/{cid}/toggle")
-async def discount_toggle(request: Request, cid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE discount_codes SET is_active=1-is_active WHERE id=?;", (cid,))
-        conn.commit()
-    finally:
-        conn.close()
-    return _redir("/admin/discounts?flash=وضعیت+تغییر+کرد")
-
-
-@router.post("/discounts/{cid}/delete")
-async def discount_delete(request: Request, cid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("DELETE FROM discount_codes WHERE id=?;", (cid,))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "حذف کد تخفیف", "تخفیف", f"id:{cid}")
-    return _redir("/admin/discounts?flash=کد+حذف+شد")
-
-
-
-@router.get("/referrals", response_class=HTMLResponse)
-async def referrals_page(request: Request, flash: str = ""):
-    # ادغام شد در /admin/partners?tab=referrals
-    return _redir("/admin/partners?tab=referrals")
-
-
-async def _old_referrals_page_unused(request: Request, flash: str = ""):
-    settings = get_referral_settings()
-    conn = _db()
-    try:
-        refs = conn.execute("""
-            SELECT r.*, u1.full_name as referrer_name, u2.full_name as referred_name
-            FROM referrals r
-            LEFT JOIN users u1 ON u1.user_id=r.referrer_id
-            LEFT JOIN users u2 ON u2.user_id=r.referred_id
-            ORDER BY r.id DESC LIMIT 200;
-        """).fetchall()
-        total     = conn.execute("SELECT COUNT(*) FROM referrals;").fetchone()[0]
-        rewarded  = conn.execute("SELECT COUNT(*) FROM referrals WHERE rewarded=1;").fetchone()[0]
-        total_pay = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;").fetchone()[0]
-    except Exception:
-        refs = []; total = rewarded = total_pay = 0
-    finally:
-        conn.close()
-
-    rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-      <td class="px-4 py-3 text-xs text-gray-400">#{r['id']}</td>
-      <td class="px-4 py-3 text-sm">{e(r['referrer_name'] or str(r['referrer_id']))}</td>
-      <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
-      <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت شد</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">در انتظار خرید</span>'}</td>
-      <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
-      <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
-    </tr>""" for r in refs)
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">👥 سیستم معرفی</h1>
-    </div>
-    <div class="grid grid-cols-3 gap-4 mb-6">
-      <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total}</div><div class="text-xs text-gray-400 mt-1">کل معرفی‌ها</div></div>
-      <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{rewarded}</div><div class="text-xs text-gray-400 mt-1">پرداخت شده</div></div>
-      <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{int(total_pay):,}</div><div class="text-xs text-gray-400 mt-1">جمع پاداش (تومان)</div></div>
-    </div>
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">⚙️ تنظیمات</h2>
-      <form method="post" action="/admin/referrals/settings" class="flex flex-wrap gap-4 items-end">
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">مبلغ پاداش (تومان)</label>
-          {_input("reward_amount","",str(settings.get("reward_amount",5000)),"number",True)}</div>
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت سیستم</label>
-          <select name="is_active">
-            <option value="1" {"selected" if settings.get("is_active") else ""}>فعال</option>
-            <option value="0" {"" if settings.get("is_active") else "selected"}>غیرفعال</option>
-          </select></div>
-        {_btn("ذخیره","",color="green")}
-      </form>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">#</th><th class="px-4 py-3">معرف</th><th class="px-4 py-3">کاربر جدید</th>
-            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پاداش</th><th class="px-4 py-3">تاریخ</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>معرفی‌ای ثبت نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-    return _layout("سیستم معرفی", body, adm, flash=flash)
-
-
-@router.post("/referrals/settings")
-async def referrals_settings(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    form = await request.form()
-    amount = int(form.get("reward_amount") or 5000)
-    active = int(form.get("is_active") or 1)
-    from db import ensure_referral_schema
-    ensure_referral_schema()
-    conn = _db()
-    try:
-        conn.execute("UPDATE referral_settings SET reward_amount=?,is_active=?,updated_at=datetime('now') WHERE id=1;",
-                     (amount, active))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "تنظیم معرفی", "معرفی", f"پاداش: {amount:,} | فعال: {active}")
-    return _redir("/admin/referrals?flash=تنظیمات+ذخیره+شد")
-
-
-@router.get("/orders/export.xlsx")
-async def orders_export_excel(request: Request, q: str = "", status: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        wheres, params = [], []
-        if q:
-            wheres.append("(title LIKE ? OR CAST(user_id AS TEXT) LIKE ?)")
-            params += [f"%{q}%", f"%{q}%"]
-        if status:
-            wheres.append("status=?"); params.append(status)
-        where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
-        orders = conn.execute(
-            f"SELECT id,user_id,category,title,price,status,created_at FROM orders {where_sql} ORDER BY id DESC LIMIT 5000;",
-            params
-        ).fetchall()
-    finally:
-        conn.close()
-
-    status_fa = {"active": "ارسال شد", "returned": "برگشتی", "pending": "در انتظار"}
-
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        from fastapi.responses import Response
-        import io
-
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "orders"
-        ws.sheet_view.rightToLeft = True
-
-        headers = ["#", "User ID", "دسته", "محصول", "مبلغ", "وضعیت", "تاریخ"]
-        hfill = PatternFill("solid", fgColor="2EC4B6")
-        hfont = Font(bold=True, color="FFFFFF", name="Calibri")
-        for ci, h in enumerate(headers, 1):
-            c = ws.cell(row=1, column=ci, value=h)
-            c.fill = hfill; c.font = hfont
-            c.alignment = Alignment(horizontal="center", vertical="center")
-        ws.row_dimensions[1].height = 22
-
-        for ri, o in enumerate(orders, 2):
-            ws.cell(ri, 1, o["id"] or "")
-            ws.cell(ri, 2, o["user_id"] or "")
-            ws.cell(ri, 3, o["category"] or "")
-            ws.cell(ri, 4, o["title"] or "")
-            ws.cell(ri, 5, int(o["price"] or 0))
-            ws.cell(ri, 6, status_fa.get(o["status"] or "", o["status"] or ""))
-            ws.cell(ri, 7, (o["created_at"] or "")[:16])
-            if ri % 2 == 0:
-                for ci in range(1, 8):
-                    ws.cell(ri, ci).fill = PatternFill("solid", fgColor="F8FAFB")
-
-        col_widths = [8, 12, 16, 28, 14, 14, 18]
-        for ci, w in enumerate(col_widths, 1):
-            ws.column_dimensions[ws.cell(1, ci).column_letter].width = w
-
-        buf = io.BytesIO()
-        wb.save(buf); buf.seek(0)
-        _log(request, "خروجی Excel", "سفارش‌ها", f"{len(orders)} ردیف")
-        return Response(
-            content=buf.read(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=orders_{len(orders)}.xlsx"}
+        safe_edit_message_text(
+            text_msg,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=kb,
         )
+        return
 
-    except ImportError:
-        # Fallback: CSV اگه openpyxl نصب نیست
-        from fastapi.responses import Response
-        lines = ["#,User ID,دسته,محصول,مبلغ,وضعیت,تاریخ"]
-        for o in orders:
-            lines.append(f'{o["id"]},{o["user_id"] or ""},{o["category"] or ""},'
-                         f'"{(o["title"] or "").replace(chr(34), "")}",'
-                         f'{int(o["price"] or 0)},{status_fa.get(o["status"] or "", "")},'
-                         f'{(o["created_at"] or "")[:16]}')
-        csv_content = "\ufeff" + "\n".join(lines)  # BOM برای UTF-8 در Excel
-        _log(request, "خروجی CSV", "سفارش‌ها", f"{len(orders)} ردیف")
-        return Response(
-            content=csv_content.encode("utf-8"),
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f"attachment; filename=orders_{len(orders)}.csv"}
+    if data.startswith("admin_back_cat_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        category = data.split("_")[-1]
+        bot.answer_callback_query(call.id)
+        send_products_menu(call.message.chat.id, category, admin_view=True)
+        return
+
+    if data.startswith("admin_product_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        product = get_product_by_id(pid)
+        if not product:
+            bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        send_admin_product_detail(call.message, product)
+        return
+
+    if data.startswith("admin_feed_list_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        try:
+            _parts = data.split("_")
+            pid = safe_int(_parts[3])
+            page = safe_int(_parts[4]) or 0
+            mode = safe_int(_parts[5]) or 0
+        except Exception:
+            pid, page, mode = None, 0, 0
+
+        bot.answer_callback_query(call.id)
+        send_admin_feed_list(
+            chat_id=call.message.chat.id,
+            product_id=pid,
+            page=page,
+            mode=mode,
+            message_id=call.message.message_id,
         )
+        return
 
-
-@router.get("/orders", response_class=HTMLResponse)
-async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-
-    PAGE = 30
-    conn = _db()
-    try:
-        # migration امن
-        for col, typedef in [("status", "TEXT DEFAULT 'active'"), ("feed_id", "INTEGER"), ("returned_at", "TEXT")]:
+    if data.startswith("admin_feed_view_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        _p = data.split("_")
+        feed_id = safe_int(_p[3])
+        pid = safe_int(_p[4])
+        page = safe_int(_p[5]) or 0
+        mode = safe_int(_p[6]) or 0
+        bot.answer_callback_query(call.id)
+        row = list_feed_items(pid, None, limit=1, offset=0)
+        try:
+            import sqlite3
+            _conn = sqlite3.connect(DB_FULL_PATH)
             try:
-                conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {typedef};")
-            except Exception:
-                pass
-        where = "WHERE user_id LIKE ?" if q else ""
-        params_q = (f"%{q}%",) if q else ()
-        total = conn.execute(f"SELECT COUNT(*) FROM orders {where};", params_q).fetchone()[0]
-        orders = conn.execute(f"SELECT * FROM orders {where} ORDER BY id DESC LIMIT ? OFFSET ?;",
-                              params_q+(PAGE, page*PAGE)).fetchall()
-        # آمار برگشتی
-        returned_total = conn.execute("SELECT COUNT(*) FROM orders WHERE status='returned';").fetchone()[0]
-    finally:
-        conn.close()
-
-    pages = max((total+PAGE-1)//PAGE, 1)
-
-    def order_status_badge(st):
-        if st == "returned":
-            return '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">برگشتی</span>'
-        return '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">فعال</span>'
-
-    rows = ""
-    for o in orders:
-        st = o["status"] if "status" in o.keys() and o["status"] else "active"
-        is_returned = st == "returned"
-        action_btns = ""
-        if not is_returned:
-            action_btns = f"""
-            <a href="/admin/orders/{o['id']}/edit" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">✏️ ویرایش</a>
-            <a href="/admin/orders/{o['id']}/return" class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">↩️ برگشت</a>"""
+                _r = _conn.execute(
+                    "SELECT id, data, delivered, created_at FROM product_feed WHERE id=? AND product_id=?;",
+                    (int(feed_id), int(pid)),
+                ).fetchone()
+            finally:
+                _conn.close()
+        except Exception:
+            _r = None
+        if not _r:
+            bot.send_message(call.message.chat.id, "آیتم مورد نظر پیدا نشد.")
+            return
+        _id, _data, _del, _created = _r
+        status = "✅ تحویل‌شده" if int(_del) == 1 else "📦 تحویل‌نشده"
+        _oid = None
+        _info = _get_delivery_message(int(_id))
+        if _info:
+            _oid = _info[2]
+        txt = (
+            f"📄 آیتم محصول (Feed ID) #{_id}\n"
+            f"محصول (Product ID) #{pid}\n"
+        )
+        if _oid is not None:
+            txt += f"Order ID: #{_display_order_no(_oid)}\n"
+        txt += (
+            f"وضعیت: {status}\n"
+            f"تاریخ ثبت: {_created}\n\n"
+            f"<code>{html.escape(_data)}</code>"
+        )
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        if int(_del) == 0:
+            kb.add(types.InlineKeyboardButton("✅ علامت تحویل", callback_data=f"admin_feed_toggle_{_id}_{pid}_{page}_{mode}"))
         else:
-            action_btns = '<span class="text-xs text-gray-400">برگشت خورده</span>'
+            kb.add(types.InlineKeyboardButton("♻️ برگشت به تحویل‌نشده", callback_data=f"admin_feed_toggle_{_id}_{pid}_{page}_{mode}"))
+        kb.add(types.InlineKeyboardButton("🗑 حذف آیتم", callback_data=f"admin_feed_delete_{_id}_{pid}_{page}_{mode}"))
+        kb.add(types.InlineKeyboardButton("⬅️ بازگشت به لیست", callback_data=f"admin_feed_list_{pid}_{page}_{mode}"))
+        bot.send_message(call.message.chat.id, txt, reply_markup=kb, parse_mode="HTML")
+        return
 
-        rows += f"""
-        <tr class="border-b hover:bg-gray-50 text-sm {'bg-red-50/30' if is_returned else ''}">
-          <td class="px-4 py-2 text-gray-400">#{o["id"]}</td>
-          <td class="px-4 py-2 font-mono text-xs"><code>{e(o["user_id"])}</code></td>
-          <td class="px-4 py-2">{e(o["title"])}</td>
-          <td class="px-4 py-2 text-green-700 font-medium">{int(o["price"]):,} ت</td>
-          <td class="px-4 py-2">{order_status_badge(st)}</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(o["created_at"] or "")[:16]}</td>
-          <td class="px-4 py-2 flex gap-1 items-center">{action_btns}</td>
-        </tr>"""
-
-    pager = '<div class="flex gap-2 mt-4 justify-center">' + "".join(
-        f'<a href="/admin/orders?page={i}" class="px-3 py-1 rounded border text-sm {"bg-indigo-600 text-white" if i==page else "bg-white"}">{i+1}</a>'
-        for i in range(min(pages, 10))
-    ) + "</div>" if pages > 1 else ""
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
-      <h1 class="text-2xl font-bold text-gray-800">🧾 سفارش‌ها ({total:,})</h1>
-      <div class="flex items-center gap-2 flex-wrap">
-        <a href="/admin/orders/export.xlsx?q={e(q)}" class="btn-sm bg-green-50 text-green-700 border border-green-200 rounded px-3 py-1.5 text-xs">⬇ Excel</a>
-        <span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">↩️ برگشتی: {returned_total}</span>
-        <form method="get" class="flex gap-2">
-          {_input("q","جستجو User ID...",q)} {_btn("جستجو","","slate",True)}
-        </form>
-      </div>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">#</th><th class="px-4 py-3">User ID</th>
-            <th class="px-4 py-3">محصول</th><th class="px-4 py-3">مبلغ</th>
-            <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>سفارشی ثبت نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-      {pager}
-    </div>"""
-
-    return _layout("سفارش‌ها", body, adm, flash=flash)
-
-
-@router.get("/orders/{oid}/edit", response_class=HTMLResponse)
-async def order_edit_get(request: Request, oid: int, flash: str=""):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        o = conn.execute("SELECT * FROM orders WHERE id=? LIMIT 1;", (oid,)).fetchone()
-    finally:
-        conn.close()
-    if not o:
-        return _redir("/admin/orders?flash=سفارش+یافت+نشد")
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/orders", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش سفارش #{oid}</h1>
-    </div>
-    <div class="card p-6 max-w-xl">
-      <form method="post" action="/admin/orders/{oid}/edit" class="space-y-4">
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">کاربر</label>
-          <code class="bg-gray-100 px-2 py-1 rounded text-sm">{e(o["user_id"])}</code>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">عنوان محصول</label>
-          {_input("title", "", str(o["title"] or ""), required=True)}
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">مبلغ (تومان)</label>
-          {_input("price", "", str(o["price"] or 0), type_="number", required=True)}
-        </div>
-        <div class="flex gap-3">
-          {_btn("ذخیره تغییرات", color="green")}
-          {_btn("انصراف", "/admin/orders", "slate")}
-        </div>
-      </form>
-    </div>"""
-    return _layout(f"ویرایش سفارش #{oid}", body, adm, flash=flash)
-
-
-@router.post("/orders/{oid}/edit")
-async def order_edit_post(request: Request, oid: int, title: str=Form(""), price: str=Form("0")):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    try:
-        from db import order_update
-        order_update(oid, title=title.strip(), price=int(price or 0))
-    except Exception as ex:
-        _tg_logger.error("order_edit error: %s", ex)
-        return _redir(f"/admin/orders/{oid}/edit?flash=خطا+در+ذخیره")
-    return _redir("/admin/orders?flash=سفارش+ویرایش+شد")
-
-
-@router.get("/orders/{oid}/return", response_class=HTMLResponse)
-async def order_return_form(request: Request, oid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    conn = _db()
-    try:
-        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
-        if not order:
-            return _redir(f"/admin/orders?flash=سفارش+یافت+نشد")
-        wallet = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (order["user_id"],)).fetchone()
-        wallet_balance = int(wallet["balance"] if wallet else 0)
-        price = int(order["price"] or 0)
-    finally:
-        conn.close()
-
-    body = f"""
-    <div style="max-width:640px">
-      <div class="page-header">
-        <h1>برگشت سفارش #{oid}</h1>
-        <p>محصول: {e(order["title"] or "")} — کاربر: {order["user_id"]}</p>
-      </div>
-      <form method="post" action="/admin/orders/{oid}/return">
-        <div class="card card-p" style="margin-bottom:14px">
-          <h2 class="section-title">تکلیف محصول</h2>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="product_action" value="restore" checked style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>بازگشت به موجودی</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">محصول مجدداً قابل فروش می‌شود</div></div>
-            </label>
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="product_action" value="delete" style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>حذف دائم از فید</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">محصول از چرخه فروش خارج می‌شود</div></div>
-            </label>
-          </div>
-        </div>
-
-        <div class="card card-p" style="margin-bottom:14px">
-          <h2 class="section-title">تکلیف کیف‌پول کاربر</h2>
-          <div style="background:var(--page-bg);border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:14px">
-            موجودی فعلی: <strong>{wallet_balance:,} تومان</strong> — مبلغ سفارش: <strong>{price:,} تومان</strong>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="none" checked style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>بدون تغییر کیف‌پول</strong></div>
-            </label>
-            <label class="perm-label" style="padding:12px;background:#F0FDF4;border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="full" style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>بازگشت کامل — {price:,} تومان</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">مبلغ کامل سفارش به کیف‌پول اضافه می‌شود</div></div>
-            </label>
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="custom_add" style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>افزایش مبلغ دلخواه</strong></div>
-            </label>
-            <label class="perm-label" style="padding:12px;background:#FEF2F2;border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="custom_deduct" style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>کسر از کیف‌پول</strong></div>
-            </label>
-          </div>
-          <div style="margin-top:14px">
-            <label>مبلغ (تومان) — فقط برای گزینه‌های دلخواه</label>
-            {_input("custom_amount", f"مثلاً: {price}", type_="number")}
-          </div>
-        </div>
-
-        <div class="card card-p" style="margin-bottom:14px">
-          <h2 class="section-title">اطلاعات تکمیلی</h2>
-          <div style="margin-bottom:14px">
-            <label>علت برگشت</label>
-            <select name="reason">
-              <option value="wrong_product">ارسال محصول اشتباه</option>
-              <option value="replacement">جایگزینی محصول</option>
-              <option value="order_fix">اصلاح سفارش</option>
-              <option value="customer_request">درخواست مشتری</option>
-              <option value="other">سایر</option>
-            </select>
-          </div>
-          <div>
-            <label>توضیحات اضافه (اختیاری)</label>
-            {_input("note", "توضیح بیشتر...")}
-          </div>
-          <div style="margin-top:14px">
-            <label class="perm-label" style="font-size:13px">
-              <input type="checkbox" name="notify_user" value="1" checked style="width:15px;height:15px;min-height:15px">
-              ارسال نوتیف به کاربر
-            </label>
-          </div>
-        </div>
-
-        <div style="display:flex;gap:12px">
-          {_btn("ثبت برگشت","",color="red")}
-          <a href="/admin/orders/{oid}" class="btn btn-slate">انصراف</a>
-        </div>
-      </form>
-    </div>"""
-    return _layout(f"برگشت سفارش #{oid}", body, adm)
-
-
-@router.post("/orders/{oid}/return")
-async def order_return(request: Request, oid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-
-    form = await request.form()
-    product_action = str(form.get("product_action", "restore"))
-    wallet_action  = str(form.get("wallet_action", "none"))
-    custom_amount  = int(form.get("custom_amount") or 0)
-    reason         = str(form.get("reason", "other"))
-    note           = str(form.get("note", ""))
-    notify_user    = form.get("notify_user") == "1"
-
-    try:
-        from db import order_mark_returned_advanced
-        result = order_mark_returned_advanced(
-            oid,
-            product_action=product_action,
-            wallet_action=wallet_action,
-            custom_amount=custom_amount,
-        )
-    except Exception as ex:
-        _tg_logger.error("order_return error: %s", ex)
-        return _redir(f"/admin/orders?flash=خطا:+{str(ex)[:50]}")
-
-    if not result.get("ok"):
-        return _redir(f"/admin/orders?flash={result.get('error','خطا')}")
-
-    # حذف پیام تحویل
-    if result.get("chat_id") and result.get("message_id"):
-        _tg_delete_message(result["chat_id"], result["message_id"])
-
-    # نوتیف به کاربر
-    if notify_user and result.get("user_id"):
-        wallet_msg = ""
-        if wallet_action == "full":
-            wallet_msg = f"\n💰 مبلغ {result.get('price',0):,} تومان به کیف‌پول شما افزوده شد."
-        elif wallet_action == "custom_add" and custom_amount:
-            wallet_msg = f"\n💰 مبلغ {custom_amount:,} تومان به کیف‌پول شما افزوده شد."
-        _tg_send(int(result["user_id"]),
-            f"⚠️ سفارش #{oid} (<b>{html.escape(str(result.get('title') or ''))}</b>) "
-            f"توسط پشتیبانی برگشت داده شد.{wallet_msg}\n"
-            "در صورت سوال با پشتیبانی در تماس باشید.")
-
-    # لاگ کامل
-    _log(request, "برگشت سفارش", "سفارش‌ها",
-         f"سفارش #{oid} | محصول: {product_action} | کیف‌پول: {wallet_action} | علت: {reason} | {note[:80]}")
-
-    # redirect به صفحه ارسال مجدد
-    return _redir(f"/admin/orders/{oid}/resend?flash=برگشت+ثبت+شد")
-
-
-@router.get("/orders/{oid}/resend", response_class=HTMLResponse)
-async def order_resend_page(request: Request, oid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    conn = _db()
-    import sqlite3 as _sq_rsnd; conn.row_factory = _sq_rsnd.Row
-    try:
-        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
-        if not order:
-            return _redir("/admin/orders?flash=سفارش+یافت+نشد")
-        order = dict(order)
-        # موجودی محصول مشابه
-        feed_items = conn.execute("""
-            SELECT pf.id, pf.data, p.title
-            FROM product_feed pf
-            JOIN products p ON p.id=pf.product_id
-            WHERE p.title=? AND pf.delivered=0
-            ORDER BY pf.id LIMIT 5;
-        """, (order['title'],)).fetchall()
-    finally:
-        conn.close()
-
-    items_opts = "".join(
-        f'<option value="{f["id"]}">{f["id"]} — {str(f["data"] or "")[:50]}</option>'
-        for f in feed_items
-    )
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← سفارش‌ها", "/admin/orders", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">♻️ ارسال مجدد سفارش #{oid}</h1>
-    </div>
-
-    <div class="grid md:grid-cols-2 gap-4">
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">📦 اطلاعات سفارش</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between"><span class="text-gray-400">محصول</span><span>{e(order['title'])}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{order['status']}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">کاربر</span><code>{order['user_id']}</code></div>
-          <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span>{int(order['price'] or 0):,} تومان</span></div>
-        </div>
-      </div>
-
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">🔄 ارسال محصول جدید (معاوضه)</h2>
-        {f"""<form method="post" action="/admin/orders/{oid}/resend">
-          <div class="mb-3">
-            <label class="text-sm font-medium text-gray-700 block mb-1">انتخاب آیتم از موجودی</label>
-            <select name="feed_id" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <option value="">انتخاب کنید...</option>
-              {items_opts}
-            </select>
-          </div>
-          <div class="mb-4">
-            <label class="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" name="notify_user" value="1" checked>
-              اطلاع‌رسانی به کاربر
-            </label>
-          </div>
-          {_btn("ارسال محصول جدید","",color="green")}
-        </form>""" if items_opts else '<p class="text-red-500 text-sm">موجودی در دسترس نیست</p>'}
-      </div>
-    </div>"""
-    return _layout(f"ارسال مجدد #{oid}", body, adm, flash=flash)
-
-
-@router.post("/orders/{oid}/resend")
-async def order_resend_post(request: Request, oid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    form = await request.form()
-    feed_id = int(form.get("feed_id") or 0)
-    notify  = form.get("notify_user") == "1"
-    if not feed_id:
-        return _redir(f"/admin/orders/{oid}/resend?flash=آیتم+انتخاب+نشد")
-
-    conn = _db()
-    try:
-        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
-        feed  = conn.execute("SELECT * FROM product_feed WHERE id=? AND delivered=0;", (feed_id,)).fetchone()
-        if not order or not feed:
-            return _redir(f"/admin/orders/{oid}/resend?flash=خطا:+داده+یافت+نشد")
-
-        user_id = int(order["user_id"])
-        title   = order["title"]
-        data    = feed["data"]
-
-        # علامت‌گذاری feed به عنوان تحویل‌شده
-        conn.execute("UPDATE product_feed SET delivered=1, order_id=?, delivered_at=datetime('now') WHERE id=?;",
-                     (oid, feed_id))
-        # آپدیت order با feed_id جدید
-        conn.execute("UPDATE orders SET feed_id=?, status='active' WHERE id=?;", (feed_id, oid))
-        conn.commit()
-    finally:
-        conn.close()
-
-    # ارسال به کاربر
-    if notify:
+    if data.startswith("admin_feed_toggle_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        _p = data.split("_")
+        feed_id = safe_int(_p[3])
+        pid = safe_int(_p[4])
+        page = safe_int(_p[5]) or 0
+        mode = safe_int(_p[6]) or 0
         try:
-            import html as _html
-            _tg_send(user_id,
-                f"📦 محصول جدید برای سفارش #{oid} ارسال شد:\n\n"
-                f"<code>{_html.escape(str(data))}</code>")
+            import sqlite3
+            _conn = sqlite3.connect(DB_FULL_PATH)
+            try:
+                _r = _conn.execute("SELECT delivered FROM product_feed WHERE id=? AND product_id=?;", (int(feed_id), int(pid))).fetchone()
+            finally:
+                _conn.close()
+            cur_del = int(_r[0]) if _r else 0
         except Exception:
-            pass
+            cur_del = 0
+        new_del = 0 if cur_del == 1 else 1
+        # اگر از حالت تحویل‌شده به برگشت (تحویل‌نشده) می‌رویم، پیام تحویل را از چت مشتری پاک کن.
+        if int(cur_del) == 1 and int(new_del) == 0 and feed_id is not None:
+            _info = _get_delivery_message(int(feed_id))
+            if _info:
+                _chat_id, _msg_id = _info[0], _info[1]
+                try:
+                    bot.delete_message(int(_chat_id), int(_msg_id))
+                except Exception:
+                    pass
+            _delete_delivery_message_record(int(feed_id))
+        set_feed_item_delivered(feed_id, new_del)
+        bot.answer_callback_query(call.id, "انجام شد.")
+        send_admin_feed_list(
+            chat_id=call.message.chat.id,
+            product_id=pid,
+            page=page,
+            mode=mode,
+            message_id=call.message.message_id,
+        )
+        return
 
-    _log(request, "ارسال مجدد", "سفارش‌ها", f"سفارش #{oid} | feed_item:{feed_id}")
-    return _redir(f"/admin/orders?flash=محصول+جدید+برای+سفارش+{oid}+ارسال+شد")
+    if data.startswith("admin_feed_delete_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        _p = data.split("_")
+        feed_id = safe_int(_p[3])
+        pid = safe_int(_p[4])
+        page = safe_int(_p[5]) or 0
+        mode = safe_int(_p[6]) or 0
+        delete_feed_item(feed_id)
+        bot.answer_callback_query(call.id, "حذف شد.")
+        send_admin_feed_list(
+            chat_id=call.message.chat.id,
+            product_id=pid,
+            page=page,
+            mode=mode,
+            message_id=call.message.message_id,
+        )
+        return
 
+    if data.startswith("admin_feed_bulk_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        admin_states[uid] = {"mode": "feed_bulk", "product_id": pid}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            """📦 ارسال موجودی به صورت چندخطی:
 
-# ─────────────────────────── Wallets ───────────────────────────────────────
+    ✅ استاندارد جدید: هر آیتم می‌تواند چندخطی باشد.
+    برای جدا کردن آیتم‌ها، یک خط فقط شامل 3 ستاره یا بیشتر بفرستید (*** یا **** و ...).
+    اگر ستاره‌ها را نفرستید، حالت قدیمی فعال است: هر خط = یک آیتم.
+    برای لغو: /cancel
 
-@router.get("/users/{uid}", response_class=HTMLResponse)
-async def user_detail(request: Request, uid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_user_full, get_user_orders, get_user_tickets, ensure_user_extra_schema
-    ensure_user_extra_schema()
-    user = get_user_full(uid)
-    if not user:
-        return _redir("/admin/users?flash=کاربر+یافت+نشد")
-    orders  = get_user_orders(uid, 10)
-    tickets = get_user_tickets(uid, 10)
+    نمونه چندخطی:
+    <code>Apple Id
 
-    is_partner = user.get("is_partner")
-    is_blocked = user.get("is_blocked", 0)
-    partner_badge = '<span class="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full">🤝 همکار</span>' if is_partner else ''
-    status_badge  = '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">مسدود</span>' if is_blocked else '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'
+    email: testone.com
+    pass: 23884890HAd
+    date: 1983/02/12
 
-    # خریدها
-    order_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-      <td class="px-4 py-2 text-xs text-gray-400">#{o['id']}</td>
-      <td class="px-4 py-2 text-sm">{e(o['title'] or '—')}</td>
-      <td class="px-4 py-2 text-sm font-medium text-green-600">{int(o['price'] or 0):,} ت</td>
-      <td class="px-4 py-2 text-xs text-gray-400">{(o['created_at'] or '')[:16]}</td>
-    </tr>""" for o in orders)
+    در حفظ اپل آیدی کوشا باشید
 
-    # تیکت‌ها
-    ticket_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-      <td class="px-4 py-2 text-xs"><a href="/admin/tickets/{t['id']}" class="text-indigo-600">#{t['id']}</a></td>
-      <td class="px-4 py-2 text-xs">{e((t['type'] if 'type' in t.keys() else '') or 'پشتیبانی')}</td>
-      <td class="px-4 py-2 text-xs text-gray-400">{e((t['status'] or '')[:20])}</td>
-      <td class="px-4 py-2 text-xs text-gray-400">{(t['updated_at'] or '')[:16]}</td>
-    </tr>""" for t in tickets)
+    ***
+    Apple Id 2
 
-    note_val = e(user.get("admin_note", "") or "")
-    tags_val = e(user.get("tags", "") or "")
+    email: testone2.com
+    pass: 23884890HAd
+    date: 1983/02/12
 
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← کاربران", "/admin/users", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">{e(user['full_name'] or 'کاربر')}</h1>
-      {partner_badge} {status_badge}
-    </div>
+    در حفظ اپل آیدی کوشا باشید</code>""",
+            parse_mode="HTML",
+        )
+        return
 
-    <div class="grid md:grid-cols-3 gap-4 mb-6">
-      <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{user.get('order_count',0)}</div><div class="text-xs text-gray-400 mt-1">تعداد خرید</div></div>
-      <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{int(user.get('balance',0)):,}</div><div class="text-xs text-gray-400 mt-1">کیف‌پول (ت)</div></div>
-      <div class="card p-5 text-center"><div class="text-2xl font-bold text-gray-700">{len(tickets)}</div><div class="text-xs text-gray-400 mt-1">تیکت‌ها</div></div>
-    </div>
+    if data.startswith("admin_feed_alert_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        admin_states[uid] = {"mode": "feed_alert", "product_id": pid}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            "⚠️ آستانه هشدار موجودی را ارسال کنید (فقط عدد).\n"
+            "مثلاً 5 یعنی وقتی باقی‌مانده ≤ 5 شد به ادمین هشدار بده.\n"
+            "برای لغو: /cancel",
+        )
+        return
 
-    <div class="grid md:grid-cols-2 gap-4 mb-4">
-      <!-- اطلاعات پایه -->
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">اطلاعات پایه</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-2 rounded">{user['user_id']}</code></div>
-          <div class="flex justify-between"><span class="text-gray-400">یوزرنیم</span><span>{"@"+e(user['username']) if user['username'] else "—"}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(user['first_seen'] or '')[:10]}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">آخرین فعالیت</span><span>{(user['last_seen'] or '')[:10]}</span></div>
-        </div>
-        <div class="mt-4 pt-4 border-t flex gap-2">
-          <a href="/admin/wallets?q={uid}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-3 py-1.5 text-xs">مدیریت کیف‌پول</a>
-          <form method="post" action="/admin/users/{uid}/toggle-block" class="inline">
-            <button class="btn-sm {'bg-green-50 text-green-700 border-green-200' if is_blocked else 'bg-red-50 text-red-600 border-red-200'} border rounded px-3 py-1.5 text-xs">
-              {'رفع مسدودی' if is_blocked else 'مسدود کردن'}
-            </button>
-          </form>
-        </div>
-      </div>
+    if data.startswith("admin_edit_title_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        admin_states[uid] = {"mode": "edit_title", "product_id": pid}
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "عنوان جدید محصول را ارسال کنید:")
+        return
 
-      <!-- یادداشت و برچسب -->
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">یادداشت خصوصی مدیر</h2>
-        <form method="post" action="/admin/users/{uid}/note">
-          <textarea name="admin_note" rows="3" placeholder="یادداشت خصوصی درباره این کاربر..."
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3">{note_val}</textarea>
-          <label class="text-xs text-gray-500 block mb-1">برچسب‌ها (با کاما جدا کنید)</label>
-          <input type="text" name="tags" value="{tags_val}" placeholder="VIP، مشکوک، ..."
-            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3">
-          {_btn("ذخیره یادداشت", color="green")}
-        </form>
-      </div>
-    </div>
+    if data.startswith("admin_edit_price_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        admin_states[uid] = {"mode": "edit_price", "product_id": pid}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id, "قیمت جدید (فقط عدد) را ارسال کنید:"
+        )
+        return
 
-    <div class="grid md:grid-cols-2 gap-4">
-      <!-- خریدها -->
-      <div class="card overflow-hidden">
-        <div class="px-5 py-3 border-b bg-gray-50 font-medium text-sm text-gray-700">🛒 خریدهای اخیر</div>
-        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b"><th class="px-4 py-2">#</th><th class="px-4 py-2">محصول</th><th class="px-4 py-2">مبلغ</th><th class="px-4 py-2">تاریخ</th></tr></thead>
-          <tbody>{order_rows or "<tr><td colspan='4' class='text-center py-4 text-gray-400 text-xs'>خریدی ندارد</td></tr>"}</tbody>
-        </table></div>
-      </div>
+    if data.startswith("admin_set_limit_c_") or data.startswith("admin_set_limit_p_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id, "دسترسی غیرمجاز", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        is_c = data.startswith("admin_set_limit_c_")
+        pid = int(data.split("_")[-1])
+        admin_states[uid] = {"mode": ("edit_limit_c" if is_c else "edit_limit_p"), "product_id": pid}
+        bot.send_message(call.message.chat.id, "عدد حد خرید روزانه را ارسال کنید (0 یعنی نامحدود):")
+        return
 
-      <!-- تیکت‌ها -->
-      <div class="card overflow-hidden">
-        <div class="px-5 py-3 border-b bg-gray-50 font-medium text-sm text-gray-700">🎫 تیکت‌ها</div>
-        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b"><th class="px-4 py-2">#</th><th class="px-4 py-2">نوع</th><th class="px-4 py-2">وضعیت</th><th class="px-4 py-2">آپدیت</th></tr></thead>
-          <tbody>{ticket_rows or "<tr><td colspan='4' class='text-center py-4 text-gray-400 text-xs'>تیکتی ندارد</td></tr>"}</tbody>
-        </table></div>
-      </div>
-    </div>"""
-    return _layout(f"کاربر {uid}", body, adm, flash=flash)
+    if data.startswith("admin_edit_partner_price_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        admin_states[uid] = {"mode": "edit_partner_price", "product_id": pid}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            "قیمت همکار جدید (فقط عدد) را ارسال کنید. برای استفاده از قیمت عادی، 0 بفرستید:",
+        )
+        return
 
+    if data.startswith("admin_edit_desc_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        admin_states[uid] = {"mode": "edit_desc", "product_id": pid}
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "توضیحات جدید محصول را ارسال کنید:")
+        return
 
-@router.post("/users/{uid}/note")
-async def user_save_note(request: Request, uid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    form = await request.form()
-    note = str(form.get("admin_note", "")).strip()
-    tags = str(form.get("tags", "")).strip()
-    from db import update_user_note
-    update_user_note(uid, note, tags)
-    _log(request, "ویرایش یادداشت کاربر", "کاربران", f"user:{uid}")
-    return _redir(f"/admin/users/{uid}?flash=یادداشت+ذخیره+شد")
+    if data.startswith("admin_toggle_active_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        product = get_product_by_id(pid)
+        if not product:
+            bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
+            return
+        toggle_product_active(pid)
+        bot.answer_callback_query(call.id, "وضعیت محصول به‌روزرسانی شد.")
+        product = get_product_by_id(pid)
+        send_admin_product_detail(call.message, product)
+        return
 
+    if data.startswith("admin_delete_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        pid = safe_int(data.split("_")[-1])
+        product = get_product_by_id(pid)
+        if not product:
+            bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
+            return
 
-@router.post("/users/{uid}/toggle-block")
-async def user_toggle_block(request: Request, uid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import toggle_user_block
-    blocked = toggle_user_block(uid)
-    _log(request, "مسدود/رفع مسدودی کاربر", "کاربران", f"user:{uid} blocked:{blocked}")
-    return _redir(f"/admin/users/{uid}?flash={'کاربر+مسدود+شد' if blocked else 'مسدودی+رفع+شد'}")
+        category = product[1]
+        delete_product(pid)
 
+        bot.answer_callback_query(call.id, "محصول به‌صورت کامل حذف شد.")
+        safe_edit_message_text(
+            f"مدیریت محصولات دسته: {category}",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+        )
+        send_products_menu(call.message.chat.id, category, admin_view=True)
+        return
 
-@router.get("/users", response_class=HTMLResponse)
-async def users_list(request: Request, q: str = "", sort: str = "last_seen", flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
+    if data.startswith("admin_new_product_"):
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        category = data.split("_")[-1]
+        admin_states[uid] = {"mode": "new_product_title", "category": category}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            f"عنوان محصول جدید برای دستهٔ {category} را ارسال کنید:",
+        )
+        return
 
-    conn = _db()
-    try:
-        sort_col = sort if sort in ("user_id","full_name","first_seen","last_seen","orders","balance") else "last_seen"
-        where = "WHERE u.user_id=? OR u.username LIKE ? OR u.full_name LIKE ?" if q else ""
-        params = (int(q) if q.isdigit() else 0, f"%{q}%", f"%{q}%") if q else ()
-        users = conn.execute(f"""
-            SELECT u.*,
-                   COALESCE(w.balance,0) AS balance,
-                   COUNT(DISTINCT o.id) AS orders,
-                   (SELECT 1 FROM partners p WHERE p.tg_user_id=u.user_id AND p.status='approved' LIMIT 1) AS is_partner
-            FROM users u
-            LEFT JOIN wallets w ON w.user_id=u.user_id
-            LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id
-            {where}
-            GROUP BY u.user_id
-            ORDER BY {sort_col} DESC
-            LIMIT 500;
-        """, params).fetchall()
-        total = conn.execute(f"SELECT COUNT(*) FROM users;").fetchone()[0]
-    finally:
-        conn.close()
+    if data == "admin_wallet":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton(
+                "➕ شارژ کیف پول کاربر", callback_data="admin_wallet_credit"
+            ),
+        )
+        kb.add(
+            types.InlineKeyboardButton(
+                "➖ کاهش کیف پول کاربر", callback_data="admin_wallet_debit"
+            ),
+        )
+        kb.add(
+            types.InlineKeyboardButton(
+                "✏️ تنظیم مستقیم موجودی", callback_data="admin_wallet_set"
+            ),
+        )
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            "یکی از عملیات کیف پول را انتخاب کنید:",
+            reply_markup=kb,
+        )
+        return
 
-    def sort_link(col, label):
-        active = sort == col
-        style = "color:var(--primary);font-weight:700" if active else "color:var(--text-muted)"
-        return f'<a href="?q={e(q)}&sort={col}" style="{style};text-decoration:none;font-size:11px">{label} {"↓" if active else ""}</a>'
+    if data == "admin_wallet_credit":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        admin_states[uid] = {"mode": "wallet_credit_user_id"}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id, "آیدی عددی کاربر برای شارژ کیف پول را ارسال کنید:"
+        )
+        return
 
-    rows = ""
-    for u in users:
-        try: is_partner = u["is_partner"]
-        except: is_partner = None
-        partner_badge = ' <span class="px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">همکار</span>' if is_partner else ""
+    if data == "admin_wallet_debit":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        admin_states[uid] = {"mode": "wallet_debit_user_id"}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id, "آیدی عددی کاربر برای کاهش موجودی را ارسال کنید:"
+        )
+        return
 
-        try: blocked = u["is_blocked"]
-        except: blocked = 0
-        if blocked:
-            status_badge = '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">مسدود</span>'
+    if data == "admin_wallet_set":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        admin_states[uid] = {"mode": "wallet_set_user_id"}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id, "آیدی عددی کاربر برای تنظیم موجودی را ارسال کنید:"
+        )
+        return
+
+    if data == "admin_stats":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        stats = get_stats()
+        total_wallets, total_balance, total_orders, total_sales, active_products = stats
+        text = (
+            "📊 آمار کلی ربات:\n\n"
+            f"تعداد کیف پول‌ها: <b>{total_wallets}</b>\n"
+            f"مجموع موجودی کیف پول‌ها: <b>{total_balance:,}</b> تومان\n\n"
+            f"تعداد سفارش‌ها: <b>{total_orders}</b>\n"
+            f"مجموع فروش: <b>{total_sales:,}</b> تومان\n\n"
+            f"تعداد محصولات فعال: <b>{active_products}</b>\n"
+        )
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, text)
+        return
+
+    if data == "admin_payments":
+        if not ensure_admin(uid):
+            bot.answer_callback_query(call.id)
+            return
+        orders = get_recent_orders_global(limit=15)
+        if not orders:
+            text = t("MSG_NO_ORDERS")
         else:
-            status_badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'
-
-        rows += f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3"><code class="text-xs bg-gray-100 px-1.5 rounded">{u["user_id"]}</code></td>
-          <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(u["full_name"] or "—")}{partner_badge}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{"@"+e(u["username"]) if u["username"] else "—"}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(u["first_seen"] or "")[:10]}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(u["last_seen"] or "")[:10]}</td>
-          <td class="px-4 py-3 text-sm font-bold text-gray-700">{u["orders"] or 0}</td>
-          <td class="px-4 py-3 text-sm font-bold text-green-600">{int(u["balance"] or 0):,}</td>
-          <td class="px-4 py-3">{status_badge}</td>
-          <td class="px-4 py-3"><a href="/admin/users/{u['user_id']}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-2 py-1 text-xs">پروفایل</a></td>
-        </tr>"""
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">👤 کاربران ({total:,})</h1>
-      <a href="/admin/users/export.xlsx" class="btn-sm bg-green-50 text-green-700 border border-green-200 rounded px-3 py-1.5 text-xs">⬇ Excel</a>
-    </div>
-    <div class="card p-4 mb-4">
-      <form method="get" class="flex gap-3">
-        {_input("q","جستجو User ID یا نام...",value=q)}
-        <button type="submit" class="btn-sm bg-indigo-600 text-white rounded px-4 py-2 text-sm shrink-0">جستجو</button>
-        {"<a href='/admin/users' class='btn-sm bg-gray-100 text-gray-600 border border-gray-200 rounded px-3 py-2 text-sm'>پاک</a>" if q else ""}
-      </form>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">{sort_link("user_id","ID")}</th>
-            <th class="px-4 py-3">نام</th>
-            <th class="px-4 py-3">یوزرنیم</th>
-            <th class="px-4 py-3">{sort_link("first_seen","عضویت")}</th>
-            <th class="px-4 py-3">{sort_link("last_seen","آخرین فعالیت")}</th>
-            <th class="px-4 py-3">{sort_link("orders","خریدها")}</th>
-            <th class="px-4 py-3">{sort_link("balance","کیف‌پول")}</th>
-            <th class="px-4 py-3">وضعیت</th>
-            <th class="px-4 py-3"></th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='9' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-    return _layout("کاربران", body, adm, flash=flash)
-
-
-@router.get("/users/export.xlsx")
-async def users_export(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    conn = _db()
-    try:
-        users = conn.execute("""
-            SELECT u.user_id, u.username, u.full_name, u.first_seen, u.last_seen,
-                   COALESCE(w.balance,0) AS balance, COUNT(DISTINCT o.id) AS orders
-            FROM users u
-            LEFT JOIN wallets w ON w.user_id=u.user_id
-            LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id
-            GROUP BY u.user_id ORDER BY u.last_seen DESC LIMIT 10000;
-        """).fetchall()
-    finally:
-        conn.close()
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        from fastapi.responses import Response
-        import io
-        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "users"
-        ws.sheet_view.rightToLeft = True
-        headers = ["User ID","یوزرنیم","نام","اولین ورود","آخرین فعالیت","خریدها","کیف‌پول"]
-        hfill = PatternFill("solid", fgColor="2EC4B6")
-        for ci,h in enumerate(headers,1):
-            c = ws.cell(1,ci,h); c.fill=hfill; c.font=Font(bold=True,color="FFFFFF")
-        for ri,u in enumerate(users,2):
-            for ci,v in enumerate([u[0],u[1] or "",u[2] or "",str(u[3] or "")[:10],str(u[4] or "")[:10],u[6] or 0,u[5] or 0],1):
-                ws.cell(ri,ci,v)
-        buf=io.BytesIO(); wb.save(buf); buf.seek(0)
-        return Response(content=buf.read(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition":"attachment; filename=users.xlsx"})
-    except ImportError:
-        from fastapi.responses import Response
-        lines=["\ufeffUser ID,یوزرنیم,نام,اولین ورود,آخرین فعالیت,خریدها,کیف‌پول"]
-        for u in users:
-            lines.append(f'{u[0]},{u[1] or ""},{u[2] or ""},{str(u[3] or "")[:10]},{str(u[4] or "")[:10]},{u[6] or 0},{u[5] or 0}')
-        return Response(content="\n".join(lines).encode("utf-8"),
-            media_type="text/csv;charset=utf-8",
-            headers={"Content-Disposition":"attachment; filename=users.csv"})
-
-
-@router.get("/wallets", response_class=HTMLResponse)
-async def wallets_list(request: Request, q: str="", flash: str=""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        where = "WHERE user_id=?" if (q and q.isdigit()) else ""
-        params = (int(q),) if (q and q.isdigit()) else ()
-        wallets = conn.execute(f"SELECT * FROM wallets {where} ORDER BY balance DESC LIMIT 50;", params).fetchall()
-        totals  = conn.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM wallets;").fetchone()
-    finally:
-        conn.close()
-
-    rows = "".join(f"""
-        <tr class="border-b hover:bg-gray-50 text-sm">
-          <td class="px-4 py-2 font-mono text-xs"><code>{w["user_id"]}</code></td>
-          <td class="px-4 py-2 font-bold text-{"green" if int(w["balance"])>0 else "gray"}-700">{int(w["balance"]):,} ت</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(w["updated_at"] or "")[:16]}</td>
-          <td class="px-4 py-2">
-            <details class="inline-block">
-              <summary class="cursor-pointer px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 list-none">✏️ ویرایش موجودی</summary>
-              <form method="post" action="/admin/wallets/adjust" class="flex gap-2 items-end mt-2 p-2 bg-gray-50 rounded-lg">
-                <input type="hidden" name="uid" value="{w["user_id"]}">
-                <input type="number" name="amount" placeholder="مبلغ" required class="w-24 border border-gray-300 rounded px-2 py-1">
-                <select name="op" class="border border-gray-300 rounded px-2 py-1">
-                  <option value="add">➕ افزودن</option>
-                  <option value="sub">➖ کاهش</option>
-                  <option value="set">✏️ تنظیم</option>
-                </select>
-                <button class="px-3 py-1 bg-indigo-600 text-white rounded text-xs">ثبت</button>
-              </form>
-            </details>
-            <a href="/admin/wallets/{w["user_id"]}/history"
-              class="px-2 py-1 text-xs bg-teal-50 text-teal-700 border border-teal-200 rounded hover:bg-teal-100 mr-1">🧾 تاریخچه شارژ</a>
-          </td>
-        </tr>""" for w in wallets)
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">💰 کیف‌پول‌ها</h1>
-      <span class="text-sm text-gray-500">{int(totals[0])} کاربر — جمع: {int(totals[1]):,} تومان</span>
-    </div>
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">تنظیم موجودی</h2>
-      <form method="post" action="/admin/wallets/adjust" class="flex gap-3 flex-wrap items-end">
-        <div><label class="text-xs text-gray-500 block mb-1">User ID</label>{_input("uid","",type_="number",required=True)}</div>
-        <div><label class="text-xs text-gray-500 block mb-1">مبلغ</label>{_input("amount","",type_="number",required=True)}</div>
-        <div><label class="text-xs text-gray-500 block mb-1">عملیات</label>
-          <select name="op">
-            <option value="add">➕ افزودن</option>
-            <option value="sub">➖ کاهش</option>
-            <option value="set">✏️ تنظیم مستقیم</option>
-          </select>
-        </div>
-        {_btn("اعمال")}
-      </form>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="px-5 py-3 border-b bg-gray-50 flex gap-2">
-        <form method="get" class="flex gap-2">
-          {_input("q","جستجو User ID...",q)} {_btn("جستجو","","slate",True)}
-        </form>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">User ID</th><th class="px-4 py-3">موجودی</th>
-            <th class="px-4 py-3">آپدیت</th><th class="px-4 py-3">عملیات</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>"""
-
-    return _layout("کیف‌پول‌ها", body, adm, flash=flash)
-
-
-@router.get("/wallets/{uid}/history", response_class=HTMLResponse)
-async def wallet_charge_history(request: Request, uid: int):
-    """تاریخچه شارژ کاربر — تاریخ، مبلغ، روش (درگاه / کارت به کارت)"""
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-
-    charges = []
-    conn = _db()
-    try:
-        # شارژهای درگاه (زرین‌پال) — فقط پرداخت‌شده‌ها
-        try:
-            for r in conn.execute("""
-                SELECT amount, COALESCE(paid_at, created_at) AS dt, ref_id
-                FROM zarinpal_transactions
-                WHERE user_id=? AND status IN ('paid','OK','success','verified')
-                  AND COALESCE(payment_type,'wallet')='wallet'
-                ORDER BY id DESC LIMIT 100;
-            """, (uid,)).fetchall():
-                charges.append({"dt": r["dt"] or "", "amount": int(r["amount"] or 0),
-                                "method": "🌐 درگاه پرداخت", "ref": r["ref_id"] or "—"})
-        except Exception:
-            pass
-        # شارژهای کارت به کارت — تأییدشده‌ها
-        try:
-            for r in conn.execute("""
-                SELECT amount, COALESCE(updated_at, created_at) AS dt
-                FROM card_receipts
-                WHERE user_id=? AND status='approved'
-                ORDER BY id DESC LIMIT 100;
-            """, (uid,)).fetchall():
-                charges.append({"dt": r["dt"] or "", "amount": int(r["amount"] or 0),
-                                "method": "💳 کارت به کارت", "ref": "—"})
-        except Exception:
-            pass
-        # موجودی فعلی
-        w = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (uid,)).fetchone()
-        balance = int(w["balance"]) if w else 0
-    finally:
-        conn.close()
-
-    charges.sort(key=lambda c: c["dt"], reverse=True)
-    total_charged = sum(c["amount"] for c in charges)
-
-    rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-        <td class="px-4 py-2.5 text-xs text-gray-500">{(c['dt'] or '')[:16].replace('T',' ')}</td>
-        <td class="px-4 py-2.5 font-bold text-green-700">{c['amount']:,} ت</td>
-        <td class="px-4 py-2.5">{c['method']}</td>
-        <td class="px-4 py-2.5 text-xs text-gray-400"><code>{e(str(c['ref']))}</code></td>
-      </tr>""" for c in charges)
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6 flex-wrap">
-      {_btn("← کیف‌پول‌ها", "/admin/wallets", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">🧾 تاریخچه شارژ — کاربر <code>{uid}</code></h1>
-    </div>
-    <div class="grid grid-cols-3 gap-4 mb-6">
-      {_card("موجودی فعلی", f"{balance:,} ت", "", "indigo")}
-      {_card("تعداد شارژ", f"{len(charges)}", "", "teal")}
-      {_card("جمع شارژها", f"{total_charged:,} ت", "", "green")}
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">مبلغ</th>
-          <th class="px-4 py-3">روش پرداخت</th><th class="px-4 py-3">کد پیگیری</th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='4' class='text-center py-8 text-gray-400'>شارژی ثبت نشده</td></tr>"}</tbody>
-      </table></div>
-    </div>"""
-
-    return _layout("تاریخچه شارژ", body, adm)
-
-@router.post("/wallets/adjust")
-async def wallet_adjust(request: Request, uid: str=Form(""), amount: str=Form("0"), op: str=Form("add")):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    try:
-        user_id = int(uid); amt = int(amount)
-    except ValueError:
-        return _redir("/admin/wallets?flash=مقادیر+نامعتبر")
-    now = datetime.utcnow().isoformat()
-    conn = _db()
-    try:
-        # جدول لاگ تراکنش‌های دستی
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS wallet_admin_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER, op TEXT, amount INTEGER,
-                old_balance INTEGER, new_balance INTEGER,
-                admin_id TEXT, created_at TEXT
-            );
-        """)
-        row = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (user_id,)).fetchone()
-        cur = int(row["balance"] if row else 0)
-        new_bal = cur+amt if op=="add" else max(0,cur-amt) if op=="sub" else amt
-        conn.execute("INSERT INTO wallets (user_id,balance,updated_at) VALUES (?,?,?) "
-                     "ON CONFLICT(user_id) DO UPDATE SET balance=excluded.balance, updated_at=excluded.updated_at;",
-                     (user_id, new_bal, now))
-        # ثبت تراکنش در سوابق
-        admin_id = adm[0] if adm else "?"
-        conn.execute(
-            "INSERT INTO wallet_admin_log (user_id, op, amount, old_balance, new_balance, admin_id, created_at) "
-            "VALUES (?,?,?,?,?,?,?);",
-            (user_id, op, amt, cur, new_bal, str(admin_id), now)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    # اطلاع به کاربر
-    op_label = {"add": "افزایش", "sub": "کاهش", "set": "تنظیم"}.get(op, op)
-    try:
-        _tg_send(
-            user_id,
-            f"💰 موجودی کیف‌پول شما توسط پشتیبانی {op_label} یافت.\n"
-            f"موجودی فعلی: <b>{new_bal:,}</b> تومان"
-        )
-    except Exception:
-        pass
-
-    return _redir(f"/admin/wallets?flash=موجودی+{user_id}+به+{new_bal:,}+تومان+تنظیم+شد")
-
-# ─────────────────────────── Telegram Helper ───────────────────────────────
-
-import logging as _logging
-_tg_logger = _logging.getLogger("admin_panel.tg")
-
-
-def _tg_send(chat_id: int, text: str, parse_mode: str = "HTML",
-              reply_markup: dict | None = None) -> bool:
-    token = _env("BOT_TOKEN")
-    if not token:
-        _tg_logger.error("BOT_TOKEN not set — cannot send Telegram message")
-        return False
-    try:
-        data: dict = {"chat_id": int(chat_id), "text": text, "parse_mode": parse_mode}
-        if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup)
-        r = _requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json=data, timeout=15
-        )
-        if not r.ok:
-            _tg_logger.error("Telegram sendMessage failed: %s %s", r.status_code, r.text[:200])
-        return r.ok
-    except Exception as ex:
-        _tg_logger.exception("_tg_send error: %s", ex)
-        return False
-
-
-def _tg_send_photo(chat_id: int, photo_url: str, caption: str = "",
-                    reply_markup: dict | None = None) -> bool:
-    token = _env("BOT_TOKEN")
-    if not token:
-        return False
-    try:
-        data: dict = {"chat_id": chat_id, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
-        if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup)
-        r = _requests.post(
-            f"https://api.telegram.org/bot{token}/sendPhoto",
-            json=data, timeout=15
-        )
-        return r.ok
-    except Exception:
-        return False
-
-
-def _tg_delete_message(chat_id: int, message_id: int) -> bool:
-    """حذف یک پیام از چت کاربر (برای برگشت محصول)."""
-    token = _env("BOT_TOKEN")
-    if not token or not chat_id or not message_id:
-        return False
-    try:
-        r = _requests.post(
-            f"https://api.telegram.org/bot{token}/deleteMessage",
-            json={"chat_id": int(chat_id), "message_id": int(message_id)}, timeout=15
-        )
-        return r.ok
-    except Exception as ex:
-        _tg_logger.error("_tg_delete_message error: %s", ex)
-        return False
-
-
-# ─────────────────────────── Tickets ───────────────────────────────────────
-
-def _ticket_status_badge(status: str) -> str:
-    colors = {
-        "waiting_admin": "red",
-        "waiting_user":  "yellow",
-        "closed":        "gray",
-        # backward compat
-        "open": "green", "in_progress": "yellow",
-    }
-    labels = {
-        "waiting_admin": "منتظر ادمین",
-        "waiting_user":  "منتظر کاربر",
-        "closed":        "بسته",
-        "open": "باز", "in_progress": "در بررسی",
-    }
-    c = colors.get(status, "slate")
-    l = labels.get(status, status)
-    return f'<span class="px-2 py-0.5 text-xs rounded-full bg-{c}-100 text-{c}-700">{l}</span>'
-
-
-@router.get("/logs", response_class=HTMLResponse)
-async def admin_logs_page(request: Request, q: str = "", section: str = "", admin_name: str = "", page: int = 0, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "admins")
-    if guard: return guard
-    _ensure_theme_table()
-
-    PER_PAGE = 50
-    conn = _db()
-    try:
-        sections = [r[0] for r in conn.execute("SELECT DISTINCT section FROM admin_logs WHERE section!='' ORDER BY section;").fetchall()]
-        admin_names = [r[0] for r in conn.execute("SELECT DISTINCT admin_name FROM admin_logs WHERE admin_name IS NOT NULL ORDER BY admin_name;").fetchall()]
-
-        wheres, params = [], []
-        if q:
-            wheres.append("(admin_name LIKE ? OR action LIKE ? OR details LIKE ?)")
-            params += [f"%{q}%", f"%{q}%", f"%{q}%"]
-        if section:
-            wheres.append("section=?"); params.append(section)
-        if admin_name:
-            wheres.append("admin_name=?"); params.append(admin_name)
-        where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
-
-        total = conn.execute(f"SELECT COUNT(*) FROM admin_logs {where_sql};", params).fetchone()[0]
-        logs = conn.execute(
-            f"SELECT * FROM admin_logs {where_sql} ORDER BY id DESC LIMIT ? OFFSET ?;",
-            params + [PER_PAGE, page * PER_PAGE]
-        ).fetchall()
-    finally:
-        conn.close()
-
-    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
-
-    def action_badge(a):
-        danger_words = ("حذف", "ناموفق", "ریست", "خروج", "بازیابی")
-        warn_words = ("تغییر", "ویرایش", "غیرفعال")
-        if any(w in a for w in danger_words): return "badge badge-danger"
-        if any(w in a for w in warn_words): return "badge badge-warning"
-        return "badge badge-success"
-
-    def log_badge(a):
-        if any(w in a for w in ("حذف","ناموفق","ریست")): return f'<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">{e(a)}</span>'
-        if any(w in a for w in ("تغییر","ویرایش","غیرفعال")): return f'<span class="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-700 rounded-full">{e(a)}</span>'
-        return f'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">{e(a)}</span>'
-    rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-      <td class="px-4 py-3 text-xs text-gray-400">#{l["id"]}</td>
-      <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(l["admin_name"] or "—")}</td>
-      <td class="px-4 py-3">{log_badge(l["action"])}</td>
-      <td class="px-4 py-3 text-xs text-gray-500">{e(l["section"] or "—")}</td>
-      <td class="px-4 py-3 text-xs text-gray-500 max-w-xs truncate" title="{e(l['details'] or '')}">{e((l["details"] or "")[:60])}</td>
-      <td class="px-4 py-3 text-xs font-mono text-gray-400">{e(l["ip"] or "—")}</td>
-      <td class="px-4 py-3 text-xs text-gray-400">{e((l["created_at"] or "")[:16])}</td>
-    </tr>""" for l in logs)
-
-    section_opts = "<option value=''>همه بخش‌ها</option>" + "".join(
-        f'<option value="{e(s)}" {"selected" if section==s else ""}>{e(s)}</option>' for s in sections
-    )
-    admin_opts = "<option value=''>همه ادمین‌ها</option>" + "".join(
-        f'<option value="{e(n)}" {"selected" if admin_name==n else ""}>{e(n)}</option>' for n in admin_names
-    )
-
-    pagination = ""
-    if pages > 1:
-        pagination = '<div style="display:flex;gap:6px;justify-content:center;margin-top:16px;flex-wrap:wrap">'
-        for i in range(pages):
-            active = i == page
-            pagination += f'<a href="?q={e(q)}&section={e(section)}&admin_name={e(admin_name)}&page={i}" style="padding:5px 12px;border-radius:8px;font-size:12px;text-decoration:none;background:{"var(--primary)" if active else "var(--card-bg)"};color:{"#000" if active else "var(--text-muted)"};border:1px solid var(--border)">{i+1}</a>'
-        pagination += "</div>"
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <div>
-        <h1 class="text-2xl font-bold text-gray-800">📋 گزارش فعالیت</h1>
-        <p class="text-xs text-gray-400 mt-1">{total:,} رویداد ثبت‌شده</p>
-      </div>
-    </div>
-    <div class="card p-4 mb-4">
-      <form method="get" class="flex flex-wrap gap-3 items-end">
-        <div class="flex-1 min-w-40"><label class="text-xs text-gray-500 block mb-1">جستجو</label>{_input("q","عملیات، جزئیات...",value=q)}</div>
-        <div class="min-w-36"><label class="text-xs text-gray-500 block mb-1">ادمین</label><select name="admin_name">{admin_opts}</select></div>
-        <div class="min-w-36"><label class="text-xs text-gray-500 block mb-1">بخش</label><select name="section">{section_opts}</select></div>
-        <button type="submit" class="btn-sm bg-indigo-600 text-white rounded px-4 py-2 text-sm">فیلتر</button>
-        <a href="/admin/logs" class="btn-sm bg-gray-100 text-gray-600 border border-gray-200 rounded px-3 py-2 text-sm">پاک</a>
-      </form>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">#</th><th class="px-4 py-3">ادمین</th>
-            <th class="px-4 py-3">عملیات</th><th class="px-4 py-3">بخش</th>
-            <th class="px-4 py-3">جزئیات</th><th class="px-4 py-3">IP</th>
-            <th class="px-4 py-3">زمان</th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>رویدادی ثبت نشده</td></tr>"}</tbody>
-        </table>
-      </div>
-    </div>
-    {pagination}"""
-    return _layout("گزارش فعالیت", body, adm, flash=flash)
-
-
-def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str:
-    """ساخت HTML بخش مرکز مالی — قابل استفاده هم در صفحه مستقل و هم Embed شده در تیکت‌ها.
-    link_fn(type_filter, q, sort) -> URL برای لینک‌های تب/مرتب‌سازی/جستجو
-    """
-    from db import get_card_receipts, ensure_card_receipts_schema
-    ensure_card_receipts_schema()
-
-    rows = []
-    if type_filter in ("", "card2card"):
-        for r in get_card_receipts(""):
-            rows.append({
-                "type": "card2card", "type_label": "💳 کارت‌به‌کارت",
-                "id": r["id"], "user_id": r["user_id"],
-                "user_name": r.get("full_name") or r.get("username") or str(r["user_id"]),
-                "amount": int(r.get("amount") or 0), "status": r["status"],
-                "created_at": r.get("created_at") or "",
-                "detail_url": f"/admin/receipts/{r['id']}/view",
-            })
-    if type_filter in ("", "payout"):
-        conn = _db(); conn.row_factory = sqlite3.Row
-        try:
-            payouts = conn.execute("""
-                SELECT p.id, p.user_id, p.amount, p.status, p.created_at,
-                       u.full_name, u.username
-                FROM partner_payouts p LEFT JOIN users u ON u.user_id = p.user_id
-                ORDER BY p.id DESC;
-            """).fetchall()
-        except Exception:
-            payouts = []
-        finally:
-            conn.close()
-        for p in payouts:
-            rows.append({
-                "type": "payout", "type_label": "💰 تسویه همکار",
-                "id": p["id"], "user_id": p["user_id"],
-                "user_name": p["full_name"] or p["username"] or str(p["user_id"]),
-                "amount": int(p["amount"] or 0), "status": p["status"],
-                "created_at": p["created_at"] or "",
-                "detail_url": f"/admin/partners/payout/{p['id']}",
-            })
-
-    if q:
-        ql = q.strip().lower()
-        rows = [r for r in rows if
-                ql in str(r["user_name"]).lower() or ql in str(r["user_id"])
-                or ql in str(r["id"]) or ql in str(r["amount"])
-                or ql in str(r["status"]).lower() or ql in r["type_label"].lower()]
-
-    if sort == "date_asc":
-        rows.sort(key=lambda r: r["created_at"])
-    elif sort == "amount_desc":
-        rows.sort(key=lambda r: -r["amount"])
-    elif sort == "amount_asc":
-        rows.sort(key=lambda r: r["amount"])
-    else:
-        rows.sort(key=lambda r: r["created_at"], reverse=True)
-
-    status_map = {
-        "pending":  ("⏳ جدید",     "bg-amber-100 text-amber-700"),
-        "approved": ("✅ تأیید شد", "bg-green-100 text-green-700"),
-        "rejected": ("❌ رد شد",    "bg-red-100 text-red-600"),
-    }
-    pending_count = sum(1 for r in rows if r["status"] == "pending")
-
-    def sort_link(key, label):
-        active = sort == key
-        return f'<a href="{link_fn(type_filter, q, key)}" class="text-xs {"text-indigo-600 font-bold" if active else "text-gray-400"}">{label}</a>'
-
-    fin_rows_list = []
-    for r in rows:
-        sl, sc = status_map.get(r["status"], (r["status"], "bg-gray-100 text-gray-600"))
-        fin_rows_list.append(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-          <td class="px-3 py-3">{r['type_label']}</td>
-          <td class="px-3 py-3 font-medium">{e(str(r['user_name']))}</td>
-          <td class="px-3 py-3 text-xs text-gray-400"><code>{r['user_id']}</code></td>
-          <td class="px-3 py-3 font-bold text-green-600">{r['amount']:,}</td>
-          <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs {sc}">{sl}</span></td>
-          <td class="px-3 py-3 text-xs text-gray-400">{r['created_at'][:16]}</td>
-          <td class="px-3 py-3"><a href="{r['detail_url']}" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده و رسیدگی</a></td>
-        </tr>""")
-
-    fin_recent = fin_rows_list[:3]
-    fin_older  = fin_rows_list[3:]
-    rows_html = "".join(fin_recent) or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"
-    fin_older_html = "".join(fin_older)
-
-    fin_toggle_btn = ""
-    if fin_older:
-        fin_toggle_btn = f"""
-        <div style="text-align:center;padding:10px">
-          <button type="button" id="toggle-older-fin-btn" data-older-count="{len(fin_older)}"
-            style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:20px;font-size:12px;cursor:pointer">
-            🔽 نمایش {len(fin_older)} درخواست قدیمی‌تر
-          </button>
-        </div>
-        <script>
-        (function(){{
-          var btn = document.getElementById('toggle-older-fin-btn');
-          if(btn){{
-            btn.addEventListener('click', function(){{
-              var el = document.getElementById('older-fin-block');
-              var cnt = btn.getAttribute('data-older-count');
-              if(el.style.display === 'none'){{
-                el.style.display = 'table-row-group';
-                btn.textContent = '🔼 بستن درخواست‌های قدیمی‌تر';
-              }} else {{
-                el.style.display = 'none';
-                btn.textContent = '🔽 نمایش ' + cnt + ' درخواست قدیمی‌تر';
-              }}
-            }});
-          }}
-        }})();
-        </script>"""
-
-    tabs = ""
-    for lbl, val in [("همه", ""), ("💳 کارت‌به‌کارت", "card2card"), ("💰 تسویه همکار", "payout")]:
-        active = type_filter == val
-        tabs += (f'<a href="{link_fn(val, q, sort)}" class="px-3 py-1.5 rounded-lg text-xs border '
-                 f'{"bg-indigo-600 text-white border-indigo-600" if active else "bg-white text-gray-500 border-gray-200"}">{lbl}</a>')
-
-    bulk_delete_btn = """
-        <form method="post" action="/admin/receipts/delete-all"
-              onsubmit="return confirm('⚠️ تمام رسیدهای کارت‌به‌کارت برای همیشه حذف می‌شوند. مطمئنید؟')">
-          <button class="px-2.5 py-1 bg-red-50 text-red-500 border border-red-200 rounded-md text-[11px] font-medium whitespace-nowrap hover:bg-red-100 transition">
-            🗑 حذف همه
-          </button>
-        </form>"""
-
-    return f"""
-    <div id="financial" style="scroll-margin-top:80px" class="mt-8">
-      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <h1 class="text-xl font-bold text-gray-800">💰 مرکز مالی</h1>
-        {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
-      </div>
-      <div class="flex gap-2 mb-4 flex-wrap">{tabs}</div>
-      <form method="get" class="flex gap-2 mb-4">
-        <input type="hidden" name="fin_type" value="{type_filter}">
-        <input type="hidden" name="fin_sort" value="{sort}">
-        <input type="text" name="fin_q" value="{e(q)}" placeholder="جستجو: نام، آیدی، مبلغ، وضعیت..."
-          class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
-        <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">جستجو</button>
-      </form>
-      <div class="flex justify-end mb-2">{bulk_delete_btn}</div>
-      <div class="card overflow-hidden"><div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-3 py-2">نوع</th><th class="px-3 py-2">کاربر</th>
-            <th class="px-3 py-2">ID</th>
-            <th class="px-3 py-2">{sort_link('amount_desc' if sort!='amount_desc' else 'amount_asc','مبلغ ↕')}</th>
-            <th class="px-3 py-2">وضعیت</th>
-            <th class="px-3 py-2">{sort_link('date_asc' if sort=='date_desc' else 'date_desc','تاریخ ↕')}</th>
-            <th class="px-3 py-2">عملیات</th>
-          </tr></thead>
-          <tbody>{rows_html}</tbody>
-          <tbody id="older-fin-block" style="display:none">{fin_older_html}</tbody>
-        </table>
-      </div></div>
-      {fin_toggle_btn}
-    </div>"""
-
-
-@router.get("/financial", response_class=HTMLResponse)
-async def financial_queue(request: Request, type_filter: str = "", q: str = "",
-                          sort: str = "date_desc", flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-
-    def link_fn(tf, qq, srt):
-        from urllib.parse import quote
-        return f"/admin/financial?type_filter={tf}&q={quote(qq)}&sort={srt}"
-
-    body = _financial_section_html(type_filter, q, sort, link_fn)
-    return _layout("مرکز مالی", body, adm, flash=flash)
-
-
-@router.get("/tickets", response_class=HTMLResponse)
-async def tickets_list(request: Request, status_filter: str = "", type_filter: str = "",
-                       fin_type: str = "", fin_q: str = "", fin_sort: str = "date_desc",
-                       show_archived: str = "0", flash: str = ""):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    from db import ensure_ticket_archive_schema
-    ensure_ticket_archive_schema()
-
-    conn = _db()
-    try:
-        wheres, params = [], []
-        if status_filter:
-            wheres.append("t.status=?"); params.append(status_filter)
-        if type_filter:
-            wheres.append("t.type=?"); params.append(type_filter)
-        if show_archived == "1":
-            wheres.append("t.archived=1")
-        else:
-            wheres.append("(t.archived IS NULL OR t.archived=0)")
-        where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
-        params.append(200)
-        try:
-            tickets = conn.execute(f"""
-                SELECT t.*,
-                       (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
-                       (SELECT sender FROM ticket_messages m WHERE m.ticket_id=t.id ORDER BY m.id DESC LIMIT 1) AS last_sender,
-                       p.title AS product_title
-                FROM tickets t
-                LEFT JOIN products p ON p.id=t.product_id
-                {where_sql}
-                ORDER BY t.updated_at DESC, t.id DESC LIMIT ?;
-            """, params).fetchall()
-        except Exception:
-            tickets = conn.execute(f"""
-                SELECT t.*, (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
-                NULL AS last_sender, NULL AS product_title
-                FROM tickets t {where_sql}
-                ORDER BY id DESC LIMIT ?;
-            """, params).fetchall()
-        stats = {}
-        for s in ("waiting_admin","waiting_user","closed","waiting_info","reviewing","ready_delivery"):
-            stats[s] = conn.execute("SELECT COUNT(*) FROM tickets WHERE status=?;",(s,)).fetchone()[0]
-        type_counts = {}
-        for t in ("support","product_setup","partner_support"):
-            type_counts[t] = conn.execute("SELECT COUNT(*) FROM tickets WHERE type=?;",(t,)).fetchone()[0]
-    finally:
-        conn.close()
-
-    def tq(sf="", tf=""):
-        return f"?status_filter={sf}&type_filter={tf}"
-
-    type_tabs = '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'
-    for lbl, val, cnt in [
-        ("همه", "", sum(type_counts.values())),
-        ("🔵 پشتیبانی", "support", type_counts["support"]),
-        ("🟢 راه‌اندازی", "product_setup", type_counts["product_setup"]),
-        ("🤝 همکاران", "partner_support", type_counts["partner_support"]),
-    ]:
-        active = type_filter == val
-        bg = "var(--primary)" if active else "var(--card-bg)"
-        col = "#000" if active else "var(--text-muted)"
-        type_tabs += f'<a href="{tq(status_filter, val)}" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;border:1.5px solid {"var(--primary)" if active else "var(--border)"};background:{bg};color:{col};font-size:12px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} <span style="font-size:10px;padding:1px 6px;border-radius:20px;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"};">{cnt}</span></a>'
-    type_tabs += "</div>"
-
-    status_tabs = '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
-    for lbl, val, cnt in [("همه","",sum(stats.values())),("منتظر اطلاعات","waiting_info",stats.get("waiting_info",0)),
-                          ("نیاز به پاسخ","waiting_admin",stats.get("waiting_admin",0)),("در بررسی","reviewing",stats.get("reviewing",0)),
-                          ("آماده تحویل","ready_delivery",stats.get("ready_delivery",0)),("منتظر کاربر","waiting_user",stats.get("waiting_user",0)),
-                          ("بسته","closed",stats.get("closed",0))]:
-        active = status_filter == val
-        bg = "#374151" if active else "var(--card-bg)"; col = "#fff" if active else "var(--text-muted)"
-        status_tabs += f'<a href="{tq(val, type_filter)}" style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:9px;border:1.5px solid {"#374151" if active else "var(--border)"};background:{bg};color:{col};font-size:11px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} {cnt}</a>'
-    status_tabs += "</div>"
-
-    def sbadge(s):
-        defs = {"waiting_info":("🔴","منتظر اطلاعات","#FEE2E2","#B91C1C"),
-                "waiting_admin":("🔴","نیاز به پاسخ","#FEE2E2","#B91C1C"),
-                "reviewing":("🟡","در بررسی","#FEF3C7","#B45309"),
-                "waiting_user":("🟢","پاسخ داده شد","#DCFCE7","#166534"),
-                "ready_delivery":("🟢","آماده تحویل","#DCFCE7","#166534"),
-                "closed":("⚫","بسته","#F3F4F6","#6B7280")}
-        icon,label,bg,color = defs.get(s,("⚪",s,"#F3F4F6","#6B7280"))
-        return f'<span style="padding:3px 9px;background:{bg};color:{color};border-radius:20px;font-size:11px;font-weight:600">{icon} {label}</span>'
-
-    def tbadge(t):
-        defs = {"product_setup":("🟢","راه‌اندازی","#DCFCE7","#166534"),
-                "partner_support":("🤝","همکاران","#D1FAE5","#047857"),
-                "support":("🔵","پشتیبانی","#EFF6FF","#1D4ED8")}
-        icon,label,bg,color = defs.get(t,("🔵","پشتیبانی","#EFF6FF","#1D4ED8"))
-        return f'<span style="padding:2px 7px;background:{bg};color:{color};border-radius:20px;font-size:10px;font-weight:600">{icon} {label}</span>'
-
-    ticket_rows_list = []
-    for t in tickets:
-        try: ls = t["last_sender"]
-        except: ls = None
-        try: ptitle = e((t["product_title"] or "")[:24])
-        except: ptitle = ""
-        try: tid_type = t["type"] or "support"
-        except: tid_type = "support"
-
-        # type badge
-        type_colors = {"product_setup":("green","راه‌اندازی"),"partner_support":("teal","همکاران"),"support":("blue","پشتیبانی")}
-        tc, tl = type_colors.get(tid_type,("blue","پشتیبانی"))
-        type_b = f'<span class="px-2 py-0.5 text-xs bg-{tc}-100 text-{tc}-700 rounded-full">{tl}</span>'
-
-        # status badge
-        status_colors = {"waiting_info":("red","منتظر اطلاعات"),"waiting_admin":("red","نیاز به پاسخ"),
-                         "reviewing":("yellow","در بررسی"),"waiting_user":("green","پاسخ داده شد"),
-                         "ready_delivery":("green","آماده تحویل"),"closed":("gray","بسته")}
-        sc, sl = status_colors.get(t["status"],("gray",t["status"]))
-        status_b = f'<span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span>'
-
-        last_col = ptitle or ("↗ کاربر" if ls=="user" else ("↙ ادمین" if ls=="admin" else ""))
-
-        if show_archived == "1":
-            action_btns = f"""<a href="/admin/tickets/{t['id']}" onclick="event.stopPropagation()"
-              class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">👁 مشاهده</a>
-              <button type="button" onclick="event.stopPropagation();unarchiveTicket({t['id']})"
-              class="px-2 py-1 text-xs bg-blue-50 text-blue-600 border border-blue-200 rounded mr-1">بازگردانی</button>"""
-        else:
-            action_btns = f"""<a href="/admin/tickets/{t['id']}" onclick="event.stopPropagation()"
-              class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">👁 مشاهده</a>
-              <button type="button" onclick="event.stopPropagation();deleteTicket({t['id']})"
-              class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>"""
-
-        row_html = f"""<tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="location.href='/admin/tickets/{t['id']}'">
-          <td class="px-4 py-3" data-label="#"><a href="/admin/tickets/{t['id']}" class="text-xs font-bold text-indigo-600">#{t['id']}</a></td>
-          <td class="px-4 py-3" data-label="نوع">{type_b}</td>
-          <td class="px-4 py-3" data-label="کاربر"><code class="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{e(str(t['user_id']))}</code></td>
-          <td class="px-4 py-3" data-label="وضعیت">{status_b}</td>
-          <td class="px-4 py-3 text-xs text-gray-400" data-label="محصول">{last_col}</td>
-          <td class="px-4 py-3 text-xs text-gray-400" data-label="پیام‌ها">{int(t['msg_count'] or 0)} پیام</td>
-          <td class="px-4 py-3 text-xs text-gray-400" data-label="آپدیت">{(t['updated_at'] or '')[:16]}</td>
-          <td class="px-4 py-3 whitespace-nowrap" data-label="">{action_btns}</td>
-        </tr>"""
-        ticket_rows_list.append(row_html)
-
-    recent_rows = ticket_rows_list[:3]
-    older_rows  = ticket_rows_list[3:]
-    rows = "".join(recent_rows)
-    older_rows_html = "".join(older_rows)
-
-    tickets_toggle_btn = ""
-    if older_rows:
-        tickets_toggle_btn = f"""
-        <div style="text-align:center;padding:10px">
-          <button type="button" id="toggle-older-tickets-btn" data-older-count="{len(older_rows)}"
-            style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:20px;font-size:12px;cursor:pointer">
-            🔽 نمایش {len(older_rows)} تیکت قدیمی‌تر
-          </button>
-        </div>"""
-
-    body = f"""
-    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <h1 class="text-2xl font-bold text-gray-800">🎫 تیکت‌های پشتیبانی</h1>
-      <a href="?status_filter={status_filter}&type_filter={type_filter}&show_archived={'0' if show_archived=='1' else '1'}"
-         class="px-3 py-1.5 text-xs rounded-lg border {'bg-gray-700 text-white' if show_archived=='1' else 'bg-gray-50 text-gray-500 border-gray-200'}">
-        {'🔙 بازگشت به لیست فعال' if show_archived=='1' else '📦 آرشیو شده‌ها'}
-      </a>
-    </div>
-    {type_tabs}
-    {status_tabs}
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto ticket-table-wrap">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">#</th><th class="px-4 py-3">نوع</th>
-            <th class="px-4 py-3">کاربر</th><th class="px-4 py-3">وضعیت</th>
-            <th class="px-4 py-3">محصول/پیام</th><th class="px-4 py-3">تعداد</th>
-            <th class="px-4 py-3">آپدیت</th><th class="px-4 py-3"></th>
-          </tr></thead>
-          <tbody>{rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>تیکتی یافت نشد</td></tr>"}</tbody>
-          <tbody id="older-tickets-block" style="display:none">{older_rows_html}</tbody>
-        </table>
-      </div>
-      {tickets_toggle_btn}
-    </div>
-
-    <script>
-      window.archiveTicket = function(id){{
-        if(!confirm('این تیکت آرشیو شود؟')) return;
-        fetch('/admin/tickets/'+id+'/archive', {{method:'POST'}}).then(function(){{ location.reload(); }});
-      }};
-      window.unarchiveTicket = function(id){{
-        fetch('/admin/tickets/'+id+'/unarchive', {{method:'POST'}}).then(function(){{ location.reload(); }});
-      }};
-      window.deleteTicket = function(id){{
-        if(!confirm('⚠️ این تیکت برای همیشه حذف می‌شود. ادامه؟')) return;
-        fetch('/admin/tickets/'+id+'/delete', {{method:'POST'}}).then(function(){{ location.reload(); }});
-      }};
-      (function(){{
-        var btn = document.getElementById('toggle-older-tickets-btn');
-        if(btn){{
-          btn.addEventListener('click', function(){{
-            var el = document.getElementById('older-tickets-block');
-            var cnt = btn.getAttribute('data-older-count');
-            if(el.style.display === 'none'){{
-              el.style.display = 'table-row-group';
-              btn.textContent = '🔼 بستن تیکت‌های قدیمی‌تر';
-            }} else {{
-              el.style.display = 'none';
-              btn.textContent = '🔽 نمایش ' + cnt + ' تیکت قدیمی‌تر';
-            }}
-          }});
-        }}
-      }})();
-    </script>"""
-
-    # ── بخش مرکز مالی — Embed شده زیر تیکت‌ها در همین صفحه ────────────────
-    def _fin_link_fn(tf, qq, srt):
-        from urllib.parse import quote
-        return (f"/admin/tickets?status_filter={status_filter}&type_filter={type_filter}"
-                f"&fin_type={tf}&fin_q={quote(qq)}&fin_sort={srt}#financial")
-    try:
-        financial_html = _financial_section_html(fin_type, fin_q, fin_sort, _fin_link_fn)
-    except Exception:
-        financial_html = ""
-    body += financial_html
-
-    return _layout("تیکت‌ها", body, adm, flash=flash)
-
-
-
-@router.post("/tickets/{tid}/archive")
-async def ticket_archive(request: Request, tid: int):
-    adm = _get_admin(request)
-    if not adm: return JSONResponse({"ok": False})
-    from db import archive_ticket
-    archive_ticket(tid)
-    _log(request, "آرشیو تیکت", "تیکت‌ها", f"#{tid}")
-    return JSONResponse({"ok": True})
-
-
-@router.post("/tickets/{tid}/unarchive")
-async def ticket_unarchive(request: Request, tid: int):
-    adm = _get_admin(request)
-    if not adm: return JSONResponse({"ok": False})
-    from db import unarchive_ticket
-    unarchive_ticket(tid)
-    _log(request, "بازگردانی تیکت از آرشیو", "تیکت‌ها", f"#{tid}")
-    return JSONResponse({"ok": True})
-
-
-@router.post("/tickets/{tid}/delete")
-async def ticket_delete(request: Request, tid: int):
-    adm = _get_admin(request)
-    if not adm: return JSONResponse({"ok": False})
-    from db import delete_ticket
-    delete_ticket(tid)
-    _log(request, "حذف تیکت", "تیکت‌ها", f"#{tid}")
-    return JSONResponse({"ok": True})
-
-
-@router.get("/tickets/{tid}", response_class=HTMLResponse)
-async def ticket_detail(request: Request, tid: int, flash: str = ""):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    conn = _db()
-    try:
-        ticket = conn.execute("""
-            SELECT t.*, p.title as product_title
-            FROM tickets t LEFT JOIN products p ON t.product_id=p.id
-            WHERE t.id=? LIMIT 1;
-        """, (tid,)).fetchone()
-
-        if not ticket:
-            return _redir("/admin/tickets")
-
-        messages = conn.execute(
-            "SELECT * FROM ticket_messages WHERE ticket_id=? ORDER BY id ASC;", (tid,)
-        ).fetchall()
-
-        # وقتی ادمین تیکت رو باز می‌کنه → status به in_progress تغییر کنه (badge پاک بشه)
-        if ticket["status"] == "open":
-            conn.execute("UPDATE tickets SET status='in_progress' WHERE id=?;", (tid,))
-            conn.commit()
-
-    finally:
-        conn.close()
-
-    is_general = (not ticket["product_id"] or int(ticket["product_id"] or 0) == 0)
-    is_closed = (ticket["status"] == "closed")
-    user_id_val = int(ticket["user_id"])
-
-    # ── مکالمه با نمایش کامل رسانه ──────────────────────────────────────────
-    bot_token = _env("BOT_TOKEN")
-    chat_html = ""
-    last_msg_id = 0
-
-    def _render_media(msg) -> str:
-        """رندر امن رسانه — هرگز crash نمی‌دهد."""
-        try:
-            # sqlite3.Row از .get() پشتیبانی نمی‌کند، از try/except استفاده می‌کنیم
-            try: mt = (msg["media_type"] or "").strip().lower()
-            except: mt = ""
-            try: fid = msg["media_file_id"] or ""
-            except: fid = ""
-            try: txt = (msg["text"] or "").strip()
-            except: txt = ""
-
-            caption = f'<div style="margin-top:6px;font-size:13px">{e(txt)}</div>' if txt and not txt.startswith("[") else ""
-            proxy = f"/admin/tickets/media/{e(fid)}" if fid else ""
-
-            if mt == "photo" and proxy:
-                return (
-                    f'<a href="{proxy}" target="_blank">'
-                    f'<img src="{proxy}" style="max-width:260px;max-height:200px;border-radius:10px;display:block" '
-                    f'onerror="this.parentElement.innerHTML=\'📷 خطا در بارگذاری\'"></a>'
-                    + caption
+            lines = []
+            for o in orders:
+                oid, user_id, title, amount, created_at = o
+                date_str = created_at.split("T")[0] if created_at else ""
+                lines.append(
+                    f"#{oid} | کاربر {user_id} | {title} | {amount:,} تومان | {date_str}"
                 )
-            elif mt == "voice" and proxy:
-                return f'<audio controls style="max-width:260px"><source src="{proxy}"></audio>{caption}'
-            elif mt == "video" and proxy:
-                return f'<video controls style="max-width:280px;max-height:200px;border-radius:10px"><source src="{proxy}"></video>{caption}'
-            elif mt in ("document", "audio") and proxy:
-                icon = "🎵" if mt == "audio" else "📎"
-                label = txt if txt and not txt.startswith("[") else "دانلود فایل"
-                return f'<a href="{proxy}" download target="_blank" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:rgba(0,0,0,.06);border-radius:9px;text-decoration:none;color:inherit;font-size:12px">{icon} {e(label)}</a>'
-            elif mt and mt not in ("text", ""):
-                icons = {"sticker": "🎭", "animation": "🎬", "video_note": "📹"}
-                return f'{icons.get(mt, "📁")} <em style="opacity:.6;font-size:12px">[{e(mt)}]</em>{caption}'
-            else:
-                return e(txt) if txt else ""
-        except Exception:
-            return '<em style="opacity:.5;font-size:12px">[خطا]</em>'
+            text = "\n".join(lines)
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, text)
+        return
 
-    older_messages = messages[:-3] if len(messages) > 3 else []
-    recent_messages = messages[-3:] if len(messages) > 3 else messages
-
-    def _render_msg(msg) -> str:
-        is_adm = msg["sender"] == "admin"
-        content_html = _render_media(msg)
-        try: src = msg["source"] or ""
-        except: src = ""
-        src_icon = "🖥" if src not in ("telegram", "") else "📱"
-        time_str = (msg["created_at"] or "")[:16]
-        if is_adm:
-            return f"""
-        <div style="display:flex;justify-content:flex-end;margin-bottom:10px" data-msg-id="{msg['id']}">
-          <div style="max-width:80%">
-            <div style="background:#2EC4B6;color:#fff;border-radius:18px 4px 18px 18px;
-                        padding:10px 14px;font-size:13.5px;word-break:break-word;white-space:pre-wrap;
-                        box-shadow:0 1px 2px rgba(0,0,0,.1)">
-              {content_html or '<em style="opacity:.6">پیام خالی</em>'}
-            </div>
-            <div style="font-size:10px;color:#aaa;text-align:left;margin-top:3px">{src_icon} ادمین · {time_str}</div>
-          </div>
-        </div>"""
-        else:
-            return f"""
-        <div style="display:flex;justify-content:flex-start;margin-bottom:10px" data-msg-id="{msg['id']}">
-          <div style="max-width:80%">
-            <div style="background:#fff;border:1px solid #E5E7EB;border-radius:4px 18px 18px 18px;
-                        padding:10px 14px;font-size:13.5px;word-break:break-word;white-space:pre-wrap;
-                        box-shadow:0 1px 2px rgba(0,0,0,.06)">
-              {content_html or '<em style="opacity:.4">پیام خالی</em>'}
-            </div>
-            <div style="font-size:10px;color:#aaa;margin-top:3px">📱 کاربر {user_id_val} · {time_str}</div>
-          </div>
-        </div>"""
-
-    for msg in messages:
-        last_msg_id = max(last_msg_id, int(msg["id"] or 0))
-
-    older_html = "".join(_render_msg(m) for m in older_messages)
-    recent_html = "".join(_render_msg(m) for m in recent_messages)
-
-    toggle_btn = ""
-    if older_messages:
-        toggle_btn = f"""
-        <div style="text-align:center;margin-bottom:12px">
-          <button type="button" id="toggle-older-btn" onclick="
-            var el=document.getElementById('older-messages-block');
-            var btn=document.getElementById('toggle-older-btn');
-            if(el.style.display==='none'){{ el.style.display='block'; btn.textContent='🔼 بستن پیام‌های قبلی'; }}
-            else {{ el.style.display='none'; btn.textContent='🔽 نمایش {len(older_messages)} پیام قبلی'; }}
-          " style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:20px;font-size:12px;cursor:pointer">
-            🔽 نمایش {len(older_messages)} پیام قبلی
-          </button>
-        </div>
-        <div id="older-messages-block" style="display:none">{older_html}</div>"""
-
-    chat_html = toggle_btn + recent_html
-
-    if not chat_html.strip() or not messages:
-        chat_html = '<div class="text-center py-8 text-gray-400 text-sm" id="no-msgs">پیامی ثبت نشده</div>'
-
-    # ── فرم پاسخ ─────────────────────────────────────────────────────────────
-    reply_form = ""
-    if not is_closed:
-        reply_form = f"""
-        <div class="card p-4 mt-4">
-          <form method="post" action="/admin/tickets/{tid}/reply" id="reply-form">
-            <div class="mb-3">
-              <label class="text-xs text-gray-500 block mb-1">
-                پاسخ به کاربر <code class="bg-gray-100 px-1 rounded">{user_id_val}</code>
-              </label>
-              <textarea name="text" id="reply-text" rows="3" required
-                placeholder="متن پاسخ را بنویسید..."
-                class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-300"></textarea>
-            </div>
-            <div class="flex justify-between items-center">
-              <span class="text-xs text-gray-300">Ctrl+Enter برای ارسال سریع</span>
-              <button type="submit"
-                class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl text-sm font-medium">
-                📤 ارسال پاسخ
-              </button>
-            </div>
-          </form>
-        </div>"""
-
-    # ── وضعیت دکمه‌ها (با status های جدید v2) ─────────────────────────────
-    status_btns = ""
-    cur_status = ticket["status"]
-    for lbl2, val2, cls2 in [
-        ("🔓 بازکردن", "waiting_admin", "bg-green-50 text-green-700 border-green-200"),
-        ("🔒 بستن تیکت", "closed", "bg-gray-100 text-gray-600 border-gray-200"),
-    ]:
-        if val2 != cur_status:
-            status_btns += f"""
-            <form method="post" action="/admin/tickets/{tid}/status" class="inline-block mr-1 mb-1">
-              <input type="hidden" name="status" value="{val2}">
-              <button class="btn-sm border rounded-lg px-3 py-1.5 text-xs {cls2}">{lbl2}</button>
-            </form>"""
-
-    # ── ساختار صفحه ─────────────────────────────────────────────────────────
-    ticket_type_str = "پشتیبانی عمومی" if is_general else e(ticket["product_title"] or "-")
-
-    try: t_type = ticket["type"] or "support"
-    except: t_type = "support"
-    try: t_order_id = ticket["order_id"] or 0
-    except: t_order_id = 0
-    try: t_feed_id = ticket["feed_id"]
-    except: t_feed_id = None
-    try: t_setup_status = ticket["setup_status"] or ticket["status"]
-    except: t_setup_status = ticket["status"]
-
-    type_labels = {
-        "product_setup": "🟢 راه‌اندازی محصول",
-        "partner": "🟠 همکاری",
-        "support": "🔵 پشتیبانی عمومی",
-    }
-    type_label = type_labels.get(t_type, "🔵 پشتیبانی عمومی")
-
-    # بخش اختصاصی product_setup
-    setup_panel = ""
-    if t_type == "product_setup" and not is_closed:
-        setup_status_opts = [
-            ("waiting_info", "🔴 منتظر اطلاعات"),
-            ("reviewing", "🟡 در حال بررسی"),
-            ("ready_delivery", "🟢 آماده تحویل"),
-        ]
-        setup_status_btns = "".join(
-            f'<form method="post" action="/admin/tickets/{tid}/setup-status" style="display:inline">'
-            f'<input type="hidden" name="status" value="{sv}">'
-            f'<button class="btn btn-slate btn-sm" style="{"background:var(--primary);color:#000;font-weight:700" if t_setup_status==sv else ""}">{sl}</button></form>'
-            for sv, sl in setup_status_opts
+    if "_select_" in data:
+        _, _, pid_str = data.partition("_select_")
+        pid = safe_int(pid_str)
+        product = get_product_by_id(pid)
+        if not product:
+            bot.answer_callback_query(call.id, "محصول یافت نشد", show_alert=True)
+            return
+        category = product[1]
+        send_product_detail(
+            call.message.chat.id,
+            product,
+            category,
+            user_id=uid,
+            message=call.message
         )
-        deliver_btn = ""
-        if t_feed_id and t_setup_status in ("ready_delivery", "reviewing"):
-            deliver_btn = f"""
-            <form method="post" action="/admin/tickets/{tid}/deliver"
-                  onsubmit="return confirm('محصول به کاربر تحویل داده شود و گفتگو بسته شود؟')">
-              <button class="btn btn-primary" style="width:100%;margin-top:12px">
-                <i data-lucide="send" style="width:15px"></i> تحویل محصول و بستن گفتگو
-              </button>
-            </form>"""
-        setup_panel = f"""
-        <div class="card card-p" style="margin-bottom:12px;border:2px solid #2EC4B620">
-          <h3 style="font-size:13px;font-weight:700;margin-bottom:12px;color:#166534">🟢 اطلاعات راه‌اندازی محصول</h3>
-          <dl style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px">
-            <dt style="color:var(--text-muted)">محصول</dt><dd style="font-weight:600">{e(ticket["product_title"] or "—")}</dd>
-            <dt style="color:var(--text-muted)">سفارش</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">#{t_order_id}</code></dd>
-            <dt style="color:var(--text-muted)">فید</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">#{t_feed_id or "—"}</code></dd>
-          </dl>
-          <div style="margin-top:12px">
-            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">وضعیت راه‌اندازی</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px">{setup_status_btns}</div>
-          </div>
-          {deliver_btn}
-        </div>"""
+        bot.answer_callback_query(call.id)
+        return
+        
+# ===== بررسی ادامه خرید بعد از شارژ =====
+        import sqlite3
 
-    direct_form_html = "" if is_closed else f"""
-        <div class="card p-4 mt-3" style="border:2px dashed var(--border);background:var(--page-bg)">
-          <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px">📩 پیام مستقیم</p>
-          <form method="post" action="/admin/tickets/{tid}/direct" style="display:flex;gap:8px">
-            <textarea name="direct_msg" rows="2" placeholder="پیام آزاد..."
-              style="flex:1;border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:13px;resize:none;font-family:inherit"></textarea>
-            <button type="submit" style="background:#6B7280;color:#fff;border:none;border-radius:10px;padding:8px 14px;font-size:12px;cursor:pointer;align-self:flex-end">ارسال</button>
-          </form>
-        </div>"""
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
 
-    body = f"""
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
-      {_btn("← تیکت‌ها", "/admin/tickets", "slate", small=True)}
-      <h1 style="font-size:17px;font-weight:800">تیکت #{tid}</h1>
-      {_ticket_status_badge(ticket["status"])}
-      <span style="font-size:12px;color:var(--text-muted)">{type_label}</span>
-    </div>
+        cur.execute("""
+            SELECT id FROM pending_product_resumes
+            WHERE user_id=?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (uid,))
 
-    <div class="grid lg:grid-cols-3 gap-4">
-      <div class="lg:col-span-2">
-        <div class="card p-4 overflow-y-auto" style="min-height:280px;max-height:500px;" id="chat-box">
-          {chat_html}
-        </div>
-        {reply_form}
-        {direct_form_html}
-      </div>
+        resume_row = cur.fetchone()
 
-      <div style="display:flex;flex-direction:column;gap:12px">
-        {setup_panel}
-        <div class="card card-p">
-          <h3 style="font-size:13px;font-weight:700;margin-bottom:12px">اطلاعات تیکت</h3>
-          <dl style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px">
-            <dt style="color:var(--text-muted)">User ID</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">{user_id_val}</code></dd>
-            <dt style="color:var(--text-muted)">نوع</dt><dd style="font-weight:600">{type_label}</dd>
-            <dt style="color:var(--text-muted)">پیام‌ها</dt><dd style="font-weight:700;color:var(--primary)">{len(messages)}</dd>
-            <dt style="color:var(--text-muted)">تاریخ</dt><dd style="color:var(--text-muted)">{(ticket["created_at"] or "")[:16]}</dd>
-          </dl>
-        </div>
-        <div class="card card-p">
-          <h3 style="font-size:13px;font-weight:700;margin-bottom:10px">تغییر وضعیت</h3>
-          {status_btns}
-        </div>
-        <div class="card card-p">
-          <button type="button" onclick="archiveThisTicket({tid})"
-            style="width:100%;padding:8px 12px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer">
-            📦 آرشیو این تیکت
-          </button>
-        </div>
-      </div>
-    </div>
-    <script>
-      window.archiveThisTicket = function(id){{
-        if(!confirm('این تیکت آرشیو شود؟ از لیست اصلی پنهان می‌شود.')) return;
-        fetch('/admin/tickets/'+id+'/archive', {{method:'POST'}}).then(function(){{ location.href='/admin/tickets'; }});
-      }};
-      (function(){{
-        var b = document.getElementById('chat-box');
-        if(b) b.scrollTop = b.scrollHeight;
+        if resume_row and not data.startswith("confirm_"):
+           # حذف رکورد
+            cur.execute("DELETE FROM pending_product_resumes WHERE id=?", (resume_row["id"],))
+            conn.commit()
+            conn.close()
 
-        // Ctrl+Enter
-        var ta = document.getElementById('reply-text');
-        if(ta) ta.addEventListener('keydown', function(e){{
-          if(e.ctrlKey && e.key === 'Enter') document.getElementById('reply-form') && document.getElementById('reply-form').submit();
-        }});
+          # اجرای confirm خودکار
+            data = f"confirm_{state_category}_{state_pid}"
+        else:
+            conn.close()
+            
 
-        // Auto-refresh هر ۱۰ ثانیه
-        var lastId = {last_msg_id};
-        var ticketId = {tid};
-        function fetchNew() {{
-          fetch('/admin/tickets/' + ticketId + '/messages.json?after=' + lastId)
-            .then(function(r){{ return r.json(); }})
-            .then(function(data){{
-              if(!data.messages || data.messages.length === 0) return;
-              var nm = document.getElementById('no-msgs');
-              if(nm) nm.remove();
-              data.messages.forEach(function(msg){{
-                lastId = Math.max(lastId, msg.id);
-                var d = document.createElement('div');
-                var isA = msg.sender === 'admin';
-                d.className = 'flex flex-col ' + (isA ? 'items-end' : 'items-start') + ' mb-3';
-                var bbl = isA ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-800';
-                var lbl = isA ? 'ادمین 👤' : 'کاربر';
-                var txt = (msg.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-                if(msg.media_type) txt = '[' + msg.media_type + '] ' + txt;
-                d.innerHTML = '<div class="text-xs text-gray-400 mb-1">' + lbl + ' · ' + (msg.created_at||'').slice(0,16) + '</div>' +
-                  '<div class="' + bbl + ' rounded-2xl px-4 py-2 text-sm" style="max-width:85%;white-space:pre-wrap">' + txt + '</div>';
-                if(b) b.appendChild(d);
-              }});
-              if(b) b.scrollTop = b.scrollHeight;
-            }}).catch(function(){{}});
-        }}
-        setInterval(fetchNew, 10000);
-      }})();
-    </script>"""
+    # ===== confirm_full =====
+    if data.startswith("confirm_full_"):
 
-    return _layout(f"تیکت #{tid}", body, adm, flash=flash)
+        parts = data.split("_")
+        if len(parts) < 3:
+            bot.answer_callback_query(call.id, "داده نامعتبر است", show_alert=True)
+            return
+
+        pid = safe_int(parts[-1])
+        category = "_".join(parts[2:-1])
+
+        product = get_product_by_id(pid)
+        if not product:
+            bot.answer_callback_query(call.id, "محصول یافت نشد")
+            return
+
+        price = product[3]
+
+        start_product_payment(
+            bot,
+            call.message,
+            uid,
+            price,
+            reserved_wallet_amount=0,
+            product_id=pid
+        )
+
+        bot.answer_callback_query(call.id)
+        return
 
 
-@router.post("/tickets/{tid}/setup-status")
-async def ticket_setup_status(request: Request, tid: int):
-    adm = _get_admin(request)
-    if not adm: return _redir("/admin/login")
-    form = await request.form()
-    new_status = str(form.get("status", "reviewing"))
-    conn = _db()
+
+            # ===== confirm_wallet =====
+    if data.startswith("confirm_wallet_"):
+
+        parts = data.split("_")
+        pid = safe_int(parts[-1])
+        category = "_".join(parts[2:-1])
+
+        product = get_product_by_id(pid)
+        if not product:
+            bot.answer_callback_query(call.id, "محصول یافت نشد")
+            return
+
+        partner_price = product[6] if len(product) > 6 else None
+        eff_price = partner_price if (is_partner_approved(uid) and partner_price) else product[3]
+        from db import apply_flash_price as _afp
+        eff_price, _ = _afp(int(product[0]), int(eff_price))
+
+        wallet_balance = get_wallet_balance(uid)
+
+        if wallet_balance <= 0:
+            bot.answer_callback_query(call.id, "موجودی کیف پول صفر است")
+            return
+
+        use_wallet = min(wallet_balance, eff_price)
+
+        ok = subtract_wallet_balance(uid, use_wallet)
+        if not ok:
+            bot.answer_callback_query(call.id, "خطا در برداشت", show_alert=True)
+            return
+
+        finalize_product_order(call, uid, product, category, eff_price, wallet_used=use_wallet)
+
+        bot.answer_callback_query(call.id)
+        return
+
+        bot.reply_to(
+            message,
+            "رسید شما ثبت شد ✅\n"
+            "پس از تأیید توسط پشتیبانی، کیف پول شما شارژ خواهد شد.",
+        )
+
+
+@bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt",
+    content_types=["photo"]
+)
+def handle_card2card_photo(message):
+    uid = message.from_user.id
+    st  = user_states.pop(uid, {})
+    amount  = int(st.get("amount", 0))
+    file_id = message.photo[-1].file_id
+
+    from db import save_card_receipt, ensure_card_receipts_schema
+    ensure_card_receipts_schema()
+    rid = save_card_receipt(uid, amount, file_id)
+
+    bot.reply_to(message,
+        f"رسید شما ثبت شد ✅\n"
+        f"شناسه پیگیری: <code>#{rid}</code>\n\n"
+        "پس از تأیید توسط پشتیبانی، کیف پول شما شارژ خواهد شد.",
+        parse_mode="HTML")
     try:
-        conn.execute("UPDATE tickets SET setup_status=?, status=?, updated_at=datetime('now') WHERE id=?;",
-                     (new_status, new_status, tid))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "تغییر وضعیت راه‌اندازی", "تیکت‌ها", f"تیکت #{tid} → {new_status}")
-    return _redir(f"/admin/tickets/{tid}?flash=وضعیت+تغییر+کرد")
+        import html as _h
+        from db import get_user as _gu
+        user = _gu(uid)
+        name = _h.escape((user["full_name"] if user else None) or str(uid))
+        bot.send_photo(ADMIN_ID, file_id,
+            caption=(f"💳 <b>رسید کارت‌به‌کارت جدید</b>\n"
+                     f"شناسه: #{rid}\n"
+                     f"کاربر: {name} (<code>{uid}</code>)\n\n"
+                     f"⚠️ مبلغ هنگام تأیید در پنل وارد شود.\n"
+                     f"پنل: /admin/receipts/{rid}/view\n"
+                     f"تأیید: /approve_receipt_{rid}\n"
+                     f"رد: /reject_receipt_{rid}"),
+            parse_mode="HTML")
+    except Exception:
+        pass
 
 
-@router.post("/tickets/{tid}/deliver")
-async def ticket_deliver_product(request: Request, tid: int):
-    adm = _get_admin(request)
-    if not adm: return _redir("/admin/login")
-    conn = _db()
+@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
+                     (m.text or "").startswith("/approve_receipt_"))
+def handle_approve_receipt(message):
+    rid = int((message.text or "").replace("/approve_receipt_", "").strip())
+    from db import update_card_receipt, get_card_receipts
+    from db import get_wallet_balance, add_wallet_balance
+    receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
+    if not receipts:
+        bot.reply_to(message, "رسید یافت نشد یا قبلاً بررسی شده."); return
+    r = receipts[0]
+    update_card_receipt(rid, "approved", "تأیید توسط ادمین")
+    add_wallet_balance(r["user_id"], r["amount"])
+    bot.reply_to(message, f"✅ رسید #{rid} تأیید شد. {r['amount']:,} تومان به کیف پول افزوده شد.")
     try:
-        ticket = conn.execute("SELECT * FROM tickets WHERE id=? LIMIT 1;", (tid,)).fetchone()
-        if not ticket:
-            return _redir(f"/admin/tickets?flash=تیکت+یافت+نشد")
-        try: feed_id = ticket["feed_id"]
-        except: feed_id = None
-        try: feed_data = ticket["feed_data"]
-        except: feed_data = None
-        try: order_id = ticket["order_id"] or 0
-        except: order_id = 0
-        user_id = int(ticket["user_id"])
-        try: ptitle = ticket["product_title"] if "product_title" in ticket.keys() else "محصول"
-        except: ptitle = "محصول"
+        bot.send_message(r["user_id"],
+            f"✅ پرداخت شما تأیید شد!\n"
+            f"مبلغ <b>{r['amount']:,}</b> تومان به کیف پول شما اضافه شد.",
+            parse_mode="HTML")
+    except Exception: pass
 
-        if not feed_data:
-            return _redir(f"/admin/tickets/{tid}?flash=اطلاعات+محصول+یافت+نشد")
 
-        # ارسال به کاربر
-        bot_token = _env("BOT_TOKEN")
-        msg_text = (f"✅ <b>سفارش شما تکمیل شد</b>\n\n"
-                    f"سفارش: #{order_id}\n"
-                    f"محصول: {e(ptitle)}\n\n"
-                    f"<code>{html.escape(str(feed_data))}</code>")
+@bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
+                     (m.text or "").startswith("/reject_receipt_"))
+def handle_reject_receipt(message):
+    rid = int((message.text or "").replace("/reject_receipt_", "").strip())
+    from db import update_card_receipt, get_card_receipts
+    receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
+    if not receipts:
+        bot.reply_to(message, "رسید یافت نشد یا قبلاً بررسی شده."); return
+    r = receipts[0]
+    update_card_receipt(rid, "rejected", "رد توسط ادمین")
+    bot.reply_to(message, f"❌ رسید #{rid} رد شد.")
+    try:
+        bot.send_message(r["user_id"],
+            "❌ متأسفانه رسید پرداخت شما تأیید نشد.\n"
+            "لطفاً با پشتیبانی تماس بگیرید.")
+    except Exception: pass
+
+
+# ========= MAIN =========
+
+
+
+
+@bot.message_handler(content_types=["document"])
+def handle_admin_backup_restore_document(message):
+    uid = message.from_user.id
+    if not ensure_admin(uid):
+        return
+    st = admin_states.get(uid) or {}
+    if st.get("mode") != "await_backup_upload":
+        return
+
+    try:
+        file_id = message.document.file_id
+        file_info = bot.get_file(file_id)
+        downloaded = bot.download_file(file_info.file_path)
+
+        _ensure_backup_dir()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tmp_path = os.path.join(BACKUP_DIR, f"upload_{uid}_{ts}.sqlite")
+        with open(tmp_path, "wb") as f:
+            f.write(downloaded)
+
+        ok, msg = validate_backup_db(tmp_path)
+        if not ok:
+            bot.send_message(message.chat.id, f"فایل بکاپ معتبر نیست: {msg}")
+            try: os.remove(tmp_path)
+            except: pass
+            admin_states.pop(uid, None)
+            return
+
+        old_bak = restore_db_from_backup(tmp_path)
+        admin_states.pop(uid, None)
+
+        bot.send_message(
+            message.chat.id,
+            f"بازیابی انجام شد ✅\nنسخه قبلی ذخیره شد: {old_bak}\nربات برای اعمال تغییرات ریستارت می‌شود."
+        )
+
+        # Exit so systemd restarts cleanly.
+        os._exit(0)
+
+    except Exception as e:
+        admin_states.pop(uid, None)
+        bot.send_message(message.chat.id, f"خطا در بازیابی بکاپ: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── ₿ شارژ رمزارز + 📣 کیت تبلیغاتی همکار ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@bot.callback_query_handler(func=lambda c: c.data == "wallet_crypto")
+def cb_wallet_crypto(call):
+    from db import get_crypto_settings
+    cs = get_crypto_settings()
+    if not int(cs.get("enabled") or 0):
+        bot.answer_callback_query(call.id, "پرداخت رمزارز فعال نیست", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    if (cs.get("usdt_trc20") or "").strip():
+        kb.add(types.InlineKeyboardButton("💵 USDT (TRC20)", callback_data="crypto_net_usdt"))
+    if (cs.get("trx") or "").strip():
+        kb.add(types.InlineKeyboardButton("🔺 TRX (Tron)", callback_data="crypto_net_trx"))
+    bot.send_message(call.message.chat.id,
+        "₿ <b>شارژ با رمزارز</b>\n\nشبکه مورد نظر را انتخاب کنید:",
+        reply_markup=kb, parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("crypto_net_"))
+def cb_crypto_network(call):
+    from db import get_crypto_settings
+    cs = get_crypto_settings()
+    net = call.data.replace("crypto_net_", "")
+    addr = (cs.get("usdt_trc20") if net == "usdt" else cs.get("trx") or "").strip()
+    if not addr:
+        bot.answer_callback_query(call.id, "آدرس این شبکه تنظیم نشده", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    net_label = "USDT (TRC20)" if net == "usdt" else "TRX"
+    user_states[call.from_user.id] = {"mode": "crypto_amount", "net": net}
+    bot.send_message(call.message.chat.id,
+        f"₿ <b>پرداخت {net_label}</b>\n\n"
+        f"آدرس واریز:\n<code>{addr}</code>\n\n"
+        f"📌 {cs.get('note','')}\n\n"
+        "حالا <b>مبلغ به تومان</b> که می‌خواهید شارژ شود را وارد کنید:",
+        parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_amount")
+def handle_crypto_amount(message):
+    uid = message.from_user.id
+    st = user_states.get(uid, {})
+    raw = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "")
+    if not raw.isdigit() or int(raw) <= 0:
+        bot.reply_to(message, "❌ مبلغ نامعتبر است. یک عدد به تومان وارد کنید:")
+        return
+    st["amount"] = int(raw)
+    st["mode"] = "crypto_txid"
+    user_states[uid] = st
+    bot.reply_to(message,
+        f"مبلغ: <b>{int(raw):,}</b> تومان ✅\n\n"
+        "حالا <b>TXID</b> (هش تراکنش) را ارسال کنید:", parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_txid")
+def handle_crypto_txid(message):
+    uid = message.from_user.id
+    st = user_states.pop(uid, {})
+    txid = (message.text or "").strip()
+    if len(txid) < 10:
+        user_states[uid] = st
+        bot.reply_to(message, "❌ TXID معتبر نیست. دوباره ارسال کنید:")
+        return
+    from db import save_crypto_receipt
+    rid = save_crypto_receipt(uid, int(st.get("amount", 0)), st.get("net", "usdt"), txid)
+    bot.reply_to(message,
+        f"✅ درخواست شارژ رمزارز ثبت شد.\n"
+        f"شناسه پیگیری: <code>#{rid}</code>\n\n"
+        "پس از تأیید تراکنش، کیف‌پول شما شارژ می‌شود.", parse_mode="HTML")
+    try:
+        import html as _h
+        from db import get_user as _gu
+        user = _gu(uid)
+        name = _h.escape((user["full_name"] if user else None) or str(uid))
+        net_label = "USDT-TRC20" if st.get("net") == "usdt" else "TRX"
+        bot.send_message(ADMIN_ID,
+            f"₿ <b>رسید رمزارز جدید</b>\n"
+            f"شناسه: #{rid}\n"
+            f"کاربر: {name} (<code>{uid}</code>)\n"
+            f"مبلغ اعلامی: {int(st.get('amount',0)):,} تومان\n"
+            f"شبکه: {net_label}\n"
+            f"TXID: <code>{_h.escape(txid)}</code>\n\n"
+            f"تأیید: /approve_receipt_{rid}\n"
+            f"رد: /reject_receipt_{rid}",
+            parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_promo")
+def cb_partner_promo(call):
+    """📣 کیت تبلیغاتی همکار — متن آماده + دکمه اشتراک یک‌لمسی."""
+    uid = call.from_user.id
+    if not is_partner_approved(uid):
+        bot.answer_callback_query(call.id, "فقط برای همکاران تأییدشده", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    from db import get_promo_settings
+    try:
+        me = bot.get_me().username
+    except Exception:
+        me = ""
+    link = f"https://t.me/{me}?start=ref_{uid}" if me else f"?start=ref_{uid}"
+    text = str(get_promo_settings().get("text") or "").format(link=link)
+    import urllib.parse as _up
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(text)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.send_message(call.message.chat.id,
+        "📣 <b>ابزار تبلیغ شما</b>\n\n"
+        "این متن آماده را کپی یا مستقیم فوروارد کنید:\n"
+        "➖➖➖➖➖➖➖➖\n"
+        f"{text}\n"
+        "➖➖➖➖➖➖➖➖",
+        reply_markup=kb, parse_mode="HTML")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🚀 موتور رشد: هوک بعد از خرید + زمان‌بند بازگردانی و لیدربرد ────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _after_purchase_extras(uid, chat_id, order_id, pid, cat_id, title):
+    """پست کانال + درخواست امتیاز + پیشنهاد Upsell — با تأخیر ۲ ثانیه بعد از تحویل."""
+    def _run():
         try:
-            _requests.post(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                json={"chat_id": user_id, "text": msg_text, "parse_mode": "HTML"},
-                timeout=10
-            )
-        except Exception as ex:
-            _tg_logger.error("ticket deliver send error: %s", ex)
-            return _redir(f"/admin/tickets/{tid}?flash=خطا+در+ارسال+به+کاربر")
+            from db import get_social_settings, get_upsell_products, apply_flash_price
+            soc = get_social_settings()
 
-        # بستن تیکت
-        conn.execute("UPDATE tickets SET status='closed', setup_status='closed', closed_at=datetime('now') WHERE id=?;", (tid,))
-        conn.commit()
-
-        _log(request, "تحویل محصول از تیکت", "تیکت‌ها",
-             f"تیکت #{tid} سفارش #{order_id} به کاربر {user_id} تحویل داده شد")
-    finally:
-        conn.close()
-    return _redir(f"/admin/tickets/{tid}?flash=✅+محصول+تحویل+داده+شد+و+گفتگو+بسته+شد")
-
-
-@router.post("/tickets/{tid}/reply")
-async def ticket_reply(request: Request, tid: int, text: str = Form("")):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    text = text.strip()
-    if not text:
-        return _redir(f"/admin/tickets/{tid}?flash=متن+خالی+است")
-
-    conn = _db()
-    try:
-        ticket = conn.execute(
-            "SELECT user_id, status FROM tickets WHERE id=? LIMIT 1;", (tid,)
-        ).fetchone()
-        if not ticket:
-            return _redir("/admin/tickets?flash=تیکت+یافت+نشد")
-        if ticket["status"] == "closed":
-            return _redir(f"/admin/tickets/{tid}?flash=تیکت+بسته+است")
-        user_id = int(ticket["user_id"])
-
-        # ─── migration اطمینان از وجود ستون‌های لازم ─────────────────────
-        for col, typedef in [("source", "TEXT"), ("media_file_id", "TEXT"), ("updated_at", "TEXT"), ("user_msg_count", "INTEGER DEFAULT 0")]:
+            # ۶ب) پست خودکار فروش در کانال (ناشناس)
             try:
-                conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} {typedef};")
+                ch = str(soc.get("channel_id") or "").strip()
+                if ch and int(soc.get("sale_post") or 0):
+                    bot.send_message(ch, str(soc.get("sale_post_text") or "").format(title=title),
+                                     parse_mode="HTML")
             except Exception:
                 pass
+
+            # ۲) پیشنهاد خرید بعدی (Upsell)
             try:
-                conn.execute(f"ALTER TABLE ticket_messages ADD COLUMN {col} {typedef};")
+                if int(soc.get("upsell") or 0):
+                    ups = get_upsell_products(pid, cat_id, limit=2)
+                    if ups:
+                        kb = types.InlineKeyboardMarkup(row_width=1)
+                        for p in ups:
+                            fp, fl = apply_flash_price(p["id"], int(p["price"]))
+                            lbl = f"🔥 {p['title']} | {fp:,} تومان" if fl else f"{p['title']} | {fp:,} تومان"
+                            kb.add(types.InlineKeyboardButton(
+                                lbl, callback_data=f"cat_{p['category_id']}_p_{p['id']}"))
+                        bot.send_message(chat_id,
+                            "🛍 <b>خریداران این محصول، این‌ها را هم پسندیدند:</b>",
+                            reply_markup=kb, parse_mode="HTML")
             except Exception:
                 pass
-
-        # ذخیره در ticket_messages
-        now = datetime.now().isoformat()
-        # بررسی وجود ستون source
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(ticket_messages);").fetchall()]
-        if "source" in cols:
-            conn.execute(
-                "INSERT INTO ticket_messages (ticket_id, sender, text, source, created_at) VALUES (?,?,?,?,?);",
-                (tid, "admin", text, "panel", now)
-            )
-        else:
-            conn.execute(
-                "INSERT INTO ticket_messages (ticket_id, sender, text, created_at) VALUES (?,?,?,?);",
-                (tid, "admin", text, now)
-            )
-
-        # آپدیت وضعیت تیکت
-        ticket_cols = [r[1] for r in conn.execute("PRAGMA table_info(tickets);").fetchall()]
-        if "user_msg_count" in ticket_cols and "updated_at" in ticket_cols:
-            conn.execute(
-                "UPDATE tickets SET status='waiting_user', user_msg_count=0, updated_at=? WHERE id=?;",
-                (now, tid)
-            )
-        elif "updated_at" in ticket_cols:
-            conn.execute("UPDATE tickets SET status='waiting_user', updated_at=? WHERE id=?;", (now, tid))
-        else:
-            conn.execute("UPDATE tickets SET status='waiting_user' WHERE id=?;", (tid,))
-        conn.commit()
-    except Exception as ex:
-        _tg_logger.error("ticket_reply DB error: %s", ex)
-        return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)[:50]}")
-    finally:
-        conn.close()
-
-    # ارسال به کاربر از طریق Telegram API — با دکمه «ادامه گفتگو»
-    msg_text = f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid}):\n\n{html.escape(text)}"
-    continue_kb = {
-        "inline_keyboard": [[
-            {"text": "💬 ادامه گفتگو", "callback_data": f"ticket_v2_continue_{tid}"}
-        ]]
-    }
-    import json as _json
-    token = _env("BOT_TOKEN", "")
-    ok = False
-    if token:
-        try:
-            r = _requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": user_id, "text": msg_text,
-                      "parse_mode": "HTML", "reply_markup": continue_kb},
-                timeout=8
-            )
-            ok = r.json().get("ok", False)
         except Exception:
-            ok = _tg_send(user_id, msg_text)
-    else:
-        ok = _tg_send(user_id, msg_text)
-
-    if ok:
-        _log(request, "پاسخ تیکت", "تیکت‌ها", f"ticket #{tid}")
-        return _redir(f"/admin/tickets/{tid}?flash=پاسخ+ارسال+شد")
-    else:
-        return _redir(f"/admin/tickets/{tid}?flash=ذخیره+شد+اما+ارسال+تلگرام+ناموفق")
-
-
-@router.post("/tickets/{tid}/direct")
-async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    direct_msg = direct_msg.strip()
-    if not direct_msg:
-        return _redir(f"/admin/tickets/{tid}")
-
-    conn = _db()
+            pass
     try:
-        ticket = conn.execute("SELECT user_id FROM tickets WHERE id=? LIMIT 1;", (tid,)).fetchone()
-        user_id = ticket["user_id"] if ticket else None
-    finally:
-        conn.close()
-
-    if user_id:
-        _tg_send(user_id, f"📩 <b>پیام مستقیم از پشتیبانی:</b>\n\n{html.escape(direct_msg)}")
-
-    return _redir(f"/admin/tickets/{tid}?flash=پیام+مستقیم+ارسال+شد")
-
-
-@router.get("/badges.json")
-async def badges_json(request: Request):
-    """شمارنده‌های real-time برای navbar."""
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    if not adm:
-        return JSONResponse({"tickets": 0, "partners": 0, "notes": 0}, status_code=401)
-    try:
-        conn = _db()
-        open_notes = conn.execute("SELECT COUNT(*) FROM admin_notes WHERE status='open';").fetchone()[0]
-        conn.close()
+        threading.Timer(2.0, _run).start()
     except Exception:
-        open_notes = 0
-    try:
-        pending_payouts = _pending_payout_count()
-    except Exception:
-        pending_payouts = 0
-    try:
-        pending_financial = _pending_financial_count()
-    except Exception:
-        pending_financial = 0
-    return JSONResponse({
-        "tickets": _open_ticket_count(),
-        "partners": _pending_partner_count(),
-        "notes": int(open_notes),
-        "payouts": pending_payouts,
-        "financial": pending_financial,
-    })
+        pass
 
 
-@router.get("/tickets/{tid}/messages.json")
-async def ticket_messages_json(request: Request, tid: int, after: int = 0):
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    if not adm:
-        return JSONResponse({"messages": []}, status_code=401)
-    conn = _db()
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT id, sender, text, media_type, media_file_id, source, created_at "
-            "FROM ticket_messages WHERE ticket_id=? AND id>? ORDER BY id ASC;",
-            (tid, after)
-        ).fetchall()
-        return JSONResponse({"messages": [dict(r) for r in rows]})
-    finally:
-        conn.close()
-
-
-@router.get("/tickets/media/{file_id}")
-async def ticket_media(request: Request, file_id: str):
-    """Proxy عکس‌های تیکت از Telegram."""
-    from fastapi.responses import Response
-    adm = _get_admin(request)
-    if not adm:
-        return Response(status_code=403)
-    token = _env("BOT_TOKEN")
-    if not token:
-        return Response(status_code=404)
-    try:
-        # گرفتن file_path از Telegram
-        r1 = _requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}", timeout=10)
-        fp = r1.json().get("result", {}).get("file_path", "")
-        if not fp:
-            return Response(status_code=404)
-        r2 = _requests.get(f"https://api.telegram.org/file/bot{token}/{fp}", timeout=15)
-        ct = r2.headers.get("content-type", "image/jpeg")
-        return Response(content=r2.content, media_type=ct)
-    except Exception:
-        return Response(status_code=502)
-
-
-@router.post("/tickets/{tid}/status")
-async def ticket_status(request: Request, tid: int, status: str = Form("")):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    valid = {"waiting_admin", "waiting_user", "closed", "open", "in_progress"}
-    if status not in valid:
-        return _redir(f"/admin/tickets/{tid}?flash=وضعیت+نامعتبر")
-
-    # نرمال‌سازی: اگه status قدیمی بود، به جدید تبدیل کن
-    status_map = {"open": "waiting_admin", "in_progress": "waiting_user"}
-    status = status_map.get(status, status)
-
-    conn = _db()
-    try:
-        now = datetime.now().isoformat()
-        if status == "closed":
-            conn.execute(
-                "UPDATE tickets SET status='closed', closed_at=?, updated_at=? WHERE id=?;",
-                (now, now, tid)
-            )
-        else:
-            conn.execute("UPDATE tickets SET status=?, updated_at=? WHERE id=?;", (status, now, tid))
-        conn.commit()
-    except Exception as ex:
-        _tg_logger.error("ticket_status error: %s", ex)
-        return _redir(f"/admin/tickets/{tid}?flash=خطا+در+تغییر+وضعیت")
-    finally:
-        conn.close()
-
-    return _redir(f"/admin/tickets/{tid}?flash=وضعیت+تیکت+تغییر+کرد")
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    valid = {"open", "in_progress", "closed"}
-    if status not in valid:
-        return _redir(f"/admin/tickets/{tid}")
-
-    conn = _db()
-    try:
-        now = datetime.now().isoformat()
-        if status == "closed":
-            conn.execute("UPDATE tickets SET status=?, closed_at=?, closed_by='admin' WHERE id=?;", (status, now, tid))
-        else:
-            conn.execute("UPDATE tickets SET status=? WHERE id=?;", (status, tid))
-        conn.commit()
-    finally:
-        conn.close()
-
-    return _redir(f"/admin/tickets/{tid}?flash=وضعیت+تغییر+کرد")
-
-
-# ─────────────────────────── Broadcast ─────────────────────────────────────
-
-# وضعیت broadcast جاری
-_broadcast_state: dict = {"running": False, "total": 0, "sent": 0, "failed": 0, "done": False}
-_broadcast_lock = threading.Lock()
-
-
-def _do_broadcast(user_ids: list[int], text: str, photo_url: str,
-                   inline_buttons: list[dict], token: str) -> None:
-    global _broadcast_state
-    with _broadcast_lock:
-        _broadcast_state.update({"running": True, "total": len(user_ids), "sent": 0, "failed": 0, "done": False})
-
-    markup = None
-    if inline_buttons:
-        markup = {"inline_keyboard": [inline_buttons]}
-
-    for uid in user_ids:
+def _growth_scheduler():
+    """هر ۱۰ دقیقه: بازگردانی روزانه + لیدربرد هفتگی (ضدتکرار با bot_config)."""
+    import datetime as _dt
+    from db import (get_cfg, set_cfg, get_winback_settings, get_leaderboard_settings,
+                    find_winback_candidates, create_winback_code,
+                    weekly_top_partners, credit_partner_wallet, ensure_growth_schema)
+    ensure_growth_schema()
+    while True:
         try:
-            if photo_url:
-                _tg_send_photo(uid, photo_url, caption=text, reply_markup=markup)
-            else:
-                _tg_send(uid, text, reply_markup=markup)
-            with _broadcast_lock:
-                _broadcast_state["sent"] += 1
-        except Exception:
-            with _broadcast_lock:
-                _broadcast_state["failed"] += 1
-        time.sleep(0.05)  # rate limit safety
-
-    with _broadcast_lock:
-        _broadcast_state["running"] = False
-        _broadcast_state["done"] = True
-
-
-@router.get("/broadcast", response_class=HTMLResponse)
-async def broadcast_page(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "broadcast")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        # محافظت در برابر جداول ناموجود (علت صفحه سفید)
-        try:
-            total_users = conn.execute("SELECT COUNT(*) FROM users;").fetchone()[0]
-        except Exception:
-            total_users = 0
-        try:
-            total_buyers = conn.execute("SELECT COUNT(DISTINCT user_id) FROM orders;").fetchone()[0]
-        except Exception:
-            total_buyers = 0
-        non_buyers = max(total_users - total_buyers, 0)
-        try:
-            products = conn.execute("SELECT id, title FROM products WHERE is_active=1 ORDER BY title;").fetchall()
-        except Exception:
-            products = []
-        try:
-            categories = conn.execute("SELECT id, name FROM categories WHERE is_active=1 ORDER BY name;").fetchall()
-        except Exception:
-            categories = []
-    finally:
-        conn.close()
-
-    prod_opts = "".join(f'<option value="{p["id"]}">{e(p["title"])}</option>' for p in products)
-    cat_opts = "".join(f'<option value="{c["id"]}">{e(c["name"])}</option>' for c in categories)
-
-    # وضعیت broadcast جاری
-    status_html = ""
-    with _broadcast_lock:
-        st = dict(_broadcast_state)
-    if st["total"] > 0:
-        pct = int(st["sent"] / max(st["total"], 1) * 100)
-        status_color = "green" if st["done"] else "indigo"
-        status_html = f"""
-        <div class="card p-5 mb-6 border-r-4 border-{status_color}-500">
-          <h3 class="font-bold text-{status_color}-700 mb-2">{"✅ ارسال تمام شد" if st["done"] else "🔄 در حال ارسال..."}</h3>
-          <div class="bg-gray-100 rounded-full h-3 mb-2">
-            <div class="bg-{status_color}-500 h-3 rounded-full" style="width:{pct}%"></div>
-          </div>
-          <div class="text-sm text-gray-600">
-            ارسال‌شده: {st["sent"]} | ناموفق: {st["failed"]} | کل: {st["total"]}
-          </div>
-        </div>"""
-
-    body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">📢 پیام‌رسان</h1>
-
-    {status_html}
-
-    <div class="grid md:grid-cols-3 gap-4 mb-6">
-      {_card("کل کاربران", str(total_users), "در سیستم", "indigo")}
-      {_card("خریداران", str(total_buyers), "حداقل یک خرید", "green")}
-      {_card("بدون خرید", str(non_buyers), "عضو بدون خرید", "orange")}
-    </div>
-
-    <div class="card card-p">
-      <h2 style="font-size:15px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">ارسال پیام جدید</h2>
-      <form method="post" action="/admin/broadcast/send" style="display:flex;flex-direction:column;gap:18px">
-
-        <div>
-          <label>مخاطبان *</label>
-          <select name="target" id="target-select" onchange="toggleTargetOptions(this.value)">
-            <option value="all">همه کاربران ({total_users} نفر)</option>
-            <option value="buyers">خریداران ({total_buyers} نفر)</option>
-            <option value="non_buyers">بدون خرید ({non_buyers} نفر)</option>
-            <option value="product">خریداران یک محصول خاص</option>
-            <option value="category">خریداران یک دسته خاص</option>
-          </select>
-        </div>
-
-        <div id="product-select" style="display:none">
-          <label>محصول</label>
-          <select name="product_id">{prod_opts}</select>
-        </div>
-
-        <div id="category-select" style="display:none">
-          <label>دسته‌بندی</label>
-          <select name="category_id">{cat_opts}</select>
-        </div>
-
-        <div>
-          <label>متن پیام * <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(HTML پشتیبانی می‌شود: &lt;b&gt;، &lt;i&gt;، &lt;code&gt;)</span></label>
-          {_textarea("text", "متن پیام را اینجا بنویسید...", rows=6)}
-        </div>
-
-        <div>
-          <label>آدرس عکس <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(اختیاری)</span></label>
-          {_input("photo_url", "https://example.com/image.jpg")}
-        </div>
-
-        <div>
-          <label>دکمه‌های Inline <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(اختیاری — فرمت: متن|لینک — هر دکمه یک خط)</span></label>
-          {_textarea("buttons", "دکمه اول|https://t.me/yourbot\nدکمه دوم|https://site.com", rows=3)}
-        </div>
-
-        <div style="background:#FEF3C7;border:1px solid #FDE68A;border-radius:12px;padding:12px 16px;font-size:13px;color:#92400E">
-          ⚠️ بعد از ارسال، عملیات در پس‌زمینه اجرا می‌شود. صفحه را ببندید و بعداً وضعیت را بررسی کنید.
-        </div>
-
-        {_btn("📢 شروع ارسال", color="green")}
-      </form>
-    </div>
-
-    <script>
-    function toggleTargetOptions(val) {{
-      document.getElementById('product-select').style.display = val === 'product' ? 'block' : 'none';
-      document.getElementById('category-select').style.display = val === 'category' ? 'block' : 'none';
-    }}
-    </script>"""
-
-    return _layout("پیام‌رسانی", body, adm, flash=flash)
-
-
-@router.post("/broadcast/send")
-async def broadcast_send(request: Request, background_tasks: BackgroundTasks,
-    target: str = Form("all"), text: str = Form(""), photo_url: str = Form(""),
-    buttons: str = Form(""), product_id: str = Form(""), category_id: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "broadcast")
-    if guard: return guard
-
-    with _broadcast_lock:
-        if _broadcast_state["running"]:
-            return _redir("/admin/broadcast?flash=یک+broadcast+در+حال+اجرا+است")
-
-    text = text.strip()
-    if not text:
-        return _redir("/admin/broadcast?flash=متن+پیام+الزامی+است")
-
-    # parse inline buttons
-    inline_buttons = []
-    for line in (buttons or "").strip().splitlines():
-        line = line.strip()
-        if "|" in line:
-            parts = line.split("|", 1)
-            if len(parts) == 2 and parts[1].strip().startswith("http"):
-                inline_buttons.append({"text": parts[0].strip(), "url": parts[1].strip()})
-
-    # get target users
-    pid = int(product_id) if product_id.strip().isdigit() else None
-    cid = int(category_id) if category_id.strip().isdigit() else None
-
-    conn = _db()
-    try:
-        if target == "all":
-            rows = conn.execute("SELECT user_id FROM users;").fetchall()
-        elif target == "buyers":
-            rows = conn.execute("SELECT DISTINCT user_id FROM orders;").fetchall()
-        elif target == "non_buyers":
-            rows = conn.execute("""
-                SELECT u.user_id FROM users u
-                LEFT JOIN orders o ON u.user_id=o.user_id WHERE o.user_id IS NULL;
-            """).fetchall()
-        elif target == "product" and pid:
-            rows = conn.execute("SELECT DISTINCT user_id FROM orders WHERE product_id=?;", (str(pid),)).fetchall()
-        elif target == "category" and cid:
-            rows = conn.execute("""
-                SELECT DISTINCT o.user_id FROM orders o
-                JOIN products p ON CAST(o.product_id AS INTEGER)=p.id WHERE p.category_id=?;
-            """, (cid,)).fetchall()
-        else:
-            rows = []
-        user_ids = [int(r[0]) for r in rows]
-    finally:
-        conn.close()
-
-    if not user_ids:
-        return _redir("/admin/broadcast?flash=هیچ+کاربری+یافت+نشد")
-
-    token = _env("BOT_TOKEN")
-    background_tasks.add_task(_do_broadcast, user_ids, text, photo_url.strip(), inline_buttons, token)
-
-    return _redir(f"/admin/broadcast?flash=ارسال+به+{len(user_ids)}+کاربر+آغاز+شد")
-
-
-@router.get("/broadcast/status")
-async def broadcast_status(request: Request):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-    with _broadcast_lock:
-        st = dict(_broadcast_state)
-    from fastapi.responses import JSONResponse
-    return JSONResponse(st)
-
-
-# ─────────────────────────── Auto Daily Backup ────────────────────────────
-
-_BACKUP_DIR = "/tmp/stockland_backups"
-
-def _DB_PATH():
-    return _env("DB_PATH", "/opt/stockland/app/stockland.db")
-_MAX_BACKUPS = 5
-_auto_backup_started = False
-
-
-def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه با فرمت .stbak — حداکثر ۵ فایل."""
-    import os, glob
-    db_path = _env("DB_PATH")
-    if not db_path or not os.path.exists(db_path):
-        return
-    os.makedirs(_BACKUP_DIR, exist_ok=True)
-    try:
-        from stbak_engine import create_stbak
-        raw   = create_stbak(db_path)
-        ts    = _time.strftime("%Y%m%d_%H%M%S")
-        dst   = f"{_BACKUP_DIR}/auto_{ts}.stbak"
-        with open(dst, "wb") as f:
-            f.write(raw)
-    except Exception as ex:
-        _tg_logger.error("Auto-backup failed: %s", ex)
-        return
-
-    # حذف بکاپ‌های قدیمی — فقط ۵ تا نگه دار
-    all_backups = sorted(glob.glob(f"{_BACKUP_DIR}/auto_*.stbak"))
-    while len(all_backups) > 5:
-        try:
-            os.remove(all_backups.pop(0))
-        except Exception:
-            break
-    _tg_logger.info("Auto-backup done: %s (total: %d)", dst, len(all_backups))
-
-
-def _start_auto_backup_thread() -> None:
-    global _auto_backup_started
-    if _auto_backup_started:
-        return
-    _auto_backup_started = True
-
-    def _runner():
-        import datetime as _dt
-        while True:
             now = _dt.datetime.now()
-            # محاسبه زمان باقی‌مانده تا ۴ صبح
-            target = now.replace(hour=4, minute=0, second=0, microsecond=0)
-            if now >= target:
-                target += _dt.timedelta(days=1)
-            sleep_secs = (target - now).total_seconds()
-            _time.sleep(sleep_secs)
-            try:
-                _do_auto_backup()
-            except Exception as ex:
-                _tg_logger.error("auto-backup error: %s", ex)
+            today = now.strftime("%Y-%m-%d")
 
-    _threading.Thread(target=_runner, name="auto-backup", daemon=True).start()
+            # ── ۱) کمپین بازگردانی — روزی یک‌بار بعد از ساعت تنظیم‌شده ──
+            wb = get_winback_settings()
+            force_wb = get_cfg("winback_force", "0") == "1"
+            if (int(wb.get("enabled") or 0) and now.hour >= int(wb.get("hour") or 11)
+                    and get_cfg("winback_last", "") != today) or force_wb:
+                if force_wb:
+                    set_cfg("winback_force", "0")
+                set_cfg("winback_last", today)
+                cands = find_winback_candidates(
+                    int(wb.get("days_inactive") or 14),
+                    int(wb.get("cooldown_days") or 30),
+                    int(wb.get("batch") or 30))
+                sent = 0
+                for c in cands:
+                    try:
+                        code = create_winback_code(int(c["uid"]),
+                                                   int(wb.get("percent") or 15),
+                                                   int(wb.get("expire_days") or 3))
+                        if not code:
+                            continue
+                        msg = str(wb.get("message") or "").format(
+                            name=(c["name"] or "دوست عزیز"), code=code,
+                            percent=wb.get("percent"), days=wb.get("expire_days"))
+                        bot.send_message(int(c["uid"]), msg, parse_mode="HTML")
+                        sent += 1
+                    except Exception:
+                        continue
+                if sent:
+                    logger.info("winback: %s پیام بازگردانی ارسال شد", sent)
 
-    # thread جداگانه برای بررسی موجودی (هر ۲ ساعت)
-    def _stock_runner():
-        while True:
-            _time.sleep(7200)
-            try:
-                _notify_low_stock()
-            except Exception as ex:
-                _tg_logger.error("low-stock check error: %s", ex)
-
-    _threading.Thread(target=_stock_runner, name="stock-check", daemon=True).start()
-    _tg_logger.info("Scheduler started (backup:24h, low-stock:2h)")
-
-
-@router.get("/reports", response_class=HTMLResponse)
-async def financial_report(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_financial_report, ensure_feed_batch_schema
-    ensure_feed_batch_schema()
-    r = get_financial_report()
-
-    def _c(n): return f"{n:,}" if isinstance(n, int) else "۰"
-
-    body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">📊 گزارش مالی</h1>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {_card("مجموع فروش", _c(r.get("total_sales",0)), "تومان", "indigo")}
-      {_card("هزینه خرید", _c(r.get("total_purchase",0)), "تومان", "red")}
-      {_card("سود ناخالص", _c(r.get("gross_profit",0)), "تومان", "green")}
-      {_card("سود خالص", _c(r.get("net_profit",0)), "تومان", "emerald")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {_card("فروش مستقیم", _c(r.get("direct_sales",0)), "تومان", "blue")}
-      {_card("فروش همکاری", _c(r.get("partner_sales",0)), "تومان", "purple")}
-      {_card("پورسانت پرداختی", _c(r.get("total_commission",0)), "تومان", "amber")}
-      {_card("سود نهایی فروشگاه", _c(r.get("store_profit",0)), "تومان", "slate")}
-    </div>
-    <div class="card p-6">
-      <h2 class="font-bold text-gray-700 mb-4">📈 خلاصه حسابداری</h2>
-      <table class="w-full text-right text-sm">
-        <tbody>
-          {''.join(f'<tr class="border-b"><td class="py-2 text-gray-500">{k}</td><td class="py-2 font-bold text-gray-800">{_c(v)} تومان</td></tr>' for k,v in [
-            ("مجموع فروش", r.get("total_sales",0)),
-            ("− هزینه خرید موجودی", r.get("total_purchase",0)),
-            ("= سود ناخالص", r.get("gross_profit",0)),
-            ("− پورسانت معرفی", r.get("total_commission",0)),
-            ("= سود خالص", r.get("net_profit",0)),
-            ("− تسویه‌های پرداخت‌شده", r.get("total_payouts",0)),
-            ("= سود نهایی فروشگاه", r.get("store_profit",0)),
-          ])}
-        </tbody>
-      </table>
-      <p class="text-xs text-gray-400 mt-4">⚠️ هزینه خرید فقط برای موجودی‌هایی محاسبه می‌شود که با اطلاعات Batch ثبت شده‌اند.</p>
-    </div>"""
-    return _layout("گزارش مالی", body, adm, flash=flash)
+            # ── ۴) لیدربرد هفتگی — روز تنظیم‌شده، هفته‌ای یک‌بار ──
+            lb = get_leaderboard_settings()
+            week_key = now.strftime("%G-W%V")
+            force_lb = get_cfg("leaderboard_force", "0") == "1"
+            if (int(lb.get("enabled") or 0) and now.weekday() == int(lb.get("weekday") or 4)
+                    and get_cfg("leaderboard_last", "") != week_key) or force_lb:
+                if force_lb:
+                    set_cfg("leaderboard_force", "0")
+                set_cfg("leaderboard_last", week_key)
+                rewards = []
+                for x in str(lb.get("rewards") or "").split(","):
+                    try: rewards.append(int(x.strip()))
+                    except Exception: pass
+                tops = weekly_top_partners(limit=max(1, len(rewards) or 3))
+                medals = ["🥇", "🥈", "🥉", "🏅", "🏅"]
+                for i, t in enumerate(tops):
+                    try:
+                        reward = rewards[i] if i < len(rewards) else 0
+                        if reward > 0:
+                            credit_partner_wallet(int(t["uid"]), reward,
+                                                  note=f"جایزه لیدربرد هفته {week_key} — رتبه {i+1}")
+                        msg = str(lb.get("message") or "").format(
+                            rank=f"{medals[i]} {i+1}", count=t["cnt"], reward=f"{reward:,}")
+                        bot.send_message(int(t["uid"]), msg, parse_mode="HTML")
+                    except Exception:
+                        continue
+                if tops:
+                    logger.info("leaderboard: جوایز هفته %s پرداخت شد (%s نفر)", week_key, len(tops))
+        except Exception as ex:
+            logger.exception("growth scheduler error: %s", ex)
+        time.sleep(600)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ─── حسابداری (Light Accounting) ─────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _to_jalali(greg_str: str) -> str:
-    """تبدیل تاریخ میلادی به شمسی."""
+if __name__ == "__main__":
+    init_db(DB_PATH)
+    ticket_ensure_schema()
+    _ensure_delivery_table()
     try:
-        from datetime import date as _d
-        y, m, d = map(int, greg_str.split('-'))
-        # الگوریتم ساده تبدیل
-        g_y = y - 1600; g_m = m - 1; g_d = d - 1
-        g_d_no = 365*g_y + (g_y+3)//4 - (g_y+99)//100 + (g_y+399)//400
-        for i in range(g_m):
-            g_d_no += [31,28+1 if (y%4==0 and y%100!=0) or y%400==0 else 28,31,30,31,30,31,31,30,31,30,31][i]
-        g_d_no += g_d
-        j_d_no = g_d_no - 79
-        j_np = j_d_no // 12053; j_d_no %= 12053
-        jy = 979 + 33*j_np + 4*(j_d_no//1461); j_d_no %= 1461
-        if j_d_no >= 366:
-            jy += (j_d_no-1)//365; j_d_no = (j_d_no-1)%365
-        for i,v in enumerate([31,31,31,31,31,31,30,30,30,30,30,29]):
-            if j_d_no >= v: j_d_no -= v
-            else: jm = i+1; jd = j_d_no+1; break
-        return f"{jy}/{jm:02d}/{jd:02d}"
-    except Exception:
-        return greg_str
+        from db import ensure_growth_schema as _egs
+        _egs()
+        threading.Thread(target=_growth_scheduler, daemon=True).start()
+        logger.info("🚀 Growth scheduler started")
+    except Exception as _gex:
+        logger.exception("growth scheduler failed to start: %s", _gex)
+    logger.info("Bot started (ticket system v2)...")
 
-
-def _month_start() -> str:
-    from datetime import date, timedelta
-    d = date.today(); return d.replace(day=1).isoformat()
-
-
-def _week_start() -> str:
-    from datetime import date, timedelta
-    d = date.today(); return (d - timedelta(days=d.weekday())).isoformat()
-
-
-@router.get("/accounting", response_class=HTMLResponse)
-async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_g: str = "", dt_g: str = "", flash: str = ""):
-    # df_g/dt_g are Gregorian equivalents of Jalali df/dt
-    if df_g: df = df_g
-    if dt_g: dt = dt_g
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_accounting_kpis, ensure_accounting_schema
-    ensure_accounting_schema()
-    kpis = get_accounting_kpis(df, dt)
-    def _m(n): return f"{int(n):,}"
-    today_g = __import__('datetime').date.today().isoformat()
-    df = df or today_g; dt = dt or today_g
-    filter_html = f"""
-    <form method="get" class="flex gap-2 items-center mb-6 flex-wrap">
-      <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
-        <span class="text-xs text-gray-400 whitespace-nowrap">از:</span>
-        <input type="text" name="df" id="df" value="{_to_jalali(df)}" placeholder="۱۴۰۴/۰۱/۰۱"
-          class="w-28 text-sm outline-none" autocomplete="off" onchange="syncGreg(this,'df_g')">
-        <input type="hidden" name="df_g" id="df_g" value="{df}">
-      </div>
-      <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
-        <span class="text-xs text-gray-400 whitespace-nowrap">تا:</span>
-        <input type="text" name="dt" id="dt" value="{_to_jalali(dt)}" placeholder="۱۴۰۴/۰۱/۳۱"
-          class="w-28 text-sm outline-none" autocomplete="off" onchange="syncGreg(this,'dt_g')">
-        <input type="hidden" name="dt_g" id="dt_g" value="{dt}">
-      </div>
-      <div class="flex gap-1">
-        <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium">فیلتر</button>
-        <a href="/admin/accounting" class="px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs">امروز</a>
-        <a href="/admin/accounting?df=&dt=" class="px-3 py-1.5 bg-gray-50 text-gray-400 rounded-lg text-xs">همه</a>
-      </div>
-      <div class="flex gap-1">
-        <a href="/admin/accounting?df={_month_start()}&dt={today_g}" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">این ماه</a>
-        <a href="/admin/accounting?df={_week_start()}&dt={today_g}" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">این هفته</a>
-        <a href="/admin/accounting?df=&dt=" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">کل</a>
-      </div>
-    </form>
-    <script>
-    function jalaliToGregorian(jy,jm,jd){{
-      var gy,gm,gd,g_d_no,j_d_no,j_np,i,jy2=jy-979,jm2=jm-1,jd2=jd-1;
-      j_d_no=365*jy2+(~~(jy2/33))*8+(~~((jy2%33+3)/4));
-      for(i=0;i<jm2;++i) j_d_no+=([31,31,31,31,31,31,30,30,30,30,30,29])[i];
-      j_d_no+=jd2;
-      g_d_no=j_d_no+79;
-      gy=1600+(~~(g_d_no/36524.25))*100; g_d_no%=36524.25;
-      if(g_d_no>=36160.75){{gy+=100;g_d_no-=36160.75;}}
-      gy+=~~(g_d_no/365.25); g_d_no%=365.25;
-      gm=~~((g_d_no+16.5)/30.6001)+1;
-      gd=~~(g_d_no+16.5)-~~(30.6001*gm)+1;
-      if(gm>12){{++gy;gm-=12;}}
-      return [gy,gm,gd];
-    }}
-    function syncGreg(inp,hiddenId){{
-      var v=inp.value.trim().replace(/[۰-۹]/g,function(c){{return String.fromCharCode(c.charCodeAt(0)-1728);}});
-      var p=v.split('/'); if(p.length===3){{
-        var r=jalaliToGregorian(+p[0],+p[1],+p[2]);
-        var g=r[0]+'-'+(r[1]<10?'0'+r[1]:r[1])+'-'+(r[2]<10?'0'+r[2]:r[2]);
-        document.getElementById(hiddenId).value=g;
-      }}
-    }}
-    </script>"""
-    body = f"""
-    <div class="flex items-center justify-between mb-4">
-      <h1 class="text-2xl font-bold text-gray-800">💰 حسابداری</h1>
-      <div class="flex gap-2 flex-wrap">
-        <a href="/admin/accounting/expenses" class="px-3 py-1.5 text-sm bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">📋 هزینه‌ها</a>
-        <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
-        <a href="/admin/accounting/products" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
-        <a href="/admin/accounting/partners" class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
-
-      </div>
-    </div>
-    {{filter_html}}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {_card("فروش امروز",_m(kpis["today_sales"]),"تومان","blue")}
-      {_card("فروش این ماه",_m(kpis["month_sales"]),"تومان","indigo")}
-      {_card("مجموع فروش",_m(kpis["total_sales"]),"تومان","slate")}
-      {_card("تعداد سفارش",_m(kpis["total_orders"]),"سفارش","gray")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {_card("سود ناخالص",_m(kpis["gross_profit"]),"تومان","green")}
-      {_card("سود خالص",_m(kpis["net_profit"]),"تومان","emerald")}
-      {_card("مجموع هزینه‌ها",_m(kpis["total_expenses"]),"تومان","red")}
-      {_card("پورسانت پرداختی",_m(kpis["total_commission"]),"تومان","amber")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-      {_card("هزینه خرید کالا",_m(kpis["total_cost"]),"تومان","orange")}
-      {_card("موجودی انبار",_m(kpis["stock_count"]),"آیتم","slate")}
-      {_card("تسویه انجام‌شده",str(kpis["payout_count"]),"مورد","purple")}
-      {_card("میانگین سود/سفارش",_m(kpis["avg_profit"]),"تومان","teal")}
-    </div>
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">📊 خلاصه سود و زیان</h2>
-      <div class="space-y-3">
-        {_acbar("فروش کل",kpis["total_sales"],kpis["total_sales"],"bg-blue-400")}
-        {_acbar("هزینه خرید",kpis["total_cost"],kpis["total_sales"],"bg-red-400")}
-        {_acbar("پورسانت",kpis["total_commission"],kpis["total_sales"],"bg-amber-400")}
-        {_acbar("هزینه‌ها",kpis["total_expenses"],kpis["total_sales"],"bg-orange-400")}
-        {_acbar("سود خالص",kpis["net_profit"],kpis["total_sales"],"bg-emerald-500")}
-      </div>
-    </div>
-    <div class="card p-6">
-      <h2 class="font-bold text-gray-700 mb-4">📈 تحلیل سود</h2>
-      <div class="grid md:grid-cols-3 gap-4">
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">حاشیه سود</div>
-          <div class="text-3xl font-bold text-emerald-600">{kpis["margin_pct"]}٪</div>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">میانگین سود هر سفارش</div>
-          <div class="text-2xl font-bold text-indigo-600">{_m(kpis["avg_profit"])} ت</div>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">نسبت هزینه به فروش</div>
-          <div class="text-2xl font-bold text-red-500">
-            {round((kpis["total_expenses"]+kpis["total_cost"])/kpis["total_sales"]*100,1) if kpis["total_sales"] else 0}٪
-          </div>
-        </div>
-      </div>
-    </div>"""
-    return _layout("حسابداری", body.replace("{filter_html}", filter_html), adm, flash=flash)
-
-
-def _acbar(label, value, total, color):
-    pct = max(0, min(100, int(value/total*100) if total>0 else 0))
-    return f"""<div><div class="flex justify-between text-xs text-gray-500 mb-1">
-      <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
-      <div class="h-2 bg-gray-100 rounded-full" style="direction:ltr"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
-
-
-
-@router.get("/accounting/expenses", response_class=HTMLResponse)
-async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str="", flash: str=""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_expenses, get_expense_categories, ensure_accounting_schema
-    ensure_accounting_schema()
-    cats = get_expense_categories()
-    expenses = get_expenses(df, dt, cat)
-    total = sum(ex["amount"] for ex in expenses)
-    cat_opts = "".join(f'<option value="{c}" {"selected" if cat==c else ""}>{c}</option>' for c in cats)
-    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 text-xs text-gray-400">{ex["expense_date"]}</td>
-      <td class="px-3 py-2 font-medium">{e(ex["title"])}</td>
-      <td class="px-3 py-2"><span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-xs">{e(ex["category"])}</span></td>
-      <td class="px-3 py-2 font-bold text-red-600">{int(ex["amount"]):,}</td>
-      <td class="px-3 py-2 text-xs text-gray-400">{e((ex["description"] or "")[:30])}</td>
-      <td class="px-3 py-2"><form method="post" action="/admin/accounting/expenses/{ex["id"]}/delete" onsubmit="return confirm(\'حذف؟\')"><button class="text-xs text-red-400 hover:text-red-600">حذف</button></form></td>
-    </tr>''' for ex in expenses) or "<tr><td colspan='6' class='text-center py-6 text-gray-400'>هزینه‌ای ثبت نشده</td></tr>"
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">📋 هزینه‌ها</h1>
-    </div>
-    <div class="grid md:grid-cols-2 gap-4 mb-6">
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">+ ثبت هزینه جدید</h2>
-        <form method="post" action="/admin/accounting/expenses/new" class="space-y-3">
-          <div class="grid grid-cols-2 gap-3">
-            <div><label class="text-xs block mb-1">عنوان</label><input type="text" name="title" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs block mb-1">مبلغ (تومان)</label><input type="number" name="amount" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs block mb-1">دسته</label><select name="category" class="w-full border rounded-lg px-3 py-2 text-sm"><option value="">انتخاب...</option>{cat_opts}</select></div>
-            <div><label class="text-xs block mb-1">تاریخ</label><input type="date" name="expense_date" class="w-full border rounded-lg px-3 py-2 text-sm"></div>
-          </div>
-          <input type="text" name="description" placeholder="توضیحات (اختیاری)" class="w-full border rounded-lg px-3 py-2 text-sm">
-          {_btn("ثبت هزینه","",color="red",small=True)}
-        </form>
-      </div>
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">+ دسته‌بندی جدید</h2>
-        <form method="post" action="/admin/accounting/categories/new" class="flex gap-2 mb-4">
-          <input type="text" name="name" placeholder="نام دسته" class="flex-1 border rounded-lg px-3 py-2 text-sm">
-          {_btn("اضافه","",color="indigo",small=True)}
-        </form>
-        <div class="flex flex-wrap gap-1">{" ".join(f'<span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">{c}</span>' for c in cats)}</div>
-      </div>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="px-4 py-3 bg-gray-50 border-b flex flex-wrap justify-between items-center gap-2">
-        <form method="get" class="flex gap-2 flex-wrap">
-          <input type="date" name="df" value="{df}" class="border rounded px-2 py-1 text-xs">
-          <input type="date" name="dt" value="{dt}" class="border rounded px-2 py-1 text-xs">
-          <select name="cat" class="border rounded px-2 py-1 text-xs"><option value="">همه</option>{cat_opts}</select>
-          <button class="px-3 py-1 bg-indigo-600 text-white rounded text-xs">فیلتر</button>
-        </form>
-        <div class="flex gap-2 items-center">
-          <span class="text-sm font-bold text-red-600">جمع: {total:,} ت</span>
-          <a href="/admin/accounting/expenses/export?df={df}&dt={dt}&cat={cat}" class="px-3 py-1 bg-green-50 text-green-700 border border-green-200 rounded text-xs">⬇ Excel</a>
-        </div>
-      </div>
-      <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">عنوان</th><th class="px-3 py-2">دسته</th>
-          <th class="px-3 py-2">مبلغ</th><th class="px-3 py-2">توضیح</th><th></th>
-        </tr></thead><tbody>{rows}</tbody>
-      </table></div>
-    </div>"""
-    return _layout("هزینه‌ها", body, adm, flash=flash)
-
-
-@router.post("/accounting/expenses/new")
-async def accounting_expense_new(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import create_expense, ensure_accounting_schema
-    ensure_accounting_schema()
-    form = await request.form()
-    eid = create_expense(str(form.get("title","")).strip(), str(form.get("category","سایر")),
-                         int(form.get("amount") or 0), str(form.get("expense_date","")),
-                         str(form.get("description","")))
-    _log(request, "ثبت هزینه", "حسابداری", f"id:{eid}")
-    return _redir("/admin/accounting/expenses?flash=هزینه+ثبت+شد")
-
-
-@router.post("/accounting/expenses/{eid}/delete")
-async def accounting_expense_delete(request: Request, eid: int):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import delete_expense; delete_expense(eid)
-    _log(request, "حذف هزینه", "حسابداری", f"id:{eid}")
-    return _redir("/admin/accounting/expenses?flash=حذف+شد")
-
-
-@router.post("/accounting/categories/new")
-async def accounting_category_new(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import add_expense_category
-    form = await request.form(); name = str(form.get("name","")).strip()
-    if name: add_expense_category(name)
-    return _redir("/admin/accounting/expenses?flash=دسته+اضافه+شد")
-
-
-@router.get("/accounting/cashflow", response_class=HTMLResponse)
-async def accounting_cashflow(request: Request, df: str="", dt: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_cashflow, ensure_accounting_schema; ensure_accounting_schema()
-    rows_data = get_cashflow(df, dt, 200)
-    tc = {"فروش":"green","شارژ کیف‌پول":"blue","هزینه":"red","پورسانت":"amber"}
-    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 text-xs text-gray-400">{r["created_at"][:16]}</td>
-      <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs bg-{tc.get(r["type"],"gray")}-100 text-{tc.get(r["type"],"gray")}-700">{r["type"]}</span></td>
-      <td class="px-3 py-2 text-xs">{str(r["description"] or "")[:40]}</td>
-      <td class="px-3 py-2 font-bold {"text-green-600" if r["direction"]=="income" else "text-red-500"}">{"+" if r["direction"]=="income" else "-"}{int(r["amount"] or 0):,}</td>
-    </tr>''' for r in rows_data)
-    body = f"""<div class="flex items-center gap-3 mb-6">
-      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">🔄 گردش مالی</h1>
-    </div>
-    <form method="get" class="flex gap-2 mb-4 flex-wrap">
-      <input type="date" name="df" value="{df}" class="border rounded-lg px-3 py-2 text-sm">
-      <input type="date" name="dt" value="{dt}" class="border rounded-lg px-3 py-2 text-sm">
-      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">فیلتر</button>
-      <a href="/admin/accounting/cashflow/export?df={df}&dt={dt}" class="px-3 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm">⬇ Excel</a>
-    </form>
-    <div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-      <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-        <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">نوع</th><th class="px-3 py-2">توضیح</th><th class="px-3 py-2">مبلغ</th>
-      </tr></thead><tbody>{rows or "<tr><td colspan='4' class='text-center py-6 text-gray-400'>رکوردی یافت نشد</td></tr>"}</tbody>
-    </table></div></div>"""
-    return _layout("گردش مالی", body, adm)
-
-
-@router.get("/accounting/products", response_class=HTMLResponse)
-async def accounting_products(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_product_accounting
-    prods = get_product_accounting(50)
-    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 font-medium">{e(p["title"])}</td>
-      <td class="px-3 py-2 text-center">{p["sale_count"]}</td>
-      <td class="px-3 py-2 text-green-600">{int(p["total_revenue"] or 0):,}</td>
-      <td class="px-3 py-2">{int(p["avg_cost"] or 0):,}</td>
-      <td class="px-3 py-2">{int(p["last_cost"] or 0):,}</td>
-      <td class="px-3 py-2 font-bold text-emerald-600">{int(p["total_revenue"] or 0) - int(p["avg_cost"] or 0)*max(int(p["sale_count"] or 1),1):,}</td>
-      <td class="px-3 py-2 text-center">{p["stock"]}</td>
-    </tr>''' for p in prods)
-    body = f"""<div class="flex items-center gap-3 mb-6">
-      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">📦 گزارش محصولات</h1>
-      <a href="/admin/accounting/products/export" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg mr-auto">⬇ Excel</a>
-    </div>
-    <div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-      <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-        <th class="px-3 py-2">محصول</th><th class="px-3 py-2 text-center">فروش</th><th class="px-3 py-2">درآمد</th>
-        <th class="px-3 py-2">میانگین خرید</th><th class="px-3 py-2">آخرین خرید</th><th class="px-3 py-2">سود</th><th class="px-3 py-2">موجودی</th>
-      </tr></thead><tbody>{rows or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>داده‌ای یافت نشد</td></tr>"}</tbody>
-    </table></div></div>"""
-    return _layout("گزارش محصولات", body, adm)
-
-
-@router.get("/accounting/partners", response_class=HTMLResponse)
-async def accounting_partners_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_partner_accounting
-    partners = get_partner_accounting(50)
-    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 font-medium">{e(p["full_name"] or p["username"] or str(p["user_id"]))}</td>
-      <td class="px-3 py-2 text-center">{p["sale_count"]}</td>
-      <td class="px-3 py-2 text-green-600">{int(p["total_sales"] or 0):,}</td>
-      <td class="px-3 py-2 text-amber-600">{int(p["commission_paid"] or 0):,}</td>
-      <td class="px-3 py-2 font-bold text-emerald-600">{int(p["total_sales"] or 0)-int(p["commission_paid"] or 0):,}</td>
-    </tr>''' for p in partners)
-    body = f"""<div class="flex items-center gap-3 mb-6">
-      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">🤝 گزارش همکاران</h1>
-      <a href="/admin/accounting/partners/export" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg mr-auto">⬇ Excel</a>
-    </div>
-    <div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-      <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-        <th class="px-3 py-2">همکار</th><th class="px-3 py-2 text-center">فروش</th>
-        <th class="px-3 py-2">مجموع فروش</th><th class="px-3 py-2">پورسانت</th><th class="px-3 py-2">سود فروشگاه</th>
-      </tr></thead><tbody>{rows or "<tr><td colspan='5' class='text-center py-6 text-gray-400'>داده‌ای یافت نشد</td></tr>"}</tbody>
-    </table></div></div>"""
-    return _layout("گزارش همکاران", body, adm)
-
-
-@router.get("/accounting/expenses/export")
-async def export_expenses(request: Request, df: str="", dt: str="", cat: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_expenses; import io as _io
-    data = get_expenses(df, dt, cat, 10000)
-    try:
-        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="هزینه‌ها"
-        ws.append(["تاریخ","عنوان","دسته","مبلغ","توضیح"])
-        for r in data: ws.append([r["expense_date"],r["title"],r["category"],r["amount"],r["description"]])
-        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
-        from fastapi.responses import StreamingResponse
-        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition":"attachment; filename=expenses.xlsx"})
-    except Exception:
-        from fastapi.responses import PlainTextResponse
-        csv = "تاریخ,عنوان,دسته,مبلغ\n"+"\n".join(f"{r['expense_date']},{r['title']},{r['category']},{r['amount']}" for r in data)
-        return PlainTextResponse(csv, headers={"Content-Disposition":"attachment; filename=expenses.csv"})
-
-
-@router.get("/accounting/cashflow/export")
-async def export_cashflow(request: Request, df: str="", dt: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_cashflow; import io as _io; data = get_cashflow(df, dt, 10000)
-    try:
-        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="گردش مالی"
-        ws.append(["تاریخ","نوع","توضیح","مبلغ","جهت"])
-        for r in data: ws.append([r["created_at"],r["type"],r["description"],r["amount"],r["direction"]])
-        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
-        from fastapi.responses import StreamingResponse
-        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition":"attachment; filename=cashflow.xlsx"})
-    except Exception:
-        from fastapi.responses import PlainTextResponse
-        return PlainTextResponse("تاریخ,نوع,مبلغ\n", headers={"Content-Disposition":"attachment; filename=cashflow.csv"})
-
-
-@router.get("/accounting/products/export")
-async def export_products_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_product_accounting; import io as _io; data = get_product_accounting(1000)
-    try:
-        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="محصولات"
-        ws.append(["محصول","تعداد فروش","درآمد","میانگین خرید","آخرین خرید","موجودی"])
-        for p in data: ws.append([p["title"],p["sale_count"],p["total_revenue"],p["avg_cost"],p["last_cost"],p["stock"]])
-        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
-        from fastapi.responses import StreamingResponse
-        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition":"attachment; filename=products.xlsx"})
-    except Exception:
-        from fastapi.responses import PlainTextResponse
-        return PlainTextResponse("محصول,فروش,درآمد\n", headers={"Content-Disposition":"attachment; filename=products.csv"})
-
-
-@router.get("/accounting/partners/export")
-async def export_partners_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_partner_accounting; import io as _io; data = get_partner_accounting(1000)
-    try:
-        import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="همکاران"
-        ws.append(["همکار","فروش","درآمد","پورسانت","سود فروشگاه"])
-        for p in data:
-            name = p["full_name"] or p["username"] or str(p["user_id"])
-            ws.append([name,p["sale_count"],p["total_sales"],p["commission_paid"],int(p["total_sales"] or 0)-int(p["commission_paid"] or 0)])
-        buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
-        from fastapi.responses import StreamingResponse
-        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition":"attachment; filename=partners.xlsx"})
-    except Exception:
-        from fastapi.responses import PlainTextResponse
-        return PlainTextResponse("همکار,فروش\n", headers={"Content-Disposition":"attachment; filename=partners.csv"})
-
-
-@router.get("/notes", response_class=HTMLResponse)
-async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_admin_notes, ensure_admin_notes_schema
-    ensure_admin_notes_schema()
-    notes = get_admin_notes(status)
-
-    filter_tabs = '<div class="flex gap-2 mb-4">' + "".join(
-        f'<a href="/admin/notes?status={v}" class="px-3 py-1.5 rounded-lg border text-xs {"bg-indigo-600 text-white" if status==v else "bg-white text-gray-500"}">{l}</a>'
-        for l,v in [("همه",""),("باز","open"),("انجام شد","done")]
-    ) + '</div>'
-
-    rows = ""
-    for n in notes:
-        sc = "green" if n["status"] == "done" else "amber"
-        sl = "✅ انجام شد" if n["status"] == "done" else "🔵 باز"
-        rows += f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-xs text-gray-400">#{n['id']}</td>
-          <td class="px-4 py-3 text-sm font-medium">{e(n['author'])}</td>
-          <td class="px-4 py-3 text-sm">{e((n['text'] or '')[:60])}{'...' if len(n['text'] or '')>60 else ''}</td>
-          <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(n['created_at'] or '')[:16]}</td>
-          <td class="px-4 py-3 text-xs text-indigo-500">{n['reply_count']} پاسخ</td>
-          <td class="px-4 py-3 flex gap-1">
-            <a href="/admin/notes/{n['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">مشاهده</a>
-            <form method="post" action="/admin/notes/{n['id']}/toggle" class="inline">
-              <button class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">{'رفع انجام' if n['status']=='done' else '✅ انجام شد'}</button>
-            </form>
-          </td>
-        </tr>"""
-
-    body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">📝 یادداشت مدیران</h1>
-      <a href="/admin/notes/new" class="btn-sm bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm">+ یادداشت جدید</a>
-    </div>
-    {filter_tabs}
-    <div class="card overflow-hidden"><div class="overflow-x-auto">
-      <table class="w-full text-right min-w-max">
-        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-4 py-3">#</th><th class="px-4 py-3">نویسنده</th>
-          <th class="px-4 py-3">متن</th><th class="px-4 py-3">وضعیت</th>
-          <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">پاسخ</th>
-          <th class="px-4 py-3">عملیات</th>
-        </tr></thead>
-        <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>یادداشتی ثبت نشده</td></tr>"}</tbody>
-      </table>
-    </div></div>"""
-    return _layout("یادداشت مدیران", body, adm, flash=flash)
-
-
-@router.get("/notes/new", response_class=HTMLResponse)
-async def admin_note_new_get(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← یادداشت‌ها", "/admin/notes", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">📝 یادداشت جدید</h1>
-    </div>
-    <div class="card p-6 max-w-xl">
-      <form method="post" action="/admin/notes/new" class="space-y-4">
-        <div><label class="text-sm font-medium text-gray-700 block mb-1">متن یادداشت</label>
-          {_textarea("text","یادداشت خود را بنویسید...",rows=6)}</div>
-        {_btn("ثبت یادداشت","",color="indigo")}
-      </form>
-    </div>"""
-    return _layout("یادداشت جدید", body, adm)
-
-
-@router.post("/notes/new")
-async def admin_note_new_post(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    form = await request.form()
-    text = str(form.get("text","")).strip()
-    if not text:
-        return _redir("/admin/notes/new")
-    from db import create_admin_note
-    author = (adm[0] if adm else "مدیر")
-    create_admin_note(author, text)
-    _log(request, "ثبت یادداشت", "یادداشت‌ها", text[:40])
-    return _redir("/admin/notes?flash=یادداشت+ثبت+شد")
-
-
-@router.get("/notes/{nid}", response_class=HTMLResponse)
-async def admin_note_detail(request: Request, nid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import get_admin_note
-    data = get_admin_note(nid)
-    if not data:
-        return _redir("/admin/notes")
-    note = data["note"]
-    replies = data["replies"]
-
-    reply_rows = "".join(f"""<div class="p-4 bg-gray-50 rounded-lg mb-2">
-      <div class="flex justify-between text-xs text-gray-400 mb-1">
-        <span class="font-medium text-gray-700">{e(r['author'])}</span>
-        <span>{(r['created_at'] or '')[:16]}</span>
-      </div>
-      <p class="text-sm text-gray-800">{e(r['text'])}</p>
-    </div>""" for r in replies)
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← یادداشت‌ها", "/admin/notes", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">📝 یادداشت #{nid}</h1>
-    </div>
-    <div class="grid md:grid-cols-2 gap-4">
-      <div class="card p-6">
-        <div class="flex justify-between items-start mb-4">
-          <div>
-            <div class="text-sm font-medium text-gray-700">{e(note['author'])}</div>
-            <div class="text-xs text-gray-400">{(note['created_at'] or '')[:16]}</div>
-          </div>
-          <span class="px-2 py-1 text-xs rounded-full {'bg-green-100 text-green-700' if note['status']=='done' else 'bg-amber-100 text-amber-700'}">
-            {'✅ انجام شد' if note['status']=='done' else '🔵 باز'}
-          </span>
-        </div>
-        <p class="text-sm text-gray-800 whitespace-pre-wrap mb-4">{e(note['text'])}</p>
-        <form method="post" action="/admin/notes/{nid}/toggle">
-          <button class="px-3 py-1.5 text-xs border rounded-lg {'bg-gray-100' if note['status']=='done' else 'bg-green-50 text-green-700 border-green-200'}">
-            {'↩ بازگشایی' if note['status']=='done' else '✅ علامت انجام'}
-          </button>
-        </form>
-      </div>
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">💬 پاسخ‌ها</h2>
-        <div class="mb-4 max-h-64 overflow-y-auto">{reply_rows or '<p class="text-sm text-gray-400">پاسخی ثبت نشده</p>'}</div>
-        <form method="post" action="/admin/notes/{nid}/reply">
-          {_textarea("text","پاسخ شما...",rows=3)}
-          <div class="mt-2">{_btn("ثبت پاسخ","",color="indigo",small=True)}</div>
-        </form>
-      </div>
-    </div>"""
-    return _layout(f"یادداشت #{nid}", body, adm, flash=flash)
-
-
-@router.post("/notes/{nid}/reply")
-async def admin_note_reply(request: Request, nid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    form = await request.form()
-    text = str(form.get("text","")).strip()
-    if text:
-        from db import add_admin_note_reply
-        author = (adm[0] if adm else "مدیر")
-        add_admin_note_reply(nid, author, text)
-    return _redir(f"/admin/notes/{nid}?flash=پاسخ+ثبت+شد")
-
-
-@router.post("/notes/{nid}/toggle")
-async def admin_note_toggle(request: Request, nid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "wallets")
-    if guard: return guard
-    from db import toggle_admin_note_status
-    new_status = toggle_admin_note_status(nid)
-    _log(request, f"تغییر وضعیت یادداشت به {new_status}", "یادداشت‌ها", f"#{nid}")
-    return _redir(f"/admin/notes/{nid}")
-
-@router.get("/partners", response_class=HTMLResponse)
-async def partners_list(request: Request, tab: str = "list", status_filter: str = "", flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-
-    from db import (ensure_partner_system_schema, get_partner_tiers,
-                    get_partner_commission, ensure_referral_schema, get_referral_settings)
-    ensure_partner_system_schema()
-    ensure_referral_schema()
-
-    # تب‌های اصلی
-    tab_defs = [("list","👥 لیست همکاران"),("tree","🌳 درخت همکاران"),("referrals","🔗 معرفی‌ها"),
-                ("tiers","🏆 سطوح"),("payouts","📤 تسویه‌ها"),("settings","⚙️ تنظیمات")]
-    tabs_html = '<div class="flex gap-2 mb-6 overflow-x-auto pb-1">' + "".join(
-        f'<a href="/admin/partners?tab={v}" class="px-4 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if tab==v else "bg-white text-gray-600"}">{l}</a>'
-        for v, l in tab_defs
-    ) + '</div>'
-
-    content = ""
-
-    # ─── تب لیست همکاران ─────────────────────────────────────────────────
-    if tab == "list":
-        conn = _db()
+    while True:
         try:
-            where = "WHERE status=?" if status_filter else ""
-            partners = conn.execute(
-                f"SELECT * FROM partners {where} ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 100;",
-                (status_filter,) if status_filter else ()
-            ).fetchall()
-        finally:
-            conn.close()
-
-        sub_tabs = '<div class="flex gap-2 mb-4">' + "".join(
-            f'<a href="/admin/partners?tab=list&status_filter={v}" class="px-3 py-1.5 rounded-lg border text-xs {"bg-amber-500 text-white" if status_filter==v else "bg-white text-gray-500"}">{l}</a>'
-            for l, v in [("همه",""),("در انتظار","pending"),("تایید","approved"),("رد","rejected")]
-        ) + '</div>'
-
-        rows = ""
-        for p in partners:
-            st = p["status"] or "pending"
-            bc = {"pending":"yellow","approved":"green","rejected":"red"}.get(st,"gray")
-            bl = {"pending":"در انتظار","approved":"تایید","rejected":"رد"}.get(st,st)
-            actions = f"""<a href="/admin/partners/{p['tg_user_id']}/profile"
-                  class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded hover:bg-indigo-100">👤 پروفایل</a>"""
-            if st == "pending":
-                actions += f"""<form method="post" action="/admin/partners/{p['tg_user_id']}/approve" class="inline">
-                  <button class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200">✅</button></form>
-                  <form method="post" action="/admin/partners/{p['tg_user_id']}/reject" class="inline">
-                  <button class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200">❌</button></form>"""
-            rows += f"""<tr class="border-b hover:bg-gray-50 text-sm">
-              <td class="px-4 py-3 font-mono text-xs"><code>{e(p['tg_user_id'])}</code></td>
-              <td class="px-4 py-3">{e(p['full_name'])}</td>
-              <td class="px-4 py-3 text-gray-500">{e(p['phone'])}</td>
-              <td class="px-4 py-3 text-gray-400 text-xs">{e(p['city'])} | {e(p['shop_name'])}</td>
-              <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs rounded-full bg-{bc}-100 text-{bc}-700">{bl}</span></td>
-              <td class="px-4 py-3 flex gap-1">{actions}</td>
-            </tr>"""
-
-        content = f"""{sub_tabs}
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
-            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">User ID</th><th class="px-4 py-3">نام</th>
-              <th class="px-4 py-3">شماره</th><th class="px-4 py-3">شهر/فروشگاه</th>
-              <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">عملیات</th>
-            </tr></thead>
-            <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"}</tbody>
-          </table>
-        </div></div>"""
-
-    # ─── تب معرفی‌ها (ادغام‌شده) ─────────────────────────────────────────
-    elif tab == "referrals":
-        ref_settings = get_referral_settings()
-        conn = _db()
-        try:
-            refs = conn.execute("""
-                SELECT r.*, u1.full_name as referrer_name, u2.full_name as referred_name
-                FROM referrals r
-                LEFT JOIN users u1 ON u1.user_id=r.referrer_id
-                LEFT JOIN users u2 ON u2.user_id=r.referred_id
-                ORDER BY r.id DESC LIMIT 200;
-            """).fetchall()
-            total     = conn.execute("SELECT COUNT(*) FROM referrals;").fetchone()[0]
-            rewarded  = conn.execute("SELECT COUNT(*) FROM referrals WHERE rewarded=1;").fetchone()[0]
-            total_pay = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;").fetchone()[0]
-        except Exception:
-            refs = []; total = rewarded = total_pay = 0
-        finally:
-            conn.close()
-
-        ref_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-xs text-gray-400">#{r['id']}</td>
-          <td class="px-4 py-3 text-sm">{e(r['referrer_name'] or str(r['referrer_id']))}</td>
-          <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
-          <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">منتظر خرید</span>'}</td>
-          <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
-        </tr>""" for r in refs)
-
-        content = f"""
-        <div class="grid grid-cols-3 gap-4 mb-6">
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total}</div><div class="text-xs text-gray-400 mt-1">کل معرفی‌ها</div></div>
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{rewarded}</div><div class="text-xs text-gray-400 mt-1">پرداخت شده</div></div>
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{int(total_pay):,}</div><div class="text-xs text-gray-400 mt-1">جمع پاداش (ت)</div></div>
-        </div>
-        <div class="card p-6 mb-6">
-          <h2 class="font-bold text-gray-700 mb-4">⚙️ تنظیمات معرفی</h2>
-          <form method="post" action="/admin/referrals/settings" class="flex flex-wrap gap-4 items-end">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">مبلغ پاداش (تومان)</label>
-              {_input("reward_amount","",str(ref_settings.get("reward_amount",5000)),"number",True)}</div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
-              <select name="is_active">
-                <option value="1" {"selected" if ref_settings.get("is_active") else ""}>فعال</option>
-                <option value="0" {"" if ref_settings.get("is_active") else "selected"}>غیرفعال</option>
-              </select></div>
-            {_btn("ذخیره","",color="green")}
-          </form>
-        </div>
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
-            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">#</th><th class="px-4 py-3">معرف</th><th class="px-4 py-3">کاربر جدید</th>
-              <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پاداش</th><th class="px-4 py-3">تاریخ</th>
-            </tr></thead>
-            <tbody>{ref_rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>معرفی‌ای ثبت نشده</td></tr>"}</tbody>
-          </table>
-        </div></div>"""
-
-    elif tab == "tiers":
-        from db import get_partner_tiers, ensure_partner_tiers_extended
-        ensure_partner_tiers_extended()
-        tiers = get_partner_tiers()
-        tier_rows = ""
-        for tr in tiers:
-            try: commission = tr['commission_percent'] or 0
-            except Exception: commission = 0
-            try: cfixed = int(tr['commission_fixed'] or 0)
-            except Exception: cfixed = 0
-            comm_label = f"{cfixed:,} ت ثابت" if cfixed > 0 else f"{commission}٪"
-            try: color = tr['color'] or '#6B7280'
-            except Exception: color = '#6B7280'
-            try: desc = e(tr['description'] or '')
-            except Exception: desc = ''
-            try: photo_id = tr['photo_file_id'] or ''
-            except Exception: photo_id = ''
-            has_banner = '✅' if photo_id else '—'
-            tier_rows += f"""<tr class="border-b hover:bg-gray-50">
-              <td class="px-4 py-3 text-2xl">{e(tr['icon'])}</td>
-              <td class="px-4 py-3 text-sm font-medium">{e(tr['name'])}</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{tr['min_orders']} خرید</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{comm_label}</td>
-              <td class="px-4 py-3"><span style="background:{color};width:20px;height:20px;display:inline-block;border-radius:4px"></span></td>
-              <td class="px-4 py-3 text-xs text-center">{has_banner}</td>
-              <td class="px-4 py-3 text-xs text-gray-400">{desc[:30]}</td>
-              <td class="px-4 py-3">
-                <div class="flex gap-1 flex-wrap items-center">
-                  <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},{cfixed},'{color}','{desc}')"
-                    class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
-                  <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
-                        enctype="multipart/form-data" id="bf{tr['id']}" style="display:inline">
-                    <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer border border-amber-200">
-                      {'🖼 تعویض بنر' if photo_id else '📷 آپلود بنر'}
-                      <input type="file" name="banner_file" accept="image/*" style="display:none"
-                             onchange="this.form.submit()">
-                    </label>
-                  </form>
-                  {f'<form method="post" action="/admin/partners/tier/{tr["id"]}/delete-banner" class="inline" onsubmit="return confirm(\'بنر حذف شود؟\')"><button class="px-2 py-1 text-xs bg-red-50 text-red-500 rounded border border-red-200">🗑 بنر</button></form>' if photo_id else ''}
-                  <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف سطح؟')">
-                    <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded border border-red-200">حذف سطح</button>
-                  </form>
-                </div>
-              </td>
-            </tr>"""
-
-        content = f"""
-        <div class="card p-6 mb-4">
-          <h2 class="font-bold text-gray-700 mb-2">🏆 سطوح همکاری</h2>
-          <form method="post" action="/admin/partners/tier/save" class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end" id="tier-form">
-            <input type="hidden" name="tier_id" id="tier_id" value="">
-            <div><label class="text-xs text-gray-500 block mb-1">آیکون</label>
-              <input type="text" name="icon" id="tier_icon" value="🥉" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">نام سطح</label>
-              <input type="text" name="name" id="tier_name" placeholder="برنز" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">حداقل خرید</label>
-              <input type="number" name="min_orders" id="tier_min" value="0" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">پورسانت اضافه (٪)</label>
-              <input type="number" step="0.1" name="commission_percent" id="tier_comm" value="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">پورسانت ثابت (تومان — 0=درصدی)</label>
-              <input type="number" name="commission_fixed" id="tier_fixed" value="0" min="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">رنگ</label>
-              <input type="color" name="color" id="tier_color" value="#6B7280" class="w-full h-10 border border-gray-200 rounded-lg px-1"></div>
-            <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">توضیح</label>
-              <input type="text" name="description" id="tier_desc" placeholder="توضیح این سطح..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">File ID عکس بنر (اختیاری)</label>
-              <input type="text" name="photo_file_id" id="tier_photo" placeholder="Telegram file_id" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium self-end">ذخیره سطح</button>
-          </form>
-          <button onclick="resetTierForm()" class="mt-2 text-xs text-gray-400 hover:text-gray-600">+ سطح جدید</button>
-        </div>
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
-            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">آیکون</th><th class="px-4 py-3">سطح</th><th class="px-4 py-3">شرط ارتقا</th>
-              <th class="px-4 py-3">پورسانت</th><th class="px-4 py-3">رنگ</th><th class="px-4 py-3">بنر</th><th class="px-4 py-3">توضیح</th><th class="px-4 py-3">عملیات</th>
-            </tr></thead>
-            <tbody>{tier_rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
-          </table>
-        </div></div>
-        <script>
-        function editTier(id,name,icon,min,comm,cfixed,color,desc){{
-          document.getElementById('tier_id').value=id;
-          document.getElementById('tier_name').value=name;
-          document.getElementById('tier_icon').value=icon;
-          document.getElementById('tier_min').value=min;
-          document.getElementById('tier_comm').value=comm;
-          document.getElementById('tier_fixed').value=cfixed||0;
-          document.getElementById('tier_color').value=color;
-          document.getElementById('tier_desc').value=desc;
-          document.getElementById('tier-form').scrollIntoView({{behavior:'smooth'}});
-        }}
-        function resetTierForm(){{
-          document.getElementById('tier_id').value='';
-          document.getElementById('tier_name').value='';
-          document.getElementById('tier_icon').value='🥉';
-          document.getElementById('tier_min').value='0';
-          document.getElementById('tier_comm').value='0';
-          document.getElementById('tier_fixed').value='0';
-          document.getElementById('tier_color').value='#6B7280';
-          document.getElementById('tier_desc').value='';
-        }}
-        </script>"""
-
-    # ─── تب تسویه‌ها ─────────────────────────────────────────────────────
-    elif tab == "payouts":
-        from db import get_partner_payouts, ensure_partner_wallet_schema, get_partner_payout_settings
-        ensure_partner_wallet_schema()
-        status_f = request.query_params.get("pstatus", "")
-        payouts = get_partner_payouts(status=status_f, limit=100)
-        pstats = '<div class="flex gap-2 mb-4 flex-wrap">' + "".join(
-            f'<a href="/admin/partners?tab=payouts&pstatus={v}" class="px-3 py-1.5 rounded-lg border text-xs {"bg-indigo-600 text-white" if status_f==v else "bg-white text-gray-500"}">{l}</a>'
-            for l,v in [("همه",""),("در انتظار","pending"),("تایید","approved"),("رد","rejected")]
-        ) + '</div>'
-        prows = ""
-        for p in payouts:
-            sc = {"pending":"yellow","approved":"green","rejected":"red"}.get(p["status"],"gray")
-            sl = {"pending":"در انتظار","approved":"تایید شد","rejected":"رد شد"}.get(p["status"],p["status"])
-            acts = ""
-            if p["status"] == "pending":
-                acts = f"""<form method="post" action="/admin/partners/payout/{p['id']}/approve" class="inline">
-                  <button class="px-2 py-1 text-xs bg-green-100 text-green-700 rounded">✅ تایید</button></form>
-                  <form method="post" action="/admin/partners/payout/{p['id']}/reject" class="inline ml-1">
-                  <button class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded">❌ رد</button></form>"""
-            prows += f"""<tr class="border-b hover:bg-gray-50 text-sm">
-              <td class="px-4 py-3 text-xs text-gray-400">#{p['id']}</td>
-              <td class="px-4 py-3">{e(p['full_name'] or str(p['user_id']))}</td>
-              <td class="px-4 py-3 font-bold text-green-600">{int(p['amount']):,} ت</td>
-              <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
-              <td class="px-4 py-3 text-xs text-gray-400">{(p['created_at'] or '')[:10]}</td>
-              <td class="px-4 py-3">{acts}<a href="/admin/partners/payout/{p['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded mr-1">جزئیات</a></td>
-            </tr>"""
-
-        content = f"""{pstats}
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
-            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">#</th><th class="px-4 py-3">همکار</th>
-              <th class="px-4 py-3">مبلغ</th><th class="px-4 py-3">وضعیت</th>
-              <th class="px-4 py-3">تاریخ</th><th class="px-4 py-3">عملیات</th>
-            </tr></thead>
-            <tbody>{prows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>درخواستی یافت نشد</td></tr>"}</tbody>
-          </table>
-        </div></div>"""
-
-    # ─── تب تنظیمات پورسانت ──────────────────────────────────────────────
-    elif tab == "settings":
-        comm = get_partner_commission()
-        from db import get_partner_payout_settings, ensure_partner_wallet_schema
-        ensure_partner_wallet_schema()
-        ps = get_partner_payout_settings()
-        content = f"""
-        <div class="card p-6 mb-4">
-          <h2 class="font-bold text-gray-700 mb-2">⚙️ تنظیمات پورسانت معرفی</h2>
-          <form method="post" action="/admin/partners/commission" class="space-y-4 max-w-md">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">درصد پورسانت (٪)</label>
-              <input type="number" step="0.1" name="percent" value="{comm['percent']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ خرید (تومان)</label>
-              <input type="number" name="min_order" value="{comm['min_order']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = بدون محدودیت</span></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف پورسانت هر خرید (تومان)</label>
-              <input type="number" name="max_payout" value="{comm['max_payout']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت سیستم پورسانت</label>
-              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option value="1" {"selected" if comm['is_active'] else ""}>فعال</option>
-                <option value="0" {"" if comm['is_active'] else "selected"}>غیرفعال</option>
-              </select></div>
-            {_btn("ذخیره پورسانت","",color="green")}
-          </form>
-        </div>
-        <div class="card p-6">
-          <h2 class="font-bold text-gray-700 mb-2">📤 تنظیمات تسویه</h2>
-          <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-2xl">
-            <div class="grid grid-cols-2 gap-4">
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ تسویه (تومان)</label>
-                <input type="number" name="min_amount" value="{ps.get('min_amount',50000)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ تسویه (تومان)</label>
-                <input type="number" name="max_amount" value="{ps.get('max_amount',0)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
-                <input type="number" name="max_per_month" value="{ps.get('max_per_month',2)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">مدت بررسی (ساعت)</label>
-                <input type="number" name="review_hours" value="{ps.get('review_hours',48)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            </div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت تسویه</label>
-              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option value="1" {"selected" if ps.get('is_active') else ""}>فعال</option>
-                <option value="0" {"" if ps.get('is_active') else "selected"}>غیرفعال</option>
-              </select></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">متن راهنمای تسویه (نمایش به همکار)</label>
-              <textarea name="guide_text" rows="3" placeholder="شرایط و راهنمای تسویه..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{e(ps.get('guide_text',''))}</textarea></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام تأیید (به همکار)</label>
-              <input type="text" name="approval_message" value="{e(ps.get('approval_message',''))}" placeholder="درخواست تسویه شما تأیید و پرداخت می‌شود." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام رد (به همکار)</label>
-              <input type="text" name="rejection_message" value="{e(ps.get('rejection_message',''))}" placeholder="درخواست تسویه شما رد شد." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            {_btn("ذخیره تسویه","",color="indigo")}
-          </form>
-        </div>"""
-
-    elif tab == "tree":
-        # ─── 🌳 درخت همکاران — رندر کامل سمت کلاینت با Lazy DOM ───────────
-        content = """
-        <!-- کارت‌های آماری -->
-        <div id="tree-stats" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5"></div>
-
-        <!-- جستجو -->
-        <div class="card p-4 mb-4">
-          <div class="flex gap-2">
-            <input id="tree-q" type="text" placeholder="جستجو: نام، یوزرنیم یا آیدی تلگرام…"
-              class="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm" dir="rtl"
-              onkeydown="if(event.key==='Enter')treeSearch()">
-            <button onclick="treeSearch()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold transition">🔍 جستجو</button>
-          </div>
-          <div id="tree-results" class="mt-2 text-sm"></div>
-        </div>
-
-        <!-- درخت -->
-        <div class="card p-4 overflow-x-auto" style="min-height:300px">
-          <div id="tree-root" class="min-w-max"><div class="text-center text-gray-400 py-12">در حال بارگذاری درخت…</div></div>
-        </div>
-
-        <!-- پنل اطلاعات (سمت راست) -->
-        <div id="tree-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70" onclick="treeCloseDrawer()"></div>
-        <div id="tree-drawer" class="card"
-          style="position:fixed;top:0;right:0;height:100vh;width:min(92vw,360px);z-index:71;transform:translateX(105%);transition:transform .25s;overflow-y:auto;border-radius:0;padding:0">
-          <div class="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white" style="z-index:1">
-            <b class="text-gray-800">👤 اطلاعات همکار</b>
-            <button onclick="treeCloseDrawer()" class="text-gray-400 hover:text-red-500 text-lg px-2">✕</button>
-          </div>
-          <div id="tree-drawer-body" class="p-4 text-sm"></div>
-        </div>
-
-        <style>
-        .tn-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;cursor:pointer;transition:background .12s;position:relative}
-        .tn-row:hover{background:#F5F7FB}
-        body.sl-dark .tn-row:hover,body.dark-mode .tn-row:hover{background:#1F2A38}
-        .tn-arrow{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;
-          color:#8A94A6;font-size:11px;transition:transform .18s;user-select:none}
-        .tn-arrow.open{transform:rotate(-90deg)}
-        .tn-arrow.leaf{visibility:hidden}
-        .tn-kids{border-right:2px solid #E7EBF2;margin-right:20px;padding-right:6px}
-        body.sl-dark .tn-kids,body.dark-mode .tn-kids{border-right-color:#2B3A4C}
-        .tn-badge{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap}
-        .tn-hl{outline:2px solid #6366F1;outline-offset:2px;border-radius:10px;animation:tnflash 1.6s ease 2}
-        @keyframes tnflash{0%,100%{background:transparent}50%{background:rgba(99,102,241,.14)}}
-        </style>
-
-        <script>
-        (function(){
-          var T=null, EXP={}, CHUNK=100;
-          var ST_LBL={approved:['فعال','bg-green-100 text-green-700'],
-                      pending:['در انتظار','bg-amber-100 text-amber-700'],
-                      rejected:['غیرفعال','bg-red-100 text-red-600'],
-                      user:['کاربر','bg-gray-100 text-gray-500']};
-          function fmt(n){return (n||0).toLocaleString('en-US');}
-          function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
-
-          fetch('/admin/partners/tree-data').then(function(r){return r.json();}).then(function(d){
-            T=d; renderStats(); renderRoots();
-          }).catch(function(){document.getElementById('tree-root').innerHTML='<div class="text-center text-red-500 py-10">خطا در دریافت داده‌ها</div>';});
-
-          function renderStats(){
-            var s=T.stats, box=document.getElementById('tree-stats');
-            var cards=[['🤝','کل همکاران',fmt(s.total_partners)],['✅','همکاران فعال',fmt(s.active)],
-                       ['🕸','عمق شبکه',fmt(s.max_depth)+' لایه'],['👥','بیشترین زیرمجموعه',fmt(s.max_subs)],
-                       ['🛒','فروش شبکه',fmt(s.net_sales)+' ت'],['💰','درآمد شبکه',fmt(s.net_income)+' ت']];
-            box.innerHTML=cards.map(function(c){
-              return '<div class="card p-3"><div class="text-xs text-gray-400 mb-1">'+c[0]+' '+c[1]+'</div>'
-                    +'<div class="font-bold text-gray-800 text-sm">'+c[2]+'</div></div>';
-            }).join('');
-          }
-
-          function nodeRow(id){
-            var n=T.nodes[String(id)], st=ST_LBL[n.status]||ST_LBL.user;
-            var row=document.createElement('div');
-            row.className='tn-row'; row.id='tn-'+id;
-            row.innerHTML=
-              '<span class="tn-arrow'+(n.children.length?'':' leaf')+'" data-a>◀</span>'
-             +'<span style="font-size:15px">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</span>'
-             +'<span class="font-medium text-gray-800">'+esc(n.name)+'</span>'
-             +(n.username?'<span class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</span>':'')
-             +'<code class="text-xs">'+n.id+'</code>'
-             +'<span class="tn-badge bg-indigo-50 text-indigo-600">🛒 '+fmt(n.sales)+'</span>'
-             +'<span class="tn-badge bg-teal-50 text-teal-700">💰 '+fmt(n.income)+' ت</span>'
-             +'<span class="tn-badge bg-gray-100 text-gray-500">👥 '+fmt(n.direct)+' / '+fmt(n.total)+'</span>'
-             +'<span class="tn-badge '+st[1]+'">'+st[0]+'</span>';
-            row.querySelector('[data-a]').onclick=function(ev){ev.stopPropagation();toggle(id);};
-            row.onclick=function(){openDrawer(id);};
-            return row;
-          }
-
-          function wrap(id){
-            var w=document.createElement('div'); w.id='tw-'+id;
-            w.appendChild(nodeRow(id));
-            return w;
-          }
-
-          function renderRoots(){
-            var box=document.getElementById('tree-root'); box.innerHTML='';
-            if(!T.roots.length){box.innerHTML='<div class="text-center text-gray-400 py-12">هنوز معرفی‌ای ثبت نشده است</div>';return;}
-            T.roots.forEach(function(r){box.appendChild(wrap(r));});
-          }
-
-          function toggle(id){ EXP[id]?collapse(id):expand(id); }
-
-          function expand(id){
-            var n=T.nodes[String(id)]; if(!n||!n.children.length)return;
-            var w=document.getElementById('tw-'+id); if(!w)return;
-            var kids=w.querySelector(':scope > .tn-kids');
-            if(!kids){
-              kids=document.createElement('div'); kids.className='tn-kids';
-              kids.dataset.next='0'; w.appendChild(kids);
-              fill(id,kids);
-            }
-            kids.style.display='';
-            w.querySelector('[data-a]').classList.add('open');
-            EXP[id]=true;
-          }
-
-          function fill(id,kids){
-            var n=T.nodes[String(id)], from=+kids.dataset.next, to=Math.min(from+CHUNK,n.children.length);
-            var more=kids.querySelector(':scope > .tn-more'); if(more)more.remove();
-            for(var i=from;i<to;i++) kids.appendChild(wrap(n.children[i]));
-            kids.dataset.next=to;
-            if(to<n.children.length){
-              var b=document.createElement('button');
-              b.className='tn-more text-xs text-indigo-500 hover:text-indigo-700 py-2 pr-8 block';
-              b.textContent='⬇ نمایش '+fmt(n.children.length-to)+' مورد دیگر…';
-              b.onclick=function(){fill(id,kids);};
-              kids.appendChild(b);
-            }
-          }
-
-          function collapse(id){
-            var w=document.getElementById('tw-'+id); if(!w)return;
-            var kids=w.querySelector(':scope > .tn-kids');
-            if(kids)kids.style.display='none';
-            w.querySelector('[data-a]').classList.remove('open');
-            EXP[id]=false;
-          }
-
-          function pathOf(id){
-            var p=[],cur=id,g=0;
-            while(cur!=null&&g++<500){p.unshift(cur);cur=T.nodes[String(cur)]?T.nodes[String(cur)].parent:null;}
-            return p;
-          }
-
-          window.treeReveal=function(id){
-            var p=pathOf(id);
-            for(var i=0;i<p.length-1;i++){
-              expand(p[i]);
-              // اگر گره هدف در چانک‌های بعدی است، تا رسیدن به آن fill کن
-              var kids=document.getElementById('tw-'+p[i]).querySelector(':scope > .tn-kids');
-              var guard=0;
-              while(kids&&!document.getElementById('tw-'+p[i+1])&&guard++<200){
-                var mb=kids.querySelector(':scope > .tn-more'); if(!mb)break; mb.click();
-              }
-            }
-            var el=document.getElementById('tn-'+id);
-            if(el){el.scrollIntoView({behavior:'smooth',block:'center'});
-              el.classList.add('tn-hl'); setTimeout(function(){el.classList.remove('tn-hl');},3500);}
-          };
-
-          window.treeSearch=function(){
-            var q=(document.getElementById('tree-q').value||'').trim().toLowerCase();
-            var out=document.getElementById('tree-results');
-            if(!q){out.innerHTML='';return;}
-            var hits=[];
-            for(var k in T.nodes){var n=T.nodes[k];
-              if(String(n.id).indexOf(q)>-1||(n.name||'').toLowerCase().indexOf(q)>-1||(n.username||'').toLowerCase().indexOf(q)>-1)
-                {hits.push(n); if(hits.length>=15)break;}
-            }
-            if(!hits.length){out.innerHTML='<span class="text-gray-400">چیزی یافت نشد</span>';return;}
-            out.innerHTML=hits.map(function(n){
-              return '<button onclick="treeReveal('+n.id+')" class="ml-2 mb-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs hover:bg-indigo-100">'
-                    +esc(n.name)+' <code>'+n.id+'</code></button>';
-            }).join('');
-            treeReveal(hits[0].id);
-          };
-
-          window.openDrawer=function(id){
-            var n=T.nodes[String(id)], st=ST_LBL[n.status]||ST_LBL.user;
-            var path=pathOf(id).map(function(pid){
-              var pn=T.nodes[String(pid)];
-              return '<button onclick="treeReveal('+pid+');treeCloseDrawer()" class="text-indigo-500 hover:underline">'+esc(pn?pn.name:pid)+'</button>';
-            }).join(' <span class="text-gray-300">←</span> ');
-            var ref=n.parent!=null?T.nodes[String(n.parent)]:null;
-            function line(l,v){return '<div class="flex justify-between gap-3 py-2 border-b border-gray-100"><span class="text-gray-400 text-xs">'+l+'</span><span class="font-medium text-gray-700 text-left">'+v+'</span></div>';}
-            document.getElementById('tree-drawer-body').innerHTML=
-              '<div class="text-center mb-4"><div class="text-3xl mb-1">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</div>'
-             +'<div class="font-bold text-gray-800">'+esc(n.name)+'</div>'
-             +(n.username?'<div class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</div>':'')+'</div>'
-             +line('آیدی تلگرام','<code>'+n.id+'</code>')
-             +line('سطح همکاری',esc(n.tier))
-             +line('وضعیت','<span class="tn-badge '+st[1]+'">'+st[0]+'</span>')
-             +line('تاریخ عضویت',esc(n.joined||'—'))
-             +line('معرف مستقیم',ref?esc(ref.name):'— (ریشه)')
-             +line('زیرمجموعه مستقیم',fmt(n.direct))
-             +line('کل زیرمجموعه‌ها',fmt(n.total))
-             +line('تعداد خرید',fmt(n.sales))
-             +line('مجموع خرید',fmt(n.spend)+' ت')
-             +line('درآمد (پورسانت)',fmt(n.income)+' ت')
-             +line('عمق در شبکه','لایه '+fmt(n.depth))
-             +'<div class="mt-4"><div class="text-xs text-gray-400 mb-2">مسیر معرفی</div>'
-             +'<div class="leading-7 text-xs">'+path+'</div></div>'
-             +'<a href="/admin/partners/'+n.id+'/profile" class="block text-center mt-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">👤 پروفایل کامل</a>';
-            document.getElementById('tree-overlay').classList.remove('hidden');
-            document.getElementById('tree-drawer').style.transform='translateX(0)';
-          };
-          window.treeCloseDrawer=function(){
-            document.getElementById('tree-overlay').classList.add('hidden');
-            document.getElementById('tree-drawer').style.transform='translateX(105%)';
-          };
-        })();
-        </script>"""
-
-    body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-4">🤝 همکاران</h1>
-    {tabs_html}
-    {content}"""
-    return _layout("همکاران", body, adm, flash=flash)
-
-
-# ─── 🌳 درخت همکاران — موتور داده ─────────────────────────────────────────
-
-def _build_partner_tree(conn) -> dict:
-    """ساخت درخت کامل معرفی‌ها + آمار — O(N+E)، بدون محدودیت عمق، ضد حلقه."""
-    from collections import deque
-
-    edges = conn.execute(
-        "SELECT referrer_id, referred_id, COALESCE(created_at,'') AS ca FROM referrals;"
-    ).fetchall()
-    users = {}
-    for r in conn.execute("SELECT user_id, COALESCE(username,'') u, COALESCE(full_name,'') f, COALESCE(first_seen,'') fs FROM users;").fetchall():
-        try: users[int(r["user_id"])] = r
-        except Exception: pass
-    partners = {}
-    for r in conn.execute("SELECT tg_user_id, COALESCE(full_name,'') fn, COALESCE(status,'') st FROM partners;").fetchall():
-        try: partners[int(r["tg_user_id"])] = r
-        except Exception: pass
-    tiers = conn.execute(
-        "SELECT name, icon, min_orders, COALESCE(color,'#6B7280') color FROM partner_tiers ORDER BY min_orders ASC;"
-    ).fetchall()
-    sales = {}
-    for r in conn.execute("""
-        SELECT CAST(user_id AS INTEGER) u, COUNT(*) c, COALESCE(SUM(price),0) s,
-               SUM(CASE WHEN buyer_type='partner' THEN 1 ELSE 0 END) pc
-        FROM orders WHERE COALESCE(status,'active')!='returned'
-        GROUP BY CAST(user_id AS INTEGER);""").fetchall():
-        try: sales[int(r["u"])] = (int(r["c"]), int(r["s"]), int(r["pc"] or 0))
-        except Exception: pass
-    income = {}
-    try:
-        for r in conn.execute("SELECT user_id u, COALESCE(SUM(amount),0) s FROM partner_transactions WHERE type='credit' GROUP BY user_id;").fetchall():
-            income[int(r["u"])] = int(r["s"])
-    except Exception:
-        pass
-
-    # والد هر گره — اولین معرفی معتبر است؛ خودارجاعی رد می‌شود
-    parent, joined, node_ids = {}, {}, set()
-    for e in edges:
-        try:
-            a, b = int(e["referrer_id"]), int(e["referred_id"])
-        except Exception:
-            continue
-        if a == b:
-            continue
-        node_ids.add(a); node_ids.add(b)
-        if b not in parent:
-            parent[b] = a
-            joined[b] = (e["ca"] or "")[:10]
-
-    # شکستن حلقه‌های احتمالی (داده خراب) — گرهِ حلقه‌ساز ریشه می‌شود
-    for n in list(parent.keys()):
-        seen, cur = set(), n
-        while cur in parent:
-            if cur in seen:
-                parent.pop(n, None)
-                break
-            seen.add(cur)
-            cur = parent[cur]
-
-    children = {}
-    for b, a in parent.items():
-        children.setdefault(a, []).append(b)
-    roots = sorted(n for n in node_ids if n not in parent)
-
-    # عمق (BFS) + ترتیب برای پیمایش
-    depth, order, dq = {}, [], deque((r, 1) for r in roots)
-    while dq:
-        n, d = dq.popleft()
-        depth[n] = d
-        order.append(n)
-        for c in children.get(n, ()):
-            dq.append((c, d + 1))
-
-    # کل زیرمجموعه‌ها — post-order تکراری
-    total_subs = {n: 0 for n in node_ids}
-    for n in reversed(order):
-        t = 0
-        for c in children.get(n, ()):
-            t += 1 + total_subs.get(c, 0)
-        total_subs[n] = t
-
-    def _tier_of(pc):
-        cur = None
-        for t in tiers:
-            if pc >= int(t["min_orders"] or 0):
-                cur = t
-        return cur
-
-    nodes = {}
-    for n in node_ids:
-        u, p = users.get(n), partners.get(n)
-        c, s, pc = sales.get(n, (0, 0, 0))
-        t = _tier_of(pc)
-        name = (p["fn"] if p and p["fn"] else
-                (u["f"] if u and u["f"] else
-                 (u["u"] if u and u["u"] else f"کاربر {n}")))
-        kids = children.get(n, [])
-        kids.sort(key=lambda x: -total_subs.get(x, 0))
-        nodes[str(n)] = {
-            "id": n, "name": name,
-            "username": (u["u"] if u else ""),
-            "parent": parent.get(n),
-            "children": kids,
-            "tier": (f'{t["icon"]} {t["name"]}' if t else "—"),
-            "tcolor": (t["color"] if t else "#6B7280"),
-            "sales": c, "spend": s, "income": income.get(n, 0),
-            "direct": len(kids), "total": total_subs.get(n, 0),
-            "depth": depth.get(n, 1),
-            "status": (p["st"] if p else "user"),
-            "joined": joined.get(n, "") or ((u["fs"] or "")[:10] if u else ""),
-        }
-
-    stats = {
-        "total_partners": len(partners),
-        "active": sum(1 for p in partners.values() if p["st"] == "approved"),
-        "network": len(node_ids),
-        "max_depth": max(depth.values()) if depth else 0,
-        "max_subs": max((len(v) for v in children.values()), default=0),
-        "net_sales": sum(sales.get(n, (0, 0, 0))[1] for n in node_ids),
-        "net_income": sum(income.get(n, 0) for n in node_ids),
-    }
-    return {"stats": stats, "roots": roots, "nodes": nodes}
-
-
-@router.get("/partners/tree-data")
-async def partners_tree_data(request: Request):
-    """JSON درخت همکاران — فقط ادمین"""
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    from db import ensure_referral_schema, ensure_partner_tiers_extended
-    ensure_referral_schema()
-    ensure_partner_tiers_extended()
-    conn = _db()
-    try:
-        data = _build_partner_tree(conn)
-    finally:
-        conn.close()
-    return JSONResponse(data)
-
-
-@router.post("/partners/payout-settings")
-async def partner_payout_settings_save(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    form = await request.form()
-    from db import save_payout_settings_full, ensure_payout_settings_extended
-    ensure_payout_settings_extended()
-    save_payout_settings_full({
-        "min_amount":         int(form.get("min_amount") or 50000),
-        "max_amount":         int(form.get("max_amount") or 0),
-        "max_per_month":      int(form.get("max_per_month") or 2),
-        "is_active":          int(form.get("is_active") or 1),
-        "review_hours":       int(form.get("review_hours") or 48),
-        "guide_text":         str(form.get("guide_text","")).strip(),
-        "approval_message":   str(form.get("approval_message","")).strip(),
-        "rejection_message":  str(form.get("rejection_message","")).strip(),
-    })
-    _log(request, "تنظیمات تسویه", "همکاران", "updated")
-    return _redir("/admin/partners?tab=settings&flash=تنظیمات+تسویه+ذخیره+شد")
-
-
-@router.get("/partners/{uid}/profile", response_class=HTMLResponse)
-async def partner_profile_admin(request: Request, uid: int):
-    """پروفایل کامل همکار — مشخصات + خریدها + زیرمجموعه‌های مستقیم"""
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-
-    conn = _db()
-    try:
-        p = conn.execute("SELECT * FROM partners WHERE tg_user_id=?;", (str(uid),)).fetchone()
-        if not p:
-            p = conn.execute("SELECT * FROM partners WHERE CAST(tg_user_id AS INTEGER)=?;", (uid,)).fetchone()
-
-        orders = conn.execute("""
-            SELECT * FROM orders WHERE CAST(user_id AS INTEGER)=?
-            ORDER BY id DESC LIMIT 50;
-        """, (uid,)).fetchall()
-        o_total = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER)=? AND COALESCE(status,'active')!='returned';",
-            (uid,)).fetchone()
-
-        subs = conn.execute("""
-            SELECT r.referred_id,
-                   COALESCE(u.full_name, u.username, 'کاربر ' || r.referred_id) AS name,
-                   r.created_at,
-                   COALESCE(o.cnt,0) AS ocnt, COALESCE(o.total,0) AS ototal
-            FROM referrals r
-            LEFT JOIN users u ON CAST(u.user_id AS INTEGER)=r.referred_id
-            LEFT JOIN (SELECT CAST(user_id AS INTEGER) ouid, COUNT(*) cnt, SUM(price) total
-                       FROM orders WHERE COALESCE(status,'active')!='returned'
-                       GROUP BY CAST(user_id AS INTEGER)) o ON o.ouid=r.referred_id
-            WHERE r.referrer_id=? ORDER BY ototal DESC;
-        """, (uid,)).fetchall()
-
-        try:
-            pw = conn.execute("SELECT COALESCE(balance,0) FROM partner_wallets WHERE user_id=?;", (uid,)).fetchone()
-            pw_bal = int(pw[0]) if pw else 0
-        except Exception:
-            pw_bal = 0
-    finally:
-        conn.close()
-
-    name  = e((p["full_name"] if p else "") or f"کاربر {uid}")
-    phone = e((p["phone"] if p else "") or "—")
-    city  = e((p["city"] if p else "") or "—")
-    shop  = e((p["shop_name"] if p else "") or "—")
-    st    = (p["status"] if p else "—") or "—"
-    st_bc = {"pending":"yellow","approved":"green","rejected":"red"}.get(st,"gray")
-    st_bl = {"pending":"در انتظار","approved":"تایید شده","rejected":"رد شده"}.get(st,st)
-
-    order_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-        <td class="px-4 py-2.5 text-xs text-gray-400">#{o['id']}</td>
-        <td class="px-4 py-2.5">{e(o['title'] or '—')}</td>
-        <td class="px-4 py-2.5 font-medium">{int(o['price'] or 0):,} ت</td>
-        <td class="px-4 py-2.5">{'<span class="px-2 py-0.5 text-xs bg-red-100 text-red-600 rounded-full">برگشتی</span>' if (o['status'] or 'active')=='returned' else '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'}</td>
-        <td class="px-4 py-2.5 text-xs text-gray-400">{(o['created_at'] or '')[:10]}</td>
-      </tr>""" for o in orders)
-
-    sub_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-        <td class="px-4 py-2.5 font-mono text-xs"><code>{s['referred_id']}</code></td>
-        <td class="px-4 py-2.5">{e(s['name'])}</td>
-        <td class="px-4 py-2.5">{int(s['ocnt'])} خرید</td>
-        <td class="px-4 py-2.5 font-medium text-green-600">{int(s['ototal']):,} ت</td>
-        <td class="px-4 py-2.5 text-xs text-gray-400">{(s['created_at'] or '')[:10]}</td>
-      </tr>""" for s in subs)
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6 flex-wrap">
-      {_btn("← همکاران", "/admin/partners", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">👤 {name}</h1>
-      <span class="px-2.5 py-1 text-xs rounded-full bg-{st_bc}-100 text-{st_bc}-700">{st_bl}</span>
-    </div>
-
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {_card("خریدها", f"{int(o_total[0] or 0)}", "", "indigo")}
-      {_card("جمع خرید", f"{int(o_total[1] or 0):,} ت", "", "green")}
-      {_card("زیرمجموعه مستقیم", f"{len(subs)}", "", "amber")}
-      {_card("کیف‌پول همکاری", f"{pw_bal:,} ت", "", "teal")}
-    </div>
-
-    <div class="card p-5 mb-6">
-      <h2 class="font-bold text-gray-700 mb-3">📇 مشخصات</h2>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-        <div><span class="text-xs text-gray-400 block">User ID</span><code>{uid}</code></div>
-        <div><span class="text-xs text-gray-400 block">شماره</span>{phone}</div>
-        <div><span class="text-xs text-gray-400 block">شهر</span>{city}</div>
-        <div><span class="text-xs text-gray-400 block">فروشگاه</span>{shop}</div>
-      </div>
-    </div>
-
-    <div class="grid lg:grid-cols-2 gap-6">
-      <div class="card overflow-hidden">
-        <div class="px-5 py-4 border-b"><h2 class="font-bold text-gray-700">🛒 خریدها (۵۰ مورد آخر)</h2></div>
-        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-2.5">#</th><th class="px-4 py-2.5">محصول</th>
-            <th class="px-4 py-2.5">مبلغ</th><th class="px-4 py-2.5">وضعیت</th><th class="px-4 py-2.5">تاریخ</th>
-          </tr></thead>
-          <tbody>{order_rows or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>خریدی ندارد</td></tr>"}</tbody>
-        </table></div>
-      </div>
-      <div class="card overflow-hidden">
-        <div class="px-5 py-4 border-b"><h2 class="font-bold text-gray-700">👥 زیرمجموعه‌های مستقیم</h2></div>
-        <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-2.5">ID</th><th class="px-4 py-2.5">نام</th>
-            <th class="px-4 py-2.5">خرید</th><th class="px-4 py-2.5">مبلغ</th><th class="px-4 py-2.5">عضویت</th>
-          </tr></thead>
-          <tbody>{sub_rows or "<tr><td colspan='5' class='text-center py-8 text-gray-400'>زیرمجموعه‌ای ندارد</td></tr>"}</tbody>
-        </table></div>
-      </div>
-    </div>"""
-
-    return _layout(f"پروفایل همکار", body, adm)
-
-
-@router.get("/partners/payout/{pid}", response_class=HTMLResponse)
-async def partner_payout_detail(request: Request, pid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-
-    from db import (ensure_partner_wallet_schema, ensure_partner_bank_schema,
-                    get_partner_bank_info, get_partner_wallet_balance,
-                    get_partner_payouts, ensure_partner_tiers_extended,
-                    get_partner_tier_for, get_partner_order_count)
-    ensure_partner_wallet_schema(); ensure_partner_bank_schema(); ensure_partner_tiers_extended()
-
-    conn = _db()
-    import sqlite3 as _sq3; conn.row_factory = _sq3.Row
-    try:
-        pay = conn.execute("""
-            SELECT p.*, u.full_name as u_name, u.username, u.first_seen, pr.phone, pr.shop_name, pr.city
-            FROM partner_payouts p
-            LEFT JOIN users u ON u.user_id=p.user_id
-            LEFT JOIN partners pr ON pr.tg_user_id=p.user_id
-            WHERE p.id=?;
-        """, (pid,)).fetchone()
-        if not pay:
-            return _redir("/admin/partners?tab=payouts&flash=درخواست+یافت+نشد")
-
-        uid = pay["user_id"]
-        # تاریخچه تسویه‌ها
-        prev_payouts = conn.execute("""
-            SELECT COUNT(*) as cnt, COALESCE(SUM(amount),0) as total
-            FROM partner_payouts WHERE user_id=? AND status='approved';
-        """, (uid,)).fetchone()
-        last_payout = conn.execute("""
-            SELECT created_at, amount FROM partner_payouts
-            WHERE user_id=? AND status='approved' ORDER BY id DESC LIMIT 1;
-        """, (uid,)).fetchone()
-        # مجموع پورسانت
-        total_commission = conn.execute(
-            "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE referrer_id=? AND rewarded=1;",
-            (uid,)
-        ).fetchone()[0]
-    finally:
-        conn.close()
-
-    bank   = get_partner_bank_info(uid) or {}
-    bal    = get_partner_wallet_balance(uid)
-    order_cnt = get_partner_order_count(uid)
-    tier   = get_partner_tier_for(order_cnt)
-
-    sc = {"pending":"amber","approved":"green","rejected":"red"}.get(pay["status"],"gray")
-    sl = {"pending":"در انتظار","approved":"تأیید شد","rejected":"رد شد"}.get(pay["status"], pay["status"])
-
-    action_btns = ""
-    if pay["status"] == "pending":
-        action_btns = f"""
-        <div class="card p-6">
-          <h2 class="font-bold text-gray-700 mb-4">⚡ عملیات</h2>
-          <div class="flex gap-3 flex-wrap">
-            <form method="post" action="/admin/partners/payout/{pid}/approve">
-              <button class="px-6 py-2.5 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700">
-                ✅ تأیید و پرداخت
-              </button>
-            </form>
-            <button onclick="document.getElementById('reject-form').classList.toggle('hidden')"
-              class="px-6 py-2.5 bg-red-50 text-red-600 border border-red-200 rounded-xl text-sm font-bold hover:bg-red-100">
-              ❌ رد درخواست
-            </button>
-          </div>
-          <form method="post" action="/admin/partners/payout/{pid}/reject" id="reject-form" class="hidden mt-4">
-            <label class="text-sm font-medium text-gray-700 block mb-2">دلیل رد (نمایش به همکار):</label>
-            {_textarea("note","توضیح اختیاری...",rows=3)}
-            <div class="mt-3">
-              <button type="submit" class="px-5 py-2 bg-red-600 text-white rounded-lg text-sm font-medium">
-                ثبت رد درخواست
-              </button>
-            </div>
-          </form>
-        </div>"""
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← تسویه‌ها", "/admin/partners?tab=payouts", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">درخواست تسویه #{pid}</h1>
-      <span class="px-3 py-1 text-sm bg-{sc}-100 text-{sc}-700 rounded-full font-medium">{sl}</span>
-    </div>
-
-    <div class="grid md:grid-cols-3 gap-4 mb-4">
-      <div class="card p-5 text-center border-t-4 border-green-400">
-        <div class="text-2xl font-bold text-green-600">{int(pay['amount']):,}</div>
-        <div class="text-xs text-gray-400 mt-1">مبلغ درخواست (تومان)</div>
-      </div>
-      <div class="card p-5 text-center border-t-4 border-blue-400">
-        <div class="text-2xl font-bold text-blue-600">{bal:,}</div>
-        <div class="text-xs text-gray-400 mt-1">موجودی کیف‌پول (تومان)</div>
-      </div>
-      <div class="card p-5 text-center border-t-4 border-purple-400">
-        <div class="text-2xl font-bold text-purple-600">{int(total_commission or 0):,}</div>
-        <div class="text-xs text-gray-400 mt-1">مجموع پورسانت دریافتی</div>
-      </div>
-    </div>
-
-    <div class="grid md:grid-cols-2 gap-4 mb-4">
-      <!-- اطلاعات همکار -->
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">👤 اطلاعات همکار</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between"><span class="text-gray-400">نام</span><span class="font-medium">{e(pay['u_name'] or '—')}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">فروشگاه</span><span>{e(pay['shop_name'] or '—')}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">شهر</span><span>{e(pay['city'] or '—')}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">موبایل</span><span>{e(pay['phone'] or '—')}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(pay['first_seen'] or '')[:10]}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">سطح</span><span>{tier['icon']} {tier['name']}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-1.5 rounded">{uid}</code></div>
-        </div>
-        <div class="mt-3">
-          <a href="/admin/users/{uid}" class="text-xs text-indigo-600 hover:underline">مشاهده پروفایل کامل ↗</a>
-        </div>
-      </div>
-
-      <!-- اطلاعات بانکی -->
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">💳 اطلاعات بانکی</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between"><span class="text-gray-400">صاحب حساب</span><span class="font-medium">{e(bank.get('full_name','—'))}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">شماره کارت</span><code class="text-xs bg-gray-100 px-2 py-0.5 rounded">{e(bank.get('card_number','—'))}</code></div>
-          <div class="flex justify-between"><span class="text-gray-400">شماره شبا</span><code class="text-xs bg-gray-100 px-2 py-0.5 rounded">{e(bank.get('iban','—'))}</code></div>
-        </div>
-        <div class="mt-4 p-3 bg-amber-50 rounded-lg text-xs text-amber-700">
-          ⚠️ قبل از تأیید، اطلاعات بانکی را تأیید کنید
-        </div>
-      </div>
-    </div>
-
-    <div class="card p-6 mb-4">
-      <h2 class="font-bold text-gray-700 mb-4">📊 تاریخچه مالی</h2>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-        <div class="text-center p-3 bg-gray-50 rounded-lg">
-          <div class="font-bold text-gray-700">{int(prev_payouts['cnt'] or 0)}</div>
-          <div class="text-xs text-gray-400">تسویه‌های موفق</div>
-        </div>
-        <div class="text-center p-3 bg-gray-50 rounded-lg">
-          <div class="font-bold text-gray-700">{int(prev_payouts['total'] or 0):,}</div>
-          <div class="text-xs text-gray-400">مجموع تسویه (ت)</div>
-        </div>
-        <div class="text-center p-3 bg-gray-50 rounded-lg">
-          <div class="font-bold text-gray-700">{(last_payout['created_at'] or '—')[:10] if last_payout else '—'}</div>
-          <div class="text-xs text-gray-400">آخرین تسویه</div>
-        </div>
-        <div class="text-center p-3 bg-gray-50 rounded-lg">
-          <div class="font-bold text-gray-700">{order_cnt}</div>
-          <div class="text-xs text-gray-400">تعداد خرید همکاری</div>
-        </div>
-      </div>
-    </div>
-
-    {action_btns}"""
-
-    return _layout(f"تسویه #{pid}", body, adm, flash=flash)
-
-
-@router.post("/partners/payout/{pid}/approve")
-async def partner_payout_approve(request: Request, pid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    from db import process_partner_payout, get_payout_settings_full, ensure_payout_settings_extended
-    ensure_payout_settings_extended()
-    result = process_partner_payout(pid, approve=True)
-    if result["ok"]:
-        uid = result["user_id"]; amt = result["amount"]
-        ps = get_payout_settings_full()
-        hours = ps.get("review_hours", 48)
-        msg = ps.get("approval_message","") or f"✅ درخواست تسویه {amt:,} تومان تأیید شد و ظرف {hours} ساعت پرداخت می‌شود."
-        _log(request, "تأیید تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
-        try: _tg_send(uid, msg)
-        except Exception: pass
-    return _redir("/admin/tickets?flash=تسویه+تأیید+شد#financial")
-
-
-@router.post("/partners/payout/{pid}/reject")
-async def partner_payout_reject(request: Request, pid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    from db import process_partner_payout, get_payout_settings_full, ensure_payout_settings_extended
-    ensure_payout_settings_extended()
-    form = await request.form()
-    note = str(form.get("note","")).strip()
-    result = process_partner_payout(pid, approve=False, admin_note=note)
-    if result["ok"]:
-        uid = result["user_id"]; amt = result["amount"]
-        ps = get_payout_settings_full()
-        msg = ps.get("rejection_message","") or f"❌ درخواست تسویه {amt:,} تومان رد شد."
-        if note: msg += f"\n\nدلیل: {note}"
-        msg += f"\n\nمبلغ به کیف‌پول همکاری برگشت داده شد."
-        _log(request, "رد تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
-        try: _tg_send(uid, msg)
-        except Exception: pass
-    return _redir("/admin/tickets?flash=تسویه+رد+شد#financial")
-
-
-@router.post("/partners/tier/{tid}/delete-banner")
-async def partner_tier_delete_banner(request: Request, tid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE partner_tiers SET photo_file_id='' WHERE id=?;", (tid,))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, f"حذف بنر سطح #{tid}", "همکاران")
-    return _redir("/admin/partners?tab=tiers&flash=بنر+حذف+شد")
-
-
-@router.post("/partners/tier/{tid}/upload-banner")
-async def partner_tier_upload_banner(request: Request, tid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    form = await request.form()
-    file = form.get("banner_file")
-    if not file or not file.filename:
-        return _redir(f"/admin/partners?tab=tiers&flash=فایلی+انتخاب+نشد")
-    file_bytes = await file.read()
-    # آپلود به تلگرام و دریافت file_id
-    try:
-        import requests as _req
-        token = _env("BOT_TOKEN", "")
-        admin_tg = _env("ADMIN_ID", "")
-        if not token or not admin_tg:
-            raise ValueError("BOT_TOKEN or ADMIN_ID not set")
-        resp = _req.post(
-            f"https://api.telegram.org/bot{token}/sendPhoto",
-            data={"chat_id": admin_tg, "caption": f"بنر سطح #{tid}"},
-            files={"photo": (file.filename, file_bytes, file.content_type or "image/jpeg")},
-            timeout=15
-        )
-        result = resp.json()
-        if not result.get("ok"):
-            raise ValueError(result.get("description", "upload failed"))
-        photo_id = result["result"]["photo"][-1]["file_id"]
-        # ذخیره
-        conn = _db()
-        conn.execute("UPDATE partner_tiers SET photo_file_id=? WHERE id=?;", (photo_id, tid))
-        conn.commit()
-        conn.close()
-        _log(request, f"آپلود بنر سطح #{tid}", "همکاران", photo_id[:20])
-        return _redir(f"/admin/partners?tab=tiers&flash=بنر+آپلود+شد")
-    except Exception as ex:
-        return _redir(f"/admin/partners?tab=tiers&flash=خطا:+{str(ex)[:40]}")
-
-
-@router.post("/partners/tier/save")
-async def partner_tier_save(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    form = await request.form()
-    tid  = form.get("tier_id")
-    tid  = int(tid) if tid and str(tid).isdigit() else None
-    from db import save_partner_tier, ensure_partner_tiers_extended
-    ensure_partner_tiers_extended()
-    # ذخیره با فیلدهای جدید
-    conn = _db()
-    try:
-        name   = str(form.get("name","")).strip()
-        icon   = str(form.get("icon","🥉")).strip()
-        min_o  = int(form.get("min_orders") or 0)
-        comm   = float(form.get("commission_percent") or 0)
-        cfixed = int(form.get("commission_fixed") or 0)
-        color  = str(form.get("color","#6B7280")).strip()
-        desc   = str(form.get("description","")).strip()
-        photo  = str(form.get("photo_file_id","")).strip()
-        if tid:
-            conn.execute("""UPDATE partner_tiers SET name=?,icon=?,min_orders=?,
-                commission_percent=?,commission_fixed=?,color=?,description=?,photo_file_id=? WHERE id=?;""",
-                (name, icon, min_o, comm, cfixed, color, desc, photo, tid))
-        else:
-            mx = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM partner_tiers;").fetchone()[0]
-            conn.execute("""INSERT INTO partner_tiers
-                (name,icon,min_orders,commission_percent,commission_fixed,color,description,photo_file_id,sort_order)
-                VALUES (?,?,?,?,?,?,?,?,?);""",
-                (name, icon, min_o, comm, cfixed, color, desc, photo, mx))
-        conn.commit()
-    finally:
-        conn.close()
-    _log(request, "ذخیره سطح همکاری", "همکاران", name)
-    return _redir("/admin/partners?tab=tiers&flash=سطح+ذخیره+شد")
-
-
-@router.post("/partners/tier/{tid}/delete")
-async def partner_tier_delete(request: Request, tid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    from db import delete_partner_tier
-    delete_partner_tier(tid)
-    _log(request, "حذف سطح همکاری", "همکاران", f"tier:{tid}")
-    return _redir("/admin/partners?tab=tiers&flash=سطح+حذف+شد")
-
-
-@router.post("/partners/commission")
-async def partner_commission_save(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    form = await request.form()
-    from db import save_partner_commission
-    save_partner_commission(
-        float(form.get("percent") or 5.0),
-        int(form.get("min_order") or 0),
-        int(form.get("max_payout") or 0),
-        int(form.get("is_active") or 1)
-    )
-    _log(request, "تنظیم پورسانت همکاری", "همکاران", f"{form.get('percent')}%")
-    return _redir("/admin/partners?tab=settings&flash=تنظیمات+ذخیره+شد")
-
-
-@router.post("/partners/{uid}/approve")
-async def partner_approve(request: Request, uid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE partners SET status='approved', approved_at=? WHERE tg_user_id=?;", (datetime.utcnow().isoformat(), uid))
-        conn.commit()
-    finally:
-        conn.close()
-    try:
-        import json as _json, requests as _rq
-        token = _env("BOT_TOKEN","")
-        if token:
-            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
-                "chat_id": int(uid),
-                "text": "✅ <b>درخواست نمایندگی شما تایید شد!</b>\n\n"
-                        "از این پس قیمت‌های ویژه همکار برای شما فعال است.\n"
-                        "منوی پنل همکار در منوی زیر در دسترس شماست 🤝",
-                "parse_mode": "HTML",
-                "reply_markup": _json.dumps({
-                    "keyboard": [
-                        [{"text":"پنل همکار 🤝"}],
-                        [{"text":"خریدهای من 🧾"},{"text":"کیف پول 💰"}]
-                    ],
-                    "resize_keyboard": True
-                })
-            }, timeout=8)
-        else:
-            _tg_send(int(uid), "✅ درخواست نمایندگی تایید شد! منوی همکار فعال است.")
-    except Exception:
-        pass
-    return _redir("/admin/partners?flash=همکار+تایید+شد")
-
-
-@router.post("/partners/{uid}/reject")
-async def partner_reject(request: Request, uid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "partners")
-    if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE partners SET status='rejected' WHERE tg_user_id=?;", (uid,))
-        conn.commit()
-    finally:
-        conn.close()
-    try:
-        _tg_send(int(uid),
-            "❌ متأسفانه درخواست نمایندگی شما در این مرحله تأیید نشد.\n"
-            "در صورت سوال با پشتیبانی در تماس باشید.")
-    except Exception:
-        pass
-    return _redir("/admin/partners?flash=درخواست+رد+شد")
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            logger.exception("Polling crashed, restarting in 5s: %s", e)
+            time.sleep(5)
