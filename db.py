@@ -2383,6 +2383,28 @@ def ensure_discount_table():
                 FOREIGN KEY(code_id) REFERENCES discount_codes(id)
             );
         """)
+        # ─── مهاجرت: افزودن ستون‌های جدید به جدول‌های قدیمی ───────────────
+        try:
+            existing = {r[1] for r in conn.execute("PRAGMA table_info(discount_codes);").fetchall()}
+            for col, decl in [
+                ("max_value",         "INTEGER DEFAULT 0"),
+                ("min_amount",        "INTEGER DEFAULT 0"),
+                ("max_uses",          "INTEGER DEFAULT 0"),
+                ("max_uses_per_user", "INTEGER DEFAULT 0"),
+                ("used_count",        "INTEGER DEFAULT 0"),
+                ("product_id",        "INTEGER DEFAULT NULL"),
+                ("category_id",       "INTEGER DEFAULT NULL"),
+                ("first_buy_only",    "INTEGER DEFAULT 0"),
+                ("vip_only",          "INTEGER DEFAULT 0"),
+                ("starts_at",         "TEXT DEFAULT NULL"),
+                ("expires_at",        "TEXT DEFAULT NULL"),
+                ("is_active",         "INTEGER DEFAULT 1"),
+                ("description",       "TEXT DEFAULT ''"),
+            ]:
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE discount_codes ADD COLUMN {col} {decl};")
+        except Exception:
+            pass
         conn.commit()
     finally:
         conn.close()
