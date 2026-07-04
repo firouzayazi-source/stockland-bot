@@ -17,6 +17,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 apihelper.CONNECT_TIMEOUT = 15
 apihelper.READ_TIMEOUT = 60
 import re
+import time
+import threading
 import html
 from db import subtract_wallet_balance
 from db import (
@@ -319,6 +321,8 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     partner_ok = (user_id is not None) and is_partner_approved(int(user_id))
     eff_price = partner_price if (partner_ok and partner_price) else price
+    from db import apply_flash_price as _afp
+    eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
     # بررسی سقف خرید روزانه
     if user_id is not None:
@@ -365,6 +369,7 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     text = (
         f"نام سرویس: <b>{title}</b>{rating_text}\n"
+        f"{_flash_badge(pid, _flash_sale, price, eff_price)}"
         f"قیمت: <b>{eff_price:,}</b> تومان\n\n"
         f"{description or 'بدون توضیحات'}"
         f"{faq_text}"
@@ -1473,6 +1478,23 @@ import sqlite3
 from datetime import datetime
 import html
 
+def _flash_badge(pid, sale, base_price, eff_price) -> str:
+    """بج فروش فوری: تخفیف + شمارش معکوس + موجودی محدود."""
+    if not sale:
+        return ""
+    try:
+        from db import get_feed_stats
+        _tot, _rem, _dlv = get_feed_stats(int(pid))
+        stock = int(_rem or 0)
+    except Exception:
+        stock = None
+    lines = [f"🔥 <b>فروش فوری {sale['percent']}٪</b> — قیمت قبل: <s>{int(base_price):,}</s> تومان",
+             f"⏰ فقط تا <b>{sale['left_str']}</b> دیگر!"]
+    if stock is not None and 0 < stock <= 10:
+        lines.append(f"⚡ تنها <b>{stock}</b> عدد باقی مانده!")
+    return "\n".join(lines) + "\n"
+
+
 def finalize_product_order(call, uid, product, category, eff_price, wallet_used=0):
 
     pid = int(product[0])
@@ -1579,6 +1601,17 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                     parse_mode="HTML")
             except Exception:
                 pass
+    except Exception:
+        pass
+
+    # 🚀 پست کانال + امتیازدهی + Upsell (با تأخیر، بعد از تحویل)
+    try:
+        _cat_for_upsell = None
+        try:
+            _cat_for_upsell = product.get("category_id") if isinstance(product, dict) else None
+        except Exception:
+            pass
+        _after_purchase_extras(uid, call.message.chat.id, order_id, pid, _cat_for_upsell, title)
     except Exception:
         pass
 
@@ -1712,6 +1745,8 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
             cb = f"admin_product_{pid}"
         else:
             eff_price = partner_price if (partner_ok and partner_price) else price
+            from db import apply_flash_price as _afp
+            eff_price, _flash_sale = _afp(int(pid), int(eff_price))
             text = f"{title} | {eff_price:,} تومان"
             cb = f"{category}_select_{pid}"
         kb.add(types.InlineKeyboardButton(text, callback_data=cb))
@@ -2051,6 +2086,8 @@ def handle_confirm_wallet(call):
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
     eff_price = partner_price if (partner_ok and partner_price) else price
+    from db import apply_flash_price as _afp
+    eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
     # تخفیف اعمال شده از _show_order_summary
     discount = int(user_states.get(uid, {}).get("applied_discount", 0))
@@ -3113,6 +3150,7 @@ def _show_partner_dashboard(chat_id, uid):
     )
     kb.row(
         types.InlineKeyboardButton(_t("BTN_PARTNER_CHAT",        _D.get("BTN_PARTNER_CHAT",        "💬 چت با پشتیبان")), callback_data="partner_support"),
+        types.InlineKeyboardButton(_t("BTN_PARTNER_PROMO",       _D.get("BTN_PARTNER_PROMO",       "📣 ابزار تبلیغ")),   callback_data="partner_promo"),
     )
 
     # بنر سطح
@@ -4227,6 +4265,12 @@ def _send_rating_request(chat_id: int, uid: int, order_id: int, pid: int, title:
     import threading as _th
     def _delayed():
         import time as _t; _t.sleep(30)
+        try:
+            from db import get_social_settings
+            if not int(get_social_settings().get("rating") or 0):
+                return
+        except Exception:
+            pass
         from db import has_rated_order
         if has_rated_order(order_id):
             return
@@ -4620,6 +4664,14 @@ def handle_callbacks(call: types.CallbackQuery):
                 _t("BTN_WALLET_GATEWAY", _D.get("BTN_WALLET_GATEWAY", "🌐 درگاه پرداخت")), callback_data="wallet_gateway"
             ),
         )
+        try:
+            from db import get_crypto_settings
+            if int(get_crypto_settings().get("enabled") or 0):
+                kb.add(types.InlineKeyboardButton(
+                    _t("BTN_WALLET_CRYPTO", _D.get("BTN_WALLET_CRYPTO", "₿ پرداخت رمزارز")),
+                    callback_data="wallet_crypto"))
+        except Exception:
+            pass
         bot.answer_callback_query(call.id)
         bot.send_message(
             call.message.chat.id,
@@ -5662,6 +5714,8 @@ def handle_callbacks(call: types.CallbackQuery):
 
         partner_price = product[6] if len(product) > 6 else None
         eff_price = partner_price if (is_partner_approved(uid) and partner_price) else product[3]
+        from db import apply_flash_price as _afp
+        eff_price, _ = _afp(int(product[0]), int(eff_price))
 
         wallet_balance = get_wallet_balance(uid)
 
@@ -5813,13 +5867,260 @@ def handle_admin_backup_restore_document(message):
         bot.send_message(message.chat.id, f"خطا در بازیابی بکاپ: {e}")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── ₿ شارژ رمزارز + 📣 کیت تبلیغاتی همکار ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@bot.callback_query_handler(func=lambda c: c.data == "wallet_crypto")
+def cb_wallet_crypto(call):
+    from db import get_crypto_settings
+    cs = get_crypto_settings()
+    if not int(cs.get("enabled") or 0):
+        bot.answer_callback_query(call.id, "پرداخت رمزارز فعال نیست", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    if (cs.get("usdt_trc20") or "").strip():
+        kb.add(types.InlineKeyboardButton("💵 USDT (TRC20)", callback_data="crypto_net_usdt"))
+    if (cs.get("trx") or "").strip():
+        kb.add(types.InlineKeyboardButton("🔺 TRX (Tron)", callback_data="crypto_net_trx"))
+    bot.send_message(call.message.chat.id,
+        "₿ <b>شارژ با رمزارز</b>\n\nشبکه مورد نظر را انتخاب کنید:",
+        reply_markup=kb, parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("crypto_net_"))
+def cb_crypto_network(call):
+    from db import get_crypto_settings
+    cs = get_crypto_settings()
+    net = call.data.replace("crypto_net_", "")
+    addr = (cs.get("usdt_trc20") if net == "usdt" else cs.get("trx") or "").strip()
+    if not addr:
+        bot.answer_callback_query(call.id, "آدرس این شبکه تنظیم نشده", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    net_label = "USDT (TRC20)" if net == "usdt" else "TRX"
+    user_states[call.from_user.id] = {"mode": "crypto_amount", "net": net}
+    bot.send_message(call.message.chat.id,
+        f"₿ <b>پرداخت {net_label}</b>\n\n"
+        f"آدرس واریز:\n<code>{addr}</code>\n\n"
+        f"📌 {cs.get('note','')}\n\n"
+        "حالا <b>مبلغ به تومان</b> که می‌خواهید شارژ شود را وارد کنید:",
+        parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_amount")
+def handle_crypto_amount(message):
+    uid = message.from_user.id
+    st = user_states.get(uid, {})
+    raw = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "")
+    if not raw.isdigit() or int(raw) <= 0:
+        bot.reply_to(message, "❌ مبلغ نامعتبر است. یک عدد به تومان وارد کنید:")
+        return
+    st["amount"] = int(raw)
+    st["mode"] = "crypto_txid"
+    user_states[uid] = st
+    bot.reply_to(message,
+        f"مبلغ: <b>{int(raw):,}</b> تومان ✅\n\n"
+        "حالا <b>TXID</b> (هش تراکنش) را ارسال کنید:", parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_txid")
+def handle_crypto_txid(message):
+    uid = message.from_user.id
+    st = user_states.pop(uid, {})
+    txid = (message.text or "").strip()
+    if len(txid) < 10:
+        user_states[uid] = st
+        bot.reply_to(message, "❌ TXID معتبر نیست. دوباره ارسال کنید:")
+        return
+    from db import save_crypto_receipt
+    rid = save_crypto_receipt(uid, int(st.get("amount", 0)), st.get("net", "usdt"), txid)
+    bot.reply_to(message,
+        f"✅ درخواست شارژ رمزارز ثبت شد.\n"
+        f"شناسه پیگیری: <code>#{rid}</code>\n\n"
+        "پس از تأیید تراکنش، کیف‌پول شما شارژ می‌شود.", parse_mode="HTML")
+    try:
+        import html as _h
+        from db import get_user as _gu
+        user = _gu(uid)
+        name = _h.escape((user["full_name"] if user else None) or str(uid))
+        net_label = "USDT-TRC20" if st.get("net") == "usdt" else "TRX"
+        bot.send_message(ADMIN_ID,
+            f"₿ <b>رسید رمزارز جدید</b>\n"
+            f"شناسه: #{rid}\n"
+            f"کاربر: {name} (<code>{uid}</code>)\n"
+            f"مبلغ اعلامی: {int(st.get('amount',0)):,} تومان\n"
+            f"شبکه: {net_label}\n"
+            f"TXID: <code>{_h.escape(txid)}</code>\n\n"
+            f"تأیید: /approve_receipt_{rid}\n"
+            f"رد: /reject_receipt_{rid}",
+            parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_promo")
+def cb_partner_promo(call):
+    """📣 کیت تبلیغاتی همکار — متن آماده + دکمه اشتراک یک‌لمسی."""
+    uid = call.from_user.id
+    if not is_partner_approved(uid):
+        bot.answer_callback_query(call.id, "فقط برای همکاران تأییدشده", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    from db import get_promo_settings
+    try:
+        me = bot.get_me().username
+    except Exception:
+        me = ""
+    link = f"https://t.me/{me}?start=ref_{uid}" if me else f"?start=ref_{uid}"
+    text = str(get_promo_settings().get("text") or "").format(link=link)
+    import urllib.parse as _up
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(text)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
+    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
+    bot.send_message(call.message.chat.id,
+        "📣 <b>ابزار تبلیغ شما</b>\n\n"
+        "این متن آماده را کپی یا مستقیم فوروارد کنید:\n"
+        "➖➖➖➖➖➖➖➖\n"
+        f"{text}\n"
+        "➖➖➖➖➖➖➖➖",
+        reply_markup=kb, parse_mode="HTML")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🚀 موتور رشد: هوک بعد از خرید + زمان‌بند بازگردانی و لیدربرد ────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _after_purchase_extras(uid, chat_id, order_id, pid, cat_id, title):
+    """پست کانال + درخواست امتیاز + پیشنهاد Upsell — با تأخیر ۲ ثانیه بعد از تحویل."""
+    def _run():
+        try:
+            from db import get_social_settings, get_upsell_products, apply_flash_price
+            soc = get_social_settings()
+
+            # ۶ب) پست خودکار فروش در کانال (ناشناس)
+            try:
+                ch = str(soc.get("channel_id") or "").strip()
+                if ch and int(soc.get("sale_post") or 0):
+                    bot.send_message(ch, str(soc.get("sale_post_text") or "").format(title=title),
+                                     parse_mode="HTML")
+            except Exception:
+                pass
+
+            # ۲) پیشنهاد خرید بعدی (Upsell)
+            try:
+                if int(soc.get("upsell") or 0):
+                    ups = get_upsell_products(pid, cat_id, limit=2)
+                    if ups:
+                        kb = types.InlineKeyboardMarkup(row_width=1)
+                        for p in ups:
+                            fp, fl = apply_flash_price(p["id"], int(p["price"]))
+                            lbl = f"🔥 {p['title']} | {fp:,} تومان" if fl else f"{p['title']} | {fp:,} تومان"
+                            kb.add(types.InlineKeyboardButton(
+                                lbl, callback_data=f"cat_{p['category_id']}_p_{p['id']}"))
+                        bot.send_message(chat_id,
+                            "🛍 <b>خریداران این محصول، این‌ها را هم پسندیدند:</b>",
+                            reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
+        except Exception:
+            pass
+    try:
+        threading.Timer(2.0, _run).start()
+    except Exception:
+        pass
+
+
+def _growth_scheduler():
+    """هر ۱۰ دقیقه: بازگردانی روزانه + لیدربرد هفتگی (ضدتکرار با bot_config)."""
+    import datetime as _dt
+    from db import (get_cfg, set_cfg, get_winback_settings, get_leaderboard_settings,
+                    find_winback_candidates, create_winback_code,
+                    weekly_top_partners, credit_partner_wallet, ensure_growth_schema)
+    ensure_growth_schema()
+    while True:
+        try:
+            now = _dt.datetime.now()
+            today = now.strftime("%Y-%m-%d")
+
+            # ── ۱) کمپین بازگردانی — روزی یک‌بار بعد از ساعت تنظیم‌شده ──
+            wb = get_winback_settings()
+            force_wb = get_cfg("winback_force", "0") == "1"
+            if (int(wb.get("enabled") or 0) and now.hour >= int(wb.get("hour") or 11)
+                    and get_cfg("winback_last", "") != today) or force_wb:
+                if force_wb:
+                    set_cfg("winback_force", "0")
+                set_cfg("winback_last", today)
+                cands = find_winback_candidates(
+                    int(wb.get("days_inactive") or 14),
+                    int(wb.get("cooldown_days") or 30),
+                    int(wb.get("batch") or 30))
+                sent = 0
+                for c in cands:
+                    try:
+                        code = create_winback_code(int(c["uid"]),
+                                                   int(wb.get("percent") or 15),
+                                                   int(wb.get("expire_days") or 3))
+                        if not code:
+                            continue
+                        msg = str(wb.get("message") or "").format(
+                            name=(c["name"] or "دوست عزیز"), code=code,
+                            percent=wb.get("percent"), days=wb.get("expire_days"))
+                        bot.send_message(int(c["uid"]), msg, parse_mode="HTML")
+                        sent += 1
+                    except Exception:
+                        continue
+                if sent:
+                    logger.info("winback: %s پیام بازگردانی ارسال شد", sent)
+
+            # ── ۴) لیدربرد هفتگی — روز تنظیم‌شده، هفته‌ای یک‌بار ──
+            lb = get_leaderboard_settings()
+            week_key = now.strftime("%G-W%V")
+            force_lb = get_cfg("leaderboard_force", "0") == "1"
+            if (int(lb.get("enabled") or 0) and now.weekday() == int(lb.get("weekday") or 4)
+                    and get_cfg("leaderboard_last", "") != week_key) or force_lb:
+                if force_lb:
+                    set_cfg("leaderboard_force", "0")
+                set_cfg("leaderboard_last", week_key)
+                rewards = []
+                for x in str(lb.get("rewards") or "").split(","):
+                    try: rewards.append(int(x.strip()))
+                    except Exception: pass
+                tops = weekly_top_partners(limit=max(1, len(rewards) or 3))
+                medals = ["🥇", "🥈", "🥉", "🏅", "🏅"]
+                for i, t in enumerate(tops):
+                    try:
+                        reward = rewards[i] if i < len(rewards) else 0
+                        if reward > 0:
+                            credit_partner_wallet(int(t["uid"]), reward,
+                                                  note=f"جایزه لیدربرد هفته {week_key} — رتبه {i+1}")
+                        msg = str(lb.get("message") or "").format(
+                            rank=f"{medals[i]} {i+1}", count=t["cnt"], reward=f"{reward:,}")
+                        bot.send_message(int(t["uid"]), msg, parse_mode="HTML")
+                    except Exception:
+                        continue
+                if tops:
+                    logger.info("leaderboard: جوایز هفته %s پرداخت شد (%s نفر)", week_key, len(tops))
+        except Exception as ex:
+            logger.exception("growth scheduler error: %s", ex)
+        time.sleep(600)
+
+
 if __name__ == "__main__":
     init_db(DB_PATH)
     ticket_ensure_schema()
     _ensure_delivery_table()
+    try:
+        from db import ensure_growth_schema as _egs
+        _egs()
+        threading.Thread(target=_growth_scheduler, daemon=True).start()
+        logger.info("🚀 Growth scheduler started")
+    except Exception as _gex:
+        logger.exception("growth scheduler failed to start: %s", _gex)
     logger.info("Bot started (ticket system v2)...")
 
-    import time
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
