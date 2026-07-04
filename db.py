@@ -2786,9 +2786,10 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
     finally:
         conn.close()
 
-    credit_partner_wallet(referrer_id, amount,
-                          note=f"پورسانت خرید زیرمجموعه — سفارش #{order_id} (سطح {tier_name})")
-    return {"paid": True, "referrer_id": referrer_id, "amount": amount, "tier_name": tier_name}
+    wallet = credit_referrer(referrer_id, amount,
+                             note=f"پورسانت خرید زیرمجموعه — سفارش #{order_id} (سطح {tier_name})")
+    return {"paid": True, "referrer_id": referrer_id, "amount": amount,
+            "tier_name": tier_name, "wallet": wallet}
 
 
 def get_referral_stats(referrer_id: int) -> dict:
@@ -4611,8 +4612,14 @@ def get_cfg_json(key: str, default: dict) -> dict:
         return dict(default)
 
 
+_GROWTH_SCHEMA_READY = False
+
 def ensure_growth_schema():
-    """جدول‌های فروش فوری و بازگردانی + مهاجرت رسیدها برای رمزارز."""
+    """جدول‌های فروش فوری و بازگردانی + مهاجرت رسیدها — فقط یک‌بار در هر پروسه."""
+    global _GROWTH_SCHEMA_READY
+    if _GROWTH_SCHEMA_READY:
+        return
+    _GROWTH_SCHEMA_READY = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -4671,6 +4678,8 @@ def create_flash_sale(product_id: int, percent: int, hours: int) -> int:
             VALUES (?,?, datetime('now','localtime'), datetime('now','localtime', ?));
         """, (product_id, max(1, min(90, int(percent))), f"+{int(hours)} hours"))
         conn.commit()
+        try: flash_map_invalidate()
+        except Exception: pass
         return cur.lastrowid
     finally:
         conn.close()
@@ -4681,6 +4690,8 @@ def deactivate_flash_sale(sale_id: int):
     try:
         conn.execute("UPDATE flash_sales SET is_active=0 WHERE id=?;", (sale_id,))
         conn.commit()
+        try: flash_map_invalidate()
+        except Exception: pass
     finally:
         conn.close()
 
@@ -4927,3 +4938,82 @@ def save_crypto_receipt(user_id: int, amount: int, network: str, txid: str) -> i
         return cur.lastrowid
     finally:
         conn.close()
+
+
+# ─── ۶) پاداش عضویت (به‌جای اولین خرید) + مسیریابی کیف‌پول ─────────────────
+
+def _is_approved_partner(user_id: int) -> bool:
+    conn = _get_connection()
+    try:
+        r = conn.execute(
+            "SELECT 1 FROM partners WHERE CAST(tg_user_id AS INTEGER)=? AND status='approved' LIMIT 1;",
+            (int(user_id),)).fetchone()
+        return bool(r)
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def credit_referrer(referrer_id: int, amount: int, note: str) -> str:
+    """پرداخت به معرف — همکار → کیف همکاری، کاربر عادی → کیف اصلی. برمی‌گرداند نوع کیف."""
+    if _is_approved_partner(referrer_id):
+        credit_partner_wallet(referrer_id, amount, note=note)
+        return "partner"
+    add_wallet_balance(referrer_id, amount)
+    return "main"
+
+
+def pay_signup_referral_reward(referrer_id: int, referred_id: int) -> dict:
+    """پاداش ثابت معرفی — همان لحظه عضویت، فقط یک‌بار (قفل با پرچم rewarded).
+    Returns: {paid, amount, wallet}"""
+    ensure_referral_schema()
+    settings = get_referral_settings()
+    if not settings.get("is_active"):
+        return {"paid": False}
+    amount = int(settings.get("reward_amount") or 0)
+    if amount <= 0:
+        return {"paid": False}
+    conn = _get_connection()
+    try:
+        # قفل اتمیک: فقط اگر rewarded=0 بود، 1 کن
+        conn.execute(
+            "UPDATE referrals SET rewarded=1 WHERE referrer_id=? AND referred_id=? AND rewarded=0;",
+            (referrer_id, referred_id))
+        changed = conn.execute("SELECT changes();").fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+    if not changed:
+        return {"paid": False}
+    wallet = credit_referrer(referrer_id, amount,
+                             note=f"پاداش معرفی کاربر {referred_id}")
+    return {"paid": True, "amount": amount, "wallet": wallet}
+
+
+_FLASH_MAP_CACHE = {"t": 0.0, "map": {}}
+
+def get_active_flash_map() -> dict:
+    """{product_id: percent} فروش‌های فوری زنده — کش ۳۰ ثانیه برای لیبل لیست‌ها."""
+    now = _time.time()
+    if now - _FLASH_MAP_CACHE["t"] < 30:
+        return _FLASH_MAP_CACHE["map"]
+    ensure_growth_schema()
+    m = {}
+    conn = _get_connection()
+    try:
+        for r in conn.execute("""
+            SELECT product_id, percent FROM flash_sales
+            WHERE is_active=1 AND datetime('now','localtime') BETWEEN starts_at AND ends_at;"""):
+            m[int(r[0])] = int(r[1])
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    _FLASH_MAP_CACHE["t"] = now
+    _FLASH_MAP_CACHE["map"] = m
+    return m
+
+
+def flash_map_invalidate():
+    _FLASH_MAP_CACHE["t"] = 0.0
