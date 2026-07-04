@@ -1590,8 +1590,43 @@ def get_category_products(cat_id: int, active_only: bool = True) -> list:
         conn.close()
 
 
+_CAT_BTN_CACHE = {"t": 0.0, "map": {}}
+
+def _cat_btn_map() -> dict:
+    """نقشه متن دکمه ← دسته ریشه — کش ۲۰ ثانیه (این تابع در فیلتر هر پیام صدا می‌خورد)."""
+    import time as _t
+    now = _t.time()
+    if now - _CAT_BTN_CACHE["t"] < 20:
+        return _CAT_BTN_CACHE["map"]
+    m = {}
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        for cat in conn.execute(
+            "SELECT * FROM categories WHERE parent_id IS NULL AND is_active=1;"
+        ).fetchall():
+            emoji = (cat["emoji"] or "").strip()
+            btn = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+            m[btn] = dict(cat)
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    _CAT_BTN_CACHE["t"] = now
+    _CAT_BTN_CACHE["map"] = m
+    return m
+
+
+def cat_btn_cache_clear():
+    _CAT_BTN_CACHE["t"] = 0.0
+
+
 def get_category_by_button_text(text: str):
-    """یافتن دسته ریشه بر اساس متن دکمه Reply Keyboard"""
+    """یافتن دسته ریشه بر اساس متن دکمه Reply Keyboard — از کش."""
+    return _cat_btn_map().get((text or "").strip())
+
+
+def _legacy_get_category_by_button_text(text: str):
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
@@ -2787,7 +2822,7 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
         conn.close()
 
     wallet = credit_referrer(referrer_id, amount,
-                             note=f"پورسانت خرید زیرمجموعه — سفارش #{order_id} (سطح {tier_name})")
+                             note=f"پاداش فروش — سفارش #{order_id} (سطح {tier_name})")
     return {"paid": True, "referrer_id": referrer_id, "amount": amount,
             "tier_name": tier_name, "wallet": wallet}
 
@@ -4403,13 +4438,21 @@ def delete_product_faq(faq_id: int):
 
 # ─── Maintenance Mode ─────────────────────────────────────────────────────────
 
+_MAINT_CACHE = {"t": 0.0, "v": False}
+
 def get_maintenance_mode() -> bool:
+    import time as _t
+    now = _t.time()
+    if now - _MAINT_CACHE["t"] < 10:
+        return _MAINT_CACHE["v"]
+    _MAINT_CACHE["t"] = now
     conn = _get_connection()
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
             (key TEXT PRIMARY KEY, value TEXT);""")
         row = conn.execute("SELECT value FROM bot_config WHERE key='maintenance';").fetchone()
-        return row and row[0] == "1"
+        _MAINT_CACHE["v"] = bool(row and row[0] == "1")
+        return _MAINT_CACHE["v"]
     except Exception:
         return False
     finally:
@@ -4417,6 +4460,7 @@ def get_maintenance_mode() -> bool:
 
 
 def set_maintenance_mode(enabled: bool):
+    _MAINT_CACHE["t"] = 0.0
     conn = _get_connection()
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
