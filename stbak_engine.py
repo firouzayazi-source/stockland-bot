@@ -15,7 +15,13 @@ MODULES = {
         "tables": [
             "ui_texts_custom", "ui_texts", "other_services",
             "feed_alert_settings", "panel_theme", "admin_preferences",
+            "bot_config",
         ],
+        "deps": [],
+    },
+    "admins": {
+        "label": "🛡 ادمین‌ها",
+        "tables": ["admins"],
         "deps": [],
     },
     "users": {
@@ -25,7 +31,8 @@ MODULES = {
     },
     "wallets": {
         "label": "💰 کیف‌پول",
-        "tables": ["wallets", "wallet_orders", "zarinpal_transactions"],
+        "tables": ["wallets", "wallet_orders", "zarinpal_transactions",
+                   "card_receipts", "wallet_admin_log"],
         "deps": ["users"],
     },
     "categories": {
@@ -35,12 +42,13 @@ MODULES = {
     },
     "products": {
         "label": "📦 محصولات",
-        "tables": ["products", "product_feed", "stock_subscriptions", "feed_batches"],
+        "tables": ["products", "product_feed", "stock_subscriptions", "feed_batches",
+                   "product_faqs", "product_ratings"],
         "deps": ["categories"],
     },
     "orders": {
         "label": "🧾 سفارش‌ها",
-        "tables": ["orders", "pending_deliveries"],
+        "tables": ["orders", "pending_deliveries", "delivery_messages"],
         "deps": ["users", "products"],
     },
     "tickets": {
@@ -58,6 +66,16 @@ MODULES = {
             "partner_bank_info",
         ],
         "deps": ["users"],
+    },
+    "sellers": {
+        "label": "🛍 فروشندگان",
+        "tables": ["sellers", "seller_levels", "seller_commissions", "seller_payouts"],
+        "deps": ["users"],
+    },
+    "accounting": {
+        "label": "📊 حسابداری و هزینه‌ها",
+        "tables": ["expenses", "expense_categories"],
+        "deps": [],
     },
     "discounts": {
         "label": "🏷 کدهای تخفیف",
