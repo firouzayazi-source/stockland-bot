@@ -4551,3 +4551,379 @@ def delete_all_card_receipts():
         conn.commit()
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🚀 لایه رشد و فروش — Flash Sale، بازگردانی، لیدربرد، نظرات، رمزارز ────
+# ══════════════════════════════════════════════════════════════════════════════
+
+import json as _json
+import time as _time
+
+_CFG_CACHE: dict = {}
+_CFG_TTL = 60  # ثانیه
+
+
+def get_cfg(key: str, default: str = "") -> str:
+    """خواندن تنظیم از bot_config با کش ۶۰ ثانیه‌ای."""
+    now = _time.time()
+    hit = _CFG_CACHE.get(key)
+    if hit and now - hit[1] < _CFG_TTL:
+        return hit[0]
+    val = default
+    conn = _get_connection()
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);")
+        row = conn.execute("SELECT value FROM bot_config WHERE key=?;", (key,)).fetchone()
+        if row is not None and row[0] is not None:
+            val = str(row[0])
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    _CFG_CACHE[key] = (val, now)
+    return val
+
+
+def set_cfg(key: str, value) -> None:
+    conn = _get_connection()
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);")
+        conn.execute(
+            "INSERT INTO bot_config (key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+            (key, str(value)))
+        conn.commit()
+    finally:
+        conn.close()
+    _CFG_CACHE.pop(key, None)
+
+
+def get_cfg_json(key: str, default: dict) -> dict:
+    raw = get_cfg(key, "")
+    if not raw:
+        return dict(default)
+    try:
+        d = dict(default)
+        d.update(_json.loads(raw))
+        return d
+    except Exception:
+        return dict(default)
+
+
+def ensure_growth_schema():
+    """جدول‌های فروش فوری و بازگردانی + مهاجرت رسیدها برای رمزارز."""
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS flash_sales (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                percent    INTEGER NOT NULL,
+                starts_at  TEXT NOT NULL,
+                ends_at    TEXT NOT NULL,
+                is_active  INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS winback_log (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                code_id INTEGER,
+                sent_at TEXT DEFAULT (datetime('now','localtime'))
+            );""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_ratings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                order_id    INTEGER NOT NULL,
+                product_id  INTEGER NOT NULL,
+                rating      INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                comment     TEXT DEFAULT '',
+                created_at  TEXT DEFAULT (datetime('now')),
+                UNIQUE(order_id)
+            );""")
+        # مهاجرت card_receipts برای رمزارز (قانون ۱۳)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(card_receipts);").fetchall()}
+            if cols:
+                if "method" not in cols:
+                    conn.execute("ALTER TABLE card_receipts ADD COLUMN method TEXT DEFAULT 'card';")
+                if "txid" not in cols:
+                    conn.execute("ALTER TABLE card_receipts ADD COLUMN txid TEXT DEFAULT '';")
+        except Exception:
+            pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── ۳) فروش فوری (Flash Sale) ────────────────────────────────────────────
+
+def create_flash_sale(product_id: int, percent: int, hours: int) -> int:
+    ensure_growth_schema()
+    conn = _get_connection()
+    try:
+        # فقط یک فروش فعال برای هر محصول
+        conn.execute("UPDATE flash_sales SET is_active=0 WHERE product_id=?;", (product_id,))
+        cur = conn.execute("""
+            INSERT INTO flash_sales (product_id, percent, starts_at, ends_at)
+            VALUES (?,?, datetime('now','localtime'), datetime('now','localtime', ?));
+        """, (product_id, max(1, min(90, int(percent))), f"+{int(hours)} hours"))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def deactivate_flash_sale(sale_id: int):
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE flash_sales SET is_active=0 WHERE id=?;", (sale_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_flash_sale(product_id: int):
+    """فروش فوری فعال محصول — dict یا None."""
+    ensure_growth_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("""
+            SELECT *, CAST((julianday(ends_at)-julianday('now','localtime'))*24*60 AS INTEGER) AS mins_left
+            FROM flash_sales
+            WHERE product_id=? AND is_active=1
+              AND datetime('now','localtime') BETWEEN starts_at AND ends_at
+            ORDER BY id DESC LIMIT 1;
+        """, (product_id,)).fetchone()
+        if not row:
+            return None
+        mins = max(0, int(row["mins_left"] or 0))
+        if mins >= 60:
+            left = f"{mins//60} ساعت و {mins%60} دقیقه"
+        else:
+            left = f"{mins} دقیقه"
+        return {"id": row["id"], "percent": int(row["percent"]),
+                "ends_at": row["ends_at"], "mins_left": mins, "left_str": left}
+    finally:
+        conn.close()
+
+
+def apply_flash_price(product_id: int, price: int):
+    """(قیمت نهایی، فروش‌فوری یا None)"""
+    try:
+        sale = get_flash_sale(product_id)
+        if sale:
+            return max(0, int(price) - int(price) * sale["percent"] // 100), sale
+    except Exception:
+        pass
+    return int(price), None
+
+
+def list_flash_sales(limit: int = 30) -> list:
+    ensure_growth_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT f.*, COALESCE(p.title,'#'||f.product_id) AS title,
+                   (datetime('now','localtime') BETWEEN f.starts_at AND f.ends_at AND f.is_active=1) AS live
+            FROM flash_sales f LEFT JOIN products p ON p.id=f.product_id
+            ORDER BY f.id DESC LIMIT ?;
+        """, (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
+# ─── ۶) امتیاز محصول ─────────────────────────────────────────────────────
+
+def save_product_rating(user_id: int, order_id: int, product_id: int, rating: int) -> bool:
+    ensure_growth_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO product_ratings (user_id,order_id,product_id,rating) VALUES (?,?,?,?);",
+            (user_id, order_id, product_id, max(1, min(5, int(rating)))))
+        ok = conn.execute("SELECT changes();").fetchone()[0]
+        conn.commit()
+        return bool(ok)
+    finally:
+        conn.close()
+
+
+# نکته: get_product_rating نسخه dict قدیمی (بالاتر در همین فایل) مرجع است.
+
+
+# ─── ۲) پیشنهاد بعد از خرید (Upsell) ─────────────────────────────────────
+
+def get_upsell_products(product_id: int, category_id, limit: int = 2) -> list:
+    """پرفروش‌های موجودِ همان دسته، غیر از محصول خریداری‌شده."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT p.id, p.title, p.price, p.category_id,
+                   (SELECT COUNT(*) FROM product_feed f WHERE f.product_id=p.id AND f.delivered=0) AS stock,
+                   (SELECT COUNT(*) FROM orders o WHERE o.product_id=p.id
+                        AND COALESCE(o.status,'active')!='returned') AS sold
+            FROM products p
+            WHERE p.id != ? AND COALESCE(p.is_active,1)=1
+              AND (? IS NULL OR p.category_id = ?)
+            GROUP BY p.id
+            HAVING stock > 0
+            ORDER BY sold DESC, p.id DESC
+            LIMIT ?;
+        """, (product_id, category_id, category_id, limit)).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+# ─── ۱) کمپین بازگردانی (Win-back) ────────────────────────────────────────
+
+WINBACK_DEFAULTS = {
+    "enabled": 0, "days_inactive": 14, "percent": 15,
+    "expire_days": 3, "cooldown_days": 30, "hour": 11, "batch": 30,
+    "message": ("سلام {name} 👋\n\nدلمون برات تنگ شده! 💜\n"
+                "یه هدیه مخصوص خودت داریم:\n\n"
+                "🎁 کد تخفیف <code>{code}</code> — {percent}٪ تخفیف\n"
+                "⏳ فقط تا {days} روز اعتبار داره!\n\n"
+                "همین حالا از منوی فروشگاه استفاده‌ش کن 🛍"),
+}
+
+
+def get_winback_settings() -> dict:
+    return get_cfg_json("winback", WINBACK_DEFAULTS)
+
+
+def find_winback_candidates(days_inactive: int, cooldown_days: int, batch: int = 30) -> list:
+    """کاربرانی که خرید داشته‌اند ولی N روز است نخریده‌اند و اخیراً پیام نگرفته‌اند."""
+    ensure_growth_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT CAST(o.user_id AS INTEGER) AS uid,
+                   COALESCE(u.full_name, u.username, '') AS name,
+                   MAX(o.created_at) AS last_order
+            FROM orders o
+            LEFT JOIN users u ON CAST(u.user_id AS INTEGER)=CAST(o.user_id AS INTEGER)
+            WHERE COALESCE(o.status,'active') != 'returned'
+            GROUP BY CAST(o.user_id AS INTEGER)
+            HAVING MAX(o.created_at) < datetime('now','localtime', ?)
+               AND NOT EXISTS (
+                   SELECT 1 FROM winback_log w
+                   WHERE w.user_id = CAST(o.user_id AS INTEGER)
+                     AND w.sent_at > datetime('now','localtime', ?)
+               )
+            ORDER BY last_order ASC
+            LIMIT ?;
+        """, (f"-{int(days_inactive)} days", f"-{int(cooldown_days)} days", int(batch))).fetchall()
+    finally:
+        conn.close()
+
+
+def create_winback_code(user_id: int, percent: int, expire_days: int) -> str:
+    """کد تخفیف شخصی یک‌بارمصرف — برمی‌گرداند: متن کد."""
+    ensure_discount_table()
+    import random, string
+    conn = _get_connection()
+    try:
+        for _ in range(6):
+            code = "WB" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            try:
+                cur = conn.execute("""
+                    INSERT INTO discount_codes
+                        (code, type, value, max_uses, max_uses_per_user, is_active,
+                         expires_at, description)
+                    VALUES (?,?,?,?,?,?, datetime('now','localtime', ?), ?);
+                """, (code, "percent", int(percent), 1, 1, 1,
+                      f"+{int(expire_days)} days", f"بازگردانی کاربر {user_id}"))
+                code_id = cur.lastrowid
+                conn.execute("INSERT INTO winback_log (user_id, code_id) VALUES (?,?);",
+                             (user_id, code_id))
+                conn.commit()
+                return code
+            except sqlite3.IntegrityError:
+                continue
+        return ""
+    finally:
+        conn.close()
+
+
+# ─── ۴) لیدربرد هفتگی همکاران ────────────────────────────────────────────
+
+LEADERBOARD_DEFAULTS = {
+    "enabled": 0, "weekday": 4,  # 4 = جمعه (Mon=0)
+    "rewards": "100000,60000,30000",
+    "message": ("🏆 <b>نتایج مسابقه هفتگی همکاران</b>\n\n"
+                "تبریک! شما در جایگاه {rank} این هفته قرار گرفتید 🎉\n"
+                "🛒 فروش شما: {count} سفارش\n"
+                "🎁 جایزه: <b>{reward}</b> تومان به کیف‌پول همکاری شما اضافه شد.\n\n"
+                "هفته بعد هم منتظرتیم 💪"),
+}
+
+
+def get_leaderboard_settings() -> dict:
+    return get_cfg_json("leaderboard", LEADERBOARD_DEFAULTS)
+
+
+def weekly_top_partners(limit: int = 3) -> list:
+    """برترین همکاران ۷ روز اخیر بر اساس تعداد خرید همکاری."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT CAST(user_id AS INTEGER) AS uid, COUNT(*) AS cnt,
+                   COALESCE(SUM(price),0) AS total
+            FROM orders
+            WHERE buyer_type='partner'
+              AND COALESCE(status,'active') != 'returned'
+              AND created_at > datetime('now','localtime','-7 days')
+            GROUP BY CAST(user_id AS INTEGER)
+            ORDER BY cnt DESC, total DESC
+            LIMIT ?;
+        """, (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
+# ─── ۷) تنظیمات رمزارز / کانال / تبلیغ / وب‌اپ ────────────────────────────
+
+CRYPTO_DEFAULTS = {"enabled": 0, "usdt_trc20": "", "trx": "",
+                   "note": "پس از واریز، TXID تراکنش را ارسال کنید. شارژ بعد از تأیید انجام می‌شود."}
+SOCIAL_DEFAULTS = {"channel_id": "", "sale_post": 0, "rating": 1, "upsell": 1,
+                   "sale_post_text": "✅ همین حالا «{title}» خریداری شد 🎉\n\n🛍 شما هم از ربات ما خرید کنید!"}
+PROMO_DEFAULTS  = {"text": ("🔥 فروشگاه دیجیتال StockLand\n\n"
+                            "✅ تحویل آنی و خودکار\n✅ پشتیبانی واقعی\n✅ قیمت‌های رقابتی\n\n"
+                            "با لینک اختصاصی من عضو شو و خرید کن:\n{link}")}
+
+
+def get_crypto_settings() -> dict:
+    return get_cfg_json("crypto", CRYPTO_DEFAULTS)
+
+
+def get_social_settings() -> dict:
+    return get_cfg_json("social", SOCIAL_DEFAULTS)
+
+
+def get_promo_settings() -> dict:
+    return get_cfg_json("promo", PROMO_DEFAULTS)
+
+
+def save_crypto_receipt(user_id: int, amount: int, network: str, txid: str) -> int:
+    """رسید رمزارز — در همان جدول card_receipts با method مجزا."""
+    ensure_card_receipts_schema()
+    ensure_growth_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO card_receipts (user_id, amount, file_id, method, txid) VALUES (?,?,?,?,?);",
+            (user_id, amount, "", f"crypto_{network}", txid.strip()))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
