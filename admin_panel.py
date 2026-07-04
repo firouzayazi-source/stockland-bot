@@ -1651,14 +1651,14 @@ async def dashboard(request: Request, err: str = ""):
 # ─────────────────────────── Settings ──────────────────────────────────────
 
 DEFAULT_UI_TEXTS = {
-    "MAIN_BTN_OTHER_PRODUCTS": "سایر محصولات فروشگاه 🛍",
-    "MAIN_BTN_BUY_APPLE_ID":  "سرویس اپل آیدی 📱",
-    "MAIN_BTN_MY_ORDERS":     "خرید های من 🧾",
-    "MAIN_BTN_WALLET":        "کیف پول 💰",
-    "MAIN_BTN_PARTNER_REQUEST":"درخواست نمایندگی 📝",
-    "MAIN_BTN_PARTNER_PANEL": "پنل همکار 🤝",
-    "MAIN_BTN_GUIDE":         "راهنما 🔑",
-    "MAIN_BTN_SUPPORT":       "پشتیبانی 👨‍💻",
+    "MAIN_BTN_OTHER_PRODUCTS": "🛍 سایر محصولات فروشگاه",
+    "MAIN_BTN_BUY_APPLE_ID":  "📱 سرویس اپل آیدی",
+    "MAIN_BTN_MY_ORDERS":     "🧾 خریدهای من",
+    "MAIN_BTN_WALLET":        "💰 کیف پول",
+    "MAIN_BTN_PARTNER_REQUEST":"📝 درخواست نمایندگی",
+    "MAIN_BTN_PARTNER_PANEL": "🤝 پنل همکار",
+    "MAIN_BTN_GUIDE":         "🔑 راهنما",
+    "MAIN_BTN_SUPPORT":       "👨‍💻 پشتیبانی",
     "SUPPORT_TEXT":           "متن پشتیبانی...",
     "HELP_TEXT":              "متن راهنما...",
     "TXT_MAIN_MENU_TITLE":    "منوی اصلی",
@@ -9430,22 +9430,25 @@ async def partner_approve(request: Request, uid: int):
         import json as _json, requests as _rq
         token = _env("BOT_TOKEN","")
         if token:
-            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
+            # منوی واقعی و کامل همکار — از همان سازنده ربات (نه هاردکد)
+            markup = None
+            try:
+                from keyboards import main_menu as _mm
+                markup = _mm(user_id=int(uid)).to_json()
+            except Exception:
+                markup = None
+            payload = {
                 "chat_id": int(uid),
                 "text": "✅ <b>درخواست نمایندگی شما تایید شد!</b>\n\n"
                         "از این پس قیمت‌های ویژه همکار برای شما فعال است.\n"
-                        "منوی پنل همکار در منوی زیر در دسترس شماست 🤝",
+                        "منوی کامل همکاری برای شما به‌روزرسانی شد 🤝",
                 "parse_mode": "HTML",
-                "reply_markup": _json.dumps({
-                    "keyboard": [
-                        [{"text":"پنل همکار 🤝"}],
-                        [{"text":"خریدهای من 🧾"},{"text":"کیف پول 💰"}]
-                    ],
-                    "resize_keyboard": True
-                })
-            }, timeout=8)
+            }
+            if markup:
+                payload["reply_markup"] = markup
+            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
         else:
-            _tg_send(int(uid), "✅ درخواست نمایندگی تایید شد! منوی همکار فعال است.")
+            _tg_send(int(uid), "✅ درخواست نمایندگی تایید شد! برای فعال‌سازی منو /start بزنید.")
     except Exception:
         pass
     return _redir("/admin/partners?flash=همکار+تایید+شد")
@@ -9879,7 +9882,7 @@ async def shop_api_buy(request: Request):
 
     from db import (get_wallet_balance, subtract_wallet_balance, apply_flash_price,
                     create_order, claim_next_feed_item,
-                    process_referral_reward, process_referral_commission)
+                    process_referral_commission)
     conn = _db()
     try:
         p = conn.execute(
@@ -9913,20 +9916,14 @@ async def shop_api_buy(request: Request):
         f"💰 مبلغ: {price:,} تومان\n\n"
         f"📦 اطلاعات محصول:\n<code>{item[1]}</code>")
 
-    # هوک‌های پورسانت
-    try:
-        rr = process_referral_reward(uid, order_id)
-        if rr.get("rewarded"):
-            _tg_api_send(rr["referrer_id"],
-                f"🎉 یکی از دوستانی که معرفی کردید خرید کرد!\n💰 <b>{rr['amount']:,}</b> تومان به کیف‌پول شما اضافه شد.")
-    except Exception:
-        pass
+    # هوک پورسانت (پاداش عضویت جدا و در لحظه /start پرداخت می‌شود)
     try:
         cm = process_referral_commission(uid, order_id, price)
         if cm.get("paid"):
+            _wl = "کیف‌پول همکاری" if cm.get("wallet") == "partner" else "کیف‌پول"
             _tg_api_send(cm["referrer_id"],
                 f"💸 <b>پورسانت جدید!</b>\nیکی از زیرمجموعه‌های شما خرید کرد و "
-                f"<b>{cm['amount']:,}</b> تومان (سطح {cm['tier_name']}) به کیف‌پول همکاری شما اضافه شد.")
+                f"<b>{cm['amount']:,}</b> تومان (سطح {cm['tier_name']}) به {_wl} شما اضافه شد.")
     except Exception:
         pass
     # پست کانال
