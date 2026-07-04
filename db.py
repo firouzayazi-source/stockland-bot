@@ -2424,11 +2424,34 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
                     return {"valid": False, "error": "سقف استفاده شما از این کد تمام شده است"}
             if row["first_buy_only"]:
                 has_order = conn.execute(
-                    "SELECT COUNT(*) FROM orders WHERE user_id=? AND status='active';",
-                    (str(user_id),)
+                    "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? "
+                    "AND COALESCE(status,'active') != 'returned';",
+                    (int(user_id),)
                 ).fetchone()[0]
                 if has_order > 0:
                     return {"valid": False, "error": "این کد فقط برای اولین خرید است"}
+            if row["vip_only"]:
+                # VIP = کاربر دارای برچسب VIP یا همکار تأییدشده
+                is_vip = False
+                try:
+                    tag_row = conn.execute(
+                        "SELECT tags FROM users WHERE CAST(user_id AS INTEGER)=?;", (int(user_id),)
+                    ).fetchone()
+                    if tag_row and tag_row["tags"] and "vip" in str(tag_row["tags"]).lower():
+                        is_vip = True
+                except Exception:
+                    pass
+                if not is_vip:
+                    try:
+                        pr = conn.execute(
+                            "SELECT 1 FROM partners WHERE CAST(tg_user_id AS INTEGER)=? AND status='approved' LIMIT 1;",
+                            (int(user_id),)
+                        ).fetchone()
+                        is_vip = bool(pr)
+                    except Exception:
+                        pass
+                if not is_vip:
+                    return {"valid": False, "error": "این کد مخصوص کاربران VIP است"}
 
         # محاسبه تخفیف
         if row["type"] == "percent":
@@ -2711,10 +2734,13 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
             return {"paid": False}
 
         # سطح معرف
-        order_count = conn.execute(
-            "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
-            (referrer_id,)
-        ).fetchone()[0]
+        try:
+            order_count = conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
+                (referrer_id,)
+            ).fetchone()[0]
+        except Exception:
+            order_count = 0
         tier = conn.execute("""
             SELECT * FROM partner_tiers WHERE min_orders <= ?
             ORDER BY min_orders DESC LIMIT 1;
@@ -3681,6 +3707,7 @@ def delete_admin_note(note_id: int):
 # ─── ستونهای اضافی partner_tiers ────────────────────────────────────────────
 
 def ensure_partner_tiers_extended():
+    ensure_partner_system_schema()  # ابتدا جدول پایه ساخته شود
     conn = _get_connection()
     try:
         for col, default in [
