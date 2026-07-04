@@ -33,6 +33,17 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     if sys_row1:
         kb.row(*sys_row1)
 
+    # 🛍 دکمه فروشگاه آنلاین (Mini App) — فقط اگر آدرس تنظیم شده باشد
+    try:
+        from db import get_cfg
+        _wurl = (get_cfg("webapp_url", "") or "").strip()
+        if _wurl.startswith("https://"):
+            kb.row(types.KeyboardButton(
+                t("MAIN_BTN_WEBAPP", DEFAULT_UI_TEXTS.get("MAIN_BTN_WEBAPP", "🛍 فروشگاه آنلاین")),
+                web_app=types.WebAppInfo(url=_wurl)))
+    except Exception:
+        pass
+
     if is_partner:
         # همکار: پنل همکار (یه ردیف کامل)
         if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
