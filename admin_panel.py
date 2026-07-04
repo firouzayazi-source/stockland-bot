@@ -8336,6 +8336,20 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
 
     # ─── تب معرفی‌ها (ادغام‌شده) ─────────────────────────────────────────
     elif tab == "referrals":
+        # 🔧 ثبت دستی معرفی — برای اصلاح رکوردهای جامانده (مثل حامد)
+        manual_form = """
+        <div class="card p-5 mb-5">
+          <h2 class="font-bold text-gray-700 mb-1">🔧 ثبت دستی معرفی</h2>
+          <p class="text-xs text-gray-400 mb-4">اگر معرفی‌ای در ربات ثبت نشده، اینجا دستی وصل کنید. رکورد تکراری (دعوت‌شده‌ای که قبلاً معرف دارد) پذیرفته نمی‌شود.</p>
+          <form method="post" action="/admin/partners/manual-referral" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+            <div><label class="text-xs text-gray-500 block mb-1">آیدی معرف</label>
+              <input type="number" name="referrer_id" required placeholder="مثلاً 1929259679" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">آیدی دعوت‌شده</label>
+              <input type="number" name="referred_id" required placeholder="مثلاً 400678791" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+            <label class="flex items-center gap-2 text-sm pb-2"><input type="checkbox" name="pay_reward" checked> پرداخت پاداش عضویت</label>
+            <button class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold">➕ ثبت معرفی</button>
+          </form>
+        </div>"""
         ref_settings = get_referral_settings()
         conn = _db()
         try:
@@ -8363,7 +8377,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
         </tr>""" for r in refs)
 
-        content = f"""
+        content = manual_form + f"""
         <div class="grid grid-cols-3 gap-4 mb-6">
           <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total}</div><div class="text-xs text-gray-400 mt-1">کل معرفی‌ها</div></div>
           <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{rewarded}</div><div class="text-xs text-gray-400 mt-1">پرداخت شده</div></div>
@@ -9506,7 +9520,14 @@ async def growth_page(request: Request, flash: str = ""):
         <td class="px-3 py-2 font-bold text-red-600">{s['percent']}٪</td>
         <td class="px-3 py-2 text-xs text-gray-400">{(s['ends_at'] or '')[:16]}</td>
         <td class="px-3 py-2">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">🔴 زنده</span>' if s['live'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-400 rounded-full">پایان‌یافته</span>'}</td>
-        <td class="px-3 py-2">{f'<form method="post" action="/admin/growth/flash/{s["id"]}/off" class="inline"><button class="text-xs text-red-500 hover:underline">توقف</button></form>' if s['live'] else ''}</td>
+        <td class="px-3 py-2 whitespace-nowrap">
+          {f'<form method="post" action="/admin/growth/flash/{s["id"]}/off" class="inline"><button class="text-xs text-amber-600 hover:underline ml-2">⏸ توقف</button></form>' if s['live'] else ''}
+          <button type="button" class="text-xs text-indigo-500 hover:underline ml-2"
+            onclick="flashEdit({s['product_id']},{s['percent']})">✏️ ویرایش</button>
+          <form method="post" action="/admin/growth/flash/{s['id']}/delete" class="inline"
+            onsubmit="return confirm('این فروش فوری حذف شود؟')">
+            <button class="text-xs text-red-500 hover:underline">🗑 حذف</button></form>
+        </td>
       </tr>""" for s in sales)
 
     def _chk(v): return "checked" if int(v or 0) else ""
@@ -9640,7 +9661,17 @@ async def growth_page(request: Request, flash: str = ""):
     <div class="pb-10">
       <button type="submit" class="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold transition">💾 ذخیره همه تنظیمات رشد</button>
     </div>
-    </form>"""
+    </form>
+    <script>
+    function flashEdit(pid, pct){{
+      var s=document.querySelector('select[name=product_id]');
+      var p=document.querySelector('input[name=percent]');
+      if(s) s.value=String(pid);
+      if(p) p.value=pct;
+      window.scrollTo({{top:0,behavior:'smooth'}});
+      if(s) s.focus();
+    }}
+    </script>"""
     return _layout("رشد و فروش", body, adm, flash=flash)
 
 
@@ -9693,6 +9724,26 @@ async def growth_flash_new(request: Request):
         create_flash_sale(pid, int(form.get("percent") or 10), int(form.get("hours") or 24))
         _log(request, "فروش فوری", "رشد", f"محصول #{pid}", admin_info=adm)
     return _redir("/admin/growth?flash=🔥+فروش+فوری+شروع+شد")
+
+
+@router.post("/growth/flash/{sid}/delete")
+async def growth_flash_delete(request: Request, sid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("DELETE FROM flash_sales WHERE id=?;", (sid,))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        from db import flash_map_invalidate
+        flash_map_invalidate()
+    except Exception:
+        pass
+    _log(request, "حذف فروش فوری", "رشد", f"#{sid}", admin_info=adm)
+    return _redir("/admin/growth?flash=🗑+فروش+فوری+حذف+شد")
 
 
 @router.post("/growth/flash/{sid}/off")
@@ -9922,7 +9973,7 @@ async def shop_api_buy(request: Request):
         if cm.get("paid"):
             _wl = "کیف‌پول همکاری" if cm.get("wallet") == "partner" else "کیف‌پول"
             _tg_api_send(cm["referrer_id"],
-                f"💸 <b>پورسانت جدید!</b>\nیکی از زیرمجموعه‌های شما خرید کرد و "
+                f"💸 <b>پورسانت جدید!</b>\nیکی از دعوت‌شده‌های شما خرید کرد و "
                 f"<b>{cm['amount']:,}</b> تومان (سطح {cm['tier_name']}) به {_wl} شما اضافه شد.")
     except Exception:
         pass
@@ -9937,3 +9988,40 @@ async def shop_api_buy(request: Request):
         pass
 
     return JSONResponse({"ok": True, "order_id": order_id})
+
+
+@router.post("/partners/manual-referral")
+async def partners_manual_referral(request: Request):
+    """🔧 ثبت دستی معرفی + پاداش عضویت اختیاری + اطلاع‌رسانی به معرف."""
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    form = await request.form()
+    try:
+        referrer_id = int(form.get("referrer_id") or 0)
+        referred_id = int(form.get("referred_id") or 0)
+    except Exception:
+        return _redir("/admin/partners?tab=referrals&flash=❌+آیدی+نامعتبر")
+    if not referrer_id or not referred_id or referrer_id == referred_id:
+        return _redir("/admin/partners?tab=referrals&flash=❌+آیدی+نامعتبر")
+
+    from db import register_referral, pay_signup_referral_reward, ensure_referral_schema
+    ensure_referral_schema()
+    ok = register_referral(referrer_id, referred_id)
+    if not ok:
+        return _redir("/admin/partners?tab=referrals&flash=⛔+این+کاربر+قبلاً+معرف+دارد")
+
+    paid_txt = ""
+    if form.get("pay_reward") is not None:
+        pr = pay_signup_referral_reward(referrer_id, referred_id)
+        if pr.get("paid"):
+            paid_txt = f"+و+{pr['amount']:,}+تومان+پاداش+پرداخت+شد"
+            try:
+                _wl = "کیف‌پول همکاری" if pr.get("wallet") == "partner" else "کیف‌پول"
+                _tg_api_send(referrer_id,
+                    f"🎉 یک دعوت‌شده جدید برای شما ثبت شد!\n"
+                    f"💰 پاداش عضویت: <b>{pr['amount']:,}</b> تومان به {_wl} شما اضافه شد.")
+            except Exception:
+                pass
+    _log(request, "ثبت دستی معرفی", "همکاران", f"{referrer_id} → {referred_id}", admin_info=adm)
+    return _redir(f"/admin/partners?tab=referrals&flash=✅+معرفی+ثبت+شد{paid_txt}")
