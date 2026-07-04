@@ -147,6 +147,7 @@ DEFAULT_UI_TEXTS = {
     "BTN_WALLET_CRYPTO":         "₿ پرداخت رمزارز",
     "BTN_PARTNER_PROMO":         "📣 ابزار تبلیغ",
     "MAIN_BTN_WEBAPP":           "🛍 فروشگاه آنلاین",
+    "MAIN_BTN_INVITE":           "🎁 دعوت دوستان",
 
     # ─── دکمه‌های پروفایل ────────────────────────────────────────────────
     "BTN_EDIT_NAME":            "✏️ نام",
@@ -257,6 +258,7 @@ MAIN_BUTTON_KEYS = [
     "MAIN_BTN_PARTNER_REQUEST",
     "MAIN_BTN_PARTNER_PANEL",
     "MAIN_BTN_SUPPORT",
+    "MAIN_BTN_INVITE",
 ]
 
 
@@ -287,6 +289,7 @@ EDITABLE_BUTTON_GROUPS: dict[str, list[str]] = {
         "MAIN_BTN_PARTNER_REQUEST",
         "MAIN_BTN_PARTNER_PANEL",
         "MAIN_BTN_SUPPORT",
+        "MAIN_BTN_INVITE",
     ],
     "دکمه‌های پنل همکار": [
         "BTN_PARTNER_MY_SELLERS",
@@ -295,7 +298,6 @@ EDITABLE_BUTTON_GROUPS: dict[str, list[str]] = {
         "BTN_PARTNER_REF_LINK",
         "BTN_PARTNER_CHAT",
         "BTN_PARTNER_GUIDE",
-        "BTN_PARTNER_PROMO",
     ],
     "دکمه‌های کیف‌پول و پرداخت": [
         "BTN_WALLET_CHARGE",
@@ -327,6 +329,7 @@ BUTTON_ICONS: dict[str, str] = {
     "MAIN_BTN_PARTNER_REQUEST": "📝",
     "MAIN_BTN_PARTNER_PANEL":   "🤝",
     "MAIN_BTN_SUPPORT":         "👨‍💻",
+    "MAIN_BTN_INVITE":          "🎁",
     "BTN_PARTNER_MY_SELLERS":   "👥",
     "BTN_PARTNER_PROFILE":      "👤",
     "BTN_PARTNER_WALLET":       "💰",
@@ -339,5 +342,4 @@ BUTTON_ICONS: dict[str, str] = {
     "BTN_WALLET_TRANSFER":      "🔄",
     "BTN_WALLET_PAYOUT":        "📤",
     "BTN_WALLET_CRYPTO":        "₿",
-    "BTN_PARTNER_PROMO":        "📣",
 }
