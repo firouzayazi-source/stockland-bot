@@ -73,10 +73,11 @@ def category_inline_keyboard(cat_id: int, user_id: int = None) -> types.InlineKe
             kb.add(types.InlineKeyboardButton("محصولی موجود نیست", callback_data="noop"))
         else:
             partner_ok = user_id and is_partner_approved(int(user_id))
+            _FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
             for p in products:
                 pp = p["partner_price"]
                 eff = pp if (partner_ok and pp) else p["price"]
-                label = f"{p['title']} | {int(eff):,} تومان"
+                label = f"{p['title']} | {int(eff):,} تومان".translate(_FA)
                 kb.add(types.InlineKeyboardButton(label, callback_data=f"cat_{cat_id}_p_{p['id']}"))
 
     # دکمه بازگشت — فقط برای زیردسته‌ها (دسته‌های ریشه بازگشت ندارند)
