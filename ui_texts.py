@@ -144,6 +144,9 @@ DEFAULT_UI_TEXTS = {
     # ─── دکمه‌های کیف‌پول همکاری ─────────────────────────────────────────
     "BTN_WALLET_TRANSFER":      "🔄 انتقال به کیف‌پول اصلی",
     "BTN_WALLET_PAYOUT":        "📤 درخواست تسویه",
+    "BTN_WALLET_CRYPTO":         "₿ پرداخت رمزارز",
+    "BTN_PARTNER_PROMO":         "📣 ابزار تبلیغ",
+    "MAIN_BTN_WEBAPP":           "🛍 فروشگاه آنلاین",
 
     # ─── دکمه‌های پروفایل ────────────────────────────────────────────────
     "BTN_EDIT_NAME":            "✏️ نام",
@@ -292,6 +295,7 @@ EDITABLE_BUTTON_GROUPS: dict[str, list[str]] = {
         "BTN_PARTNER_REF_LINK",
         "BTN_PARTNER_CHAT",
         "BTN_PARTNER_GUIDE",
+        "BTN_PARTNER_PROMO",
     ],
     "دکمه‌های کیف‌پول و پرداخت": [
         "BTN_WALLET_CHARGE",
@@ -299,6 +303,7 @@ EDITABLE_BUTTON_GROUPS: dict[str, list[str]] = {
         "BTN_WALLET_CARD",
         "BTN_WALLET_TRANSFER",
         "BTN_WALLET_PAYOUT",
+        "BTN_WALLET_CRYPTO",
     ],
 }
 
@@ -333,4 +338,6 @@ BUTTON_ICONS: dict[str, str] = {
     "BTN_WALLET_CARD":          "💳",
     "BTN_WALLET_TRANSFER":      "🔄",
     "BTN_WALLET_PAYOUT":        "📤",
+    "BTN_WALLET_CRYPTO":        "₿",
+    "BTN_PARTNER_PROMO":        "📣",
 }
