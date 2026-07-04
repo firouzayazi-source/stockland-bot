@@ -50,7 +50,9 @@
 
 12. **جدول جدید = ماژول بکاپ.** هر جدول تازه را به ماژول مناسب در `MODULES` داخل `stbak_engine.py` اضافه کن وگرنه بکاپ/ریست ناقص می‌شود.
 
-13. **HTML پنل داخل f-string است:** آکولاد JS/CSS باید `{{ }}` باشد. helperها: `_layout`, `_card`, `_btn`, `_input`, `e()` (escape), `_log(request, action, section, details)`, `_redir`.
+13. **ستون جدید = مهاجرت ALTER.** `CREATE TABLE IF NOT EXISTS` جدول‌های موجود را تغییر نمی‌دهد؛ هر ستون تازه باید در تابع `ensure_*` مربوطه با الگوی `PRAGMA table_info` ← `ALTER TABLE … ADD COLUMN` (داخل try/except) به جدول‌های قدیمیِ سرور هم اضافه شود — نمونه: `ensure_discount_table`، `ensure_partner_tiers_extended`. دسترسی به ستونی که در دیتابیس تولید نیست، خطای «No item with that key» می‌دهد.
+
+14. **HTML پنل داخل f-string است:** آکولاد JS/CSS باید `{{ }}` باشد. helperها: `_layout`, `_card`, `_btn`, `_input`, `e()` (escape), `_log(request, action, section, details)`, `_redir`.
 
 ## تست قبل از تحویل
 
