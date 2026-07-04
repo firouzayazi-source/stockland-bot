@@ -3403,6 +3403,9 @@ def cb_partner_wallet(call):
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
     )
     _partner_edit(call, text, kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_transfer")
 def cb_partner_transfer(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
