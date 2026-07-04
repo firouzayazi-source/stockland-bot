@@ -831,7 +831,7 @@ def _is_menu_or_system_button(text: str) -> bool:
     try:
         system_keys = (
             "MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET", "MAIN_BTN_PARTNER_REQUEST",
-            "MAIN_BTN_PARTNER_PANEL", "BTN_PARTNER_GUIDE", "MAIN_BTN_SUPPORT",
+            "MAIN_BTN_PARTNER_PANEL", "BTN_PARTNER_GUIDE", "MAIN_BTN_SUPPORT", "MAIN_BTN_INVITE",
             "MAIN_BTN_OTHER_PRODUCTS", "MAIN_BTN_BUY_APPLE_ID",
         )
         for key in system_keys:
@@ -1143,19 +1143,24 @@ def handle_start(message):
                     settings = get_referral_settings()
                     if settings.get("is_active"):
                         is_new = register_referral(referrer_id, uid)
-                        # اطلاع‌رسانی به معرف — فقط برای عضویت جدید
+                        # پاداش عضویت + اطلاع‌رسانی به معرف — فقط برای عضویت جدید
                         if is_new:
                             try:
+                                from db import pay_signup_referral_reward
+                                pr = pay_signup_referral_reward(referrer_id, uid)
                                 new_name = (full_name or username or "کاربر جدید").strip()
-                                bot.send_message(
-                                    referrer_id,
+                                msg = (
                                     "🎉 <b>خبر خوب!</b>\n\n"
-                                    f"«{new_name}» با لینک دعوت شما به ربات پیوست.\n\n"
-                                    "زیرمجموعه‌های خود را می‌توانید از بخش "
-                                    "«👥 فروشندگان من» در پنل همکاری مشاهده کنید.\n"
-                                    "هرچه شبکه شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪",
-                                    parse_mode="HTML"
+                                    f"«{new_name}» با لینک دعوت شما به ربات پیوست."
                                 )
+                                if pr.get("paid"):
+                                    wallet_lbl = "کیف‌پول همکاری" if pr.get("wallet") == "partner" else "کیف‌پول"
+                                    msg += f"\n\n💰 پاداش عضویت: <b>{pr['amount']:,}</b> تومان به {wallet_lbl} شما اضافه شد!"
+                                msg += (
+                                    "\n\n💸 از این پس با هر خرید ایشان، پورسانت هم دریافت می‌کنید.\n"
+                                    "هرچه شبکه شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪"
+                                )
+                                bot.send_message(referrer_id, msg, parse_mode="HTML")
                             except Exception:
                                 pass
             except Exception:
@@ -1426,6 +1431,7 @@ def process_wallet_charge_amount(message):
         t("MAIN_BTN_SUPPORT",        DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "")),
         t("MAIN_BTN_PARTNER_REQUEST",DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "")),
         t("MAIN_BTN_PARTNER_PANEL",  DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "")),
+        t("MAIN_BTN_INVITE",         DEFAULT_UI_TEXTS.get("MAIN_BTN_INVITE", "")),
     ]
     if text in system_buttons:
         clear_user_state(uid)
@@ -1571,33 +1577,18 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         buyer_type=buyer_type
     )
 
-    # پاداش معرفی — فقط اگه این اولین خرید کاربره
-    try:
-        from db import process_referral_reward, ensure_referral_schema
-        ensure_referral_schema()
-        ref_result = process_referral_reward(uid, order_id)
-        if ref_result.get("rewarded"):
-            try:
-                bot.send_message(ref_result["referrer_id"],
-                    f"🎉 یکی از دوستانی که معرفی کردید خرید کرد!\n"
-                    f"💰 <b>{ref_result['amount']:,}</b> تومان به کیف‌پول شما اضافه شد.",
-                    parse_mode="HTML")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
     # پورسانت سطحی — روی «هر» خرید زیرمجموعه (درصد یا مبلغ ثابت سطح معرف)
     try:
         from db import process_referral_commission
         comm = process_referral_commission(uid, order_id, eff_price)
         if comm.get("paid"):
             try:
+                _wl = "کیف‌پول همکاری" if comm.get("wallet") == "partner" else "کیف‌پول"
                 bot.send_message(comm["referrer_id"],
                     f"💸 <b>پورسانت جدید!</b>\n\n"
                     f"یکی از زیرمجموعه‌های شما خرید کرد و\n"
                     f"💰 <b>{comm['amount']:,}</b> تومان پورسانت (سطح {comm['tier_name']}) "
-                    f"به کیف‌پول همکاری شما اضافه شد.",
+                    f"به {_wl} شما اضافه شد.",
                     parse_mode="HTML")
             except Exception:
                 pass
@@ -3150,7 +3141,6 @@ def _show_partner_dashboard(chat_id, uid):
     )
     kb.row(
         types.InlineKeyboardButton(_t("BTN_PARTNER_CHAT",        _D.get("BTN_PARTNER_CHAT",        "💬 چت با پشتیبان")), callback_data="partner_support"),
-        types.InlineKeyboardButton(_t("BTN_PARTNER_PROMO",       _D.get("BTN_PARTNER_PROMO",       "📣 ابزار تبلیغ")),   callback_data="partner_promo"),
     )
 
     # بنر سطح
@@ -3308,9 +3298,10 @@ def _ph_bankname(message):
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
 def cb_partner_ref_link(call):
+    """🔗 نمای ادغام‌شده: لینک معرفی + آمار + متن تبلیغاتی آماده + اشتراک یک‌لمسی."""
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    from db import get_referral_stats_for, get_referral_settings
+    from db import get_referral_stats_for, get_referral_settings, get_promo_settings
     settings = get_referral_settings()
     stats    = get_referral_stats_for(uid)
     try:
@@ -3319,21 +3310,25 @@ def cb_partner_ref_link(call):
         bot_username = "your_bot"
     link = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = settings.get("reward_amount", 5000)
+    promo  = str(get_promo_settings().get("text") or "").format(link=link)
 
     text = (
-        f"🔗 <b>لینک معرفی شما</b>\n\n"
-        f"کد معرفی: <code>{uid}</code>\n\n"
-        f"لینک اختصاصی:\n<code>{link}</code>\n\n"
-        f"💰 با هر معرفی موفق <b>{reward:,}</b> تومان پاداش بگیرید!\n\n"
-        f"📊 آمار شما:\n"
-        f"• کل معرفی‌ها: {stats['total']}\n"
-        f"• پاداش دریافتی: {stats['total_reward']:,} تومان"
+        f"🔗 <b>لینک معرفی و ابزار تبلیغ</b>\n\n"
+        f"لینک اختصاصی شما:\n<code>{link}</code>\n\n"
+        f"💰 پاداش هر عضویت: <b>{reward:,}</b> تومان\n"
+        f"💸 + پورسانت از هر خرید زیرمجموعه (بر اساس سطح شما)\n\n"
+        f"📊 آمار شبکه شما:\n"
+        f"• کل معرفی‌ها: <b>{stats['total']}</b>\n"
+        f"• پاداش دریافتی: <b>{stats['total_reward']:,}</b> تومان\n\n"
+        f"📣 <b>متن آماده تبلیغ</b> (کپی یا فوروارد کنید):\n"
+        f"➖➖➖➖➖➖➖➖\n"
+        f"{promo}\n"
+        f"➖➖➖➖➖➖➖➖"
     )
+    import urllib.parse as _up
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton(
-        "📤 ارسال لینک به دوستان",
-        switch_inline_query=f"با این لینک ثبت‌نام کن!\n{link}"
-    ))
+    kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
     _partner_edit(call, text, kb)
 
@@ -4385,6 +4380,17 @@ def _build_guarantee_text() -> str:
 def handle_callbacks(call: types.CallbackQuery):
     data = call.data
     uid = call.from_user.id
+
+    # 🚀 دیسپچ کالبک‌های رشد — هندلرهایشان بعد از این catch-all تعریف شده‌اند
+    if data == "partner_promo" or data == "partner_ref_link":
+        return cb_partner_ref_link(call)          # نمای ادغام‌شده لینک + ابزار تبلیغ
+    if data == "wallet_crypto":
+        return cb_wallet_crypto(call)
+    if data.startswith("crypto_net_"):
+        return cb_crypto_network(call)
+    if data == "user_invite":
+        return cb_user_invite(call)
+
     # --- toggle active/inactive for other_services ---
     if data.startswith("toggle_other_"):
         if not ensure_admin(uid):
@@ -5871,6 +5877,55 @@ def handle_admin_backup_restore_document(message):
 # ─── ₿ شارژ رمزارز + 📣 کیت تبلیغاتی همکار ──────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _send_invite_view(chat_id, uid):
+    """🎁 دعوت دوستان — برای همه کاربران: لینک + پاداش + متن آماده + اشتراک."""
+    from db import get_referral_settings, get_referral_stats_for, get_promo_settings
+    settings = get_referral_settings()
+    try:
+        stats = get_referral_stats_for(uid)
+    except Exception:
+        stats = {"total": 0, "total_reward": 0}
+    try:
+        bot_username = bot.get_me().username
+    except Exception:
+        bot_username = "your_bot"
+    link = f"https://t.me/{bot_username}?start=ref_{uid}"
+    reward = int(settings.get("reward_amount") or 0)
+    promo = str(get_promo_settings().get("text") or "").format(link=link)
+
+    text = (
+        "🎁 <b>دعوت دوستان</b>\n\n"
+        f"لینک اختصاصی شما:\n<code>{link}</code>\n\n"
+    )
+    if settings.get("is_active") and reward > 0:
+        text += f"💰 با هر عضویت: <b>{reward:,}</b> تومان پاداش\n"
+    text += (
+        "💸 + پورسانت از هر خرید دعوت‌شده‌ها\n\n"
+        f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
+        + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
+        + "\n\n📣 متن آماده برای ارسال:\n➖➖➖➖➖➖➖➖\n"
+        + promo + "\n➖➖➖➖➖➖➖➖"
+    )
+    import urllib.parse as _up
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
+    bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_INVITE"))
+def handle_user_invite(message):
+    if not is_main_button_enabled("MAIN_BTN_INVITE"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+    _send_invite_view(message.chat.id, message.from_user.id)
+
+
+def cb_user_invite(call):
+    bot.answer_callback_query(call.id)
+    _send_invite_view(call.message.chat.id, call.from_user.id)
+
+
 @bot.callback_query_handler(func=lambda c: c.data == "wallet_crypto")
 def cb_wallet_crypto(call):
     from db import get_crypto_settings
@@ -5958,35 +6013,6 @@ def handle_crypto_txid(message):
             parse_mode="HTML")
     except Exception:
         pass
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "partner_promo")
-def cb_partner_promo(call):
-    """📣 کیت تبلیغاتی همکار — متن آماده + دکمه اشتراک یک‌لمسی."""
-    uid = call.from_user.id
-    if not is_partner_approved(uid):
-        bot.answer_callback_query(call.id, "فقط برای همکاران تأییدشده", show_alert=True)
-        return
-    bot.answer_callback_query(call.id)
-    from db import get_promo_settings
-    try:
-        me = bot.get_me().username
-    except Exception:
-        me = ""
-    link = f"https://t.me/{me}?start=ref_{uid}" if me else f"?start=ref_{uid}"
-    text = str(get_promo_settings().get("text") or "").format(link=link)
-    import urllib.parse as _up
-    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(text)
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
-    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
-    bot.send_message(call.message.chat.id,
-        "📣 <b>ابزار تبلیغ شما</b>\n\n"
-        "این متن آماده را کپی یا مستقیم فوروارد کنید:\n"
-        "➖➖➖➖➖➖➖➖\n"
-        f"{text}\n"
-        "➖➖➖➖➖➖➖➖",
-        reply_markup=kb, parse_mode="HTML")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
