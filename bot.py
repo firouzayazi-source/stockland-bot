@@ -367,10 +367,15 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     # ضمانت
     guarantee = _build_guarantee_text()
 
+    if _flash_sale:
+        _price_line = f"قیمت: <s>{int(price):,}</s> ← <b>{eff_price:,}</b> تومان 🔥\n"
+    else:
+        _price_line = f"قیمت: <b>{eff_price:,}</b> تومان\n"
+
     text = (
-        f"نام سرویس: <b>{title}</b>{rating_text}\n"
         f"{_flash_badge(pid, _flash_sale, price, eff_price)}"
-        f"قیمت: <b>{eff_price:,}</b> تومان\n\n"
+        f"نام سرویس: <b>{title}</b>{rating_text}\n"
+        f"{_price_line}\n"
         f"{description or 'بدون توضیحات'}"
         f"{faq_text}"
         f"{guarantee}"
@@ -1143,6 +1148,22 @@ def handle_start(message):
                     settings = get_referral_settings()
                     if settings.get("is_active"):
                         is_new = register_referral(referrer_id, uid)
+                        # 🔎 لاگ تشخیصی — برای ردیابی معرفی‌های ثبت‌نشده
+                        try:
+                            if is_new:
+                                logger.info("REFERRAL ✅ ثبت شد: %s → %s", referrer_id, uid)
+                            else:
+                                from db import _get_connection as _gc
+                                _c = _gc()
+                                _ex = _c.execute("SELECT referrer_id FROM referrals WHERE referred_id=?;", (uid,)).fetchone()
+                                _c.close()
+                                logger.warning("REFERRAL ⛔ ثبت نشد: %s → %s | معرف قبلی: %s",
+                                               referrer_id, uid, (_ex[0] if _ex else "—"))
+                        except Exception:
+                            pass
+                    else:
+                        logger.warning("REFERRAL ⛔ سیستم معرفی غیرفعال است — %s → %s", referrer_id, uid)
+                    if settings.get("is_active"):
                         # پاداش عضویت + اطلاع‌رسانی به معرف — فقط برای عضویت جدید
                         if is_new:
                             try:
@@ -1158,7 +1179,7 @@ def handle_start(message):
                                     msg += f"\n\n💰 پاداش عضویت: <b>{pr['amount']:,}</b> تومان به {wallet_lbl} شما اضافه شد!"
                                 msg += (
                                     "\n\n💸 از این پس با هر خرید ایشان، پورسانت هم دریافت می‌کنید.\n"
-                                    "هرچه شبکه شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪"
+                                    "هرچه تیم فروش شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪"
                                 )
                                 bot.send_message(referrer_id, msg, parse_mode="HTML")
                             except Exception:
@@ -1174,25 +1195,8 @@ def handle_start(message):
 
 @bot.message_handler(commands=["referral", "invite"])
 def handle_referral_cmd(message):
-    uid = message.from_user.id
-    from db import get_referral_stats, get_referral_settings, ensure_referral_schema
-    ensure_referral_schema()
-    settings = get_referral_settings()
-    if not settings.get("is_active"):
-        bot.send_message(message.chat.id, "❌ سیستم معرفی فعلاً غیرفعال است.")
-        return
-    stats    = get_referral_stats(uid)
-    bot_info = bot.get_me()
-    link     = f"https://t.me/{bot_info.username}?start=ref_{uid}"
-    bot.send_message(message.chat.id,
-        f"🔗 <b>لینک معرفی شما:</b>\n<code>{link}</code>\n\n"
-        f"👥 معرفی‌شدگان: <b>{stats['total']}</b>\n"
-        f"✅ پرداخت‌شده: <b>{stats['rewarded']}</b>\n"
-        f"💰 کل درآمد: <b>{stats['earned']:,}</b> تومان\n\n"
-        f"📌 به ازای هر خرید اول دوستی که معرفی می‌کنید "
-        f"<b>{settings.get('reward_amount',5000):,}</b> تومان به کیف‌پول شما اضافه می‌شود.",
-        parse_mode="HTML"
-    )
+    """دستور /invite — همان نمای یکپارچه دعوت دوستان."""
+    return _send_invite_view(message.chat.id, message.from_user.id)
 
 
 
@@ -1484,8 +1488,20 @@ import sqlite3
 from datetime import datetime
 import html
 
+
+_BOT_USERNAME_CACHE = {"v": ""}
+
+def _bot_username() -> str:
+    """یوزرنیم ربات — فقط یک‌بار از API گرفته می‌شود (حذف تأخیر شبکه از هر بازدید)."""
+    if not _BOT_USERNAME_CACHE["v"]:
+        try:
+            _BOT_USERNAME_CACHE["v"] = bot.get_me().username or ""
+        except Exception:
+            return ""
+    return _BOT_USERNAME_CACHE["v"]
+
 def _flash_badge(pid, sale, base_price, eff_price) -> str:
-    """بج فروش فوری: تخفیف + شمارش معکوس + موجودی محدود."""
+    """بنر برجسته فروش فوری: تخفیف + شمارش معکوس + موجودی محدود."""
     if not sale:
         return ""
     try:
@@ -1494,10 +1510,15 @@ def _flash_badge(pid, sale, base_price, eff_price) -> str:
         stock = int(_rem or 0)
     except Exception:
         stock = None
-    lines = [f"🔥 <b>فروش فوری {sale['percent']}٪</b> — قیمت قبل: <s>{int(base_price):,}</s> تومان",
-             f"⏰ فقط تا <b>{sale['left_str']}</b> دیگر!"]
+    saving = max(0, int(base_price) - int(eff_price))
+    lines = [
+        "🔥⚡️ <b>فــروش فــوری</b> ⚡️🔥",
+        f"🏷 <b>{sale['percent']}٪ تخفیف</b> — سود شما: <b>{saving:,}</b> تومان",
+        f"⏰ فقط تا <b>{sale['left_str']}</b> دیگر!",
+    ]
     if stock is not None and 0 < stock <= 10:
-        lines.append(f"⚡ تنها <b>{stock}</b> عدد باقی مانده!")
+        lines.append(f"⚡ عجله کنید — تنها <b>{stock}</b> عدد باقی مانده!")
+    lines.append("━━━━━━━━━━━━━━━")
     return "\n".join(lines) + "\n"
 
 
@@ -1586,7 +1607,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                 _wl = "کیف‌پول همکاری" if comm.get("wallet") == "partner" else "کیف‌پول"
                 bot.send_message(comm["referrer_id"],
                     f"💸 <b>پورسانت جدید!</b>\n\n"
-                    f"یکی از زیرمجموعه‌های شما خرید کرد و\n"
+                    f"یکی از دعوت‌شده‌های شما خرید کرد و\n"
                     f"💰 <b>{comm['amount']:,}</b> تومان پورسانت (سطح {comm['tier_name']}) "
                     f"به {_wl} شما اضافه شد.",
                     parse_mode="HTML")
@@ -1758,25 +1779,44 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
 #======================= ORDER SUMMARY + DISCOUNT =======================
 
 def _get_eff_price(product, uid):
-    """قیمت موثر بر اساس همکار یا مشتری بودن."""
+    """قیمت موثر بر اساس همکار یا مشتری بودن + فروش فوری."""
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
-    return partner_price if (partner_ok and partner_price) else price
+    base = partner_price if (partner_ok and partner_price) else price
+    from db import apply_flash_price
+    eff, _ = apply_flash_price(int(product[0]), int(base))
+    return eff
 
 
 def _show_order_summary(chat_id, uid, product, category, pid):
-    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی."""
+    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی و فروش فوری."""
     title     = product[2]
-    base      = _get_eff_price(product, uid)
+    # قیمت پایه (بدون فلش) برای نمایش خط‌خورده
+    _p = product[3]
+    _pp = product[6] if len(product) > 6 else None
+    raw_base  = _pp if (is_partner_approved(uid) and _pp) else _p
+    from db import apply_flash_price, get_flash_sale
+    base, _fl = apply_flash_price(int(pid), int(raw_base))
+
     state     = user_states.get(uid, {})
+    # 🔥 در فروش فوری، کد تخفیف غیرفعال است — اگر قبلاً اعمال شده، حذف شود
+    if _fl and state.get("applied_discount"):
+        state.pop("applied_discount", None)
+        state.pop("applied_code", None)
+        user_states[uid] = state
     discount  = int(state.get("applied_discount", 0))
     code_name = state.get("applied_code", "")
     final     = max(0, base - discount)
     wallet_bal = get_wallet_balance(uid)
 
     lines = [f"🛒 <b>{title}</b>\n"]
-    lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
+    if _fl:
+        lines.append(f"⚡️ <b>فروش فوری {_fl['percent']}٪ فعال است!</b> ⏰ تا {_fl['left_str']} دیگر")
+        lines.append(f"مبلغ کالا: <s>{int(raw_base):,}</s> ← <b>{base:,}</b> تومان 🔥")
+        lines.append("🎟 در زمان فروش فوری، کد تخفیف قابل استفاده نیست.")
+    else:
+        lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
     if discount > 0:
         lines.append(f"🎟 کد تخفیف: <code>{code_name}</code>")
         lines.append(f"💸 تخفیف: <b>−{discount:,}</b> تومان")
@@ -1814,7 +1854,9 @@ def _show_order_summary(chat_id, uid, product, category, pid):
             callback_data=f"confirm_full_{category}_{pid}"
         ))
 
-    if discount > 0:
+    if _fl:
+        pass  # 🔥 فروش فوری — دکمه کد تخفیف نمایش داده نمی‌شود
+    elif discount > 0:
         kb.row(
             types.InlineKeyboardButton("🔄 تغییر کد", callback_data=f"enter_code_{category}_{pid}"),
             types.InlineKeyboardButton("🗑 حذف کد",   callback_data=f"remove_code_{category}_{pid}")
@@ -1836,6 +1878,16 @@ def _show_order_summary(chat_id, uid, product, category, pid):
 def handle_enter_code(call):
     uid  = call.from_user.id
     suf  = call.data[len("enter_code_"):]
+    # 🔥 فروش فوری فعال → کد تخفیف مسدود
+    try:
+        _pid_chk = int(suf.rsplit("_", 1)[-1])
+        from db import get_flash_sale
+        if get_flash_sale(_pid_chk):
+            bot.answer_callback_query(call.id,
+                "⚡️ در زمان فروش فوری، کد تخفیف قابل استفاده نیست.", show_alert=True)
+            return
+    except Exception:
+        pass
     # ذخیره info برای برگشت بعد از کد
     user_states.setdefault(uid, {})["code_context"] = suf
     kb = types.InlineKeyboardMarkup()
@@ -1864,6 +1916,15 @@ def _handle_code_input(message):
         bot.send_message(message.chat.id, "❌ محصول یافت نشد"); return
 
     base   = _get_eff_price(product, uid)
+    # 🔥 فروش فوری فعال → کد تخفیف پذیرفته نمی‌شود
+    from db import get_flash_sale as _gfs
+    if _gfs(pid):
+        user_states.setdefault(uid, {}).pop("code_context", None)
+        bot.send_message(message.chat.id,
+            "⚡️ این محصول در <b>فروش فوری</b> است و کد تخفیف قابل استفاده نیست.\n"
+            "قیمت ویژه به‌صورت خودکار اعمال شده 🔥", parse_mode="HTML")
+        _show_order_summary(message.chat.id, uid, product, category, pid)
+        return
     result = validate_discount(code, product_id=pid, amount=base, user_id=uid)
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
@@ -3125,8 +3186,8 @@ def _show_partner_dashboard(chat_id, uid):
         f"💰 مجموع خرید: <b>{partner_total:,}</b> تومان"
         f"{next_line}\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"👥 <b>زیرمجموعه‌ها</b>\n"
-        f"معرفی‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
+        f"👥 <b>دعوت‌شده‌ها</b>\n"
+        f"دعوت‌شده‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -3304,10 +3365,7 @@ def cb_partner_ref_link(call):
     from db import get_referral_stats_for, get_referral_settings, get_promo_settings
     settings = get_referral_settings()
     stats    = get_referral_stats_for(uid)
-    try:
-        bot_username = bot.get_me().username
-    except Exception:
-        bot_username = "your_bot"
+    bot_username = _bot_username() or "your_bot"
     link = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = settings.get("reward_amount", 5000)
     promo  = str(get_promo_settings().get("text") or "").format(link=link)
@@ -3316,9 +3374,9 @@ def cb_partner_ref_link(call):
         f"🔗 <b>لینک معرفی و ابزار تبلیغ</b>\n\n"
         f"لینک اختصاصی شما:\n<code>{link}</code>\n\n"
         f"💰 پاداش هر عضویت: <b>{reward:,}</b> تومان\n"
-        f"💸 + پورسانت از هر خرید زیرمجموعه (بر اساس سطح شما)\n\n"
-        f"📊 آمار شبکه شما:\n"
-        f"• کل معرفی‌ها: <b>{stats['total']}</b>\n"
+        f"💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
+        f"📊 آمار تیم فروش شما:\n"
+        f"• کل دعوت‌شده‌ها: <b>{stats['total']}</b>\n"
         f"• پاداش دریافتی: <b>{stats['total_reward']:,}</b> تومان\n\n"
         f"📣 <b>متن آماده تبلیغ</b> (کپی یا فوروارد کنید):\n"
         f"➖➖➖➖➖➖➖➖\n"
@@ -3335,7 +3393,7 @@ def cb_partner_ref_link(call):
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_sub_stats")
 def cb_partner_sub_stats(call):
-    """نمای شبکه‌ای — کاربر بالا، زیرمجموعه‌ها با آمار خرید زیرش (سبک نتورک)"""
+    """نمای تیم فروش — کاربر بالا، دعوت‌شده‌ها با آمار خرید زیرش"""
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     import sqlite3 as _sq
@@ -3379,7 +3437,7 @@ def cb_partner_sub_stats(call):
         f"👤 <b>{my_name}</b>  (شما)",
     ]
     if not subs:
-        lines.append("\n└ هنوز زیرمجموعه‌ای ندارید.\n\n🔗 لینک معرفی خود را به اشتراک بگذارید تا شبکه‌تان رشد کند!")
+        lines.append("\n└ هنوز فروشنده‌ای ندارید.\n\n🔗 لینک معرفی خود را به اشتراک بگذارید تا تیم فروش شما رشد کند!")
     else:
         for i, s in enumerate(subs):
             is_last = (i == len(subs) - 1)
@@ -3392,7 +3450,7 @@ def cb_partner_sub_stats(call):
                 lines.append(f"{branch} {medal} {s['name']} — بدون خرید{own}")
         lines.append(
             f"\n━━━━━━━━━━━━━━━\n"
-            f"📊 جمع شبکه: <b>{len(subs)}</b> نفر | "
+            f"📊 جمع تیم: <b>{len(subs)}</b> نفر | "
             f"🛒 <b>{total_orders}</b> خرید | 💰 <b>{total_purchase:,}</b> ت"
         )
 
@@ -3753,6 +3811,23 @@ def handle_partner_guide_reply(message):
     )
     kb = types.InlineKeyboardMarkup()
     bot.send_message(message.chat.id, guide_text, reply_markup=kb, parse_mode="HTML")
+
+
+# ── ثبتِ زودهنگام — این‌ها باید قبل از catch-all ادمین (پایین) ثبت شوند
+# وگرنه پیام‌های متنیِ ادمین‌ها هرگز به آن‌ها نمی‌رسد.
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_INVITE"))
+def _pre_handle_user_invite(message):
+    return handle_user_invite(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_amount")
+def _pre_handle_crypto_amount(message):
+    return handle_crypto_amount(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_txid")
+def _pre_handle_crypto_txid(message):
+    return handle_crypto_txid(message)
 
 
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
@@ -5885,10 +5960,7 @@ def _send_invite_view(chat_id, uid):
         stats = get_referral_stats_for(uid)
     except Exception:
         stats = {"total": 0, "total_reward": 0}
-    try:
-        bot_username = bot.get_me().username
-    except Exception:
-        bot_username = "your_bot"
+    bot_username = _bot_username() or "your_bot"
     link = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = int(settings.get("reward_amount") or 0)
     promo = str(get_promo_settings().get("text") or "").format(link=link)
@@ -5913,7 +5985,6 @@ def _send_invite_view(chat_id, uid):
     bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_INVITE"))
 def handle_user_invite(message):
     if not is_main_button_enabled("MAIN_BTN_INVITE"):
         bot.reply_to(message, t("MSG_BTN_DISABLED"))
@@ -5964,7 +6035,6 @@ def cb_crypto_network(call):
         parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_amount")
 def handle_crypto_amount(message):
     uid = message.from_user.id
     st = user_states.get(uid, {})
@@ -5980,7 +6050,6 @@ def handle_crypto_amount(message):
         "حالا <b>TXID</b> (هش تراکنش) را ارسال کنید:", parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_txid")
 def handle_crypto_txid(message):
     uid = message.from_user.id
     st = user_states.pop(uid, {})
