@@ -175,6 +175,59 @@ set_ui_cache_clear_callback(ui_cache_clear)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ─── اعداد فارسی — تبدیل سراسری همه پیام‌های خروجی ربات ────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+import re as _fa_re
+_FA_DIGIT_MAP = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+# لینک‌ها، بلوک‌های code/pre، یوزرنیم‌ها و دستورات دست نمی‌خورند
+_FA_SKIP_RE = _fa_re.compile(
+    r'(<code>.*?</code>|<pre>.*?</pre>|https?://[^\s<]+|t\.me/[^\s<]+|@\w+|/\w+)',
+    _fa_re.S
+)
+
+def _fa_digits(text):
+    """تبدیل ارقام لاتین به فارسی — به‌جز لینک‌ها و بلوک‌های کد."""
+    if not isinstance(text, str) or not text:
+        return text
+    parts = _FA_SKIP_RE.split(text)
+    return "".join(p if i % 2 else p.translate(_FA_DIGIT_MAP)
+                   for i, p in enumerate(parts) if p is not None)
+
+# پچ توابع ارسال — یک‌بار، سراسری
+_orig_send_message = bot.send_message
+def _fa_send_message(chat_id, text, *args, **kwargs):
+    return _orig_send_message(chat_id, _fa_digits(text), *args, **kwargs)
+bot.send_message = _fa_send_message
+
+_orig_edit_message_text = bot.edit_message_text
+def _fa_edit_message_text(text, *args, **kwargs):
+    return _orig_edit_message_text(_fa_digits(text), *args, **kwargs)
+bot.edit_message_text = _fa_edit_message_text
+
+_orig_reply_to = bot.reply_to
+def _fa_reply_to(message, text, *args, **kwargs):
+    return _orig_reply_to(message, _fa_digits(text), *args, **kwargs)
+bot.reply_to = _fa_reply_to
+
+_orig_send_photo = bot.send_photo
+def _fa_send_photo(chat_id, photo, *args, **kwargs):
+    if "caption" in kwargs:
+        kwargs["caption"] = _fa_digits(kwargs["caption"])
+    return _orig_send_photo(chat_id, photo, *args, **kwargs)
+bot.send_photo = _fa_send_photo
+
+_orig_answer_cbq = bot.answer_callback_query
+def _fa_answer_cbq(callback_query_id, text=None, *args, **kwargs):
+    return _orig_answer_cbq(callback_query_id, _fa_digits(text) if text else text, *args, **kwargs)
+bot.answer_callback_query = _fa_answer_cbq
+
+_orig_edit_caption = bot.edit_message_caption
+def _fa_edit_caption(caption=None, *args, **kwargs):
+    return _orig_edit_caption(_fa_digits(caption) if caption else caption, *args, **kwargs)
+bot.edit_message_caption = _fa_edit_caption
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ─── Rate Limiting ربات ───────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1785,7 +1838,7 @@ def _handle_code_input(message):
         bot.send_message(message.chat.id, "❌ محصول یافت نشد"); return
 
     base   = _get_eff_price(product, uid)
-    result = validate_discount(code, product_id=pid, amount=base)
+    result = validate_discount(code, product_id=pid, amount=base, user_id=uid)
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔙 بازگشت به سفارش",
@@ -2074,7 +2127,7 @@ def _process_discount_code(message):
     eff_price = state.get("eff_price", 0)
     pending_cb = state.get("pending_cb", "")
 
-    result = validate_discount(code, product_id=pid, amount=eff_price)
+    result = validate_discount(code, product_id=pid, amount=eff_price, user_id=uid)
 
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
@@ -2087,7 +2140,7 @@ def _process_discount_code(message):
         return
 
     discount = result["discount_amount"]
-    use_discount(result["code_id"])
+    use_discount(result["code_id"], user_id=uid)
     final_price = max(0, eff_price - discount)
 
     state["applied_discount"] = discount
@@ -2134,7 +2187,7 @@ def _process_discount_code(message):
     category = state.get("category", "")
     eff_price = state.get("eff_price", 0)
 
-    result = validate_discount(code, product_id=pid, amount=eff_price)
+    result = validate_discount(code, product_id=pid, amount=eff_price, user_id=uid)
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton(
@@ -2147,7 +2200,7 @@ def _process_discount_code(message):
         return
 
     discount = result["discount_amount"]
-    use_discount(result["code_id"])
+    use_discount(result["code_id"], user_id=uid)
     state["applied_discount"] = discount
     user_states[uid] = state
 
