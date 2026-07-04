@@ -8261,7 +8261,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
     ensure_referral_schema()
 
     # تب‌های اصلی
-    tab_defs = [("list","👥 لیست همکاران"),("referrals","🔗 معرفی‌ها"),
+    tab_defs = [("list","👥 لیست همکاران"),("tree","🌳 درخت همکاران"),("referrals","🔗 معرفی‌ها"),
                 ("tiers","🏆 سطوح"),("payouts","📤 تسویه‌ها"),("settings","⚙️ تنظیمات")]
     tabs_html = '<div class="flex gap-2 mb-6 overflow-x-auto pb-1">' + "".join(
         f'<a href="/admin/partners?tab={v}" class="px-4 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if tab==v else "bg-white text-gray-600"}">{l}</a>'
@@ -8579,11 +8579,369 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           </form>
         </div>"""
 
+    elif tab == "tree":
+        # ─── 🌳 درخت همکاران — رندر کامل سمت کلاینت با Lazy DOM ───────────
+        content = """
+        <!-- کارت‌های آماری -->
+        <div id="tree-stats" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5"></div>
+
+        <!-- جستجو -->
+        <div class="card p-4 mb-4">
+          <div class="flex gap-2">
+            <input id="tree-q" type="text" placeholder="جستجو: نام، یوزرنیم یا آیدی تلگرام…"
+              class="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm" dir="rtl"
+              onkeydown="if(event.key==='Enter')treeSearch()">
+            <button onclick="treeSearch()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold transition">🔍 جستجو</button>
+          </div>
+          <div id="tree-results" class="mt-2 text-sm"></div>
+        </div>
+
+        <!-- درخت -->
+        <div class="card p-4 overflow-x-auto" style="min-height:300px">
+          <div id="tree-root" class="min-w-max"><div class="text-center text-gray-400 py-12">در حال بارگذاری درخت…</div></div>
+        </div>
+
+        <!-- پنل اطلاعات (سمت راست) -->
+        <div id="tree-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70" onclick="treeCloseDrawer()"></div>
+        <div id="tree-drawer" class="card"
+          style="position:fixed;top:0;right:0;height:100vh;width:min(92vw,360px);z-index:71;transform:translateX(105%);transition:transform .25s;overflow-y:auto;border-radius:0;padding:0">
+          <div class="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white" style="z-index:1">
+            <b class="text-gray-800">👤 اطلاعات همکار</b>
+            <button onclick="treeCloseDrawer()" class="text-gray-400 hover:text-red-500 text-lg px-2">✕</button>
+          </div>
+          <div id="tree-drawer-body" class="p-4 text-sm"></div>
+        </div>
+
+        <style>
+        .tn-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;cursor:pointer;transition:background .12s;position:relative}
+        .tn-row:hover{background:#F5F7FB}
+        body.sl-dark .tn-row:hover,body.dark-mode .tn-row:hover{background:#1F2A38}
+        .tn-arrow{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;
+          color:#8A94A6;font-size:11px;transition:transform .18s;user-select:none}
+        .tn-arrow.open{transform:rotate(-90deg)}
+        .tn-arrow.leaf{visibility:hidden}
+        .tn-kids{border-right:2px solid #E7EBF2;margin-right:20px;padding-right:6px}
+        body.sl-dark .tn-kids,body.dark-mode .tn-kids{border-right-color:#2B3A4C}
+        .tn-badge{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+        .tn-hl{outline:2px solid #6366F1;outline-offset:2px;border-radius:10px;animation:tnflash 1.6s ease 2}
+        @keyframes tnflash{0%,100%{background:transparent}50%{background:rgba(99,102,241,.14)}}
+        </style>
+
+        <script>
+        (function(){
+          var T=null, EXP={}, CHUNK=100;
+          var ST_LBL={approved:['فعال','bg-green-100 text-green-700'],
+                      pending:['در انتظار','bg-amber-100 text-amber-700'],
+                      rejected:['غیرفعال','bg-red-100 text-red-600'],
+                      user:['کاربر','bg-gray-100 text-gray-500']};
+          function fmt(n){return (n||0).toLocaleString('en-US');}
+          function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+
+          fetch('/admin/partners/tree-data').then(function(r){return r.json();}).then(function(d){
+            T=d; renderStats(); renderRoots();
+          }).catch(function(){document.getElementById('tree-root').innerHTML='<div class="text-center text-red-500 py-10">خطا در دریافت داده‌ها</div>';});
+
+          function renderStats(){
+            var s=T.stats, box=document.getElementById('tree-stats');
+            var cards=[['🤝','کل همکاران',fmt(s.total_partners)],['✅','همکاران فعال',fmt(s.active)],
+                       ['🕸','عمق شبکه',fmt(s.max_depth)+' لایه'],['👥','بیشترین زیرمجموعه',fmt(s.max_subs)],
+                       ['🛒','فروش شبکه',fmt(s.net_sales)+' ت'],['💰','درآمد شبکه',fmt(s.net_income)+' ت']];
+            box.innerHTML=cards.map(function(c){
+              return '<div class="card p-3"><div class="text-xs text-gray-400 mb-1">'+c[0]+' '+c[1]+'</div>'
+                    +'<div class="font-bold text-gray-800 text-sm">'+c[2]+'</div></div>';
+            }).join('');
+          }
+
+          function nodeRow(id){
+            var n=T.nodes[String(id)], st=ST_LBL[n.status]||ST_LBL.user;
+            var row=document.createElement('div');
+            row.className='tn-row'; row.id='tn-'+id;
+            row.innerHTML=
+              '<span class="tn-arrow'+(n.children.length?'':' leaf')+'" data-a>◀</span>'
+             +'<span style="font-size:15px">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</span>'
+             +'<span class="font-medium text-gray-800">'+esc(n.name)+'</span>'
+             +(n.username?'<span class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</span>':'')
+             +'<code class="text-xs">'+n.id+'</code>'
+             +'<span class="tn-badge bg-indigo-50 text-indigo-600">🛒 '+fmt(n.sales)+'</span>'
+             +'<span class="tn-badge bg-teal-50 text-teal-700">💰 '+fmt(n.income)+' ت</span>'
+             +'<span class="tn-badge bg-gray-100 text-gray-500">👥 '+fmt(n.direct)+' / '+fmt(n.total)+'</span>'
+             +'<span class="tn-badge '+st[1]+'">'+st[0]+'</span>';
+            row.querySelector('[data-a]').onclick=function(ev){ev.stopPropagation();toggle(id);};
+            row.onclick=function(){openDrawer(id);};
+            return row;
+          }
+
+          function wrap(id){
+            var w=document.createElement('div'); w.id='tw-'+id;
+            w.appendChild(nodeRow(id));
+            return w;
+          }
+
+          function renderRoots(){
+            var box=document.getElementById('tree-root'); box.innerHTML='';
+            if(!T.roots.length){box.innerHTML='<div class="text-center text-gray-400 py-12">هنوز معرفی‌ای ثبت نشده است</div>';return;}
+            T.roots.forEach(function(r){box.appendChild(wrap(r));});
+          }
+
+          function toggle(id){ EXP[id]?collapse(id):expand(id); }
+
+          function expand(id){
+            var n=T.nodes[String(id)]; if(!n||!n.children.length)return;
+            var w=document.getElementById('tw-'+id); if(!w)return;
+            var kids=w.querySelector(':scope > .tn-kids');
+            if(!kids){
+              kids=document.createElement('div'); kids.className='tn-kids';
+              kids.dataset.next='0'; w.appendChild(kids);
+              fill(id,kids);
+            }
+            kids.style.display='';
+            w.querySelector('[data-a]').classList.add('open');
+            EXP[id]=true;
+          }
+
+          function fill(id,kids){
+            var n=T.nodes[String(id)], from=+kids.dataset.next, to=Math.min(from+CHUNK,n.children.length);
+            var more=kids.querySelector(':scope > .tn-more'); if(more)more.remove();
+            for(var i=from;i<to;i++) kids.appendChild(wrap(n.children[i]));
+            kids.dataset.next=to;
+            if(to<n.children.length){
+              var b=document.createElement('button');
+              b.className='tn-more text-xs text-indigo-500 hover:text-indigo-700 py-2 pr-8 block';
+              b.textContent='⬇ نمایش '+fmt(n.children.length-to)+' مورد دیگر…';
+              b.onclick=function(){fill(id,kids);};
+              kids.appendChild(b);
+            }
+          }
+
+          function collapse(id){
+            var w=document.getElementById('tw-'+id); if(!w)return;
+            var kids=w.querySelector(':scope > .tn-kids');
+            if(kids)kids.style.display='none';
+            w.querySelector('[data-a]').classList.remove('open');
+            EXP[id]=false;
+          }
+
+          function pathOf(id){
+            var p=[],cur=id,g=0;
+            while(cur!=null&&g++<500){p.unshift(cur);cur=T.nodes[String(cur)]?T.nodes[String(cur)].parent:null;}
+            return p;
+          }
+
+          window.treeReveal=function(id){
+            var p=pathOf(id);
+            for(var i=0;i<p.length-1;i++){
+              expand(p[i]);
+              // اگر گره هدف در چانک‌های بعدی است، تا رسیدن به آن fill کن
+              var kids=document.getElementById('tw-'+p[i]).querySelector(':scope > .tn-kids');
+              var guard=0;
+              while(kids&&!document.getElementById('tw-'+p[i+1])&&guard++<200){
+                var mb=kids.querySelector(':scope > .tn-more'); if(!mb)break; mb.click();
+              }
+            }
+            var el=document.getElementById('tn-'+id);
+            if(el){el.scrollIntoView({behavior:'smooth',block:'center'});
+              el.classList.add('tn-hl'); setTimeout(function(){el.classList.remove('tn-hl');},3500);}
+          };
+
+          window.treeSearch=function(){
+            var q=(document.getElementById('tree-q').value||'').trim().toLowerCase();
+            var out=document.getElementById('tree-results');
+            if(!q){out.innerHTML='';return;}
+            var hits=[];
+            for(var k in T.nodes){var n=T.nodes[k];
+              if(String(n.id).indexOf(q)>-1||(n.name||'').toLowerCase().indexOf(q)>-1||(n.username||'').toLowerCase().indexOf(q)>-1)
+                {hits.push(n); if(hits.length>=15)break;}
+            }
+            if(!hits.length){out.innerHTML='<span class="text-gray-400">چیزی یافت نشد</span>';return;}
+            out.innerHTML=hits.map(function(n){
+              return '<button onclick="treeReveal('+n.id+')" class="ml-2 mb-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs hover:bg-indigo-100">'
+                    +esc(n.name)+' <code>'+n.id+'</code></button>';
+            }).join('');
+            treeReveal(hits[0].id);
+          };
+
+          window.openDrawer=function(id){
+            var n=T.nodes[String(id)], st=ST_LBL[n.status]||ST_LBL.user;
+            var path=pathOf(id).map(function(pid){
+              var pn=T.nodes[String(pid)];
+              return '<button onclick="treeReveal('+pid+');treeCloseDrawer()" class="text-indigo-500 hover:underline">'+esc(pn?pn.name:pid)+'</button>';
+            }).join(' <span class="text-gray-300">←</span> ');
+            var ref=n.parent!=null?T.nodes[String(n.parent)]:null;
+            function line(l,v){return '<div class="flex justify-between gap-3 py-2 border-b border-gray-100"><span class="text-gray-400 text-xs">'+l+'</span><span class="font-medium text-gray-700 text-left">'+v+'</span></div>';}
+            document.getElementById('tree-drawer-body').innerHTML=
+              '<div class="text-center mb-4"><div class="text-3xl mb-1">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</div>'
+             +'<div class="font-bold text-gray-800">'+esc(n.name)+'</div>'
+             +(n.username?'<div class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</div>':'')+'</div>'
+             +line('آیدی تلگرام','<code>'+n.id+'</code>')
+             +line('سطح همکاری',esc(n.tier))
+             +line('وضعیت','<span class="tn-badge '+st[1]+'">'+st[0]+'</span>')
+             +line('تاریخ عضویت',esc(n.joined||'—'))
+             +line('معرف مستقیم',ref?esc(ref.name):'— (ریشه)')
+             +line('زیرمجموعه مستقیم',fmt(n.direct))
+             +line('کل زیرمجموعه‌ها',fmt(n.total))
+             +line('تعداد خرید',fmt(n.sales))
+             +line('مجموع خرید',fmt(n.spend)+' ت')
+             +line('درآمد (پورسانت)',fmt(n.income)+' ت')
+             +line('عمق در شبکه','لایه '+fmt(n.depth))
+             +'<div class="mt-4"><div class="text-xs text-gray-400 mb-2">مسیر معرفی</div>'
+             +'<div class="leading-7 text-xs">'+path+'</div></div>'
+             +'<a href="/admin/partners/'+n.id+'/profile" class="block text-center mt-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">👤 پروفایل کامل</a>';
+            document.getElementById('tree-overlay').classList.remove('hidden');
+            document.getElementById('tree-drawer').style.transform='translateX(0)';
+          };
+          window.treeCloseDrawer=function(){
+            document.getElementById('tree-overlay').classList.add('hidden');
+            document.getElementById('tree-drawer').style.transform='translateX(105%)';
+          };
+        })();
+        </script>"""
+
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-4">🤝 همکاران</h1>
     {tabs_html}
     {content}"""
     return _layout("همکاران", body, adm, flash=flash)
+
+
+# ─── 🌳 درخت همکاران — موتور داده ─────────────────────────────────────────
+
+def _build_partner_tree(conn) -> dict:
+    """ساخت درخت کامل معرفی‌ها + آمار — O(N+E)، بدون محدودیت عمق، ضد حلقه."""
+    from collections import deque
+
+    edges = conn.execute(
+        "SELECT referrer_id, referred_id, COALESCE(created_at,'') AS ca FROM referrals;"
+    ).fetchall()
+    users = {}
+    for r in conn.execute("SELECT user_id, COALESCE(username,'') u, COALESCE(full_name,'') f, COALESCE(first_seen,'') fs FROM users;").fetchall():
+        try: users[int(r["user_id"])] = r
+        except Exception: pass
+    partners = {}
+    for r in conn.execute("SELECT tg_user_id, COALESCE(full_name,'') fn, COALESCE(status,'') st FROM partners;").fetchall():
+        try: partners[int(r["tg_user_id"])] = r
+        except Exception: pass
+    tiers = conn.execute(
+        "SELECT name, icon, min_orders, COALESCE(color,'#6B7280') color FROM partner_tiers ORDER BY min_orders ASC;"
+    ).fetchall()
+    sales = {}
+    for r in conn.execute("""
+        SELECT CAST(user_id AS INTEGER) u, COUNT(*) c, COALESCE(SUM(price),0) s,
+               SUM(CASE WHEN buyer_type='partner' THEN 1 ELSE 0 END) pc
+        FROM orders WHERE COALESCE(status,'active')!='returned'
+        GROUP BY CAST(user_id AS INTEGER);""").fetchall():
+        try: sales[int(r["u"])] = (int(r["c"]), int(r["s"]), int(r["pc"] or 0))
+        except Exception: pass
+    income = {}
+    try:
+        for r in conn.execute("SELECT user_id u, COALESCE(SUM(amount),0) s FROM partner_transactions WHERE type='credit' GROUP BY user_id;").fetchall():
+            income[int(r["u"])] = int(r["s"])
+    except Exception:
+        pass
+
+    # والد هر گره — اولین معرفی معتبر است؛ خودارجاعی رد می‌شود
+    parent, joined, node_ids = {}, {}, set()
+    for e in edges:
+        try:
+            a, b = int(e["referrer_id"]), int(e["referred_id"])
+        except Exception:
+            continue
+        if a == b:
+            continue
+        node_ids.add(a); node_ids.add(b)
+        if b not in parent:
+            parent[b] = a
+            joined[b] = (e["ca"] or "")[:10]
+
+    # شکستن حلقه‌های احتمالی (داده خراب) — گرهِ حلقه‌ساز ریشه می‌شود
+    for n in list(parent.keys()):
+        seen, cur = set(), n
+        while cur in parent:
+            if cur in seen:
+                parent.pop(n, None)
+                break
+            seen.add(cur)
+            cur = parent[cur]
+
+    children = {}
+    for b, a in parent.items():
+        children.setdefault(a, []).append(b)
+    roots = sorted(n for n in node_ids if n not in parent)
+
+    # عمق (BFS) + ترتیب برای پیمایش
+    depth, order, dq = {}, [], deque((r, 1) for r in roots)
+    while dq:
+        n, d = dq.popleft()
+        depth[n] = d
+        order.append(n)
+        for c in children.get(n, ()):
+            dq.append((c, d + 1))
+
+    # کل زیرمجموعه‌ها — post-order تکراری
+    total_subs = {n: 0 for n in node_ids}
+    for n in reversed(order):
+        t = 0
+        for c in children.get(n, ()):
+            t += 1 + total_subs.get(c, 0)
+        total_subs[n] = t
+
+    def _tier_of(pc):
+        cur = None
+        for t in tiers:
+            if pc >= int(t["min_orders"] or 0):
+                cur = t
+        return cur
+
+    nodes = {}
+    for n in node_ids:
+        u, p = users.get(n), partners.get(n)
+        c, s, pc = sales.get(n, (0, 0, 0))
+        t = _tier_of(pc)
+        name = (p["fn"] if p and p["fn"] else
+                (u["f"] if u and u["f"] else
+                 (u["u"] if u and u["u"] else f"کاربر {n}")))
+        kids = children.get(n, [])
+        kids.sort(key=lambda x: -total_subs.get(x, 0))
+        nodes[str(n)] = {
+            "id": n, "name": name,
+            "username": (u["u"] if u else ""),
+            "parent": parent.get(n),
+            "children": kids,
+            "tier": (f'{t["icon"]} {t["name"]}' if t else "—"),
+            "tcolor": (t["color"] if t else "#6B7280"),
+            "sales": c, "spend": s, "income": income.get(n, 0),
+            "direct": len(kids), "total": total_subs.get(n, 0),
+            "depth": depth.get(n, 1),
+            "status": (p["st"] if p else "user"),
+            "joined": joined.get(n, "") or ((u["fs"] or "")[:10] if u else ""),
+        }
+
+    stats = {
+        "total_partners": len(partners),
+        "active": sum(1 for p in partners.values() if p["st"] == "approved"),
+        "network": len(node_ids),
+        "max_depth": max(depth.values()) if depth else 0,
+        "max_subs": max((len(v) for v in children.values()), default=0),
+        "net_sales": sum(sales.get(n, (0, 0, 0))[1] for n in node_ids),
+        "net_income": sum(income.get(n, 0) for n in node_ids),
+    }
+    return {"stats": stats, "roots": roots, "nodes": nodes}
+
+
+@router.get("/partners/tree-data")
+async def partners_tree_data(request: Request):
+    """JSON درخت همکاران — فقط ادمین"""
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    from db import ensure_referral_schema, ensure_partner_tiers_extended
+    ensure_referral_schema()
+    ensure_partner_tiers_extended()
+    conn = _db()
+    try:
+        data = _build_partner_tree(conn)
+    finally:
+        conn.close()
+    return JSONResponse(data)
 
 
 @router.post("/partners/payout-settings")
