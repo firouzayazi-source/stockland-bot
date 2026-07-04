@@ -934,14 +934,60 @@ def _layout(title: str, body: str, admin_info=None,
 
     /* ── Dark Mode ────────────────────────────────────────────── */
     body.sl-dark, body.dark-mode {{
-      --bg-page:#0D1117; --bg-card:#161B22; --bg-input:#161B22; --bg-subtle:#1C2130;
-      --txt-primary:#E5E7EB; --txt-secondary:#C5CDD8; --txt-muted:#8896A8;
-      --bdr:#30363D; --bdr-input:#30363D;
-      --shadow-card:0 1px 4px rgba(0,0,0,.3);
-      background:#0D1117; color:#E5E7EB;
+      --bg-page:#0E1621; --bg-card:#17212B; --bg-input:#1B2530; --bg-subtle:#232E3C;
+      --txt-primary:#F5F5F5; --txt-secondary:#D9E1EA; --txt-muted:#8A99AC;
+      --bdr:#2B3A4C; --bdr-input:#2B3A4C;
+      --shadow-card:0 1px 4px rgba(0,0,0,.35);
+      background:#0E1621; color:#F5F5F5;
     }}
-    body.sl-dark .topbar, body.dark-mode .topbar {{ background:rgba(13,17,23,.9) !important; border-color:#30363D !important; }}
-    body.sl-dark .global-search, body.dark-mode .global-search {{ background:#161B22 !important; border-color:#30363D !important; color:#E5E7EB !important; }}
+    body.sl-dark .topbar, body.dark-mode .topbar {{ background:rgba(14,22,33,.92) !important; border-color:#2B3A4C !important; }}
+    body.sl-dark .global-search, body.dark-mode .global-search {{ background:#17212B !important; border-color:#2B3A4C !important; color:#F5F5F5 !important; }}
+    /* ── کنتراست حالت شب — کیفیت تلگرام ── */
+    body.sl-dark .card, body.dark-mode .card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
+    body.sl-dark .bg-white, body.dark-mode .bg-white {{ background:#17212B !important; }}
+    body.sl-dark .bg-gray-50, body.dark-mode .bg-gray-50 {{ background:#1B2530 !important; }}
+    body.sl-dark .bg-gray-100, body.dark-mode .bg-gray-100 {{ background:#232E3C !important; }}
+    body.sl-dark .text-gray-800, body.sl-dark .text-gray-900,
+    body.dark-mode .text-gray-800, body.dark-mode .text-gray-900 {{ color:#F5F5F5 !important; }}
+    body.sl-dark .text-gray-700, body.dark-mode .text-gray-700 {{ color:#E4EAF1 !important; }}
+    body.sl-dark .text-gray-600, body.sl-dark .text-gray-500,
+    body.dark-mode .text-gray-600, body.dark-mode .text-gray-500 {{ color:#A9B6C6 !important; }}
+    body.sl-dark .text-gray-400, body.dark-mode .text-gray-400 {{ color:#8A99AC !important; }}
+    body.sl-dark .border, body.sl-dark .border-b, body.sl-dark .border-t,
+    body.sl-dark .border-gray-200, body.sl-dark .border-gray-300, body.sl-dark [class*="border-gray-1"],
+    body.dark-mode .border, body.dark-mode .border-b, body.dark-mode .border-t,
+    body.dark-mode .border-gray-200, body.dark-mode .border-gray-300 {{ border-color:#2B3A4C !important; }}
+    body.sl-dark input, body.sl-dark select, body.sl-dark textarea,
+    body.dark-mode input, body.dark-mode select, body.dark-mode textarea {{
+      background:#1B2530 !important; color:#F0F4F8 !important; border-color:#2B3A4C !important;
+    }}
+    body.sl-dark input::placeholder, body.sl-dark textarea::placeholder,
+    body.dark-mode input::placeholder, body.dark-mode textarea::placeholder {{ color:#6B7B8F !important; }}
+    body.sl-dark tr:hover, body.sl-dark .hover\\:bg-gray-50:hover, body.sl-dark .hover\\:bg-gray-100:hover,
+    body.dark-mode tr:hover, body.dark-mode .hover\\:bg-gray-50:hover, body.dark-mode .hover\\:bg-gray-100:hover {{ background:#1F2A38 !important; }}
+    body.sl-dark thead tr, body.dark-mode thead tr {{ background:#1B2530 !important; }}
+    body.sl-dark code, body.dark-mode code {{ background:#232E3C; color:#8FD3F4; padding:1px 5px; border-radius:5px; }}
+    /* بج‌های رنگی: پس‌زمینه شفاف تیره + متن روشن‌تر */
+    body.sl-dark [class*="bg-green-100"], body.sl-dark [class*="bg-green-50"] {{ background:rgba(34,197,94,.16) !important; }}
+    body.sl-dark [class*="text-green-7"] {{ color:#5DDE8A !important; }}
+    body.sl-dark [class*="bg-red-100"], body.sl-dark [class*="bg-red-50"] {{ background:rgba(239,68,68,.16) !important; }}
+    body.sl-dark [class*="text-red-6"], body.sl-dark [class*="text-red-7"], body.sl-dark [class*="text-red-5"] {{ color:#FF7B7B !important; }}
+    body.sl-dark [class*="bg-amber-100"], body.sl-dark [class*="bg-amber-50"],
+    body.sl-dark [class*="bg-yellow-100"], body.sl-dark [class*="bg-yellow-50"] {{ background:rgba(245,158,11,.16) !important; }}
+    body.sl-dark [class*="text-amber-7"], body.sl-dark [class*="text-amber-8"], body.sl-dark [class*="text-yellow-7"] {{ color:#FFC46B !important; }}
+    body.sl-dark [class*="bg-indigo-100"], body.sl-dark [class*="bg-indigo-50"] {{ background:rgba(99,102,241,.18) !important; }}
+    body.sl-dark [class*="text-indigo-7"], body.sl-dark [class*="text-indigo-6"] {{ color:#A5B4FF !important; }}
+    body.sl-dark [class*="bg-blue-100"], body.sl-dark [class*="bg-blue-50"] {{ background:rgba(59,130,246,.16) !important; }}
+    body.sl-dark [class*="text-blue-7"], body.sl-dark [class*="text-blue-6"] {{ color:#7DB8FF !important; }}
+    body.sl-dark [class*="bg-teal-100"], body.sl-dark [class*="bg-teal-50"] {{ background:rgba(20,184,166,.16) !important; }}
+    body.sl-dark [class*="text-teal-7"] {{ color:#5EEAD4 !important; }}
+    body.sl-dark [class*="bg-purple-100"], body.sl-dark [class*="bg-purple-50"] {{ background:rgba(168,85,247,.16) !important; }}
+    body.sl-dark [class*="text-purple-7"] {{ color:#D0A8FF !important; }}
+    body.sl-dark [class*="bg-orange-100"], body.sl-dark [class*="bg-orange-50"] {{ background:rgba(249,115,22,.16) !important; }}
+    body.sl-dark [class*="text-orange-7"] {{ color:#FFAD70 !important; }}
+    body.sl-dark [class*="border-green-2"], body.sl-dark [class*="border-red-2"],
+    body.sl-dark [class*="border-amber-2"], body.sl-dark [class*="border-indigo-2"],
+    body.sl-dark [class*="border-blue-2"], body.sl-dark [class*="border-teal-2"] {{ border-color:#2B3A4C !important; }}
 
     /* ── Misc Helpers ─────────────────────────────────────────── */
     .section-title {{ font-size:14px; font-weight:700; color:var(--txt-primary); margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid var(--bdr); }}
@@ -1060,34 +1106,49 @@ def _layout(title: str, body: str, admin_info=None,
     document.getElementById('overlay')?.classList.toggle('open');
   }};
 
-  // ── Classic / Dark Mode ─────────────────────────────
+  // ── Classic / Dark Mode (با پشتیبانی هماهنگی سیستم) ──────────
+  function _prefersDark(){{
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }}
+  function _resolveDark(){{
+    var m = localStorage.getItem('sl-dark');
+    if(m==='auto' || m===null) return _prefersDark();
+    return m==='1';
+  }}
   function applyMode(){{
     var isClassic = localStorage.getItem('sl-classic')==='1';
-    var isDark = localStorage.getItem('sl-dark')==='1';
-    document.body.classList.toggle('sl-classic', isClassic);
-    document.body.classList.toggle('sl-dark', isDark && !isClassic);
-    document.body.classList.toggle('dark-mode', isDark && !isClassic);
+    var isDark = _resolveDark();
+    document.body.classList.toggle('sl-classic', isClassic && !isDark);
+    document.body.classList.toggle('sl-dark', isDark);
+    document.body.classList.toggle('dark-mode', isDark);
+  }}
+  window.applyMode = applyMode;
+  // اگر روی حالت خودکار است، با تغییر تم سیستم همگام شو
+  if(window.matchMedia){{
+    try {{
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(){{
+        if((localStorage.getItem('sl-dark')||'auto')==='auto') applyMode();
+      }});
+    }} catch(e){{}}
   }}
   window.toggleClassic = function(){{
     var on = localStorage.getItem('sl-classic')==='1';
     localStorage.setItem('sl-classic', on?'0':'1');
-    if(!on) localStorage.setItem('sl-dark','0');
     applyMode(); renderIcons();
+    fetch('/admin/settings/save-theme?dark='+encodeURIComponent(localStorage.getItem('sl-dark')||'auto')+'&classic='+(on?'0':'1'),{{method:'POST'}}).catch(function(){{}});
   }};
   window.toggleDark = function(){{
-    var on = localStorage.getItem('sl-dark')==='1';
+    var on = _resolveDark();
     localStorage.setItem('sl-dark', on?'0':'1');
-    if(!on) localStorage.setItem('sl-classic','0');
     applyMode(); renderIcons();
-    fetch('/admin/settings/save-theme?dark='+(on?'0':'1'),{{method:'POST'}}).catch(function(){{}});
+    fetch('/admin/settings/save-theme?dark='+(on?'0':'1')+'&classic='+(localStorage.getItem('sl-classic')==='1'?'1':'0'),{{method:'POST'}}).catch(function(){{}});
   }};
   // بارگذاری تم ذخیره‌شده از سرور
   (function(){{
     var saved = document.documentElement.getAttribute('data-saved-dark');
     var savedC = document.documentElement.getAttribute('data-saved-classic');
-    if(savedC==='1'){{ localStorage.setItem('sl-classic','1'); localStorage.setItem('sl-dark','0'); }}
-    else if(saved==='1'){{ localStorage.setItem('sl-dark','1'); localStorage.setItem('sl-classic','0'); }}
-    else if(saved==='0'){{ localStorage.setItem('sl-dark','0'); localStorage.setItem('sl-classic','0'); }}
+    if(saved==='1'||saved==='0'||saved==='auto') localStorage.setItem('sl-dark', saved);
+    if(savedC==='1'||savedC==='0') localStorage.setItem('sl-classic', savedC);
   }})();
   applyMode();
 
@@ -1134,6 +1195,39 @@ def _layout(title: str, body: str, admin_info=None,
   }, 12000);
   """}
   renderIcons();
+}})();
+</script>
+<script>
+/* ─── اعداد فارسی سراسری پنل ─── */
+(function(){{
+  var FA=['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+  function conv(s){{ return s.replace(/[0-9]/g,function(d){{return FA[+d];}}); }}
+  var SKIP={{SCRIPT:1,STYLE:1,TEXTAREA:1,INPUT:1,SELECT:1,OPTION:1,CODE:1,PRE:1,KBD:1}};
+  function walk(node){{
+    if(node.nodeType===3){{
+      if(/[0-9]/.test(node.nodeValue)) node.nodeValue=conv(node.nodeValue);
+      return;
+    }}
+    if(node.nodeType!==1) return;
+    if(SKIP[node.tagName]) return;
+    if(node.closest && node.closest('code,pre,kbd,.no-fa')) return;
+    for(var i=0;i<node.childNodes.length;i++) walk(node.childNodes[i]);
+  }}
+  function run(){{ walk(document.body); }}
+  run();
+  var mo=new MutationObserver(function(muts){{
+    mo.disconnect();
+    muts.forEach(function(m){{
+      m.addedNodes && m.addedNodes.forEach(function(n){{ walk(n); }});
+      if(m.type==='characterData' && /[0-9]/.test(m.target.nodeValue||'')){{
+        var p=m.target.parentElement;
+        if(p && !SKIP[p.tagName] && !(p.closest&&p.closest('code,pre,kbd,.no-fa')))
+          m.target.nodeValue=conv(m.target.nodeValue);
+      }}
+    }});
+    mo.observe(document.body,{{childList:true,subtree:true,characterData:true}});
+  }});
+  mo.observe(document.body,{{childList:true,subtree:true,characterData:true}});
 }})();
 </script>
 </body>
@@ -1609,7 +1703,7 @@ async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0")
             );
         """)
         conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
-                     (str(adm[0]), "dark_mode", "1" if dark == "1" else "0"))
+                     (str(adm[0]), "dark_mode", dark if dark in ("1", "0", "auto") else "0"))
         conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
                      (str(adm[0]), "classic_mode", "1" if classic == "1" else "0"))
         conn.commit(); conn.close()
@@ -1812,39 +1906,78 @@ async def settings_hub(request: Request, flash: str = ""):
     if guard: return guard
 
     # تم فعلی
-    saved_dark = ""
+    saved_dark = "auto"; saved_classic = "0"
     try:
         conn = _db()
-        row = conn.execute("SELECT value FROM admin_preferences WHERE admin_id=? AND key='dark_mode';", (str(adm[0]),)).fetchone()
+        for r in conn.execute("SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');", (str(adm[0]),)).fetchall():
+            if r[0] == "dark_mode":    saved_dark = r[1] or "auto"
+            if r[0] == "classic_mode": saved_classic = r[1] or "0"
         conn.close()
-        saved_dark = row[0] if row else "0"
     except Exception:
-        saved_dark = "0"
+        pass
 
-    current_theme = "dark" if saved_dark == "1" else "day"
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-6">⚙️ تنظیمات</h1>
     <div class="grid md:grid-cols-2 gap-4">
       <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">🌙 حالت نمایش</h2>
-        <p class="text-sm text-gray-500 mb-4">انتخاب شما ذخیره می‌شود و پس از ورود مجدد هم اعمال می‌شود.</p>
-        <div class="flex gap-2 mb-3">
-          <button onclick="setTheme('day')" class="flex-1 py-2.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-sm font-medium hover:bg-amber-100 transition">☀️ روز</button>
-          <button onclick="setTheme('dark')" class="flex-1 py-2.5 bg-gray-800 text-gray-100 border border-gray-600 rounded-lg text-sm font-medium hover:bg-gray-700 transition">🌙 شب</button>
-          <button onclick="setTheme('classic')" class="flex-1 py-2.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-sm font-medium hover:bg-blue-100 transition">💙 کلاسیک</button>
-        </div>
-        <p class="text-xs text-gray-400">فعلی: <span id="cur-theme">{'🌙 شب' if saved_dark=='1' else '☀️ روز'}</span></p>
+        <h2 class="font-bold text-gray-700 mb-3">🌗 حالت نمایش</h2>
+        <p class="text-sm text-gray-500 mb-4">انتخاب شما ذخیره می‌شود و پس از خروج و ورود مجدد هم باقی می‌ماند.</p>
+
+        <button id="btn-daynight" onclick="hubToggleDark()"
+          class="w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
+
+        <button id="btn-classic" onclick="hubToggleClassic()"
+          class="w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
+
+        <button id="btn-auto" onclick="hubSetAuto()"
+          class="w-full py-3 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
+
+        <p class="text-xs text-gray-400 mt-3">🖥 در حالت «هماهنگ با سیستم»، پنل به‌صورت خودکار با تم روز/شب دستگاه شما هماهنگ می‌شود.</p>
+
         <script>
-        function setTheme(m){{
-          var labels={{'day':'☀️ روز','dark':'🌙 شب','classic':'💙 کلاسیک'}};
-          localStorage.setItem('sl-dark', m==='dark'?'1':'0');
-          localStorage.setItem('sl-classic', m==='classic'?'1':'0');
-          document.body.classList.toggle('sl-dark', m==='dark');
-          document.body.classList.toggle('dark-mode', m==='dark');
-          document.body.classList.toggle('sl-classic', m==='classic');
-          document.getElementById('cur-theme').textContent = labels[m];
-          fetch('/admin/settings/save-theme?dark='+(m==='dark'?'1':'0')+'&classic='+(m==='classic'?'1':'0'), {{method:'POST'}});
+        function _hubMode(){{ return localStorage.getItem('sl-dark') || '{saved_dark}' || 'auto'; }}
+        function _hubIsDark(){{
+          var m=_hubMode();
+          if(m==='auto') return window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+          return m==='1';
         }}
+        function _hubSave(){{
+          fetch('/admin/settings/save-theme?dark='+encodeURIComponent(localStorage.getItem('sl-dark')||'auto')
+            +'&classic='+(localStorage.getItem('sl-classic')==='1'?'1':'0'), {{method:'POST'}}).catch(function(){{}});
+        }}
+        function hubRender(){{
+          var m=_hubMode(), dark=_hubIsDark(), classic=localStorage.getItem('sl-classic')==='1';
+          var dn=document.getElementById('btn-daynight');
+          if(dark){{
+            dn.textContent='☀️ رفتن به حالت روز';
+            dn.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100';
+          }} else {{
+            dn.textContent='🌙 رفتن به حالت شب';
+            dn.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 bg-gray-800 text-gray-100 border-gray-600 hover:bg-gray-700';
+          }}
+          var bc=document.getElementById('btn-classic');
+          bc.textContent = classic ? '🎨 حالت کلاسیک: روشن — بازگشت به پیش‌فرض' : '🎨 فعال‌کردن حالت کلاسیک';
+          bc.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 '
+            +(classic?'bg-blue-600 text-white border-blue-600 hover:bg-blue-700':'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100');
+          var ba=document.getElementById('btn-auto');
+          ba.textContent = m==='auto' ? '🖥 هماهنگ با سیستم: فعال ✓' : '🖥 هماهنگ با سیستم';
+          ba.className='w-full py-3 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 '
+            +(m==='auto'?'bg-teal-600 text-white border-teal-600':'bg-teal-50 text-teal-700 border-teal-200 hover:bg-teal-100');
+        }}
+        function hubToggleDark(){{
+          localStorage.setItem('sl-dark', _hubIsDark()?'0':'1');
+          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
+        }}
+        function hubToggleClassic(){{
+          var on=localStorage.getItem('sl-classic')==='1';
+          localStorage.setItem('sl-classic', on?'0':'1');
+          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
+        }}
+        function hubSetAuto(){{
+          localStorage.setItem('sl-dark','auto');
+          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
+        }}
+        hubRender();
         </script>
       </div>
       <div class="card p-6">
@@ -4071,7 +4204,7 @@ async def feed_overview(request: Request):
           <td class="px-4 py-3 text-xs text-gray-400">{e(p["category"])}</td>
           <td class="px-4 py-3">
             <div class="flex items-center gap-2">
-              <div class="flex-1 bg-gray-100 rounded-full h-2">
+              <div class="flex-1 bg-gray-100 rounded-full h-2" style="direction:ltr">
                 <div class="bg-{c}-500 h-2 rounded-full" style="width:{pct}%"></div>
               </div>
               <span class="text-sm font-medium text-{c}-700 w-16">{avail}/{total}</span>
@@ -7678,7 +7811,7 @@ def _acbar(label, value, total, color):
     pct = max(0, min(100, int(value/total*100) if total>0 else 0))
     return f"""<div><div class="flex justify-between text-xs text-gray-500 mb-1">
       <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
-      <div class="h-2 bg-gray-100 rounded-full"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
+      <div class="h-2 bg-gray-100 rounded-full" style="direction:ltr"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
 
 
 
