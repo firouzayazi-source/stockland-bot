@@ -3659,29 +3659,52 @@ def transfer_partner_to_main(user_id: int, amount: int) -> dict:
 
 def get_partner_payout_settings() -> dict:
     ensure_partner_wallet_schema()
+    ensure_payout_settings_extended()  # ← حیاتی: بدون این فراخوانی، ستون‌های متنی اصلاً در DB وجود ندارند
+    _TEXT_DEFAULTS = {
+        "guide_text": (
+            "📤 <b>شرایط و راهنمای درخواست تسویه</b>\n\n"
+            "برای ثبت درخواست تسویه، موارد زیر را رعایت کنید:\n\n"
+            "۱. اطلاعات حساب بانکی (شبا و نام صاحب حساب) باید ثبت شده باشد\n"
+            "۲. موجودی کیف‌پول همکاری باید به حداقل تعیین‌شده رسیده باشد\n"
+            "۳. پس از ثبت درخواست، تیم مالی آن را بررسی و تأیید می‌کند\n"
+            "۴. پرداخت معمولاً ظرف ۴۸ ساعت کاری انجام می‌شود\n\n"
+            "⚠️ درخواست‌های با اطلاعات نادرست یا مغایرت حساب رد خواهند شد."
+        ),
+        "approval_message": (
+            "✅ <b>درخواست تسویه شما تأیید شد!</b>\n\n"
+            "💰 مبلغ درخواستی به حساب بانکی ثبت‌شده واریز خواهد شد.\n"
+            "⏰ پردازش: ۲۴ تا ۴۸ ساعت کاری\n\n"
+            "ممنون از همکاری شما 🙏"
+        ),
+        "rejection_message": (
+            "❌ <b>درخواست تسویه رد شد</b>\n\n"
+            "درخواست تسویه شما تأیید نشد. لطفاً موارد زیر را بررسی کنید:\n"
+            "• صحت اطلاعات حساب بانکی\n"
+            "• کافی بودن موجودی\n\n"
+            "برای اطلاعات بیشتر با پشتیبانی تماس بگیرید 💬"
+        ),
+    }
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute("SELECT * FROM partner_payout_settings WHERE id=1;").fetchone()
         if row:
-            return dict(row)
+            d = dict(row)
+            # نکته حیاتی: حتی اگه ردیف در DB وجود دارد، فیلدهای متنیِ خالی
+            # (سرور قدیمی که قبل از این آپدیت یک‌بار ذخیره شده) با پیش‌فرض حرفه‌ای پر شوند
+            for key, default_text in _TEXT_DEFAULTS.items():
+                if not (d.get(key) or "").strip():
+                    d[key] = default_text
+            d.setdefault("min_amount", 50000)
+            d.setdefault("max_amount", 0)
+            d.setdefault("max_per_month", 2)
+            d.setdefault("is_active", 1)
+            d.setdefault("review_hours", 48)
+            return d
         return {
             "min_amount": 50000, "max_amount": 0, "max_per_month": 2,
             "is_active": 1, "review_hours": 48,
-            "guide_text": (
-                "📤 <b>شرایط درخواست تسویه</b>\n\n"
-                "۱. اطلاعات بانکی معتبر ثبت‌شده باشد\n"
-                "۲. موجودی به حداقل تعیین‌شده رسیده باشد\n"
-                "۳. پرداخت ظرف ۴۸ ساعت کاری انجام می‌شود"
-            ),
-            "approval_message": (
-                "✅ درخواست تسویه شما تأیید شد!\n"
-                "مبلغ ظرف ۴۸ ساعت کاری واریز می‌شود 💰"
-            ),
-            "rejection_message": (
-                "❌ درخواست تسویه رد شد.\n"
-                "برای اطلاعات بیشتر با پشتیبانی تماس بگیرید 💬"
-            ),
+            **_TEXT_DEFAULTS,
         }
     finally:
         conn.close()
