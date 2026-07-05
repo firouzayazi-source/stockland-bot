@@ -15,7 +15,7 @@ import requests
 CLOUD_DEFAULTS = {
     "enabled": 0, "hour": 4, "retention": 7,
     "tg_enabled": 0, "tg_channel": "",
-    "gd_enabled": 0, "gd_folder": "", "gd_sa_json": "",
+    "gd_enabled": 0, "gd_client_id": "", "gd_client_secret": "", "gd_refresh": "", "gd_folder": "",
     "od_enabled": 0, "od_client_id": "", "od_folder": "StockLand-Backups", "od_refresh": "",
 }
 
@@ -81,29 +81,61 @@ def _up_telegram(filepath: str, cfg: dict, retention: int) -> dict:
 # درایور ۲ — Google Drive (Service Account)
 # ══════════════════════════════════════════════════════════════════════════
 
-def _gdrive_token(sa_json: str):
-    try:
-        from google.oauth2 import service_account
-        from google.auth.transport.requests import Request as _GReq
-    except ImportError:
-        raise RuntimeError("کتابخانه نصب نیست — روی سرور اجرا کنید: pip install google-auth")
-    info = json.loads(sa_json)
-    creds = service_account.Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/drive.file",
-                      "https://www.googleapis.com/auth/drive"])
-    creds.refresh(_GReq())
-    return creds.token
+_G_TOKEN_URL  = "https://oauth2.googleapis.com/token"
+_G_DEVICE_URL = "https://oauth2.googleapis.com/device/code"
+_G_SCOPE      = "https://www.googleapis.com/auth/drive.file"
+
+
+def _gdrive_access_token(cfg: dict) -> str:
+    """توکن دسترسی از refresh_token — بدون هیچ کتابخانه اضافه."""
+    cid, csec = str(cfg.get("gd_client_id") or "").strip(), str(cfg.get("gd_client_secret") or "").strip()
+    refresh   = str(cfg.get("gd_refresh") or "").strip()
+    if not cid or not csec or not refresh:
+        raise RuntimeError("Google Drive متصل نیست — از پنل «اتصال با ایمیل» را انجام دهید")
+    r = requests.post(_G_TOKEN_URL, data={
+        "client_id": cid, "client_secret": csec,
+        "grant_type": "refresh_token", "refresh_token": refresh}, timeout=30)
+    j = r.json()
+    if "access_token" not in j:
+        raise RuntimeError(f"Drive token: {j.get('error_description', j)[:180]}")
+    return j["access_token"]
+
+
+def _gdrive_ensure_folder(token: str, cfg: dict) -> str:
+    """پوشه StockLand-Backups را (فقط یک‌بار) می‌سازد و id را نگه می‌دارد."""
+    fid = str(cfg.get("gd_folder") or "").strip()
+    H = {"Authorization": f"Bearer {token}"}
+    if fid:
+        # هنوز معتبر است؟
+        chk = requests.get(f"https://www.googleapis.com/drive/v3/files/{fid}",
+                           headers=H, params={"fields": "id,trashed"}, timeout=30)
+        if chk.status_code == 200 and not chk.json().get("trashed"):
+            return fid
+    # جستجو بین فایل‌های خودِ برنامه
+    q = requests.get("https://www.googleapis.com/drive/v3/files", headers=H, params={
+        "q": "name='StockLand-Backups' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        "fields": "files(id)"}, timeout=30).json()
+    files = q.get("files", [])
+    if files:
+        fid = files[0]["id"]
+    else:
+        mk = requests.post("https://www.googleapis.com/drive/v3/files", headers=H, json={
+            "name": "StockLand-Backups",
+            "mimeType": "application/vnd.google-apps.folder"}, timeout=30).json()
+        fid = mk.get("id", "")
+        if not fid:
+            raise RuntimeError(f"Drive folder: {str(mk)[:150]}")
+    cfg["gd_folder"] = fid
+    save_cloud_settings(cfg)
+    return fid
 
 
 def _up_gdrive(filepath: str, cfg: dict, retention: int) -> dict:
-    sa_json = str(cfg.get("gd_sa_json") or "").strip()
-    folder  = str(cfg.get("gd_folder") or "").strip()
-    if not sa_json or not folder:
-        return {"ok": False, "error": "Drive: کلید Service Account یا شناسه پوشه تنظیم نشده"}
     try:
-        token = _gdrive_token(sa_json)
+        token  = _gdrive_access_token(cfg)
+        folder = _gdrive_ensure_folder(token, cfg)
     except Exception as ex:
-        return {"ok": False, "error": f"Drive auth: {ex}"}
+        return {"ok": False, "error": str(ex)}
 
     fname = os.path.basename(filepath)
     meta = {"name": fname, "parents": [folder]}
@@ -140,6 +172,30 @@ def _up_gdrive(filepath: str, cfg: dict, retention: int) -> dict:
     except Exception:
         pass
     return {"ok": True}
+
+
+def gdrive_devicecode_start(client_id: str) -> dict:
+    """شروع اتصال ایمیلی Google Drive — کد و لینک برای کاربر."""
+    r = requests.post(_G_DEVICE_URL,
+                      data={"client_id": client_id, "scope": _G_SCOPE}, timeout=30)
+    j = r.json()
+    # یکسان‌سازی نام فیلد با مایکروسافت
+    if "verification_url" in j and "verification_uri" not in j:
+        j["verification_uri"] = j["verification_url"]
+    return j
+
+
+def gdrive_devicecode_poll(client_id: str, client_secret: str, device_code: str) -> dict:
+    r = requests.post(_G_TOKEN_URL, data={
+        "client_id": client_id, "client_secret": client_secret,
+        "device_code": device_code,
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}, timeout=30)
+    j = r.json()
+    if j.get("refresh_token"):
+        return {"status": "ok", "refresh_token": j["refresh_token"]}
+    if j.get("error") in ("authorization_pending", "slow_down"):
+        return {"status": "pending"}
+    return {"status": "error", "error": j.get("error_description", str(j))[:200]}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -314,5 +370,3 @@ def watchdog_check() -> str | None:
         pass
     lines.append("\n🔧 پنل ← دیتابیس ← بکاپ ابری را بررسی کنید.")
     return "\n".join(lines)
-
-
