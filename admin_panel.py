@@ -2937,99 +2937,124 @@ async def database_page(request: Request, flash: str = ""):
     {_js}
     </script>
 
-    <!-- ☁️ بکاپ ابری شبانه -->
-    <div class="card p-5 mt-6 mb-8" id="cloudbk">
-      <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
-        <h2 class="font-bold text-gray-700">☁️ بکاپ ابری شبانه</h2>
-        <span class="text-xs {('text-green-600' if _cb_last_ok else 'text-red-500')}">
-          آخرین آپلود موفق: <b>{e(_cb_last_ok or 'هرگز')}</b>
-        </span>
+    <!-- ☁️ بکاپ ابری -->
+    <div class="card p-4 mt-6 mb-8" id="cloudbk">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+        <h2 class="font-bold text-gray-700 text-sm">☁️ بکاپ ابری</h2>
+        <span class="text-[11px] {('text-green-600' if _cb_last_ok else 'text-gray-400')}">آخرین آپلود: <b>{e(_cb_last_ok or 'هرگز')}</b></span>
       </div>
-      <p class="text-xs text-gray-400 mb-4">هر شب بی‌صدا به مقاصد فعال آپلود می‌شود؛ فقط در صورت مشکل، نگهبان به چت ادمین هشدار می‌فرستد. {_cb_report_html}</p>
+      <p class="text-[11px] text-gray-400 mb-3 leading-5">بی‌صدا آپلود می‌شود؛ فقط اگر مشکلی باشد نگهبان به چت شما هشدار می‌دهد. {_cb_report_html}</p>
 
       <form method="post" action="/admin/database/cloud-save">
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}> فعال</label>
-          <div><label class="text-xs text-gray-500 block mb-1">ساعت اجرا</label>
-            <input type="number" name="hour" value="{int(_cb.get('hour') or 4)}" min="0" max="23" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
-          <div><label class="text-xs text-gray-500 block mb-1">تعداد نگهداری در هر مقصد</label>
-            <input type="number" name="retention" value="{int(_cb.get('retention') or 7)}" min="1" max="60" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <label class="flex items-center gap-1.5 text-xs border border-gray-200 rounded-lg px-2 py-2 justify-center">
+            <input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}> فعال</label>
+          <div class="border border-gray-200 rounded-lg px-2 py-1">
+            <label class="text-[10px] text-gray-400 block">ساعت</label>
+            <input type="number" name="hour" value="{int(_cb.get('hour') or 4)}" min="0" max="23" class="w-full text-xs bg-transparent outline-none"></div>
+          <div class="border border-gray-200 rounded-lg px-2 py-1">
+            <label class="text-[10px] text-gray-400 block">نگهداری</label>
+            <input type="number" name="retention" value="{int(_cb.get('retention') or 7)}" min="1" max="60" class="w-full text-xs bg-transparent outline-none"></div>
         </div>
 
         <!-- تلگرام -->
-        <div class="border border-gray-100 rounded-xl p-4 mb-3">
-          <label class="flex items-center gap-2 text-sm font-medium mb-2">
-            <input type="checkbox" name="tg_enabled" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}> 📢 کانال خصوصی تلگرام</label>
-          <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}" placeholder="-100xxxxxxxxxx یا @channel"
-            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr">
-          <p class="text-xs text-gray-400 mt-1">ربات باید ادمین کانال باشد. بکاپ‌های قدیمی‌تر از حد نگهداری خودکار حذف می‌شوند.</p>
-        </div>
+        <details class="border border-gray-100 rounded-xl mb-2 overflow-hidden">
+          <summary class="flex items-center gap-2 px-3 py-2.5 cursor-pointer text-xs font-medium select-none">
+            <input type="checkbox" name="tg_enabled" onclick="event.stopPropagation()" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}>
+            📢 کانال تلگرام
+            <span class="mr-auto text-[10px] {('text-green-600' if (_cb.get('tg_channel') or '').strip() else 'text-gray-300')}">{('تنظیم شده ✓' if (_cb.get('tg_channel') or '').strip() else 'تنظیم نشده')}</span>
+          </summary>
+          <div class="px-3 pb-3">
+            <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}" placeholder="-100xxxxxxxxxx یا @channel"
+              class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
+            <p class="text-[10px] text-gray-400 mt-1">ربات باید ادمین کانال باشد.</p>
+          </div>
+        </details>
 
         <!-- گوگل درایو -->
-        <div class="border border-gray-100 rounded-xl p-4 mb-3">
-          <label class="flex items-center gap-2 text-sm font-medium mb-2">
-            <input type="checkbox" name="gd_enabled" {('checked' if int(_cb.get('gd_enabled') or 0) else '')}> 🟡 Google Drive</label>
-          <div class="grid md:grid-cols-2 gap-3">
-            <div><label class="text-xs text-gray-500 block mb-1">شناسه پوشه (Folder ID)</label>
-              <input type="text" name="gd_folder" value="{e(_cb.get('gd_folder',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">کلید Service Account (JSON)</label>
-              <textarea name="gd_sa_json" rows="3" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs" dir="ltr" placeholder='{{"type":"service_account",...}}'>{e(_cb.get('gd_sa_json',''))}</textarea></div>
+        <details class="border border-gray-100 rounded-xl mb-2 overflow-hidden">
+          <summary class="flex items-center gap-2 px-3 py-2.5 cursor-pointer text-xs font-medium select-none">
+            <input type="checkbox" name="gd_enabled" onclick="event.stopPropagation()" {('checked' if int(_cb.get('gd_enabled') or 0) else '')}>
+            🟡 Google Drive
+            <span class="mr-auto text-[10px] {('text-green-600' if (_cb.get('gd_refresh') or '').strip() else 'text-gray-300')}">{('✅ متصل' if (_cb.get('gd_refresh') or '').strip() else 'متصل نیست')}</span>
+          </summary>
+          <div class="px-3 pb-3 space-y-2">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input type="text" name="gd_client_id" id="gd_cid" value="{e(_cb.get('gd_client_id',''))}" placeholder="Client ID"
+                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
+              <input type="text" name="gd_client_secret" id="gd_csec" value="{e(_cb.get('gd_client_secret',''))}" placeholder="Client Secret"
+                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
+            </div>
+            <button type="button" onclick="cloudConnect('gdrive')"
+              class="w-full py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100">📧 اتصال با ایمیل گوگل</button>
+            <div id="gdrive_box" class="hidden p-2.5 bg-amber-50 rounded-lg text-xs leading-6"></div>
+            <p class="text-[10px] text-gray-400 leading-5">یک‌بار در <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-indigo-500">Google Cloud Console</a> یک OAuth Client از نوع «TVs and Limited Input devices» بسازید و ID/Secret را اینجا بگذارید. پوشه بکاپ خودکار ساخته می‌شود — چیزی روی سرور نصب نمی‌شود.</p>
           </div>
-          <p class="text-xs text-gray-400 mt-1">۱) در Google Cloud یک Service Account بسازید و کلید JSON بگیرید ۲) پوشه Drive را با ایمیل آن share کنید ۳) روی سرور: <code>pip install google-auth</code></p>
-        </div>
+        </details>
 
         <!-- وان‌درایو -->
-        <div class="border border-gray-100 rounded-xl p-4 mb-4">
-          <label class="flex items-center gap-2 text-sm font-medium mb-2">
-            <input type="checkbox" name="od_enabled" {('checked' if int(_cb.get('od_enabled') or 0) else '')}> 🔵 Microsoft OneDrive</label>
-          <div class="grid md:grid-cols-3 gap-3 items-end">
-            <div><label class="text-xs text-gray-500 block mb-1">Client ID برنامه Azure</label>
-              <input type="text" name="od_client_id" id="od_cid" value="{e(_cb.get('od_client_id',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">نام پوشه مقصد</label>
-              <input type="text" name="od_folder" value="{e(_cb.get('od_folder','StockLand-Backups'))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
-            <div class="text-sm">
-              وضعیت: {('<span class="text-green-600 font-medium">✅ متصل</span>' if (_cb.get('od_refresh') or '').strip() else '<span class="text-gray-400">متصل نیست</span>')}
-              <button type="button" onclick="odConnect()" class="mr-2 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs hover:bg-blue-100">🔗 اتصال / اتصال مجدد</button>
+        <details class="border border-gray-100 rounded-xl mb-3 overflow-hidden">
+          <summary class="flex items-center gap-2 px-3 py-2.5 cursor-pointer text-xs font-medium select-none">
+            <input type="checkbox" name="od_enabled" onclick="event.stopPropagation()" {('checked' if int(_cb.get('od_enabled') or 0) else '')}>
+            🔵 OneDrive
+            <span class="mr-auto text-[10px] {('text-green-600' if (_cb.get('od_refresh') or '').strip() else 'text-gray-300')}">{('✅ متصل' if (_cb.get('od_refresh') or '').strip() else 'متصل نیست')}</span>
+          </summary>
+          <div class="px-3 pb-3 space-y-2">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input type="text" name="od_client_id" id="od_cid" value="{e(_cb.get('od_client_id',''))}" placeholder="Client ID برنامه Azure"
+                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
+              <input type="text" name="od_folder" value="{e(_cb.get('od_folder','StockLand-Backups'))}" placeholder="نام پوشه"
+                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
             </div>
+            <button type="button" onclick="cloudConnect('onedrive')"
+              class="w-full py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold hover:bg-blue-100">📧 اتصال با ایمیل مایکروسافت</button>
+            <div id="onedrive_box" class="hidden p-2.5 bg-blue-50 rounded-lg text-xs leading-6"></div>
+            <p class="text-[10px] text-gray-400 leading-5">یک‌بار در <a href="https://portal.azure.com" target="_blank" class="text-indigo-500">Azure Portal</a> یک App Registration بسازید (Personal accounts + «Allow public client flows» روشن).</p>
           </div>
-          <div id="od_box" class="hidden mt-3 p-3 bg-blue-50 rounded-lg text-sm"></div>
-          <p class="text-xs text-gray-400 mt-2">در <a href="https://portal.azure.com" target="_blank" class="text-indigo-500">Azure Portal</a> یک App Registration بسازید (Supported accounts: Personal Microsoft accounts)، در Authentication گزینه «Allow public client flows» را روشن کنید و Client ID را اینجا بگذارید.</p>
-        </div>
+        </details>
 
-        <div class="flex items-center gap-3 flex-wrap">
-          <button type="submit" class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold">💾 ذخیره تنظیمات ابری</button>
+        <div class="grid grid-cols-2 gap-2">
+          <button type="submit" class="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold">💾 ذخیره</button>
           <button type="submit" formaction="/admin/database/cloud-run"
-            class="px-5 py-2.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-xl text-sm hover:bg-teal-100">▶ بکاپ + آپلود همین حالا</button>
+            class="py-2.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-xl text-xs font-semibold hover:bg-teal-100">▶ بکاپ و آپلود الان</button>
         </div>
       </form>
 
       <script>
-      var _odDevice = null;
-      function odConnect() {{
-        var cid = document.getElementById('od_cid').value.trim();
-        if (!cid) {{ alert('اول Client ID را وارد و ذخیره کنید'); return; }}
-        var box = document.getElementById('od_box');
+      var _devCodes = {{}};
+      function cloudConnect(prov) {{
+        var cid = document.getElementById(prov === 'gdrive' ? 'gd_cid' : 'od_cid').value.trim();
+        if (!cid) {{ alert('اول Client ID را وارد کنید'); return; }}
+        var body = 'client_id=' + encodeURIComponent(cid);
+        if (prov === 'gdrive') {{
+          var cs = document.getElementById('gd_csec').value.trim();
+          if (!cs) {{ alert('Client Secret را هم وارد کنید'); return; }}
+          body += '&client_secret=' + encodeURIComponent(cs);
+        }}
+        var box = document.getElementById(prov + '_box');
         box.classList.remove('hidden');
         box.innerHTML = 'در حال دریافت کد…';
-        fetch('/admin/database/onedrive/start', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
-          body: 'client_id=' + encodeURIComponent(cid)}})
+        fetch('/admin/database/' + prov + '/start', {{method:'POST',
+          headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body: body}})
           .then(function(r) {{ return r.json(); }})
           .then(function(d) {{
             if (!d.user_code) {{ box.innerHTML = '❌ ' + (d.error || 'خطا'); return; }}
-            _odDevice = d.device_code;
-            box.innerHTML = '۱) به <a href="' + d.verification_uri + '" target="_blank" class="text-indigo-600 underline">' + d.verification_uri + '</a> بروید<br>'
-              + '۲) این کد را وارد کنید: <code style="font-size:16px;font-weight:bold">' + d.user_code + '</code><br>'
-              + '۳) بعد از تأیید: <button type="button" onclick="odPoll()" class="mt-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs">✅ بررسی اتصال</button>';
+            _devCodes[prov] = d.device_code;
+            box.innerHTML = '۱) وارد <a href="' + d.verification_uri + '" target="_blank" class="text-indigo-600 underline font-bold">' + d.verification_uri + '</a> شوید و با ایمیل خود لاگین کنید<br>'
+              + '۲) این کد را وارد کنید: <code style="font-size:15px;font-weight:800;letter-spacing:1px">' + d.user_code + '</code><br>'
+              + '۳) سپس: <button type="button" onclick="cloudPoll(\'' + prov + '\')" class="mt-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs">✅ بررسی اتصال</button>';
           }}).catch(function() {{ box.innerHTML = '❌ خطا در ارتباط'; }});
       }}
-      function odPoll() {{
-        var cid = document.getElementById('od_cid').value.trim();
-        fetch('/admin/database/onedrive/poll', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
-          body: 'client_id=' + encodeURIComponent(cid) + '&device_code=' + encodeURIComponent(_odDevice || '')}})
+      function cloudPoll(prov) {{
+        var cid = document.getElementById(prov === 'gdrive' ? 'gd_cid' : 'od_cid').value.trim();
+        var body = 'client_id=' + encodeURIComponent(cid) + '&device_code=' + encodeURIComponent(_devCodes[prov] || '');
+        if (prov === 'gdrive') body += '&client_secret=' + encodeURIComponent(document.getElementById('gd_csec').value.trim());
+        fetch('/admin/database/' + prov + '/poll', {{method:'POST',
+          headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body: body}})
           .then(function(r) {{ return r.json(); }})
           .then(function(d) {{
-            if (d.status === 'ok') {{ alert('✅ OneDrive متصل شد!'); location.reload(); }}
-            else if (d.status === 'pending') {{ alert('⏳ هنوز تأیید نشده — بعد از ورود کد دوباره بزنید'); }}
+            if (d.status === 'ok') {{ alert('✅ متصل شد!'); location.reload(); }}
+            else if (d.status === 'pending') {{ alert('⏳ هنوز تأیید نشده — بعد از واردکردن کد دوباره بزنید'); }}
             else {{ alert('❌ ' + (d.error || 'خطا')); }}
           }});
       }}
@@ -10195,9 +10220,9 @@ async def database_cloud_save(request: Request):
         "retention":    max(1, min(60, int(g("retention", "7") or 7))),
         "tg_enabled":   onoff("tg_enabled"),
         "tg_channel":   g("tg_channel"),
-        "gd_enabled":   onoff("gd_enabled"),
-        "gd_folder":    g("gd_folder"),
-        "gd_sa_json":   g("gd_sa_json"),
+        "gd_enabled":       onoff("gd_enabled"),
+        "gd_client_id":     g("gd_client_id"),
+        "gd_client_secret": g("gd_client_secret"),
         "od_enabled":   onoff("od_enabled"),
         "od_client_id": g("od_client_id"),
         "od_folder":    g("od_folder") or "StockLand-Backups",
@@ -10220,6 +10245,55 @@ async def database_cloud_run(request: Request):
         return _redir(f"/admin/database?flash=❌+خطا:+{ex}#cloudbk")
     _log(request, "بکاپ ابری دستی", "دیتابیس", "run-now", admin_info=adm)
     return _redir("/admin/database?flash=▶+بکاپ+و+آپلود+شروع+شد+—+نتیجه+چند+لحظه+دیگر+در+وضعیت+همین+کارت#cloudbk")
+
+
+@router.post("/database/gdrive/start")
+async def database_gdrive_start(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    form = await request.form()
+    client_id = str(form.get("client_id") or "").strip()
+    if not client_id:
+        return JSONResponse({"error": "Client ID خالی است"})
+    try:
+        from backup_uploader import gdrive_devicecode_start
+        d = gdrive_devicecode_start(client_id)
+        return JSONResponse({
+            "user_code":        d.get("user_code"),
+            "verification_uri": d.get("verification_uri"),
+            "device_code":      d.get("device_code"),
+            "error":            d.get("error_description") or d.get("error"),
+        })
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:200]})
+
+
+@router.post("/database/gdrive/poll")
+async def database_gdrive_poll(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    form = await request.form()
+    client_id     = str(form.get("client_id") or "").strip()
+    client_secret = str(form.get("client_secret") or "").strip()
+    device_code   = str(form.get("device_code") or "").strip()
+    if not client_id or not client_secret or not device_code:
+        return JSONResponse({"status": "error", "error": "پارامتر ناقص"})
+    try:
+        from backup_uploader import gdrive_devicecode_poll, get_cloud_settings, save_cloud_settings
+        res = gdrive_devicecode_poll(client_id, client_secret, device_code)
+        if res.get("status") == "ok":
+            cfg = get_cloud_settings()
+            cfg["gd_refresh"]       = res["refresh_token"]
+            cfg["gd_client_id"]     = client_id
+            cfg["gd_client_secret"] = client_secret
+            save_cloud_settings(cfg)
+            _log(request, "اتصال Google Drive", "دیتابیس", "connected", admin_info=adm)
+            return JSONResponse({"status": "ok"})
+        return JSONResponse(res)
+    except Exception as ex:
+        return JSONResponse({"status": "error", "error": str(ex)[:200]})
 
 
 @router.post("/database/onedrive/start")
