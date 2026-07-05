@@ -8,6 +8,13 @@ admin_panel.py — پنل مدیریت وب استوک لند (نسخه کامل
   - مدیریت ادمین‌ها از پنل وب
 """
 
+# تقویم شمسی — در دسترس همه توابع پنل
+try:
+    from db import fa_date, fa_now  # noqa: F401
+except Exception:
+    def fa_date(d, with_time=False): return str(d or "—")[:16 if with_time else 10]
+    def fa_now(with_time=True): import datetime; return datetime.datetime.now().strftime("%Y/%m/%d  %H:%M" if with_time else "%Y/%m/%d")
+
 import hashlib
 import hmac as _hmac
 import html
@@ -1537,7 +1544,7 @@ async def dashboard(request: Request, err: str = ""):
     """ for index, (name, data) in enumerate(sorted(product_summary.items(), key=lambda item: (item[1]["count"], item[1]["revenue"]), reverse=True)[:5], 1))
 
     activity_rows = "".join(f"""
-      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {e(str(o['created_at'])[:16])}</small></span></div>
+      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {fa_date(str(o['created_at'], with_time=True))}</small></span></div>
     """ for o in recent[:5])
 
     def command_item(icon, label, value, meta, tone="cyan", href="#"):
@@ -1813,7 +1820,7 @@ async def card_receipts_page(request: Request, status: str = "pending", flash: s
         {'bg-amber-100 text-amber-700' if r['status']=='pending' else 'bg-green-100 text-green-700' if r['status']=='approved' else 'bg-red-100 text-red-600'}">
         {'⏳' if r['status']=='pending' else '✅' if r['status']=='approved' else '❌'}
       </span></td>
-      <td class="px-3 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:16]}</td>
+      <td class="px-3 py-3 text-xs text-gray-400">{fa_date(r['created_at'] or '', with_time=True)}</td>
       {'<td class="px-3 py-3 flex gap-1"><form method="post" action="/admin/receipts/' + str(r["id"]) + '/approve"><button class="px-2 py-1 bg-green-600 text-white rounded text-xs">✅ تأیید</button></form><form method="post" action="/admin/receipts/' + str(r["id"]) + '/reject"><button class="px-2 py-1 bg-red-50 text-red-600 border border-red-200 rounded text-xs">❌ رد</button></form></td>' if r['status']=='pending' else '<td></td>'}
     </tr>""" for r in receipts) or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>رسیدی یافت نشد</td></tr>"
 
@@ -1855,7 +1862,7 @@ async def receipt_view(request: Request, rid: int):
           <div class="flex justify-between"><span class="text-gray-400">کاربر</span><span>{e(r['full_name'] or str(r['user_id']))}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span class="font-bold text-green-600">{int(r['amount']):,} تومان</span></div>
           <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{r['status']}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">تاریخ</span><span>{(r['created_at'] or '')[:16]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">تاریخ</span><span>{fa_date(r['created_at'] or '', with_time=True)}</span></div>
         </div>
         {'''<div class="mt-4 space-y-3">
           <label class="text-sm font-medium text-gray-700 block">مبلغ تأیید شده (تومان)</label>
@@ -4498,7 +4505,7 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
           <td class="px-4 py-2 text-gray-400 font-mono">#{item["id"]}</td>
           <td class="px-4 py-2 font-mono text-xs truncate max-w-xs">{e(preview)}{dup_badge}</td>
           <td class="px-4 py-2">{badge}</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(item["created_at"] or "")[:10]}</td>
+          <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(item["created_at"] or "")}</td>
           <td class="px-4 py-2 flex gap-1">
             {_btn("ویرایش", f"/admin/feed/item/{item['id']}/edit", "indigo", small=True)}
             <form method="post" action="/admin/feed/item/{item['id']}/delete" onsubmit="return confirm('حذف شود؟')" class="inline">
@@ -5059,7 +5066,7 @@ async def discounts_list(request: Request, flash: str = ""):
           <td class="px-4 py-3"><code class="text-sm font-bold text-indigo-700">{e(c['code'])}</code></td>
           <td class="px-4 py-3 text-sm text-gray-700">{c['value']} {type_fa}{f" (سقف {max_v:,})" if max_v else ""}</td>
           <td class="px-4 py-3 text-xs text-gray-500">{real_u} / {c['max_uses'] or '∞'}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(c['expires_at'] or '—')[:10]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(c['expires_at']) if c['expires_at'] else '—'}</td>
           <td class="px-4 py-3">{flag_html}</td>
           <td class="px-4 py-3">{status_b}</td>
           <td class="px-4 py-3">
@@ -5155,7 +5162,7 @@ async def discounts_add(request: Request):
                 (code,dtype,value,max_uses,min_amt,exp))
         conn.commit()
     except Exception as ex:
-        return _redir(f"/admin/discounts?flash=خطا:+{str(ex)[:40]}")
+        return _redir(f"/admin/discounts?flash=خطا:+{str(ex)}")
     finally:
         conn.close()
     _log(request, "ایجاد کد تخفیف", "تخفیف", f"کد: {code} | نوع: {dtype} | مقدار: {value}")
@@ -5334,7 +5341,7 @@ async def orders_export_excel(request: Request, q: str = "", status: str = ""):
             ws.cell(ri, 4, o["title"] or "")
             ws.cell(ri, 5, int(o["price"] or 0))
             ws.cell(ri, 6, status_fa.get(o["status"] or "", o["status"] or ""))
-            ws.cell(ri, 7, (o["created_at"] or "")[:16])
+            ws.cell(ri, 7, fa_date(o["created_at"], with_time=True))
             if ri % 2 == 0:
                 for ci in range(1, 8):
                     ws.cell(ri, ci).fill = PatternFill("solid", fgColor="F8FAFB")
@@ -5360,7 +5367,7 @@ async def orders_export_excel(request: Request, q: str = "", status: str = ""):
             lines.append(f'{o["id"]},{o["user_id"] or ""},{o["category"] or ""},'
                          f'"{(o["title"] or "").replace(chr(34), "")}",'
                          f'{int(o["price"] or 0)},{status_fa.get(o["status"] or "", "")},'
-                         f'{(o["created_at"] or "")[:16]}')
+                         f'{fa_date(o["created_at"] or "", with_time=True)}')
         csv_content = "\ufeff" + "\n".join(lines)  # BOM برای UTF-8 در Excel
         _log(request, "خروجی CSV", "سفارش‌ها", f"{len(orders)} ردیف")
         return Response(
@@ -5421,7 +5428,7 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
           <td class="px-4 py-2">{e(o["title"])}</td>
           <td class="px-4 py-2 text-green-700 font-medium">{int(o["price"]):,} ت</td>
           <td class="px-4 py-2">{order_status_badge(st)}</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(o["created_at"] or "")[:16]}</td>
+          <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(o["created_at"] or "", with_time=True)}</td>
           <td class="px-4 py-2 flex gap-1 items-center">{action_btns}</td>
         </tr>"""
 
@@ -5812,7 +5819,7 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
       <td class="px-4 py-2 text-xs"><a href="/admin/tickets/{t['id']}" class="text-indigo-600">#{t['id']}</a></td>
       <td class="px-4 py-2 text-xs">{e((t['type'] if 'type' in t.keys() else '') or 'پشتیبانی')}</td>
       <td class="px-4 py-2 text-xs text-gray-400">{e((t['status'] or '')[:20])}</td>
-      <td class="px-4 py-2 text-xs text-gray-400">{(t['updated_at'] or '')[:16]}</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{fa_date(t['updated_at'] or '', with_time=True)}</td>
     </tr>""" for t in tickets)
 
     note_val = e(user.get("admin_note", "") or "")
@@ -5838,8 +5845,8 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
         <div class="space-y-2 text-sm">
           <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-2 rounded">{user['user_id']}</code></div>
           <div class="flex justify-between"><span class="text-gray-400">یوزرنیم</span><span>{"@"+e(user['username']) if user['username'] else "—"}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(user['first_seen'] or '')[:10]}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">آخرین فعالیت</span><span>{(user['last_seen'] or '')[:10]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{fa_date(user['first_seen'] or '')}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">آخرین فعالیت</span><span>{fa_date(user['last_seen'] or '')}</span></div>
         </div>
         <div class="mt-4 pt-4 border-t flex gap-2">
           <a href="/admin/wallets?q={uid}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-3 py-1.5 text-xs">مدیریت کیف‌پول</a>
@@ -5962,8 +5969,8 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
           <td class="px-4 py-3"><code class="text-xs bg-gray-100 px-1.5 rounded">{u["user_id"]}</code></td>
           <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(u["full_name"] or "—")}{partner_badge}</td>
           <td class="px-4 py-3 text-xs text-gray-400">{"@"+e(u["username"]) if u["username"] else "—"}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(u["first_seen"] or "")[:10]}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(u["last_seen"] or "")[:10]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(u["first_seen"] or "")}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(u["last_seen"] or "")}</td>
           <td class="px-4 py-3 text-sm font-bold text-gray-700">{u["orders"] or 0}</td>
           <td class="px-4 py-3 text-sm font-bold text-green-600">{int(u["balance"] or 0):,}</td>
           <td class="px-4 py-3">{status_badge}</td>
@@ -6067,7 +6074,7 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
         <tr class="border-b hover:bg-gray-50 text-sm">
           <td class="px-4 py-2 font-mono text-xs"><code>{w["user_id"]}</code></td>
           <td class="px-4 py-2 font-bold text-{"green" if int(w["balance"])>0 else "gray"}-700">{int(w["balance"]):,} ت</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(w["updated_at"] or "")[:16]}</td>
+          <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(w["updated_at"] or "", with_time=True)}</td>
           <td class="px-4 py-2">
             <details class="inline-block">
               <summary class="cursor-pointer px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 list-none">✏️ ویرایش موجودی</summary>
@@ -6385,7 +6392,7 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
       <td class="px-4 py-3 text-xs text-gray-500">{e(l["section"] or "—")}</td>
       <td class="px-4 py-3 text-xs text-gray-500 max-w-xs truncate" title="{e(l['details'] or '')}">{e((l["details"] or "")[:60])}</td>
       <td class="px-4 py-3 text-xs font-mono text-gray-400">{e(l["ip"] or "—")}</td>
-      <td class="px-4 py-3 text-xs text-gray-400">{e((l["created_at"] or "")[:16])}</td>
+      <td class="px-4 py-3 text-xs text-gray-400">{fa_date(l["created_at"] or "", with_time=True)}</td>
     </tr>""" for l in logs)
 
     section_opts = "<option value=''>همه بخش‌ها</option>" + "".join(
@@ -6513,7 +6520,7 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
           <td class="px-3 py-3 text-xs text-gray-400"><code>{r['user_id']}</code></td>
           <td class="px-3 py-3 font-bold text-green-600">{r['amount']:,}</td>
           <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs {sc}">{sl}</span></td>
-          <td class="px-3 py-3 text-xs text-gray-400">{r['created_at'][:16]}</td>
+          <td class="px-3 py-3 text-xs text-gray-400">{fa_date(r['created_at'], with_time=True)}</td>
           <td class="px-3 py-3"><a href="{r['detail_url']}" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده و رسیدگی</a></td>
         </tr>""")
 
@@ -6748,7 +6755,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
           <td class="px-4 py-3" data-label="وضعیت">{status_b}</td>
           <td class="px-4 py-3 text-xs text-gray-400" data-label="محصول">{last_col}</td>
           <td class="px-4 py-3 text-xs text-gray-400" data-label="پیام‌ها">{int(t['msg_count'] or 0)} پیام</td>
-          <td class="px-4 py-3 text-xs text-gray-400" data-label="آپدیت">{(t['updated_at'] or '')[:16]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400" data-label="آپدیت">{fa_date(t['updated_at'] or '', with_time=True)}</td>
           <td class="px-4 py-3 whitespace-nowrap" data-label="">{action_btns}</td>
         </tr>"""
         ticket_rows_list.append(row_html)
@@ -6954,7 +6961,7 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
         try: src = msg["source"] or ""
         except: src = ""
         src_icon = "🖥" if src not in ("telegram", "") else "📱"
-        time_str = (msg["created_at"] or "")[:16]
+        time_str = fa_date(msg["created_at"] or "", with_time=True)
         if is_adm:
             return f"""
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px" data-msg-id="{msg['id']}">
@@ -7137,7 +7144,7 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             <dt style="color:var(--text-muted)">User ID</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">{user_id_val}</code></dd>
             <dt style="color:var(--text-muted)">نوع</dt><dd style="font-weight:600">{type_label}</dd>
             <dt style="color:var(--text-muted)">پیام‌ها</dt><dd style="font-weight:700;color:var(--primary)">{len(messages)}</dd>
-            <dt style="color:var(--text-muted)">تاریخ</dt><dd style="color:var(--text-muted)">{(ticket["created_at"] or "")[:16]}</dd>
+            <dt style="color:var(--text-muted)">تاریخ</dt><dd style="color:var(--text-muted)">{fa_date(ticket["created_at"] or "", with_time=True)}</dd>
           </dl>
         </div>
         <div class="card card-p">
@@ -7328,7 +7335,7 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
         conn.commit()
     except Exception as ex:
         _tg_logger.error("ticket_reply DB error: %s", ex)
-        return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)[:50]}")
+        return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)}")
     finally:
         conn.close()
 
@@ -8174,7 +8181,7 @@ async def accounting_cashflow(request: Request, df: str="", dt: str=""):
     rows_data = get_cashflow(df, dt, 200)
     tc = {"فروش":"green","شارژ کیف‌پول":"blue","هزینه":"red","پورسانت":"amber"}
     rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 text-xs text-gray-400">{r["created_at"][:16]}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{fa_date(r["created_at"], with_time=True)}</td>
       <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs bg-{tc.get(r["type"],"gray")}-100 text-{tc.get(r["type"],"gray")}-700">{r["type"]}</span></td>
       <td class="px-3 py-2 text-xs">{str(r["description"] or "")[:40]}</td>
       <td class="px-3 py-2 font-bold {"text-green-600" if r["direction"]=="income" else "text-red-500"}">{"+" if r["direction"]=="income" else "-"}{int(r["amount"] or 0):,}</td>
@@ -8352,7 +8359,7 @@ async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
           <td class="px-4 py-3 text-sm font-medium">{e(n['author'])}</td>
           <td class="px-4 py-3 text-sm">{e((n['text'] or '')[:60])}{'...' if len(n['text'] or '')>60 else ''}</td>
           <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(n['created_at'] or '')[:16]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(n['created_at'] or '', with_time=True)}</td>
           <td class="px-4 py-3 text-xs text-indigo-500">{n['reply_count']} پاسخ</td>
           <td class="px-4 py-3 flex gap-1">
             <a href="/admin/notes/{n['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">مشاهده</a>
@@ -8433,7 +8440,7 @@ async def admin_note_detail(request: Request, nid: int, flash: str = ""):
     reply_rows = "".join(f"""<div class="p-4 bg-gray-50 rounded-lg mb-2">
       <div class="flex justify-between text-xs text-gray-400 mb-1">
         <span class="font-medium text-gray-700">{e(r['author'])}</span>
-        <span>{(r['created_at'] or '')[:16]}</span>
+        <span>{fa_date(r['created_at'] or '', with_time=True)}</span>
       </div>
       <p class="text-sm text-gray-800">{e(r['text'])}</p>
     </div>""" for r in replies)
@@ -8448,7 +8455,7 @@ async def admin_note_detail(request: Request, nid: int, flash: str = ""):
         <div class="flex justify-between items-start mb-4">
           <div>
             <div class="text-sm font-medium text-gray-700">{e(note['author'])}</div>
-            <div class="text-xs text-gray-400">{(note['created_at'] or '')[:16]}</div>
+            <div class="text-xs text-gray-400">{fa_date(note['created_at'] or '', with_time=True)}</div>
           </div>
           <span class="px-2 py-1 text-xs rounded-full {'bg-green-100 text-green-700' if note['status']=='done' else 'bg-amber-100 text-amber-700'}">
             {'✅ انجام شد' if note['status']=='done' else '🔵 باز'}
@@ -8770,7 +8777,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <td class="px-4 py-3">{e(p['full_name'] or str(p['user_id']))}</td>
               <td class="px-4 py-3 font-bold text-green-600">{int(p['amount']):,} ت</td>
               <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
-              <td class="px-4 py-3 text-xs text-gray-400">{(p['created_at'] or '')[:10]}</td>
+              <td class="px-4 py-3 text-xs text-gray-400">{fa_date(p['created_at'] or '')}</td>
               <td class="px-4 py-3">{acts}<a href="/admin/partners/payout/{p['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded mr-1">جزئیات</a></td>
             </tr>"""
 
@@ -9175,7 +9182,7 @@ def _build_partner_tree(conn) -> dict:
             "direct": len(kids), "total": total_subs.get(n, 0),
             "depth": depth.get(n, 1),
             "status": (p["st"] if p else "user"),
-            "joined": joined.get(n, "") or ((u["fs"] or "")[:10] if u else ""),
+            "joined": fa_date(joined.get(n, "") or (u["fs"] if u else "")),
         }
 
     stats = {
@@ -9284,7 +9291,7 @@ async def partner_profile_admin(request: Request, uid: int):
         <td class="px-4 py-2.5">{e(o['title'] or '—')}</td>
         <td class="px-4 py-2.5 font-medium">{int(o['price'] or 0):,} ت</td>
         <td class="px-4 py-2.5">{'<span class="px-2 py-0.5 text-xs bg-red-100 text-red-600 rounded-full">برگشتی</span>' if (o['status'] or 'active')=='returned' else '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'}</td>
-        <td class="px-4 py-2.5 text-xs text-gray-400">{(o['created_at'] or '')[:10]}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400">{fa_date(o['created_at'] or '')}</td>
       </tr>""" for o in orders)
 
     sub_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
@@ -9454,7 +9461,7 @@ async def partner_payout_detail(request: Request, pid: int, flash: str = ""):
           <div class="flex justify-between"><span class="text-gray-400">فروشگاه</span><span>{e(pay['shop_name'] or '—')}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">شهر</span><span>{e(pay['city'] or '—')}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">موبایل</span><span>{e(pay['phone'] or '—')}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(pay['first_seen'] or '')[:10]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{fa_date(pay['first_seen'] or '')}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">سطح</span><span>{tier['icon']} {tier['name']}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-1.5 rounded">{uid}</code></div>
         </div>
@@ -9489,7 +9496,7 @@ async def partner_payout_detail(request: Request, pid: int, flash: str = ""):
           <div class="text-xs text-gray-400">مجموع تسویه (ت)</div>
         </div>
         <div class="text-center p-3 bg-gray-50 rounded-lg">
-          <div class="font-bold text-gray-700">{(last_payout['created_at'] or '—')[:10] if last_payout else '—'}</div>
+          <div class="font-bold text-gray-700">{fa_date(last_payout['created_at'] or '—') if last_payout else '—'}</div>
           <div class="text-xs text-gray-400">آخرین تسویه</div>
         </div>
         <div class="text-center p-3 bg-gray-50 rounded-lg">
@@ -9753,7 +9760,7 @@ async def growth_page(request: Request, flash: str = ""):
     sale_rows = "".join(f"""<tr class="border-b text-sm hover:bg-gray-50">
         <td class="px-3 py-2">{e(s['title'])}</td>
         <td class="px-3 py-2 font-bold text-red-600">{s['percent']}٪</td>
-        <td class="px-3 py-2 text-xs text-gray-400">{(s['ends_at'] or '')[:16]}</td>
+        <td class="px-3 py-2 text-xs text-gray-400">{fa_date(s['ends_at'], with_time=True)}</td>
         <td class="px-3 py-2">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">🔴 زنده</span>' if s['live'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-400 rounded-full">پایان‌یافته</span>'}</td>
         <td class="px-3 py-2 whitespace-nowrap">
           {f'<form method="post" action="/admin/growth/flash/{s["id"]}/off" class="inline"><button class="text-xs text-amber-600 hover:underline ml-2">⏸ توقف</button></form>' if s['live'] else ''}
