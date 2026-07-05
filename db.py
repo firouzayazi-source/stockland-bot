@@ -6,6 +6,77 @@ from config import DB_PATH, BASE_DIR
 
 # اگر DB_PATH در config نسبی باشد، به BASE_DIR وصل میکنیم
 DB_FULL_PATH = DB_PATH
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── تقویم شمسی + اعداد فارسی ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+from datetime import date as _date, timedelta as _td
+
+_NRZ = {
+    1395:_date(2016,3,20),1396:_date(2017,3,21),1397:_date(2018,3,21),
+    1398:_date(2019,3,21),1399:_date(2020,3,20),1400:_date(2021,3,21),
+    1401:_date(2022,3,21),1402:_date(2023,3,21),1403:_date(2024,3,20),
+    1404:_date(2025,3,20),1405:_date(2026,3,21),1406:_date(2027,3,21),
+    1407:_date(2028,3,20),1408:_date(2029,3,20),1409:_date(2030,3,20),
+    1410:_date(2031,3,21),
+}
+_REF_JY, _REF_G = 1403, _NRZ[1403]
+
+def _is_leap_j(jy):
+    return (((jy-474)%2820+475)*682)%2816 < 682
+
+def _to_jalali(gy, gm, gd):
+    try:
+        g = _date(gy, gm, gd)
+    except Exception:
+        return 1400, 1, 1
+    jy = _REF_JY + (g - _REF_G).days // 365
+    for _ in range(5):
+        if jy in _NRZ:
+            nrz = _NRZ[jy]
+        else:
+            d = 0
+            if jy > _REF_JY:
+                for y in range(_REF_JY, jy): d += 366 if _is_leap_j(y) else 365
+                nrz = _REF_G + _td(days=d)
+            else:
+                for y in range(jy, _REF_JY): d += 366 if _is_leap_j(y) else 365
+                nrz = _REF_G - _td(days=d)
+        nxt = _NRZ.get(jy+1, nrz+_td(days=366 if _is_leap_j(jy) else 365))
+        if g < nrz: jy -= 1; continue
+        if g >= nxt: jy += 1; continue
+        break
+    diff = (g - nrz).days
+    mlen = [31]*6+[30]*5+[30 if _is_leap_j(jy) else 29]
+    for jm, ml in enumerate(mlen, 1):
+        if diff < ml: return jy, jm, diff+1
+        diff -= ml
+    return jy, 12, 29
+
+_FA_TBL = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+def fa_date(dt_str, with_time: bool = False) -> str:
+    """تبدیل ISO تاریخ به شمسی فارسی."""
+    if not dt_str: return "—"
+    try:
+        s = str(dt_str).strip()[:19].replace("T"," ")
+        jy,jm,jd = _to_jalali(int(s[:4]),int(s[5:7]),int(s[8:10]))
+        r = f"{jy}/{jm:02d}/{jd:02d}"
+        if with_time and len(s) >= 16: r += f"  {s[11:16]}"
+        return r.translate(_FA_TBL)
+    except Exception:
+        return str(dt_str)[:10]
+
+def fa_now(with_time: bool = True) -> str:
+    import datetime as _dtt
+    now = _dtt.datetime.now()
+    jy,jm,jd = _to_jalali(now.year, now.month, now.day)
+    r = f"{jy}/{jm:02d}/{jd:02d}"
+    if with_time: r += f"  {now.strftime('%H:%M')}"
+    return r.translate(_FA_TBL)
+
 if not os.path.isabs(DB_FULL_PATH):
     DB_FULL_PATH = os.path.join(BASE_DIR, DB_PATH)
 
@@ -2760,7 +2831,7 @@ def process_referral_reward(referred_id: int, order_id: int) -> dict:
 
 def process_referral_commission(referred_id: int, order_id: int, order_price: int) -> dict:
     """
-    پورسانت روی «هر» خرید زیرمجموعه — بر اساس سطح معرف:
+    پورسانت روی خرید دعوت‌شده — فقط برای معرفِ همکار تأییدشده:
       1. اگر سطح معرف مبلغ ثابت (commission_fixed) دارد → همان مبلغ
       2. وگرنه اگر سطح درصد (commission_percent) دارد → درصدی از مبلغ سفارش
       3. وگرنه → درصد عمومی از partner_commission
@@ -2778,6 +2849,9 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
         if not ref:
             return {"paid": False}
         referrer_id = int(ref["referrer_id"])
+        # ← مورد ۱۰: فقط همکار تأییدشده پورسانت می‌گیرد
+        if not _is_approved_partner(referrer_id):
+            return {"paid": False}
 
         # تنظیمات عمومی پورسانت
         gset = conn.execute("SELECT * FROM partner_commission WHERE id=1;").fetchone()
@@ -2826,6 +2900,48 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
     return {"paid": True, "referrer_id": referrer_id, "amount": amount,
             "tier_name": tier_name, "wallet": wallet}
 
+
+
+
+def check_and_notify_tier_up(user_id: int) -> dict | None:
+    """سطح فعلی و قبلی همکار را مقایسه می‌کند — اگر ارتقا یافته، اطلاعات برمی‌گرداند."""
+    ensure_partner_tiers_extended()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        # تعداد خریدهای همکاری
+        order_count = conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? "
+            "AND buyer_type='partner' AND COALESCE(status,'active')!='returned';",
+            (user_id,)).fetchone()[0]
+        tiers = conn.execute(
+            "SELECT * FROM partner_tiers ORDER BY min_orders ASC;"
+        ).fetchall()
+        if not tiers:
+            return None
+        # سطح فعلی
+        cur_tier = tiers[0]
+        for t in tiers:
+            if order_count >= int(t["min_orders"] or 0):
+                cur_tier = t
+        # سطح ثبت‌شده در پارتنر (notified_tier)
+        pr = conn.execute(
+            "SELECT notified_tier FROM partners WHERE CAST(tg_user_id AS INTEGER)=?;",
+            (user_id,)).fetchone()
+        old_tier_id = int(pr["notified_tier"] or 0) if pr and pr["notified_tier"] else 0
+        new_tier_id = int(cur_tier["id"])
+        if new_tier_id > old_tier_id:
+            # به‌روزرسانی ستون notified_tier
+            conn.execute(
+                "UPDATE partners SET notified_tier=? WHERE CAST(tg_user_id AS INTEGER)=?;",
+                (new_tier_id, user_id))
+            conn.commit()
+            return {"tier": dict(cur_tier), "old_tier_id": old_tier_id}
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
 
 def get_referral_stats(referrer_id: int) -> dict:
     ensure_referral_schema()
@@ -3301,7 +3417,14 @@ def ensure_partner_system_schema():
         c2 = conn.execute("SELECT COUNT(*) FROM partner_commission;").fetchone()[0]
         if c2 == 0:
             conn.execute("INSERT INTO partner_commission (id,percent,min_order,max_payout,is_active) VALUES (1,5.0,0,0,1);")
-            conn.commit()
+            # مهاجرت ستون notified_tier در جدول partners
+        try:
+            pcols = {r[1] for r in conn.execute("PRAGMA table_info(partners);").fetchall()}
+            if "notified_tier" not in pcols:
+                conn.execute("ALTER TABLE partners ADD COLUMN notified_tier INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+        conn.commit()
     finally:
         conn.close()
 
@@ -4145,6 +4268,9 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             "gross_profit":      gross_profit,
             "net_profit":        net_profit,
             "payout_count":      payout_count,
+            "total_payouts":     int(conn.execute(
+                "SELECT COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='paid';"
+            ).fetchone()[0] or 0),
             "payout_total":      payout_total,
             "stock_count":       int(stock_count or 0),
             "avg_profit":        avg_profit,
@@ -5008,6 +5134,70 @@ def credit_referrer(referrer_id: int, amount: int, note: str) -> str:
     return "main"
 
 
+
+
+def ensure_invite_cap_schema():
+    """ستون invite_count در جدول users."""
+    conn = _get_connection()
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(users);").fetchall()}
+        if "invite_count" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN invite_count INTEGER DEFAULT 0;")
+        if "invite_cap_reset" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN invite_cap_reset INTEGER DEFAULT 0;")
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def check_invite_cap(referrer_id: int) -> dict:
+    """بررسی سقف دعوت — {ok, count, cap, reset_needed}."""
+    from db import get_cfg_json
+    settings = get_cfg_json("referral_settings_ext", {
+        "max_invites": 0, "cap_reset_on_purchase": 1})
+    cap = int(settings.get("max_invites") or 0)
+    if cap <= 0:
+        return {"ok": True, "count": 0, "cap": 0}
+    ensure_invite_cap_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT invite_count, invite_cap_reset FROM users WHERE CAST(user_id AS INTEGER)=?;",
+            (referrer_id,)).fetchone()
+        count = int(row[0] if row else 0)
+        reset = int(row[1] if row else 0)
+        return {"ok": count < cap or bool(reset), "count": count, "cap": cap,
+                "reset_after_purchase": int(settings.get("cap_reset_on_purchase") or 1)}
+    finally:
+        conn.close()
+
+
+def increment_invite_count(referrer_id: int):
+    ensure_invite_cap_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET invite_count=COALESCE(invite_count,0)+1 WHERE CAST(user_id AS INTEGER)=?;",
+            (referrer_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reset_invite_cap_after_purchase(user_id: int):
+    """بعد از خرید، سقف دعوت مجدداً فعال می‌شود."""
+    ensure_invite_cap_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET invite_count=0, invite_cap_reset=0 WHERE CAST(user_id AS INTEGER)=?;",
+            (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
 def pay_signup_referral_reward(referrer_id: int, referred_id: int) -> dict:
     """پاداش ثابت معرفی — همان لحظه عضویت، فقط یک‌بار (قفل با پرچم rewarded).
     Returns: {paid, amount, wallet}"""
@@ -5020,15 +5210,19 @@ def pay_signup_referral_reward(referrer_id: int, referred_id: int) -> dict:
         return {"paid": False}
     conn = _get_connection()
     try:
-        # قفل اتمیک: فقط اگر rewarded=0 بود، 1 کن
+        # قفل اتمیک + ثبت مبلغ و زمان — باگ قبلی: reward_amount پر نمی‌شد
         conn.execute(
-            "UPDATE referrals SET rewarded=1 WHERE referrer_id=? AND referred_id=? AND rewarded=0;",
-            (referrer_id, referred_id))
+            "UPDATE referrals SET rewarded=1, reward_amount=?, rewarded_at=datetime('now','localtime') "
+            "WHERE referrer_id=? AND referred_id=? AND rewarded=0;",
+            (amount, referrer_id, referred_id))
         changed = conn.execute("SELECT changes();").fetchone()[0]
         conn.commit()
     finally:
         conn.close()
     if not changed:
+        return {"paid": False}
+    # ← مورد ۱۰: فقط همکار تأییدشده پاداش دعوت می‌گیرد
+    if not _is_approved_partner(referrer_id):
         return {"paid": False}
     wallet = credit_referrer(referrer_id, amount,
                              note=f"پاداش معرفی کاربر {referred_id}")
