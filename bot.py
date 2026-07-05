@@ -367,8 +367,18 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     # ضمانت
     guarantee = _build_guarantee_text()
 
+    # مورد ۵: نمایش قیمت عادی خط‌خورده برای همکار
+    partner_ok_view = (user_id and is_partner_approved(int(user_id)))
     if _flash_sale:
         _price_line = f"قیمت: <s>{int(price):,}</s> ← <b>{eff_price:,}</b> تومان 🔥\n"
+    elif partner_ok_view and product[6] and int(product[6]) < int(price):
+        saving = int(price) - int(eff_price)
+        pct = round(saving * 100 / int(price))
+        _price_line = (
+            f"قیمت مشتری عادی: <s>{int(price):,}</s>\n"
+            f"💚 قیمت همکاری شما: <b>{eff_price:,}</b> تومان\n"
+            f"💰 سود شما: <b>{saving:,} تومان ({pct}٪)</b>\n"
+        )
     else:
         _price_line = f"قیمت: <b>{eff_price:,}</b> تومان\n"
 
@@ -1147,7 +1157,30 @@ def handle_start(message):
                     ensure_referral_schema()
                     settings = get_referral_settings()
                     if settings.get("is_active"):
+                        from db import check_invite_cap, increment_invite_count
+                        _cap = check_invite_cap(referrer_id)
+                        if not _cap["ok"]:
+                            # سقف پر است
+                            try:
+                                _cap_msg = (
+                                    "\u2705 \u06cc\u06a9 \u062f\u0648\u0633\u062a "
+                                    "\u062c\u062f\u06cc\u062f \u0628\u0627 \u0644\u06cc\u0646\u06a9 "
+                                    "\u0634\u0645\u0627 \u0639\u0636\u0648 \u0634\u062f!\n\n"
+                                    "\u26a0\ufe0f \u0634\u0645\u0627 \u0628\u0647 \u0633\u0642\u0641 "
+                                    "\u062f\u0631\u06cc\u0627\u0641\u062a \u067e\u0627\u062f\u0627\u0634 "
+                                    "\u062f\u0639\u0648\u062a \u0631\u0633\u06cc\u062f\u0647\u200c\u0627\u06cc\u062f.\n"
+                                    "\u0628\u0631\u0627\u06cc \u0641\u0639\u0627\u0644\u200c\u0633\u0627\u0632\u06cc "
+                                    "\u0645\u062c\u062f\u062f\u060c \u062d\u062f\u0627\u0642\u0644 "
+                                    "\u06cc\u06a9 \u062e\u0631\u06cc\u062f \u0645\u0648\u0641\u0642 "
+                                    "\u0627\u0646\u062c\u0627\u0645 \u062f\u0647\u06cc\u062f."
+                                )
+                                bot.send_message(referrer_id, _cap_msg)
+                            except Exception:
+                                pass
+                            return  # ثبت نمی‌شود
                         is_new = register_referral(referrer_id, uid)
+                        if is_new:
+                            increment_invite_count(referrer_id)
                         # 🔎 لاگ تشخیصی — برای ردیابی معرفی‌های ثبت‌نشده
                         try:
                             if is_new:
@@ -1613,6 +1646,38 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                     parse_mode="HTML")
             except Exception:
                 pass
+    except Exception:
+        pass
+
+    # مورد ۶: بررسی Level Up بعد از هر خرید همکاری
+    try:
+        from db import check_and_notify_tier_up
+        lu = check_and_notify_tier_up(uid)
+        if lu:
+            t = lu["tier"]
+            comm_lbl = (f"{int(t.get('commission_fixed') or 0):,} تومان ثابت"
+                        if int(t.get("commission_fixed") or 0) > 0
+                        else f"{t.get('commission_percent') or 0}٪")
+            desc = str(t.get("description") or "").strip()
+            tier_icon = t.get("icon","⭐")
+            tier_name = t.get("name","")
+            _sep = "\n"
+            lvl_msg = (
+                tier_icon + " <b>\u062a\u0628\u0631\u06cc\u06a9! \u0628\u0647 \u0633\u0637\u062d \u00ab" + tier_name + "\u00bb \u0627\u0631\u062a\u0642\u0627 \u06cc\u0627\u0641\u062a\u06cc\u062f!</b>\n\n"
+                "\U0001f4b0 \u067e\u0648\u0631\u0633\u0627\u0646\u062a \u062c\u062f\u06cc\u062f: <b>" + comm_lbl + "</b> \u0627\u0632 \u0647\u0631 \u0641\u0631\u0648\u0634\n"
+            )
+            if desc:
+                lvl_msg += "\u2728 " + desc + "\n"
+            lvl_msg += "\n\U0001f4aa \u062a\u06cc\u0645 \u0641\u0631\u0648\u0634 \u0634\u0645\u0627 \u0631\u0634\u062f \u0645\u06cc\u200c\u06a9\u0646\u062f \u2014 \u0627\u062f\u0627\u0645\u0647 \u062f\u0647\u06cc\u062f!"
+            try: bot.send_message(uid, lvl_msg, parse_mode="HTML")
+            except Exception: pass
+    except Exception:
+        pass
+
+    # مورد ۷ج: reset سقف دعوت بعد از خرید
+    try:
+        from db import reset_invite_cap_after_purchase
+        reset_invite_cap_after_purchase(uid)
     except Exception:
         pass
 
@@ -3542,8 +3607,11 @@ def handle_partner_transfer(message):
 @bot.callback_query_handler(func=lambda c: c.data == "partner_payout")
 def cb_partner_payout(call):
     uid = call.from_user.id
-    from db import get_partner_wallet_balance, get_partner_payout_settings, ensure_partner_wallet_schema
+    from db import (get_partner_wallet_balance, get_partner_payout_settings,
+                    ensure_partner_wallet_schema, get_partner_bank_info,
+                    ensure_partner_bank_schema, ensure_partner_bank_address)
     ensure_partner_wallet_schema()
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
     settings = get_partner_payout_settings()
     if not settings.get("is_active"):
         bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
@@ -3556,18 +3624,95 @@ def cb_partner_payout(call):
             show_alert=True)
         return
     bot.answer_callback_query(call.id)
-    max_a = int(settings.get("max_amount") or 0)
+
+    # مورد ۴: بررسی اطلاعات بانکی — اگر ناقص است ابتدا جمع‌آوری کن
+    bank = get_partner_bank_info(uid)
+    if not bank or not (bank.get("iban") or "").strip() or not (bank.get("owner_name") or "").strip():
+        user_states[uid] = {"mode": "payout_collect_bank", "step": "owner_name", "bal": bal}
+        bot.send_message(call.message.chat.id,
+            "🏦 <b>برای ثبت درخواست تسویه، اطلاعات حساب بانکی لازم است.</b>\n\n"
+            "لطفاً <b>نام صاحب حساب</b> را وارد کنید:",
+            parse_mode="HTML")
+        return
+
+    max_a  = int(settings.get("max_amount") or 0)
     max_pm = int(settings.get("max_per_month") or 0)
     user_states[uid] = {"mode": "partner_payout", "bal": bal}
+    _iban  = (bank.get("iban") or "").strip()
+    _owner = (bank.get("owner_name") or bank.get("iban") or "—").strip()
     text = (
         f"📤 <b>درخواست تسویه</b>\n\n"
         f"موجودی: <b>{bal:,}</b> تومان\n"
-        f"{'حداقل: '+format(min_a,',')+'تومان' if min_a else ''}\n"
-        f"{'حداکثر: '+format(max_a,',')+'تومان' if max_a else ''}\n"
+        f"{'حداقل: '+format(min_a,',')+' تومان' if min_a else ''}\n"
+        f"{'حداکثر: '+format(max_a,',')+' تومان' if max_a else ''}\n"
         f"{'سقف ماهانه: '+str(max_pm)+' درخواست' if max_pm else ''}\n\n"
+        f"🏦 پرداخت به: <b>{_owner}</b> — <code>{_iban}</code>\n\n"
         "مبلغ درخواستی را وارد کنید:"
     )
     bot.send_message(call.message.chat.id, text, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "payout_collect_bank")
+def handle_payout_collect_bank(message):
+    """جمع‌آوری اطلاعات بانکی قبل از تسویه — مرحله‌ای."""
+    uid = message.from_user.id
+    state = user_states.get(uid, {})
+    step  = state.get("step")
+    text  = (message.text or "").strip()
+    if not text:
+        bot.reply_to(message, "❌ لطفاً متن وارد کنید.")
+        return
+
+    from db import ensure_partner_bank_schema, ensure_partner_bank_address
+    import sqlite3 as _sq
+    from config import DB_PATH as _DBP
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+
+    if step == "owner_name":
+        state["owner_name"] = text
+        state["step"] = "iban"
+        user_states[uid] = state
+        bot.reply_to(message,
+            "✅ نام ذخیره شد.\n\n"
+            "حالا <b>شماره شبا</b> را وارد کنید (با یا بدون IR):",
+            parse_mode="HTML")
+    elif step == "iban":
+        iban = text.upper().replace(" ", "").replace("-", "")
+        if not iban.startswith("IR"):
+            iban = "IR" + iban
+        if len(iban) != 26 or not iban[2:].isdigit():
+            bot.reply_to(message,
+                "❌ شماره شبا نامعتبر است.\n"
+                "شبا باید ۲۴ رقم داشته باشد (IR + ۲۴ رقم).\n"
+                "دوباره وارد کنید:")
+            return
+        owner = state.get("owner_name", "")
+        try:
+            conn = _sq.connect(_DBP)
+            existing = conn.execute(
+                "SELECT 1 FROM partner_bank_info WHERE user_id=?;", (uid,)).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE partner_bank_info SET owner_name=?,iban=?,updated_at=datetime('now') WHERE user_id=?;",
+                    (owner, iban, uid))
+            else:
+                conn.execute(
+                    "INSERT INTO partner_bank_info (user_id,owner_name,iban) VALUES (?,?,?);",
+                    (uid, owner, iban))
+            conn.commit(); conn.close()
+        except Exception as ex:
+            bot.reply_to(message, f"❌ خطا در ذخیره: {ex}")
+            return
+
+        # ادامه به تسویه
+        bal = state.get("bal", 0)
+        user_states[uid] = {"mode": "partner_payout", "bal": bal}
+        bot.reply_to(message,
+            f"✅ اطلاعات بانکی ذخیره شد.\n\n"
+            f"🏦 <b>{owner}</b> — <code>{iban}</code>\n\n"
+            f"موجودی شما: <b>{bal:,}</b> تومان\n"
+            "مبلغ درخواستی را وارد کنید:",
+            parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_payout")
@@ -3811,6 +3956,11 @@ def handle_partner_guide_reply(message):
     )
     kb = types.InlineKeyboardMarkup()
     bot.send_message(message.chat.id, guide_text, reply_markup=kb, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "payout_collect_bank")
+def _pre_handle_payout_bank(message):
+    return handle_payout_collect_bank(message)
 
 
 # ── ثبتِ زودهنگام — این‌ها باید قبل از catch-all ادمین (پایین) ثبت شوند
