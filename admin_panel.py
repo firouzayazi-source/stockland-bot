@@ -2648,6 +2648,21 @@ async def database_page(request: Request, flash: str = ""):
     guard = _require(adm, "database")
     if guard: return guard
 
+    # ☁️ داده‌های بکاپ ابری
+    from backup_uploader import get_cloud_settings as _gcs
+    from db import get_cfg as _gk
+    _cb = _gcs()
+    _cb_last_ok = _gk("cloudbk_last_ok", "")
+    _cb_report_html = ""
+    try:
+        import json as _j
+        _rep = _j.loads(_gk("cloudbk_last_report", "") or "{}")
+        _errs = [r for r in _rep.get("results", []) if not r.get("ok")]
+        if _errs:
+            _cb_report_html = '<span class="text-red-500">آخرین خطا: ' + e(str(_errs[0].get("driver")) + " — " + str(_errs[0].get("error"))[:100]) + "</span>"
+    except Exception:
+        pass
+
     from stbak_engine import MODULES, SECTION_LABELS
     import glob as _gl, os as _os
 
@@ -2920,7 +2935,106 @@ async def database_page(request: Request, flash: str = ""):
 
     <script>
     {_js}
-    </script>"""
+    </script>
+
+    <!-- ☁️ بکاپ ابری شبانه -->
+    <div class="card p-5 mt-6 mb-8" id="cloudbk">
+      <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+        <h2 class="font-bold text-gray-700">☁️ بکاپ ابری شبانه</h2>
+        <span class="text-xs {('text-green-600' if _cb_last_ok else 'text-red-500')}">
+          آخرین آپلود موفق: <b>{e(_cb_last_ok or 'هرگز')}</b>
+        </span>
+      </div>
+      <p class="text-xs text-gray-400 mb-4">هر شب بی‌صدا به مقاصد فعال آپلود می‌شود؛ فقط در صورت مشکل، نگهبان به چت ادمین هشدار می‌فرستد. {_cb_report_html}</p>
+
+      <form method="post" action="/admin/database/cloud-save">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}> فعال</label>
+          <div><label class="text-xs text-gray-500 block mb-1">ساعت اجرا</label>
+            <input type="number" name="hour" value="{int(_cb.get('hour') or 4)}" min="0" max="23" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+          <div><label class="text-xs text-gray-500 block mb-1">تعداد نگهداری در هر مقصد</label>
+            <input type="number" name="retention" value="{int(_cb.get('retention') or 7)}" min="1" max="60" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+        </div>
+
+        <!-- تلگرام -->
+        <div class="border border-gray-100 rounded-xl p-4 mb-3">
+          <label class="flex items-center gap-2 text-sm font-medium mb-2">
+            <input type="checkbox" name="tg_enabled" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}> 📢 کانال خصوصی تلگرام</label>
+          <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}" placeholder="-100xxxxxxxxxx یا @channel"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr">
+          <p class="text-xs text-gray-400 mt-1">ربات باید ادمین کانال باشد. بکاپ‌های قدیمی‌تر از حد نگهداری خودکار حذف می‌شوند.</p>
+        </div>
+
+        <!-- گوگل درایو -->
+        <div class="border border-gray-100 rounded-xl p-4 mb-3">
+          <label class="flex items-center gap-2 text-sm font-medium mb-2">
+            <input type="checkbox" name="gd_enabled" {('checked' if int(_cb.get('gd_enabled') or 0) else '')}> 🟡 Google Drive</label>
+          <div class="grid md:grid-cols-2 gap-3">
+            <div><label class="text-xs text-gray-500 block mb-1">شناسه پوشه (Folder ID)</label>
+              <input type="text" name="gd_folder" value="{e(_cb.get('gd_folder',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">کلید Service Account (JSON)</label>
+              <textarea name="gd_sa_json" rows="3" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs" dir="ltr" placeholder='{{"type":"service_account",...}}'>{e(_cb.get('gd_sa_json',''))}</textarea></div>
+          </div>
+          <p class="text-xs text-gray-400 mt-1">۱) در Google Cloud یک Service Account بسازید و کلید JSON بگیرید ۲) پوشه Drive را با ایمیل آن share کنید ۳) روی سرور: <code>pip install google-auth</code></p>
+        </div>
+
+        <!-- وان‌درایو -->
+        <div class="border border-gray-100 rounded-xl p-4 mb-4">
+          <label class="flex items-center gap-2 text-sm font-medium mb-2">
+            <input type="checkbox" name="od_enabled" {('checked' if int(_cb.get('od_enabled') or 0) else '')}> 🔵 Microsoft OneDrive</label>
+          <div class="grid md:grid-cols-3 gap-3 items-end">
+            <div><label class="text-xs text-gray-500 block mb-1">Client ID برنامه Azure</label>
+              <input type="text" name="od_client_id" id="od_cid" value="{e(_cb.get('od_client_id',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">نام پوشه مقصد</label>
+              <input type="text" name="od_folder" value="{e(_cb.get('od_folder','StockLand-Backups'))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+            <div class="text-sm">
+              وضعیت: {('<span class="text-green-600 font-medium">✅ متصل</span>' if (_cb.get('od_refresh') or '').strip() else '<span class="text-gray-400">متصل نیست</span>')}
+              <button type="button" onclick="odConnect()" class="mr-2 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs hover:bg-blue-100">🔗 اتصال / اتصال مجدد</button>
+            </div>
+          </div>
+          <div id="od_box" class="hidden mt-3 p-3 bg-blue-50 rounded-lg text-sm"></div>
+          <p class="text-xs text-gray-400 mt-2">در <a href="https://portal.azure.com" target="_blank" class="text-indigo-500">Azure Portal</a> یک App Registration بسازید (Supported accounts: Personal Microsoft accounts)، در Authentication گزینه «Allow public client flows» را روشن کنید و Client ID را اینجا بگذارید.</p>
+        </div>
+
+        <div class="flex items-center gap-3 flex-wrap">
+          <button type="submit" class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold">💾 ذخیره تنظیمات ابری</button>
+          <button type="submit" formaction="/admin/database/cloud-run"
+            class="px-5 py-2.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-xl text-sm hover:bg-teal-100">▶ بکاپ + آپلود همین حالا</button>
+        </div>
+      </form>
+
+      <script>
+      var _odDevice = null;
+      function odConnect() {{
+        var cid = document.getElementById('od_cid').value.trim();
+        if (!cid) {{ alert('اول Client ID را وارد و ذخیره کنید'); return; }}
+        var box = document.getElementById('od_box');
+        box.classList.remove('hidden');
+        box.innerHTML = 'در حال دریافت کد…';
+        fetch('/admin/database/onedrive/start', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+          body: 'client_id=' + encodeURIComponent(cid)}})
+          .then(function(r) {{ return r.json(); }})
+          .then(function(d) {{
+            if (!d.user_code) {{ box.innerHTML = '❌ ' + (d.error || 'خطا'); return; }}
+            _odDevice = d.device_code;
+            box.innerHTML = '۱) به <a href="' + d.verification_uri + '" target="_blank" class="text-indigo-600 underline">' + d.verification_uri + '</a> بروید<br>'
+              + '۲) این کد را وارد کنید: <code style="font-size:16px;font-weight:bold">' + d.user_code + '</code><br>'
+              + '۳) بعد از تأیید: <button type="button" onclick="odPoll()" class="mt-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs">✅ بررسی اتصال</button>';
+          }}).catch(function() {{ box.innerHTML = '❌ خطا در ارتباط'; }});
+      }}
+      function odPoll() {{
+        var cid = document.getElementById('od_cid').value.trim();
+        fetch('/admin/database/onedrive/poll', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+          body: 'client_id=' + encodeURIComponent(cid) + '&device_code=' + encodeURIComponent(_odDevice || '')}})
+          .then(function(r) {{ return r.json(); }})
+          .then(function(d) {{
+            if (d.status === 'ok') {{ alert('✅ OneDrive متصل شد!'); location.reload(); }}
+            else if (d.status === 'pending') {{ alert('⏳ هنوز تأیید نشده — بعد از ورود کد دوباره بزنید'); }}
+            else {{ alert('❌ ' + (d.error || 'خطا')); }}
+          }});
+      }}
+      </script>
+    </div>"""
 
     return _layout("پشتیبان‌گیری", body, adm, flash=flash)
 
@@ -7576,6 +7690,15 @@ def _do_auto_backup() -> None:
             break
     _tg_logger.info("Auto-backup done: %s (total: %d)", dst, len(all_backups))
 
+    # ☁️ آپلود ابری (بی‌صدا — نگهبان در صورت مشکل هشدار می‌دهد)
+    try:
+        from backup_uploader import get_cloud_settings, upload_backup
+        if int(get_cloud_settings().get("enabled") or 0):
+            rep = upload_backup(dst)
+            _tg_logger.info("Cloud backup: %s", rep)
+    except Exception as ex:
+        _tg_logger.error("Cloud backup failed: %s", ex)
+
 
 def _start_auto_backup_thread() -> None:
     global _auto_backup_started
@@ -7587,8 +7710,12 @@ def _start_auto_backup_thread() -> None:
         import datetime as _dt
         while True:
             now = _dt.datetime.now()
-            # محاسبه زمان باقی‌مانده تا ۴ صبح
-            target = now.replace(hour=4, minute=0, second=0, microsecond=0)
+            try:
+                from backup_uploader import get_cloud_settings
+                _h = int(get_cloud_settings().get("hour") or 4)
+            except Exception:
+                _h = 4
+            target = now.replace(hour=max(0, min(23, _h)), minute=0, second=0, microsecond=0)
             if now >= target:
                 target += _dt.timedelta(days=1)
             sleep_secs = (target - now).total_seconds()
@@ -7599,6 +7726,25 @@ def _start_auto_backup_thread() -> None:
                 _tg_logger.error("auto-backup error: %s", ex)
 
     _threading.Thread(target=_runner, name="auto-backup", daemon=True).start()
+
+    # ⚠️ نگهبان بکاپ ابری — ساعتی چک، در صورت مشکل هشدار به ادمین
+    def _cloud_watchdog():
+        while True:
+            _time.sleep(3600)
+            try:
+                from backup_uploader import watchdog_check
+                msg = watchdog_check()
+                if msg:
+                    try:
+                        from config import ADMIN_ID as _AID
+                    except Exception:
+                        _AID = int(_env("ADMIN_ID", "0") or 0)
+                    if _AID:
+                        _tg_api_send(_AID, msg)
+            except Exception as ex:
+                _tg_logger.error("cloud watchdog: %s", ex)
+
+    _threading.Thread(target=_cloud_watchdog, name="cloud-watchdog", daemon=True).start()
 
     # thread جداگانه برای بررسی موجودی (هر ۲ ساعت)
     def _stock_runner():
@@ -10025,3 +10171,99 @@ async def partners_manual_referral(request: Request):
                 pass
     _log(request, "ثبت دستی معرفی", "همکاران", f"{referrer_id} → {referred_id}", admin_info=adm)
     return _redir(f"/admin/partners?tab=referrals&flash=✅+معرفی+ثبت+شد{paid_txt}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── ☁️ روت‌های بکاپ ابری ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/database/cloud-save")
+async def database_cloud_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    form = await request.form()
+    from backup_uploader import get_cloud_settings, save_cloud_settings
+
+    cfg = get_cloud_settings()  # حفظ od_refresh و مقادیر قبلی
+    def g(k, d=""): return str(form.get(k, d) or d).strip()
+    def onoff(k): return 1 if form.get(k) is not None else 0
+
+    cfg.update({
+        "enabled":      onoff("enabled"),
+        "hour":         max(0, min(23, int(g("hour", "4") or 4))),
+        "retention":    max(1, min(60, int(g("retention", "7") or 7))),
+        "tg_enabled":   onoff("tg_enabled"),
+        "tg_channel":   g("tg_channel"),
+        "gd_enabled":   onoff("gd_enabled"),
+        "gd_folder":    g("gd_folder"),
+        "gd_sa_json":   g("gd_sa_json"),
+        "od_enabled":   onoff("od_enabled"),
+        "od_client_id": g("od_client_id"),
+        "od_folder":    g("od_folder") or "StockLand-Backups",
+    })
+    save_cloud_settings(cfg)
+    _log(request, "تنظیمات بکاپ ابری", "دیتابیس", "cloud settings saved", admin_info=adm)
+    return _redir("/admin/database?flash=✅+تنظیمات+بکاپ+ابری+ذخیره+شد#cloudbk")
+
+
+@router.post("/database/cloud-run")
+async def database_cloud_run(request: Request):
+    """▶ بکاپ + آپلود فوری — در پس‌زمینه تا صفحه معطل نماند."""
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    try:
+        import threading as _th
+        _th.Thread(target=_do_auto_backup, name="cloud-run-now", daemon=True).start()
+    except Exception as ex:
+        return _redir(f"/admin/database?flash=❌+خطا:+{ex}#cloudbk")
+    _log(request, "بکاپ ابری دستی", "دیتابیس", "run-now", admin_info=adm)
+    return _redir("/admin/database?flash=▶+بکاپ+و+آپلود+شروع+شد+—+نتیجه+چند+لحظه+دیگر+در+وضعیت+همین+کارت#cloudbk")
+
+
+@router.post("/database/onedrive/start")
+async def database_onedrive_start(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    form = await request.form()
+    client_id = str(form.get("client_id") or "").strip()
+    if not client_id:
+        return JSONResponse({"error": "Client ID خالی است"})
+    try:
+        from backup_uploader import onedrive_devicecode_start
+        d = onedrive_devicecode_start(client_id)
+        return JSONResponse({
+            "user_code":        d.get("user_code"),
+            "verification_uri": d.get("verification_uri"),
+            "device_code":      d.get("device_code"),
+            "error":            d.get("error_description"),
+        })
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:200]})
+
+
+@router.post("/database/onedrive/poll")
+async def database_onedrive_poll(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    form = await request.form()
+    client_id   = str(form.get("client_id") or "").strip()
+    device_code = str(form.get("device_code") or "").strip()
+    if not client_id or not device_code:
+        return JSONResponse({"status": "error", "error": "پارامتر ناقص"})
+    try:
+        from backup_uploader import onedrive_devicecode_poll, get_cloud_settings, save_cloud_settings
+        res = onedrive_devicecode_poll(client_id, device_code)
+        if res.get("status") == "ok":
+            cfg = get_cloud_settings()
+            cfg["od_refresh"]   = res["refresh_token"]
+            cfg["od_client_id"] = client_id
+            save_cloud_settings(cfg)
+            _log(request, "اتصال OneDrive", "دیتابیس", "connected", admin_info=adm)
+            return JSONResponse({"status": "ok"})
+        return JSONResponse(res)
+    except Exception as ex:
+        return JSONResponse({"status": "error", "error": str(ex)[:200]})
