@@ -2766,6 +2766,13 @@ def ensure_referral_schema():
                 rewarded_at     TEXT    DEFAULT NULL
             );
         """)
+        # مهاجرت max_invites در referral_settings (قانون ۱۳)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(referral_settings);").fetchall()}
+            if "max_invites" not in cols:
+                conn.execute("ALTER TABLE referral_settings ADD COLUMN max_invites INTEGER DEFAULT 0;")
+        except Exception:
+            pass
         conn.commit()
     finally:
         conn.close()
@@ -2872,10 +2879,15 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
             ).fetchone()[0]
         except Exception:
             order_count = 0
+        # سطح فعلی — اگه خریدی ندارد، پایین‌ترین سطح (کمترین min_orders)
         tier = conn.execute("""
             SELECT * FROM partner_tiers WHERE min_orders <= ?
             ORDER BY min_orders DESC LIMIT 1;
         """, (order_count,)).fetchone()
+        if not tier:
+            tier = conn.execute(
+                "SELECT * FROM partner_tiers ORDER BY min_orders ASC LIMIT 1;"
+            ).fetchone()
 
         tier_name  = tier["name"] if tier else "—"
         tier_fixed = int(tier["commission_fixed"] or 0) if tier and "commission_fixed" in tier.keys() else 0
@@ -2886,6 +2898,7 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
         elif tier_pct > 0:
             amount = int(order_price * tier_pct / 100)
         else:
+            # سطح تنظیم نشده → درصد عمومی (fallback اضطراری)
             amount = int(order_price * global_pct / 100)
 
         if max_payout > 0:
