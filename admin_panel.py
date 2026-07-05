@@ -8876,14 +8876,13 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
                   <option value="0" {"" if ps.get("is_active") else "selected"}>غیرفعال</option>
                 </select></div>
               <div><label class="text-sm font-medium text-gray-700 block mb-1">راهنمای تسویه (به همکار)</label>
-                <textarea name="guide_text" rows="2" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{e(ps.get("guide_text",""))}</textarea></div>
-              <div class="grid grid-cols-2 gap-4">
-                <div><label class="text-xs text-gray-500 block mb-1">پیام تأیید</label>
-                  <input type="text" name="approval_message" value="{e(ps.get("approval_message",""))}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-                <div><label class="text-xs text-gray-500 block mb-1">پیام رد</label>
-                  <input type="text" name="rejection_message" value="{e(ps.get("rejection_message",""))}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+                <textarea name="guide_text" rows="6" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(ps.get("guide_text",""))}</textarea>
+                <p class="text-xs text-gray-400 mt-1">این متن هنگام باز کردن صفحه تسویه به همکار نمایش داده می‌شود.</p></div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label class="text-xs text-gray-500 block mb-1">پیام تأیید تسویه</label>
+                  <textarea name="approval_message" rows="4" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(ps.get("approval_message",""))}</textarea></div>
+                <div><label class="text-xs text-gray-500 block mb-1">پیام رد تسویه</label>
+                  <textarea name="rejection_message" rows="4" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(ps.get("rejection_message",""))}</textarea></div>
               </div>
               {_btn("💾 ذخیره تسویه","",color="indigo")}
             </form>
