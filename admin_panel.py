@@ -54,19 +54,34 @@ def _db() -> sqlite3.Connection:
 
 # ─────────────────────────── Permissions ───────────────────────────────────
 
+# ─── رجیستری مرکزی دسترسی‌ها ─────────────────────────────────────────────
+# قانون: هر قابلیت جدید = یک کلید اینجا؛ منو، صفحه ادمین‌ها و گاردها همه از همین می‌خوانند.
 ALL_PERMISSIONS = {
     "dashboard":  "مشاهده داشبورد",
     "categories": "مدیریت دسته‌بندی‌ها",
     "products":   "مدیریت محصولات",
     "feed":       "مدیریت موجودی",
     "orders":     "مشاهده سفارش‌ها",
+    "discounts":  "کدهای تخفیف",
+    "growth":     "رشد و فروش",
     "tickets":    "مدیریت تیکت‌ها",
     "wallets":    "مدیریت کیف‌پول",
+    "users":      "کاربران",
     "partners":   "مدیریت همکاران",
+    "accounting": "حسابداری",
+    "notes":      "یادداشت مدیران",
     "settings":   "تنظیمات ربات",
     "database":   "بکاپ و دیتابیس",
     "admins":     "مدیریت ادمین‌ها",
+    "logs":       "گزارش فعالیت",
     "broadcast":  "پیام همگانی",
+}
+
+# سازگاری با ادمین‌های قدیمی: کلید جدید ← والد قدیمی
+PERM_LEGACY = {
+    "discounts": "orders", "growth": "orders",
+    "users": "wallets", "accounting": "wallets", "notes": "wallets",
+    "logs": "admins",
 }
 
 # ─────────────────────────── DB Schema for Admins ──────────────────────────
@@ -184,7 +199,14 @@ def _has(admin_info, perm: str) -> bool:
     if not admin_info:
         return False
     _, is_super, perms = admin_info
-    return is_super or perm in perms
+    if is_super:
+        return True
+    if perm not in ALL_PERMISSIONS:
+        return False             # کلید ناشناخته = رد (امنیت پیش‌فرض)
+    if perm in (perms or []):
+        return True
+    legacy = PERM_LEGACY.get(perm)
+    return bool(legacy and legacy in (perms or []))
 
 def _require(admin_info, perm: str):
     """Returns 403 redirect if admin lacks permission."""
@@ -452,14 +474,18 @@ def _layout(title: str, body: str, admin_info=None,
     if admin_info:
         sidebar = f"""
         <aside id="sidebar" class="sidebar">
-          <div class="sidebar-header" style="justify-content:center">
-            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" style="margin:0 auto">
+          <div class="sidebar-header" style="justify-content:center;position:relative">
+            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" style="margin:0 auto" id="sb-brand">
               <div class="brand-text-only" style="direction:ltr;text-align:center">
                 <span style="color:#E8EDF2;font-weight:900;letter-spacing:1.5px">STOCK</span>
                 <span style="color:#2EC4B6;font-weight:900;letter-spacing:1.5px"> LAND</span>
                 <small style="display:block;font-size:9.5px;color:#536075;letter-spacing:.8px;font-weight:400;margin-top:3px;direction:rtl">مدیریت فروشگاه</small>
               </div>
             </a>
+            <button onclick="sbCollapse()" id="sb-col-btn" title="جمع/باز"
+              style="position:absolute;left:-11px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;background:#2EC4B6;border:none;cursor:pointer;color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;z-index:60;box-shadow:0 2px 8px rgba(0,0,0,.3)">
+              <span id="sb-toggle-icon" style="transition:transform .2s;display:inline-block">›</span>
+            </button>
           </div>
           <div class="nav-caption">منو اصلی</div>
           <nav class="sidebar-nav">
@@ -471,20 +497,20 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>فروش</span></div>
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
-            {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "orders")}
-            {nav_item("/admin/growth", "rocket", "رشد و فروش", "orders")}
+            {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
+            {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
             <div class="nav-divider"><span>کاربران</span></div>
-            {nav_item("/admin/users", "users", "کاربران", "wallets")}
+            {nav_item("/admin/users", "users", "کاربران", "users")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
-            {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "wallets")}
-            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
+            {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "accounting")}
+            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "notes")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
-            {nav_item("/admin/logs", "activity", "گزارش فعالیت", "admins")}
+            {nav_item("/admin/logs", "activity", "گزارش فعالیت", "logs")}
           </nav>
           <div class="sidebar-footer">
             <div class="sidebar-status"><span class="status-dot"></span><div><strong>سامانه فعال</strong><small>همه سرویس‌ها پایدارند</small></div></div>
@@ -643,8 +669,23 @@ def _layout(title: str, body: str, admin_info=None,
       background:linear-gradient(180deg,#0B1320 0%,#05070A 100%);
       border-left:1px solid rgba(255,255,255,.06);
       box-shadow:-4px 0 24px rgba(2,6,23,.14);
-      transition:transform .25s cubic-bezier(.4,0,.2,1);
+      transition:transform .25s cubic-bezier(.4,0,.2,1), width .22s ease;
       color:#8896A8;
+    }}
+    @media (min-width:769px) {{
+      .sidebar.sb-collapsed {{ width:54px !important; overflow:visible; }}
+      .sidebar.sb-collapsed .nav-label {{ display:none !important; }}
+      .sidebar.sb-collapsed .brand-text-only {{ display:none !important; }}
+      .sidebar.sb-collapsed .nav-badge {{ display:none !important; }}
+      .sidebar.sb-collapsed .sidebar-nav a {{
+        justify-content:center; padding:11px 0; border-radius:10px; margin:1px 4px;
+      }}
+      .sidebar.sb-collapsed .sidebar-nav a .nav-icon {{ margin:0 !important; }}
+      .sidebar.sb-collapsed .sidebar-header {{ justify-content:center !important; padding:10px 4px !important; }}
+      .sidebar.sb-collapsed #sb-brand {{ display:none; }}
+      .sidebar.sb-collapsed #sb-toggle-icon {{ transform:rotate(180deg); }}
+      body.sb-collapsed-body .main-wrap.with-sidebar {{ margin-right:54px !important; }}
+      body.sb-collapsed-body .topbar {{ right:54px !important; }}
     }}
     .sidebar-header {{
       padding:18px 18px 16px; border-bottom:1px solid rgba(255,255,255,.06);
@@ -1106,6 +1147,26 @@ def _layout(title: str, body: str, admin_info=None,
     document.getElementById('sidebar')?.classList.toggle('open');
     document.getElementById('overlay')?.classList.toggle('open');
   }};
+
+  // ── Collapse sidebar (desktop only) ────────────────────────────────────
+  window.sbCollapse = function(){{
+    if(window.innerWidth < 769) return;
+    var sb = document.querySelector('.sidebar');
+    var on = sb.classList.toggle('sb-collapsed');
+    document.body.classList.toggle('sb-collapsed-body', on);
+    localStorage.setItem('sl-sb-collapsed', on ? '1' : '0');
+    var ico = document.getElementById('sb-toggle-icon');
+    if(ico) ico.style.transform = on ? 'rotate(180deg)' : '';
+  }};
+  (function(){{
+    if(window.innerWidth < 769) return;
+    if(localStorage.getItem('sl-sb-collapsed') === '1') {{
+      document.querySelector('.sidebar').classList.add('sb-collapsed');
+      document.body.classList.add('sb-collapsed-body');
+      var ico = document.getElementById('sb-toggle-icon');
+      if(ico) ico.style.transform = 'rotate(180deg)';
+    }}
+  }})();
 
   // ── Classic / Dark Mode (با پشتیبانی هماهنگی سیستم) ──────────
   function _prefersDark(){{
@@ -4093,7 +4154,7 @@ async def product_faqs_page(request: Request, pid: int, flash: str = ""):
       <td class="px-3 py-2">{"⭐️"*r['rating']}</td>
       <td class="px-3 py-2">{e(r['full_name'] or '—')}</td>
       <td class="px-3 py-2 text-gray-500">{e(r['comment'] or '—')}</td>
-      <td class="px-3 py-2 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
     </tr>""" for r in ratings) or "<tr><td colspan='4' class='text-center py-4 text-gray-400'>نظری ثبت نشده</td></tr>"
 
     body = f"""
@@ -4958,7 +5019,7 @@ async def feed_item_edit_post(request: Request, fid: int):
 @router.get("/discounts", response_class=HTMLResponse)
 async def discounts_list(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     from db import ensure_discount_table
     ensure_discount_table()
@@ -5059,7 +5120,7 @@ async def discounts_list(request: Request, flash: str = ""):
 @router.post("/discounts/add")
 async def discounts_add(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     from db import ensure_discount_table
     ensure_discount_table()
@@ -5104,7 +5165,7 @@ async def discounts_add(request: Request):
 @router.post("/discounts/{cid}/toggle")
 async def discount_toggle(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     conn = _db()
     try:
@@ -5118,7 +5179,7 @@ async def discount_toggle(request: Request, cid: int):
 @router.post("/discounts/{cid}/delete")
 async def discount_delete(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     conn = _db()
     try:
@@ -5162,7 +5223,7 @@ async def _old_referrals_page_unused(request: Request, flash: str = ""):
       <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
       <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت شد</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">در انتظار خرید</span>'}</td>
       <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
-      <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+      <td class="px-4 py-3 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
     </tr>""" for r in refs)
 
     body = f"""
@@ -5723,7 +5784,7 @@ async def order_resend_post(request: Request, oid: int):
 @router.get("/users/{uid}", response_class=HTMLResponse)
 async def user_detail(request: Request, uid: int, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     from db import get_user_full, get_user_orders, get_user_tickets, ensure_user_extra_schema
     ensure_user_extra_schema()
@@ -5743,7 +5804,7 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
       <td class="px-4 py-2 text-xs text-gray-400">#{o['id']}</td>
       <td class="px-4 py-2 text-sm">{e(o['title'] or '—')}</td>
       <td class="px-4 py-2 text-sm font-medium text-green-600">{int(o['price'] or 0):,} ت</td>
-      <td class="px-4 py-2 text-xs text-gray-400">{(o['created_at'] or '')[:16]}</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{fa_date(o['created_at'], with_time=True)}</td>
     </tr>""" for o in orders)
 
     # تیکت‌ها
@@ -5829,7 +5890,7 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
 @router.post("/users/{uid}/note")
 async def user_save_note(request: Request, uid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     form = await request.form()
     note = str(form.get("admin_note", "")).strip()
@@ -5843,7 +5904,7 @@ async def user_save_note(request: Request, uid: int):
 @router.post("/users/{uid}/toggle-block")
 async def user_toggle_block(request: Request, uid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     from db import toggle_user_block
     blocked = toggle_user_block(uid)
@@ -5854,7 +5915,7 @@ async def user_toggle_block(request: Request, uid: int):
 @router.get("/users", response_class=HTMLResponse)
 async def users_list(request: Request, q: str = "", sort: str = "last_seen", flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
 
     conn = _db()
@@ -5945,7 +6006,7 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
 @router.get("/users/export.xlsx")
 async def users_export(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     conn = _db()
     try:
@@ -6111,7 +6172,7 @@ async def wallet_charge_history(request: Request, uid: int):
     total_charged = sum(c["amount"] for c in charges)
 
     rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-        <td class="px-4 py-2.5 text-xs text-gray-500">{(c['dt'] or '')[:16].replace('T',' ')}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-500">{fa_date(c['dt'], with_time=True)}</td>
         <td class="px-4 py-2.5 font-bold text-green-700">{c['amount']:,} ت</td>
         <td class="px-4 py-2.5">{c['method']}</td>
         <td class="px-4 py-2.5 text-xs text-gray-400"><code>{e(str(c['ref']))}</code></td>
@@ -6276,7 +6337,7 @@ def _ticket_status_badge(status: str) -> str:
 @router.get("/logs", response_class=HTMLResponse)
 async def admin_logs_page(request: Request, q: str = "", section: str = "", admin_name: str = "", page: int = 0, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "admins")
+    guard = _require(adm, "logs")
     if guard: return guard
     _ensure_theme_table()
 
@@ -7873,7 +7934,7 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
     if df_g: df = df_g
     if dt_g: dt = dt_g
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_accounting_kpis, ensure_accounting_schema
     ensure_accounting_schema()
@@ -7957,6 +8018,8 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
       {_card("هزینه خرید کالا",_m(kpis["total_cost"]),"تومان","orange")}
       {_card("موجودی انبار",_m(kpis["stock_count"]),"آیتم","slate")}
+      {_card("تسویه‌های همکار",_m(kpis.get("total_payouts",0)),"تومان","purple")}
+      {_card("مانده صندوق",_m(max(0,kpis["net_profit"]-kpis.get("total_payouts",0))),"تومان","teal")}
       {_card("تسویه انجام‌شده",str(kpis["payout_count"]),"مورد","purple")}
       {_card("میانگین سود/سفارش",_m(kpis["avg_profit"]),"تومان","teal")}
     </div>
@@ -8003,7 +8066,7 @@ def _acbar(label, value, total, color):
 @router.get("/accounting/expenses", response_class=HTMLResponse)
 async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str="", flash: str=""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_expenses, get_expense_categories, ensure_accounting_schema
     ensure_accounting_schema()
@@ -8072,7 +8135,7 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
 
 @router.post("/accounting/expenses/new")
 async def accounting_expense_new(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import create_expense, ensure_accounting_schema
     ensure_accounting_schema()
@@ -8086,7 +8149,7 @@ async def accounting_expense_new(request: Request):
 
 @router.post("/accounting/expenses/{eid}/delete")
 async def accounting_expense_delete(request: Request, eid: int):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import delete_expense; delete_expense(eid)
     _log(request, "حذف هزینه", "حسابداری", f"id:{eid}")
@@ -8095,7 +8158,7 @@ async def accounting_expense_delete(request: Request, eid: int):
 
 @router.post("/accounting/categories/new")
 async def accounting_category_new(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import add_expense_category
     form = await request.form(); name = str(form.get("name","")).strip()
@@ -8105,7 +8168,7 @@ async def accounting_category_new(request: Request):
 
 @router.get("/accounting/cashflow", response_class=HTMLResponse)
 async def accounting_cashflow(request: Request, df: str="", dt: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_cashflow, ensure_accounting_schema; ensure_accounting_schema()
     rows_data = get_cashflow(df, dt, 200)
@@ -8136,7 +8199,7 @@ async def accounting_cashflow(request: Request, df: str="", dt: str=""):
 
 @router.get("/accounting/products", response_class=HTMLResponse)
 async def accounting_products(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_product_accounting
     prods = get_product_accounting(50)
@@ -8165,7 +8228,7 @@ async def accounting_products(request: Request):
 
 @router.get("/accounting/partners", response_class=HTMLResponse)
 async def accounting_partners_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_partner_accounting
     partners = get_partner_accounting(50)
@@ -8192,7 +8255,7 @@ async def accounting_partners_report(request: Request):
 
 @router.get("/accounting/expenses/export")
 async def export_expenses(request: Request, df: str="", dt: str="", cat: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_expenses; import io as _io
     data = get_expenses(df, dt, cat, 10000)
@@ -8212,7 +8275,7 @@ async def export_expenses(request: Request, df: str="", dt: str="", cat: str="")
 
 @router.get("/accounting/cashflow/export")
 async def export_cashflow(request: Request, df: str="", dt: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_cashflow; import io as _io; data = get_cashflow(df, dt, 10000)
     try:
@@ -8230,7 +8293,7 @@ async def export_cashflow(request: Request, df: str="", dt: str=""):
 
 @router.get("/accounting/products/export")
 async def export_products_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_product_accounting; import io as _io; data = get_product_accounting(1000)
     try:
@@ -8248,7 +8311,7 @@ async def export_products_report(request: Request):
 
 @router.get("/accounting/partners/export")
 async def export_partners_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_partner_accounting; import io as _io; data = get_partner_accounting(1000)
     try:
@@ -8269,7 +8332,7 @@ async def export_partners_report(request: Request):
 @router.get("/notes", response_class=HTMLResponse)
 async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     from db import get_admin_notes, ensure_admin_notes_schema
     ensure_admin_notes_schema()
@@ -8322,7 +8385,7 @@ async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
 @router.get("/notes/new", response_class=HTMLResponse)
 async def admin_note_new_get(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     body = f"""
     <div class="flex items-center gap-3 mb-6">
@@ -8342,7 +8405,7 @@ async def admin_note_new_get(request: Request):
 @router.post("/notes/new")
 async def admin_note_new_post(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     form = await request.form()
     text = str(form.get("text","")).strip()
@@ -8358,7 +8421,7 @@ async def admin_note_new_post(request: Request):
 @router.get("/notes/{nid}", response_class=HTMLResponse)
 async def admin_note_detail(request: Request, nid: int, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     from db import get_admin_note
     data = get_admin_note(nid)
@@ -8413,7 +8476,7 @@ async def admin_note_detail(request: Request, nid: int, flash: str = ""):
 @router.post("/notes/{nid}/reply")
 async def admin_note_reply(request: Request, nid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     form = await request.form()
     text = str(form.get("text","")).strip()
@@ -8427,7 +8490,7 @@ async def admin_note_reply(request: Request, nid: int):
 @router.post("/notes/{nid}/toggle")
 async def admin_note_toggle(request: Request, nid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     from db import toggle_admin_note_status
     new_status = toggle_admin_note_status(nid)
@@ -8440,6 +8503,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
     guard = _require(adm, "partners")
     if guard: return guard
 
+    from db import fa_date, fa_now
     from db import (ensure_partner_system_schema, get_partner_tiers,
                     get_partner_commission, ensure_referral_schema, get_referral_settings)
     ensure_partner_system_schema()
@@ -8545,7 +8609,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
           <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">منتظر خرید</span>'}</td>
           <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
         </tr>""" for r in refs)
 
         content = manual_form + f"""
@@ -8803,7 +8867,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
         <!-- پنل اطلاعات (سمت راست) -->
         <div id="tree-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70" onclick="treeCloseDrawer()"></div>
         <div id="tree-drawer" class="card"
-          style="position:fixed;top:0;right:0;height:100vh;width:min(92vw,360px);z-index:71;transform:translateX(105%);transition:transform .25s;overflow-y:auto;border-radius:0;padding:0">
+          style="position:fixed;top:0;left:0;height:100vh;width:min(92vw,380px);z-index:400;transform:translateX(-105%);transition:transform .25s;overflow-y:auto;border-radius:0;padding:0;box-shadow:4px 0 24px rgba(0,0,0,.2)">
           <div class="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white" style="z-index:1">
             <b class="text-gray-800">👤 اطلاعات همکار</b>
             <button onclick="treeCloseDrawer()" class="text-gray-400 hover:text-red-500 text-lg px-2">✕</button>
@@ -8990,7 +9054,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           };
           window.treeCloseDrawer=function(){
             document.getElementById('tree-overlay').classList.add('hidden');
-            document.getElementById('tree-drawer').style.transform='translateX(105%)';
+            document.getElementById('tree-drawer').style.transform='translateX(-105%)';
           };
         })();
         </script>"""
@@ -9228,7 +9292,7 @@ async def partner_profile_admin(request: Request, uid: int):
         <td class="px-4 py-2.5">{e(s['name'])}</td>
         <td class="px-4 py-2.5">{int(s['ocnt'])} خرید</td>
         <td class="px-4 py-2.5 font-medium text-green-600">{int(s['ototal']):,} ت</td>
-        <td class="px-4 py-2.5 text-xs text-gray-400">{(s['created_at'] or '')[:10]}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400">{fa_date(s['created_at'])}</td>
       </tr>""" for s in subs)
 
     body = f"""
@@ -9665,7 +9729,7 @@ async def partner_reject(request: Request, uid: int):
 @router.get("/growth", response_class=HTMLResponse)
 async def growth_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "growth")
     if guard: return guard
 
     from db import (ensure_growth_schema, list_flash_sales, get_winback_settings,
@@ -9849,7 +9913,7 @@ async def growth_page(request: Request, flash: str = ""):
 @router.post("/growth/save")
 async def growth_save(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "growth")
     if guard: return guard
     form = await request.form()
     from db import set_cfg
@@ -9886,7 +9950,7 @@ async def growth_save(request: Request):
 @router.post("/growth/flash/new")
 async def growth_flash_new(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "growth")
     if guard: return guard
     form = await request.form()
     from db import create_flash_sale
@@ -9900,7 +9964,7 @@ async def growth_flash_new(request: Request):
 @router.post("/growth/flash/{sid}/delete")
 async def growth_flash_delete(request: Request, sid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "growth")
     if guard: return guard
     conn = _db()
     try:
@@ -9920,7 +9984,7 @@ async def growth_flash_delete(request: Request, sid: int):
 @router.post("/growth/flash/{sid}/off")
 async def growth_flash_off(request: Request, sid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "growth")
     if guard: return guard
     from db import deactivate_flash_sale
     deactivate_flash_sale(sid)
@@ -9930,7 +9994,7 @@ async def growth_flash_off(request: Request, sid: int):
 @router.post("/growth/run/winback")
 async def growth_run_winback(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "growth")
     if guard: return guard
     from db import set_cfg
     set_cfg("winback_force", "1")
@@ -9940,7 +10004,7 @@ async def growth_run_winback(request: Request):
 @router.post("/growth/run/leaderboard")
 async def growth_run_leaderboard(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "growth")
     if guard: return guard
     from db import set_cfg
     set_cfg("leaderboard_force", "1")
