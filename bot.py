@@ -369,18 +369,19 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     # مورد ۵: نمایش قیمت عادی خط‌خورده برای همکار
     partner_ok_view = (user_id and is_partner_approved(int(user_id)))
+    _raw_base = int(price)  # قیمت پایه قبل از فلش (برای نمایش خط‌خورده)
     if _flash_sale:
-        _price_line = f"قیمت: <s>{int(price):,}</s> ← <b>{eff_price:,}</b> تومان 🔥\n"
-    elif partner_ok_view and product[6] and int(product[6]) < int(price):
+        _price_line = f"قیمت: <s>{_raw_base:,}</s> ← <b>{int(eff_price):,}</b> تومان 🔥\n"
+    elif partner_ok_view and partner_price and int(partner_price) < int(price):
         saving = int(price) - int(eff_price)
         pct = round(saving * 100 / int(price))
         _price_line = (
             f"قیمت مشتری عادی: <s>{int(price):,}</s>\n"
-            f"💚 قیمت همکاری شما: <b>{eff_price:,}</b> تومان\n"
+            f"💚 قیمت همکاری شما: <b>{int(eff_price):,}</b> تومان\n"
             f"💰 سود شما: <b>{saving:,} تومان ({pct}٪)</b>\n"
         )
     else:
-        _price_line = f"قیمت: <b>{eff_price:,}</b> تومان\n"
+        _price_line = f"قیمت: <b>{int(eff_price):,}</b> تومان\n"
 
     text = (
         f"{_flash_badge(pid, _flash_sale, price, eff_price)}"
