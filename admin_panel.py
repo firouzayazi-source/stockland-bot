@@ -1544,7 +1544,7 @@ async def dashboard(request: Request, err: str = ""):
     """ for index, (name, data) in enumerate(sorted(product_summary.items(), key=lambda item: (item[1]["count"], item[1]["revenue"]), reverse=True)[:5], 1))
 
     activity_rows = "".join(f"""
-      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {fa_date(str(o['created_at'], with_time=True))}</small></span></div>
+      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {fa_date(o['created_at'], with_time=True)}</small></span></div>
     """ for o in recent[:5])
 
     def command_item(icon, label, value, meta, tone="cyan", href="#"):
@@ -5272,22 +5272,31 @@ async def _old_referrals_page_unused(request: Request, flash: str = ""):
 @router.post("/referrals/settings")
 async def referrals_settings(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "partners")
     if guard: return guard
     form = await request.form()
-    amount = int(form.get("reward_amount") or 5000)
+    amount = int(form.get("reward_amount") or 0)
     active = int(form.get("is_active") or 1)
+    max_inv = int(form.get("max_invites") or 0)
     from db import ensure_referral_schema
     ensure_referral_schema()
     conn = _db()
     try:
-        conn.execute("UPDATE referral_settings SET reward_amount=?,is_active=?,updated_at=datetime('now') WHERE id=1;",
-                     (amount, active))
+        conn.execute(
+            "UPDATE referral_settings SET reward_amount=?,is_active=?,max_invites=?,updated_at=datetime('now') WHERE id=1;",
+            (amount, active, max_inv))
         conn.commit()
     finally:
         conn.close()
-    _log(request, "تنظیم معرفی", "معرفی", f"پاداش: {amount:,} | فعال: {active}")
-    return _redir("/admin/referrals?flash=تنظیمات+ذخیره+شد")
+    # به‌روزرسانی bot_config برای check_invite_cap
+    try:
+        from db import set_cfg
+        import json as _j
+        set_cfg("referral_settings_ext", _j.dumps({"max_invites": max_inv, "cap_reset_on_purchase": 1}))
+    except Exception:
+        pass
+    _log(request, "تنظیم هدیه دعوت", "همکاران", f"پاداش: {amount:,} | سقف: {max_inv}", admin_info=adm)
+    return _redir("/admin/partners?tab=settings&flash=تنظیمات+هدیه+دعوت+ذخیره+شد")
 
 
 @router.get("/orders/export.xlsx")
@@ -8518,7 +8527,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
 
     # تب‌های اصلی
     tab_defs = [("list","👥 لیست همکاران"),("tree","🌳 درخت همکاران"),("referrals","🔗 معرفی‌ها"),
-                ("tiers","🏆 سطوح"),("payouts","📤 تسویه‌ها"),("settings","⚙️ تنظیمات")]
+                ("payouts","📤 تسویه‌ها"),("settings","⚙️ تنظیمات")]
     tabs_html = '<div class="flex gap-2 mb-6 overflow-x-auto pb-1">' + "".join(
         f'<a href="/admin/partners?tab={v}" class="px-4 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if tab==v else "bg-white text-gray-600"}">{l}</a>'
         for v, l in tab_defs
@@ -8578,18 +8587,20 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
 
     # ─── تب معرفی‌ها (ادغام‌شده) ─────────────────────────────────────────
     elif tab == "referrals":
-        # 🔧 ثبت دستی معرفی — برای اصلاح رکوردهای جامانده (مثل حامد)
+        # ─── تب «معرفی‌ها، پاداش‌ها و درآمدها» ───────────────────────────
         manual_form = """
-        <div class="card p-5 mb-5">
-          <h2 class="font-bold text-gray-700 mb-1">🔧 ثبت دستی معرفی</h2>
-          <p class="text-xs text-gray-400 mb-4">اگر معرفی‌ای در ربات ثبت نشده، اینجا دستی وصل کنید. رکورد تکراری (دعوت‌شده‌ای که قبلاً معرف دارد) پذیرفته نمی‌شود.</p>
-          <form method="post" action="/admin/partners/manual-referral" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-            <div><label class="text-xs text-gray-500 block mb-1">آیدی معرف</label>
-              <input type="number" name="referrer_id" required placeholder="مثلاً 1929259679" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">آیدی دعوت‌شده</label>
-              <input type="number" name="referred_id" required placeholder="مثلاً 400678791" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
-            <label class="flex items-center gap-2 text-sm pb-2"><input type="checkbox" name="pay_reward" checked> پرداخت پاداش عضویت</label>
-            <button class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold">➕ ثبت معرفی</button>
+        <div class="card p-4 mb-4 border-r-4 border-indigo-400">
+          <h2 class="font-bold text-gray-700 mb-1 text-sm">🔧 ثبت دستی معرفی</h2>
+          <p class="text-xs text-gray-400 mb-3">اگر معرفی‌ای در ربات ثبت نشده، اینجا دستی وصل کنید.</p>
+          <form method="post" action="/admin/partners/manual-referral" class="flex flex-wrap gap-2 items-end">
+            <div><label class="text-[10px] text-gray-400 block mb-1">آیدی معرف</label>
+              <input type="number" name="referrer_id" required placeholder="ID معرف"
+                class="border border-gray-300 rounded-lg px-2.5 py-2 text-xs w-36" dir="ltr"></div>
+            <div><label class="text-[10px] text-gray-400 block mb-1">آیدی دعوت‌شده</label>
+              <input type="number" name="referred_id" required placeholder="ID دعوت‌شده"
+                class="border border-gray-300 rounded-lg px-2.5 py-2 text-xs w-36" dir="ltr"></div>
+            <label class="flex items-center gap-1.5 text-xs pb-1.5"><input type="checkbox" name="pay_reward" checked> پرداخت پاداش</label>
+            <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold">➕ ثبت</button>
           </form>
         </div>"""
         ref_settings = get_referral_settings()
@@ -8605,154 +8616,53 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
             total     = conn.execute("SELECT COUNT(*) FROM referrals;").fetchone()[0]
             rewarded  = conn.execute("SELECT COUNT(*) FROM referrals WHERE rewarded=1;").fetchone()[0]
             total_pay = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;").fetchone()[0]
+            # درآمد کل پورسانت
+            try:
+                total_comm = conn.execute(
+                    "SELECT COALESCE(SUM(amount),0) FROM partner_transactions WHERE type='credit';"
+                ).fetchone()[0]
+            except Exception:
+                total_comm = 0
         except Exception:
-            refs = []; total = rewarded = total_pay = 0
+            refs = []; total = rewarded = total_pay = total_comm = 0
         finally:
             conn.close()
 
         ref_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-xs text-gray-400">#{r['id']}</td>
-          <td class="px-4 py-3 text-sm">{e(r['referrer_name'] or str(r['referrer_id']))}</td>
-          <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
-          <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">منتظر خرید</span>'}</td>
-          <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
+          <td class="px-3 py-2 text-xs text-gray-400">#{r['id']}</td>
+          <td class="px-3 py-2 text-sm font-medium">
+            <a href="/admin/partners/{r['referrer_id']}/profile" class="text-indigo-600 hover:underline">
+              {e(r['referrer_name'] or str(r['referrer_id']))}</a></td>
+          <td class="px-3 py-2 text-sm">
+            <a href="/admin/partners/{r['referred_id']}/profile" class="text-gray-600 hover:underline">
+              {e(r['referred_name'] or str(r['referred_id']))}</a></td>
+          <td class="px-3 py-2">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-500 rounded-full">منتظر</span>'}</td>
+          <td class="px-3 py-2 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
+          <td class="px-3 py-2 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
         </tr>""" for r in refs)
 
         content = manual_form + f"""
-        <div class="grid grid-cols-3 gap-4 mb-6">
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total}</div><div class="text-xs text-gray-400 mt-1">کل معرفی‌ها</div></div>
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{rewarded}</div><div class="text-xs text-gray-400 mt-1">پرداخت شده</div></div>
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{int(total_pay):,}</div><div class="text-xs text-gray-400 mt-1">جمع پاداش (ت)</div></div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+          {_card("کل معرفی‌ها", str(total), "", "indigo")}
+          {_card("پاداش پرداخت‌شده", f"{int(total_pay):,} ت", f"{rewarded} نفر", "green")}
+          {_card("درآمد پورسانت", f"{int(total_comm):,} ت", "کل شبکه", "amber")}
+          {_card("نرخ تبدیل", f"{round(rewarded*100/total) if total else 0}٪", "معرفی→خرید", "teal")}
         </div>
-        <div class="card p-6 mb-6">
-          <h2 class="font-bold text-gray-700 mb-4">⚙️ تنظیمات معرفی</h2>
-          <form method="post" action="/admin/referrals/settings" class="flex flex-wrap gap-4 items-end">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">مبلغ پاداش (تومان)</label>
-              {_input("reward_amount","",str(ref_settings.get("reward_amount",5000)),"number",True)}</div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
-              <select name="is_active">
-                <option value="1" {"selected" if ref_settings.get("is_active") else ""}>فعال</option>
-                <option value="0" {"" if ref_settings.get("is_active") else "selected"}>غیرفعال</option>
-              </select></div>
-            {_btn("ذخیره","",color="green")}
-          </form>
-        </div>
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
+        <div class="card overflow-hidden">
+          <div class="px-4 py-3 border-b flex items-center justify-between">
+            <h2 class="font-bold text-gray-700 text-sm">📋 لیست معرفی‌ها</h2>
+            <span class="text-xs text-gray-400">کلیک روی نام → پروفایل کامل</span>
+          </div>
+          <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
             <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">#</th><th class="px-4 py-3">معرف</th><th class="px-4 py-3">کاربر جدید</th>
-              <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پاداش</th><th class="px-4 py-3">تاریخ</th>
+              <th class="px-3 py-2">#</th><th class="px-3 py-2">معرف</th>
+              <th class="px-3 py-2">کاربر جدید</th><th class="px-3 py-2">وضعیت</th>
+              <th class="px-3 py-2">پاداش</th><th class="px-3 py-2">تاریخ</th>
             </tr></thead>
             <tbody>{ref_rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>معرفی‌ای ثبت نشده</td></tr>"}</tbody>
-          </table>
-        </div></div>"""
+          </table></div>
+        </div>"""
 
-    elif tab == "tiers":
-        from db import get_partner_tiers, ensure_partner_tiers_extended
-        ensure_partner_tiers_extended()
-        tiers = get_partner_tiers()
-        tier_rows = ""
-        for tr in tiers:
-            try: commission = tr['commission_percent'] or 0
-            except Exception: commission = 0
-            try: cfixed = int(tr['commission_fixed'] or 0)
-            except Exception: cfixed = 0
-            comm_label = f"{cfixed:,} ت ثابت" if cfixed > 0 else f"{commission}٪"
-            try: color = tr['color'] or '#6B7280'
-            except Exception: color = '#6B7280'
-            try: desc = e(tr['description'] or '')
-            except Exception: desc = ''
-            try: photo_id = tr['photo_file_id'] or ''
-            except Exception: photo_id = ''
-            has_banner = '✅' if photo_id else '—'
-            tier_rows += f"""<tr class="border-b hover:bg-gray-50">
-              <td class="px-4 py-3 text-2xl">{e(tr['icon'])}</td>
-              <td class="px-4 py-3 text-sm font-medium">{e(tr['name'])}</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{tr['min_orders']} خرید</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{comm_label}</td>
-              <td class="px-4 py-3"><span style="background:{color};width:20px;height:20px;display:inline-block;border-radius:4px"></span></td>
-              <td class="px-4 py-3 text-xs text-center">{has_banner}</td>
-              <td class="px-4 py-3 text-xs text-gray-400">{desc[:30]}</td>
-              <td class="px-4 py-3">
-                <div class="flex gap-1 flex-wrap items-center">
-                  <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},{cfixed},'{color}','{desc}')"
-                    class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
-                  <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
-                        enctype="multipart/form-data" id="bf{tr['id']}" style="display:inline">
-                    <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer border border-amber-200">
-                      {'🖼 تعویض بنر' if photo_id else '📷 آپلود بنر'}
-                      <input type="file" name="banner_file" accept="image/*" style="display:none"
-                             onchange="this.form.submit()">
-                    </label>
-                  </form>
-                  {f'<form method="post" action="/admin/partners/tier/{tr["id"]}/delete-banner" class="inline" onsubmit="return confirm(\'بنر حذف شود؟\')"><button class="px-2 py-1 text-xs bg-red-50 text-red-500 rounded border border-red-200">🗑 بنر</button></form>' if photo_id else ''}
-                  <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف سطح؟')">
-                    <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded border border-red-200">حذف سطح</button>
-                  </form>
-                </div>
-              </td>
-            </tr>"""
-
-        content = f"""
-        <div class="card p-6 mb-4">
-          <h2 class="font-bold text-gray-700 mb-2">🏆 سطوح همکاری</h2>
-          <form method="post" action="/admin/partners/tier/save" class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end" id="tier-form">
-            <input type="hidden" name="tier_id" id="tier_id" value="">
-            <div><label class="text-xs text-gray-500 block mb-1">آیکون</label>
-              <input type="text" name="icon" id="tier_icon" value="🥉" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">نام سطح</label>
-              <input type="text" name="name" id="tier_name" placeholder="برنز" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">حداقل خرید</label>
-              <input type="number" name="min_orders" id="tier_min" value="0" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">پورسانت اضافه (٪)</label>
-              <input type="number" step="0.1" name="commission_percent" id="tier_comm" value="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">پورسانت ثابت (تومان — 0=درصدی)</label>
-              <input type="number" name="commission_fixed" id="tier_fixed" value="0" min="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">رنگ</label>
-              <input type="color" name="color" id="tier_color" value="#6B7280" class="w-full h-10 border border-gray-200 rounded-lg px-1"></div>
-            <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">توضیح</label>
-              <input type="text" name="description" id="tier_desc" placeholder="توضیح این سطح..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">File ID عکس بنر (اختیاری)</label>
-              <input type="text" name="photo_file_id" id="tier_photo" placeholder="Telegram file_id" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium self-end">ذخیره سطح</button>
-          </form>
-          <button onclick="resetTierForm()" class="mt-2 text-xs text-gray-400 hover:text-gray-600">+ سطح جدید</button>
-        </div>
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
-            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">آیکون</th><th class="px-4 py-3">سطح</th><th class="px-4 py-3">شرط ارتقا</th>
-              <th class="px-4 py-3">پورسانت</th><th class="px-4 py-3">رنگ</th><th class="px-4 py-3">بنر</th><th class="px-4 py-3">توضیح</th><th class="px-4 py-3">عملیات</th>
-            </tr></thead>
-            <tbody>{tier_rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
-          </table>
-        </div></div>
-        <script>
-        function editTier(id,name,icon,min,comm,cfixed,color,desc){{
-          document.getElementById('tier_id').value=id;
-          document.getElementById('tier_name').value=name;
-          document.getElementById('tier_icon').value=icon;
-          document.getElementById('tier_min').value=min;
-          document.getElementById('tier_comm').value=comm;
-          document.getElementById('tier_fixed').value=cfixed||0;
-          document.getElementById('tier_color').value=color;
-          document.getElementById('tier_desc').value=desc;
-          document.getElementById('tier-form').scrollIntoView({{behavior:'smooth'}});
-        }}
-        function resetTierForm(){{
-          document.getElementById('tier_id').value='';
-          document.getElementById('tier_name').value='';
-          document.getElementById('tier_icon').value='🥉';
-          document.getElementById('tier_min').value='0';
-          document.getElementById('tier_comm').value='0';
-          document.getElementById('tier_fixed').value='0';
-          document.getElementById('tier_color').value='#6B7280';
-          document.getElementById('tier_desc').value='';
-        }}
-        </script>"""
-
-    # ─── تب تسویه‌ها ─────────────────────────────────────────────────────
     elif tab == "payouts":
         from db import get_partner_payouts, ensure_partner_wallet_schema, get_partner_payout_settings
         ensure_partner_wallet_schema()
@@ -8795,60 +8705,214 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
 
     # ─── تب تنظیمات پورسانت ──────────────────────────────────────────────
     elif tab == "settings":
-        comm = get_partner_commission()
-        from db import get_partner_payout_settings, ensure_partner_wallet_schema
+        from db import (get_partner_payout_settings, ensure_partner_wallet_schema,
+                        get_partner_tiers, ensure_partner_tiers_extended,
+                        get_referral_settings)
         ensure_partner_wallet_schema()
-        ps = get_partner_payout_settings()
-        content = f"""
-        <div class="card p-6 mb-4">
-          <h2 class="font-bold text-gray-700 mb-2">⚙️ تنظیمات پورسانت معرفی</h2>
-          <form method="post" action="/admin/partners/commission" class="space-y-4 max-w-md">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">درصد پورسانت (٪)</label>
-              <input type="number" step="0.1" name="percent" value="{comm['percent']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ خرید (تومان)</label>
-              <input type="number" name="min_order" value="{comm['min_order']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = بدون محدودیت</span></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف پورسانت هر خرید (تومان)</label>
-              <input type="number" name="max_payout" value="{comm['max_payout']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت سیستم پورسانت</label>
-              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option value="1" {"selected" if comm['is_active'] else ""}>فعال</option>
-                <option value="0" {"" if comm['is_active'] else "selected"}>غیرفعال</option>
-              </select></div>
-            {_btn("ذخیره پورسانت","",color="green")}
-          </form>
-        </div>
-        <div class="card p-6">
-          <h2 class="font-bold text-gray-700 mb-2">📤 تنظیمات تسویه</h2>
-          <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-2xl">
-            <div class="grid grid-cols-2 gap-4">
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ تسویه (تومان)</label>
-                <input type="number" name="min_amount" value="{ps.get('min_amount',50000)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ تسویه (تومان)</label>
-                <input type="number" name="max_amount" value="{ps.get('max_amount',0)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
-                <input type="number" name="max_per_month" value="{ps.get('max_per_month',2)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">مدت بررسی (ساعت)</label>
-                <input type="number" name="review_hours" value="{ps.get('review_hours',48)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            </div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت تسویه</label>
-              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option value="1" {"selected" if ps.get('is_active') else ""}>فعال</option>
-                <option value="0" {"" if ps.get('is_active') else "selected"}>غیرفعال</option>
-              </select></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">متن راهنمای تسویه (نمایش به همکار)</label>
-              <textarea name="guide_text" rows="3" placeholder="شرایط و راهنمای تسویه..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{e(ps.get('guide_text',''))}</textarea></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام تأیید (به همکار)</label>
-              <input type="text" name="approval_message" value="{e(ps.get('approval_message',''))}" placeholder="درخواست تسویه شما تأیید و پرداخت می‌شود." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام رد (به همکار)</label>
-              <input type="text" name="rejection_message" value="{e(ps.get('rejection_message',''))}" placeholder="درخواست تسویه شما رد شد." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            {_btn("ذخیره تسویه","",color="indigo")}
-          </form>
-        </div>"""
+        ensure_partner_tiers_extended()
+        comm = get_partner_commission()
+        ps   = get_partner_payout_settings()
+        rs   = get_referral_settings()
+        tiers = get_partner_tiers()
 
+        # ── جدول سطوح ──
+        tier_rows = ""
+        for tr in tiers:
+            try: commission = tr["commission_percent"] or 0
+            except Exception: commission = 0
+            try: cfixed = int(tr["commission_fixed"] or 0)
+            except Exception: cfixed = 0
+            comm_label = f"{cfixed:,} ت ثابت" if cfixed > 0 else f"{commission}٪"
+            try: color = tr["color"] or "#6B7280"
+            except Exception: color = "#6B7280"
+            try: desc = e(tr["description"] or "")
+            except Exception: desc = ""
+            tier_rows += f"""<tr class="border-b hover:bg-gray-50 text-sm">
+              <td class="px-3 py-2 text-xl">{e(tr["icon"])}</td>
+              <td class="px-3 py-2 font-medium">{e(tr["name"])}</td>
+              <td class="px-3 py-2 text-gray-500">{tr["min_orders"]}+ خرید</td>
+              <td class="px-3 py-2 font-semibold text-indigo-700">{comm_label}</td>
+              <td class="px-3 py-2 text-gray-400">{desc[:30]}</td>
+              <td class="px-3 py-2">
+                <button onclick="editTier({tr["id"]},\'{e(tr["name"])}\',\'{e(tr["icon"])}\',{tr["min_orders"]},{commission},{cfixed},\'{color}\',\'{desc}\')"
+                  class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">✏️ ویرایش</button>
+                <form method="post" action="/admin/partners/tier/{tr["id"]}/delete" class="inline"
+                  onsubmit="return confirm(\'حذف سطح؟\')">
+                  <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded border border-red-100">حذف</button>
+                </form>
+              </td>
+            </tr>"""
+
+        content = f"""
+        <style>
+        details.acc summary{{list-style:none;cursor:pointer;user-select:none}}
+        details.acc summary::-webkit-details-marker{{display:none}}
+        details.acc[open] .acc-arrow{{transform:rotate(90deg)}}
+        .acc-arrow{{transition:transform .18s;display:inline-block;margin-inline-start:4px}}
+        </style>
+
+        <!-- ① هدیه دعوت -->
+        <details class="acc card mb-3" open>
+          <summary class="flex items-center gap-2 px-5 py-4 font-bold text-gray-700">
+            🎁 هدیه دعوت<span class="acc-arrow">›</span>
+            <span class="mr-auto text-xs font-normal text-gray-400">پاداش یک‌بارِ لحظه عضویت</span>
+          </summary>
+          <div class="px-5 pb-5 border-t pt-4">
+            <form method="post" action="/admin/referrals/settings" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+              <div>
+                <label class="text-sm font-medium text-gray-700 block mb-1">مبلغ هدیه (تومان)</label>
+                <input type="number" name="reward_amount" value="{int(rs.get('reward_amount',5000))}" min="0"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <p class="text-xs text-gray-400 mt-1">۰ = غیرفعال</p>
+              </div>
+              <div>
+                <label class="text-sm font-medium text-gray-700 block mb-1">سقف تعداد دعوت</label>
+                <input type="number" name="max_invites" value="{int(rs.get('max_invites',0))}" min="0"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <p class="text-xs text-gray-400 mt-1">۰ = نامحدود</p>
+              </div>
+              <div>
+                <label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
+                <select name="is_active" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="1" {"selected" if rs.get("is_active") else ""}>فعال</option>
+                  <option value="0" {"" if rs.get("is_active") else "selected"}>غیرفعال</option>
+                </select>
+              </div>
+              <div class="md:col-span-3">
+                {_btn("💾 ذخیره هدیه دعوت","",color="green",small=True)}
+              </div>
+            </form>
+          </div>
+        </details>
+
+        <!-- ② سطوح و پورسانت -->
+        <details class="acc card mb-3" open>
+          <summary class="flex items-center gap-2 px-5 py-4 font-bold text-gray-700">
+            🏆 سطوح و پورسانت فروش<span class="acc-arrow">›</span>
+            <span class="mr-auto text-xs font-normal text-gray-400">پورسانت هر خرید توسط دعوت‌شده‌ها</span>
+          </summary>
+          <div class="px-5 pb-5 border-t pt-4">
+            <p class="text-xs text-gray-400 mb-4">
+              پورسانت بر اساس سطح معرف محاسبه می‌شود. اگه مبلغ ثابت تنظیم شده باشد همان اعمال می‌شود، وگرنه درصد. همکاری که هنوز نفروخته، در پایین‌ترین سطح (با کمترین min) قرار می‌گیرد.
+            </p>
+            <!-- فرم ویرایش/افزودن سطح -->
+            <form method="post" action="/admin/partners/tier/save"
+              class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end mb-4 p-4 bg-gray-50 rounded-xl" id="tier-form">
+              <input type="hidden" name="tier_id" id="tier_id" value="">
+              <div><label class="text-xs text-gray-500 block mb-1">آیکون</label>
+                <input type="text" name="icon" id="tier_icon" value="🥉" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              <div><label class="text-xs text-gray-500 block mb-1">نام سطح</label>
+                <input type="text" name="name" id="tier_name" placeholder="برنز" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              <div><label class="text-xs text-gray-500 block mb-1">از چند خرید</label>
+                <input type="number" name="min_orders" id="tier_min" value="0" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              <div><label class="text-xs text-gray-500 block mb-1">پورسانت ثابت (تومان)</label>
+                <input type="number" name="commission_fixed" id="tier_fixed" value="0" min="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <p class="text-[10px] text-gray-400">یا درصد →</p></div>
+              <div><label class="text-xs text-gray-500 block mb-1">پورسانت درصدی (٪)</label>
+                <input type="number" step="0.1" name="commission_percent" id="tier_comm" value="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <p class="text-[10px] text-gray-400">اگه ثابت ≠ ۰ باشد، نادیده گرفته می‌شود</p></div>
+              <div><label class="text-xs text-gray-500 block mb-1">رنگ</label>
+                <input type="color" name="color" id="tier_color" value="#6B7280" class="w-full h-10 border border-gray-200 rounded-lg px-1"></div>
+              <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">توضیح (نمایش در پیام Level Up)</label>
+                <input type="text" name="description" id="tier_desc" placeholder="مثلاً: دسترسی به قیمت ویژه" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              <div class="flex gap-2 items-end">
+                <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium">💾 ذخیره</button>
+                <button type="button" onclick="resetTierForm()" class="px-3 py-2 bg-gray-100 text-gray-500 rounded-lg text-sm">جدید</button>
+              </div>
+            </form>
+            <!-- جدول سطوح -->
+            <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+              <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+                <th class="px-3 py-2">آیکون</th><th class="px-3 py-2">سطح</th>
+                <th class="px-3 py-2">شرط ارتقا</th><th class="px-3 py-2">پورسانت</th>
+                <th class="px-3 py-2">توضیح</th><th class="px-3 py-2">عملیات</th>
+              </tr></thead>
+              <tbody>{tier_rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
+            </table></div>
+            <!-- محدودیت‌ها -->
+            <form method="post" action="/admin/partners/commission" class="mt-4 p-4 bg-blue-50 rounded-xl flex flex-wrap gap-4 items-end">
+              <div><label class="text-xs text-gray-500 block mb-1">حداقل مبلغ خرید برای پورسانت (ت)</label>
+                <input type="number" name="min_order" value="{comm["min_order"]}" class="border border-gray-200 rounded-lg px-3 py-2 text-sm w-44">
+                <p class="text-[10px] text-gray-400">۰ = بدون حداقل</p></div>
+              <div><label class="text-xs text-gray-500 block mb-1">سقف پورسانت هر خرید (ت)</label>
+                <input type="number" name="max_payout" value="{comm["max_payout"]}" class="border border-gray-200 rounded-lg px-3 py-2 text-sm w-44">
+                <p class="text-[10px] text-gray-400">۰ = نامحدود</p></div>
+              <div><label class="text-xs text-gray-500 block mb-1">وضعیت سیستم پورسانت</label>
+                <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="1" {"selected" if comm["is_active"] else ""}>فعال</option>
+                  <option value="0" {"" if comm["is_active"] else "selected"}>غیرفعال</option>
+                </select></div>
+              <input type="hidden" name="percent" value="0">
+              {_btn("💾 ذخیره محدودیت‌ها","",color="blue",small=True)}
+            </form>
+          </div>
+        </details>
+
+        <!-- ③ تنظیمات تسویه -->
+        <details class="acc card mb-3">
+          <summary class="flex items-center gap-2 px-5 py-4 font-bold text-gray-700">
+            📤 تنظیمات تسویه<span class="acc-arrow">›</span>
+          </summary>
+          <div class="px-5 pb-5 border-t pt-4">
+            <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-2xl">
+              <div class="grid grid-cols-2 gap-4">
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ (ت)</label>
+                  <input type="number" name="min_amount" value="{ps.get("min_amount",50000)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ (ت)</label>
+                  <input type="number" name="max_amount" value="{ps.get("max_amount",0)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <p class="text-xs text-gray-400">۰ = نامحدود</p></div>
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
+                  <input type="number" name="max_per_month" value="{ps.get("max_per_month",2)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">مدت بررسی (ساعت)</label>
+                  <input type="number" name="review_hours" value="{ps.get("review_hours",48)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              </div>
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
+                <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="1" {"selected" if ps.get("is_active") else ""}>فعال</option>
+                  <option value="0" {"" if ps.get("is_active") else "selected"}>غیرفعال</option>
+                </select></div>
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">راهنمای تسویه (به همکار)</label>
+                <textarea name="guide_text" rows="2" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{e(ps.get("guide_text",""))}</textarea></div>
+              <div class="grid grid-cols-2 gap-4">
+                <div><label class="text-xs text-gray-500 block mb-1">پیام تأیید</label>
+                  <input type="text" name="approval_message" value="{e(ps.get("approval_message",""))}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+                <div><label class="text-xs text-gray-500 block mb-1">پیام رد</label>
+                  <input type="text" name="rejection_message" value="{e(ps.get("rejection_message",""))}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              </div>
+              {_btn("💾 ذخیره تسویه","",color="indigo")}
+            </form>
+          </div>
+        </details>
+
+        <script>
+        function editTier(id,name,icon,min,comm,cfixed,color,desc){{
+          document.getElementById("tier_id").value=id;
+          document.getElementById("tier_name").value=name;
+          document.getElementById("tier_icon").value=icon;
+          document.getElementById("tier_min").value=min;
+          document.getElementById("tier_comm").value=comm;
+          document.getElementById("tier_fixed").value=cfixed||0;
+          document.getElementById("tier_color").value=color;
+          document.getElementById("tier_desc").value=desc;
+          document.getElementById("tier-form").scrollIntoView({{behavior:"smooth"}});
+        }}
+        function resetTierForm(){{
+          document.getElementById("tier_id").value="";
+          document.getElementById("tier_name").value="";
+          document.getElementById("tier_icon").value="🥉";
+          document.getElementById("tier_min").value="0";
+          document.getElementById("tier_comm").value="0";
+          document.getElementById("tier_fixed").value="0";
+          document.getElementById("tier_color").value="#6B7280";
+          document.getElementById("tier_desc").value="";
+        }}
+        </script>"""
     elif tab == "tree":
         # ─── 🌳 درخت همکاران — رندر کامل سمت کلاینت با Lazy DOM ───────────
         content = """
