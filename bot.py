@@ -296,17 +296,21 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     # product می‌تونه tuple یا sqlite3.Row باشه
     if hasattr(product, 'keys'):
+        # sqlite3.Row متد keys() دارد ولی get() ندارد — دسترسی امن:
+        _pk = set(product.keys())
+        def _pg(k, default=None):
+            return product[k] if k in _pk else default
         pid = product["id"]
-        category = category or product.get("category") or str(product.get("category_id", ""))
+        category = category or _pg("category") or str(_pg("category_id", "") or "")
         title = product["title"]
         price = product["price"]
-        description = product.get("description")
-        is_active = product.get("is_active", 1)
-        partner_price = product.get("partner_price")
-        daily_lim_c = product.get("daily_limit_customer") or 0
-        daily_lim_p = product.get("daily_limit_partner") or 0
+        description = _pg("description")
+        is_active = _pg("is_active", 1)
+        partner_price = _pg("partner_price")
+        daily_lim_c = _pg("daily_limit_customer") or 0
+        daily_lim_p = _pg("daily_limit_partner") or 0
         if cat_id is None:
-            cat_id = product.get("category_id")
+            cat_id = _pg("category_id")
     else:
         pid, category, title, price, description, is_active = product[0:6]
         partner_price = product[6] if len(product) > 6 else None
