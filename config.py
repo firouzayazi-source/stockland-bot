@@ -17,6 +17,17 @@ DB_FULL_PATH = DB_PATH
 # Telegram bot token
 BOT_TOKEN = os.getenv("BOT_TOKEN") or ""
 
+# Webhook configuration
+# اگر WEBHOOK_BASE_URL خالی باشد، ربات در حالت polling کار می‌کند (سازگاری با dev)
+WEBHOOK_BASE_URL = (os.getenv("WEBHOOK_BASE_URL") or "https://panel.stland.ir").rstrip("/")
+# اگر WEBHOOK_SECRET خالی بود، یک مقدار تصادفی در حافظه ساخته می‌شود (هر restart فرق می‌کند)
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or ""
+if not WEBHOOK_SECRET:
+    import secrets as _s
+    WEBHOOK_SECRET = _s.token_urlsafe(32)
+# فعال‌سازی webhook: اگر USE_WEBHOOK=1 و WEBHOOK_BASE_URL پر باشد
+USE_WEBHOOK = (os.getenv("USE_WEBHOOK", "0") == "1") and bool(WEBHOOK_BASE_URL)
+
 # Admin numeric ID
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
 
