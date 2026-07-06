@@ -449,20 +449,52 @@ def maybe_start_bot_polling() -> None:
     if USE_WEBHOOK:
         # ── Webhook mode ──────────────────────────────────────────────
         import bot as bot_module
+        from config import WEBHOOK_BASE_URL, WEBHOOK_SECRET
         _bot_module_ref = bot_module
         bot_module.init_db(bot_module.DB_PATH)
         bot_module.ensure_pending_schema()
         bot_module._ensure_delivery_table()
         bot_module.ticket_ensure_schema()
-        webhook_url = os.getenv("WEBHOOK_URL", "")
-        if webhook_url:
+
+        webhook_path = f"/telegram/webhook/{BOT_TOKEN}"
+        webhook_url  = os.getenv("WEBHOOK_URL", "") or f"{WEBHOOK_BASE_URL}{webhook_path}"
+
+        # ثبت endpoint واقعی webhook روی FastAPI (خارج از prefix /admin)
+        from fastapi import Request as _Req, HTTPException as _HTTPExc
+        from telebot import types as _tg_types
+
+        @app.post(webhook_path)
+        async def _telegram_webhook(request: _Req):
+            # اعتبارسنجی هدر امنیتی
+            hdr = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if hdr != WEBHOOK_SECRET:
+                raise _HTTPExc(status_code=403, detail="invalid secret")
             try:
-                bot_module.bot.remove_webhook()
-                import time; time.sleep(1)
-                bot_module.bot.set_webhook(url=webhook_url)
-                logger.info("Webhook set: %s", webhook_url)
+                payload = await request.json()
+                update  = _tg_types.Update.de_json(payload)
+                # اجرا در thread جدا تا webhook فوراً 200 برگرداند
+                threading.Thread(
+                    target=lambda: bot_module.bot.process_new_updates([update]),
+                    name="tg-update-handler",
+                    daemon=True,
+                ).start()
             except Exception as ex:
-                logger.error("set_webhook failed: %s", ex)
+                logger.exception("webhook processing error: %s", ex)
+            return {"ok": True}
+
+        # پاک‌سازی webhook قبلی و ست کردن جدید با secret_token
+        try:
+            bot_module.bot.remove_webhook()
+            import time as _t; _t.sleep(1)
+            bot_module.bot.set_webhook(
+                url=webhook_url,
+                secret_token=WEBHOOK_SECRET,
+                allowed_updates=["message", "callback_query", "inline_query"],
+                drop_pending_updates=False,
+            )
+            logger.info("✅ Webhook set: %s", webhook_url)
+        except Exception as ex:
+            logger.error("set_webhook failed: %s", ex)
         _bot_thread_started = True
         return
 
