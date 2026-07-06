@@ -10589,11 +10589,18 @@ async def webhook_management(request: Request, flash: str = ""):
             <p class="text-[10px] text-gray-400 mt-1 text-center">آدرس فعلی را حذف و آدرس بالا را ست می‌کند</p>
           </form>
           <form method="post" action="/admin/webhook/remove"
-            onsubmit="return confirm('آیا مطمئنید؟ ربات از حالت Webhook خارج می‌شود.')">
+            onsubmit="return confirm('⚠️ توجه: بعد از حذف Webhook، ربات تا زمانی که Polling را دستی فعال نکنید آفلاین می‌ماند. ادامه؟')">
             <button class="w-full py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl text-sm font-semibold">
               🚫 حذف Webhook (بازگشت به Polling)</button>
-            <p class="text-[10px] text-gray-400 mt-1 text-center">پس از حذف، ربات را restart کنید تا polling استارت شود</p>
+            <p class="text-[10px] text-gray-400 mt-1 text-center">فقط برای مواقع اضطراری — نیاز به یک دستور دستی دارد ↓</p>
           </form>
+        </div>
+
+        <div class="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <p class="text-sm text-amber-800 font-semibold mb-2">⚠️ اگر به Polling برگشتید:</p>
+          <p class="text-xs text-amber-700 mb-2">ربات خودکار روشن نمی‌شود. روی سرور این دستور را بزنید تا سرویس Polling فعال شود:</p>
+          <code class="block bg-white px-3 py-2 rounded-lg text-xs no-fa" dir="ltr" style="user-select:all">systemctl start telegram-bot.service</code>
+          <p class="text-[10px] text-amber-600 mt-2">برای بازگشت به Webhook: سرویس بالا را stop کنید و از دکمه «ست کردن Webhook» استفاده کنید.</p>
         </div>
       </div>
     </div>"""
@@ -10638,6 +10645,6 @@ async def webhook_remove(request: Request):
             timeout=15)
         j = r.json()
         _log(request, "حذف Webhook", "تنظیمات", str(j.get("description", "")), admin_info=adm)
-        return _redir("/admin/webhook?flash=✅+Webhook+حذف+شد+—+برای+فعال‌سازی+polling+ربات+را+restart+کنید")
+        return _redir("/admin/webhook?flash=✅+Webhook+حذف+شد+—+توجه:+ربات+تا+فعال‌سازی+Polling+آفلاین+است.+راهنمای+پایین+صفحه+را+ببینید")
     except Exception as ex:
         return _redir(f"/admin/webhook?flash=❌+خطا:+{e(str(ex)[:100])}")
