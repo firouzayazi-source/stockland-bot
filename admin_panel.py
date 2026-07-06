@@ -521,7 +521,6 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
-            {nav_item("/admin/webhook", "link", "Webhook", "settings")}
             {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
             {nav_item("/admin/logs", "activity", "گزارش فعالیت", "logs")}
@@ -1988,6 +1987,26 @@ async def receipt_reject(request: Request, rid: int):
     return _redir(f"/admin/tickets?flash=رسید+{rid}+رد+شد#financial")
 
 
+def _webhook_status_snippet() -> str:
+    """خلاصه وضعیت webhook برای نمایش در صفحه تنظیمات."""
+    from config import BOT_TOKEN, USE_WEBHOOK
+    try:
+        import requests as _req
+        r = _req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo", timeout=10)
+        j = r.json()
+        info = j.get("result", {}) if j.get("ok") else {}
+        url = info.get("url") or ""
+        pending = info.get("pending_update_count", 0)
+    except Exception:
+        url, pending = "", 0
+    if url:
+        return (f'<div class="mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">'
+                f'✅ Webhook فعال است'
+                f'{f" — {pending} آپدیت در انتظار" if pending else ""}</div>')
+    return ('<div class="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">'
+            '⭕ در حالت Polling (Webhook غیرفعال)</div>')
+
+
 @router.get("/settings/panel", response_class=HTMLResponse)
 async def settings_hub(request: Request, flash: str = ""):
     adm = _get_admin(request)
@@ -2089,6 +2108,14 @@ async def settings_hub(request: Request, flash: str = ""):
             <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">✅ بازگشایی ربات</button>
           </form>
         </div>
+      </div>
+      <!-- Webhook -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-3">🔗 اتصال ربات (Webhook)</h2>
+        <p class="text-sm text-gray-500 mb-4">مدیریت نحوه اتصال ربات به تلگرام — Webhook (سریع‌تر) یا Polling.</p>
+        {_webhook_status_snippet()}
+        <a href="/admin/webhook" class="inline-block px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+          🔧 مدیریت کامل Webhook</a>
       </div>
     </div>"""
     return _layout("تنظیمات", body, adm, flash=flash)
