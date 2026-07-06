@@ -57,6 +57,48 @@ def _to_jalali(gy, gm, gd):
 
 _FA_TBL = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
+
+class _RowCompat:
+    """
+    پل سازگاری بین tuple و dict برای نتایج کوئری.
+    هم product[0] (ایندکس عددی)، هم product["title"] (کلید)، هم product.get("x", default) کار می‌کند.
+    برای حفظ سازگاری با کدی که به هر دو شکل به یک ردیف دسترسی دارد.
+    """
+    __slots__ = ("_row", "_keys")
+
+    def __init__(self, row):
+        self._row = row
+        try:
+            self._keys = list(row.keys())
+        except Exception:
+            self._keys = []
+
+    def __getitem__(self, k):
+        # ایندکس عددی یا کلید رشته‌ای
+        if isinstance(k, int):
+            return self._row[k]
+        return self._row[k]
+
+    def get(self, k, default=None):
+        try:
+            if k in self._keys:
+                return self._row[k]
+        except Exception:
+            pass
+        return default
+
+    def keys(self):
+        return self._keys
+
+    def __len__(self):
+        return len(self._keys)
+
+    def __iter__(self):
+        return iter(self._row)
+
+    def __contains__(self, k):
+        return k in self._keys
+
 def fa_date(dt_str, with_time: bool = False) -> str:
     """تبدیل ISO تاریخ به شمسی فارسی."""
     if not dt_str: return "—"
@@ -441,8 +483,85 @@ def init_db(db_path=None):
     finally:
         conn.close()
 
+    # ⚡ ساخت ایندکس‌ها برای سرعت — حیاتی برای عملکرد در حجم بالا
+    ensure_indexes()
 
-# ========= WALLET HELPERS =========
+
+_INDEXES_READY = False
+_ENSURE_PARTNER_TIERS_EXTENDED_DONE = False
+_ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE = False
+_ENSURE_REFERRAL_SCHEMA_DONE = False
+_ENSURE_PARTNER_WALLET_SCHEMA_DONE = False
+_ENSURE_PARTNER_SYSTEM_SCHEMA_DONE = False
+_ENSURE_PARTNER_BANK_SCHEMA_DONE = False
+_ENSURE_PARTNER_BANK_ADDRESS_DONE = False
+_ENSURE_INVITE_CAP_SCHEMA_DONE = False
+_ENSURE_ACCOUNTING_SCHEMA_DONE = False
+_ENSURE_RATINGS_SCHEMA_DONE = False
+_ENSURE_CARD_RECEIPTS_SCHEMA_DONE = False
+_ENSURE_USER_EXTRA_SCHEMA_DONE = False
+_ENSURE_ADMIN_NOTES_SCHEMA_DONE = False
+_ENSURE_FAQ_SCHEMA_DONE = False
+
+def ensure_indexes():
+    """
+    ساخت ایندکس روی ستون‌های پرمصرف — فقط یک‌بار در هر پروسه.
+    ⚡ این توابع نتیجه‌ی کوئری‌ها را تغییر نمی‌دهند، فقط سرعت را چند صد برابر می‌کنند.
+    بدون ایندکس، هر JOIN/WHERE روی این ستون‌ها = اسکن کامل جدول.
+    """
+    global _INDEXES_READY
+    # مهاجرت ستون‌های orders — فقط یک‌بار (چون ALTER گران است)
+    if not _INDEXES_READY:
+        _INDEXES_READY = True
+        for _col, _decl in [("status", "TEXT DEFAULT 'active'"), ("feed_id", "INTEGER"), ("returned_at", "TEXT")]:
+            try:
+                _c = _get_connection()
+                _c.execute(f"ALTER TABLE orders ADD COLUMN {_col} {_decl};")
+                _c.commit(); _c.close()
+            except Exception:
+                try: _c.close()
+                except Exception: pass
+    # هر ایندکس در try جدا — اگر جدول/ستون نبود، بی‌صدا رد شود (قانون ۱۳)
+    index_defs = [
+        # سفارش‌ها — پرمصرف‌ترین: JOIN با users، فیلتر status، جستجوی user_id
+        ("idx_orders_user_id",       "orders(user_id)"),
+        ("idx_orders_status",        "orders(status)"),
+        ("idx_orders_product_id",    "orders(product_id)"),
+        # معرفی‌ها — محاسبه پورسانت و آمار
+        ("idx_referrals_referrer",   "referrals(referrer_id)"),
+        ("idx_referrals_referred",   "referrals(referred_id)"),
+        # کیف‌پول و تراکنش‌ها
+        ("idx_wallets_user",         "wallets(user_id)"),
+        ("idx_ptx_user",             "partner_transactions(user_id)"),
+        ("idx_ppayouts_user",        "partner_payouts(user_id)"),
+        ("idx_ppayouts_status",      "partner_payouts(status)"),
+        ("idx_pwallets_user",        "partner_wallets(user_id)"),
+        # موجودی محصولات — feed
+        ("idx_feed_product",         "product_feed(product_id)"),
+        ("idx_feed_delivered",       "product_feed(product_id, delivered)"),
+        # دسته‌بندی محصولات
+        ("idx_products_category",    "products(category)"),
+        ("idx_products_active",      "products(is_active)"),
+        # کاربران
+        ("idx_users_username",       "users(username)"),
+        # همکاران
+        ("idx_partners_tg",          "partners(tg_user_id)"),
+        ("idx_partners_status",      "partners(status)"),
+        # فروش فوری
+        ("idx_flash_product",        "flash_sales(product_id, is_active)"),
+        # امتیازها
+        ("idx_ratings_product",      "product_ratings(product_id)"),
+    ]
+    conn = _get_connection()
+    try:
+        for name, target in index_defs:
+            try:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target};")
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_wallet_balance(user_id: int) -> int:
@@ -670,7 +789,11 @@ def get_product_by_id(pid: int):
         row = cur.fetchone()
     finally:
         conn.close()
-    return row
+    # همیشه dict برگردان تا هم [index] هم ["key"] هم .get() کار کند
+    # (سازگاری با کدی که product را به هر دو شکل استفاده می‌کند)
+    if row is None:
+        return None
+    return _RowCompat(row)
 
 def update_product_field(pid: int, field: str, value):
     """
@@ -2750,6 +2873,10 @@ def get_product_setup_message(product_id: int) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_referral_schema():
+    global _ENSURE_REFERRAL_SCHEMA_DONE
+    if _ENSURE_REFERRAL_SCHEMA_DONE:
+        return
+    _ENSURE_REFERRAL_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.executescript("""
@@ -3298,6 +3425,10 @@ def seller_approve_application(user_id: int) -> str:
 # ─── ستونهای اضافی کاربران (یادداشت، برچسب، مسدودسازی) ──────────────────────
 
 def ensure_user_extra_schema():
+    global _ENSURE_USER_EXTRA_SCHEMA_DONE
+    if _ENSURE_USER_EXTRA_SCHEMA_DONE:
+        return
+    _ENSURE_USER_EXTRA_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         for col, default in [
@@ -3392,6 +3523,10 @@ def get_user_tickets(user_id: int, limit: int = 20) -> list:
 
 def ensure_partner_system_schema():
     """جداول سطوح همکاری + تنظیمات پورسانت."""
+    global _ENSURE_PARTNER_SYSTEM_SCHEMA_DONE
+    if _ENSURE_PARTNER_SYSTEM_SCHEMA_DONE:
+        return
+    _ENSURE_PARTNER_SYSTEM_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         # سطوح همکاری
@@ -3553,6 +3688,10 @@ def get_referral_stats_for(referrer_id: int) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_partner_wallet_schema():
+    global _ENSURE_PARTNER_WALLET_SCHEMA_DONE
+    if _ENSURE_PARTNER_WALLET_SCHEMA_DONE:
+        return
+    _ENSURE_PARTNER_WALLET_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -3838,6 +3977,10 @@ def get_partner_payouts(user_id: int = None, status: str = "", limit: int = 50) 
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_admin_notes_schema():
+    global _ENSURE_ADMIN_NOTES_SCHEMA_DONE
+    if _ENSURE_ADMIN_NOTES_SCHEMA_DONE:
+        return
+    _ENSURE_ADMIN_NOTES_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -3947,7 +4090,11 @@ def delete_admin_note(note_id: int):
 # ─── ستونهای اضافی partner_tiers ────────────────────────────────────────────
 
 def ensure_partner_tiers_extended():
-    ensure_partner_system_schema()  # ابتدا جدول پایه ساخته شود
+    global _ENSURE_PARTNER_TIERS_EXTENDED_DONE
+    if _ENSURE_PARTNER_TIERS_EXTENDED_DONE:
+        return
+    ensure_partner_system_schema()  # ابتدا جدول پایه ساخته شود (قبل از set flag)
+    _ENSURE_PARTNER_TIERS_EXTENDED_DONE = True
     conn = _get_connection()
     try:
         for col, default in [
@@ -3971,6 +4118,10 @@ def ensure_partner_tiers_extended():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_partner_bank_schema():
+    global _ENSURE_PARTNER_BANK_SCHEMA_DONE
+    if _ENSURE_PARTNER_BANK_SCHEMA_DONE:
+        return
+    _ENSURE_PARTNER_BANK_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -4131,6 +4282,11 @@ def get_financial_report() -> dict:
 # ─── migration آدرس در partner_bank_info ────────────────────────────────────
 
 def ensure_partner_bank_address():
+    global _ENSURE_PARTNER_BANK_ADDRESS_DONE
+    if _ENSURE_PARTNER_BANK_ADDRESS_DONE:
+        return
+    ensure_partner_bank_schema()  # جدول پایه partner_bank_info
+    _ENSURE_PARTNER_BANK_ADDRESS_DONE = True
     conn = _get_connection()
     try:
         conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
@@ -4144,6 +4300,11 @@ def ensure_partner_bank_address():
 # ─── تنظیمات تسویه — فیلدهای اضافی ────────────────────────────────────────
 
 def ensure_payout_settings_extended():
+    global _ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE
+    if _ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE:
+        return
+    ensure_partner_wallet_schema()  # جدول پایه partner_payout_settings باید وجود داشته باشد
+    _ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE = True
     conn = _get_connection()
     try:
         for col, default in [
@@ -4221,6 +4382,10 @@ def save_payout_settings_full(data: dict):
 
 def ensure_accounting_schema():
     """ساخت جداول حسابداری."""
+    global _ENSURE_ACCOUNTING_SCHEMA_DONE
+    if _ENSURE_ACCOUNTING_SCHEMA_DONE:
+        return
+    _ENSURE_ACCOUNTING_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         # هزینهها
@@ -4509,6 +4674,10 @@ def add_expense_category(name: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_ratings_schema():
+    global _ENSURE_RATINGS_SCHEMA_DONE
+    if _ENSURE_RATINGS_SCHEMA_DONE:
+        return
+    _ENSURE_RATINGS_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -4583,6 +4752,10 @@ def has_rated_order(order_id: int) -> bool:
 # ─── FAQ ─────────────────────────────────────────────────────────────────────
 
 def ensure_faq_schema():
+    global _ENSURE_FAQ_SCHEMA_DONE
+    if _ENSURE_FAQ_SCHEMA_DONE:
+        return
+    _ENSURE_FAQ_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -4679,6 +4852,10 @@ def set_maintenance_mode(enabled: bool):
 # ─── رسیدهای کارتبهکارت ────────────────────────────────────────────────────
 
 def ensure_card_receipts_schema():
+    global _ENSURE_CARD_RECEIPTS_SCHEMA_DONE
+    if _ENSURE_CARD_RECEIPTS_SCHEMA_DONE:
+        return
+    _ENSURE_CARD_RECEIPTS_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS card_receipts (
@@ -4911,6 +5088,11 @@ def ensure_growth_schema():
         conn.commit()
     finally:
         conn.close()
+    # ایندکس‌های جدول‌های growth (flash_sales, product_ratings) پس از ساخت‌شان
+    try:
+        ensure_indexes()
+    except Exception:
+        pass
 
 
 # ─── ۳) فروش فوری (Flash Sale) ────────────────────────────────────────────
@@ -5227,6 +5409,10 @@ def credit_referrer(referrer_id: int, amount: int, note: str) -> str:
 
 def ensure_invite_cap_schema():
     """ستون invite_count در جدول users."""
+    global _ENSURE_INVITE_CAP_SCHEMA_DONE
+    if _ENSURE_INVITE_CAP_SCHEMA_DONE:
+        return
+    _ENSURE_INVITE_CAP_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(users);").fetchall()}
