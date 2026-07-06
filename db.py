@@ -84,15 +84,21 @@ if not os.path.isabs(DB_FULL_PATH):
 def _get_connection():
     """
     همیشه یک کانکشن جدید میسازد تا با Threadهای تلگرام مشکل نداشته باشیم.
+    برای مهاجرت آینده به PostgreSQL، از storage.raw_connection() استفاده می‌کند
+    که همان تنظیمات (WAL + timeout) را دارد.
     """
-    conn = sqlite3.connect(DB_FULL_PATH, timeout=30)
-    # Configure SQLite to handle concurrent writers better
     try:
-        conn.execute('PRAGMA journal_mode=WAL;')
-        conn.execute('PRAGMA busy_timeout=5000;')
+        import storage as _st
+        return _st.raw_connection()
     except Exception:
-        pass
-    return conn
+        # fallback مستقیم اگر storage نبود
+        conn = sqlite3.connect(DB_FULL_PATH, timeout=30)
+        try:
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('PRAGMA busy_timeout=5000;')
+        except Exception:
+            pass
+        return conn
 
 
 def init_db(db_path=None):
