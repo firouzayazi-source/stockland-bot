@@ -371,21 +371,23 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     # ضمانت
     guarantee = _build_guarantee_text()
 
-    # مورد ۵: نمایش قیمت عادی خط‌خورده برای همکار
+    # فاز ۱: نمایش قیمت همکاری — طرح شفاف و سبک برای تلگرام
     partner_ok_view = (user_id and is_partner_approved(int(user_id)))
-    _raw_base = int(price)  # قیمت پایه قبل از فلش (برای نمایش خط‌خورده)
+    _raw_base = int(price)  # قیمت پایه قبل از فلش
     if _flash_sale:
-        _price_line = f"قیمت: <s>{_raw_base:,}</s> ← <b>{int(eff_price):,}</b> تومان 🔥\n"
+        _price_line = f"💰 قیمت: <s>{_raw_base:,}</s> ← <b>{int(eff_price):,}</b> تومان 🔥\n"
     elif partner_ok_view and partner_price and int(partner_price) < int(price):
         saving = int(price) - int(eff_price)
         pct = round(saving * 100 / int(price))
+        # طراحی سه‌سطحی: قیمت عادی، قیمت همکاری، سود
+        # با فاصله‌گذاری خفیف که در تلگرام شفاف‌تر نمایش داده می‌شود
         _price_line = (
-            f"قیمت مشتری عادی: <s>{int(price):,}</s>\n"
-            f"💚 قیمت همکاری شما: <b>{int(eff_price):,}</b> تومان\n"
-            f"💰 سود شما: <b>{saving:,} تومان ({pct}٪)</b>\n"
+            f"💰 قیمت مشتری: <s>{int(price):,}</s> تومان\n"
+            f"🤝 قیمت همکاری: <b>{int(eff_price):,}</b> تومان\n"
+            f"💎 سود شما: <b>{saving:,}</b> تومان (<b>٪{pct}</b> تخفیف)\n"
         )
     else:
-        _price_line = f"قیمت: <b>{int(eff_price):,}</b> تومان\n"
+        _price_line = f"💰 قیمت: <b>{int(eff_price):,}</b> تومان\n"
 
     text = (
         f"{_flash_badge(pid, _flash_sale, price, eff_price)}"
@@ -1660,22 +1662,58 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         lu = check_and_notify_tier_up(uid)
         if lu:
             t = lu["tier"]
-            comm_lbl = (f"{int(t.get('commission_fixed') or 0):,} تومان ثابت"
-                        if int(t.get("commission_fixed") or 0) > 0
-                        else f"{t.get('commission_percent') or 0}٪")
+            cfixed = int(t.get("commission_fixed") or 0)
+            cpct = t.get("commission_percent") or 0
+            ctype = t.get("commission_type") or ("fixed" if cfixed > 0 else "percent")
+            comm_lbl = (f"{cfixed:,} تومان ثابت" if ctype == "fixed"
+                        else f"٪{cpct}")
             desc = str(t.get("description") or "").strip()
             tier_icon = t.get("icon","⭐")
             tier_name = t.get("name","")
-            _sep = "\n"
-            lvl_msg = (
-                tier_icon + " <b>\u062a\u0628\u0631\u06cc\u06a9! \u0628\u0647 \u0633\u0637\u062d \u00ab" + tier_name + "\u00bb \u0627\u0631\u062a\u0642\u0627 \u06cc\u0627\u0641\u062a\u06cc\u062f!</b>\n\n"
-                "\U0001f4b0 \u067e\u0648\u0631\u0633\u0627\u0646\u062a \u062c\u062f\u06cc\u062f: <b>" + comm_lbl + "</b> \u0627\u0632 \u0647\u0631 \u0641\u0631\u0648\u0634\n"
-            )
-            if desc:
-                lvl_msg += "\u2728 " + desc + "\n"
-            lvl_msg += "\n\U0001f4aa \u062a\u06cc\u0645 \u0641\u0631\u0648\u0634 \u0634\u0645\u0627 \u0631\u0634\u062f \u0645\u06cc\u200c\u06a9\u0646\u062f \u2014 \u0627\u062f\u0627\u0645\u0647 \u062f\u0647\u06cc\u062f!"
-            try: bot.send_message(uid, lvl_msg, parse_mode="HTML")
-            except Exception: pass
+            banner_id = str(t.get("photo_file_id") or "").strip()
+            custom_msg = str(t.get("levelup_message") or "").strip()
+
+            # نام همکار برای متغیر {name}
+            try:
+                from db import _get_connection as _gc
+                _c = _gc()
+                _r = _c.execute("SELECT full_name FROM users WHERE user_id=?;", (uid,)).fetchone()
+                _c.close()
+                partner_name = (_r[0] if _r and _r[0] else "همکار")
+            except Exception:
+                partner_name = "همکار"
+
+            if custom_msg:
+                # جایگزینی متغیرها در متن اختصاصی سطح
+                lvl_msg = (custom_msg
+                    .replace("{name}", str(partner_name))
+                    .replace("{tier}", tier_name)
+                    .replace("{icon}", tier_icon)
+                    .replace("{percent}", str(cpct))
+                    .replace("{fixed}", f"{cfixed:,}")
+                    .replace("{orders}", str(int(t.get("min_orders") or 0)))
+                    .replace("{min_amount}", f"{int(t.get('min_order_amount') or 0):,}")
+                    .replace("{max_payout}", f"{int(t.get('max_payout') or 0):,}")
+                )
+            else:
+                # پیش‌فرض جامع
+                lvl_msg = (
+                    f"{tier_icon} <b>تبریک! به سطح «{tier_name}» ارتقا یافتید!</b>\n\n"
+                    f"💰 پورسانت جدید: <b>{comm_lbl}</b> از هر فروش\n"
+                )
+                if desc:
+                    lvl_msg += f"✨ {desc}\n"
+                lvl_msg += "\n💪 تیم فروش شما رشد می‌کند — ادامه دهید!"
+
+            try:
+                if banner_id:
+                    bot.send_photo(uid, banner_id, caption=lvl_msg, parse_mode="HTML")
+                else:
+                    bot.send_message(uid, lvl_msg, parse_mode="HTML")
+            except Exception:
+                # fallback بدون بنر
+                try: bot.send_message(uid, lvl_msg, parse_mode="HTML")
+                except Exception: pass
     except Exception:
         pass
 
