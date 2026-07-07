@@ -1988,23 +1988,23 @@ async def receipt_reject(request: Request, rid: int):
 
 
 def _webhook_status_snippet() -> str:
-    """خلاصه وضعیت webhook برای نمایش در صفحه تنظیمات."""
-    from config import BOT_TOKEN, USE_WEBHOOK
+    """خلاصه وضعیت اتصال ربات برای نمایش در صفحه تنظیمات."""
     try:
-        import requests as _req
-        r = _req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo", timeout=10)
-        j = r.json()
-        info = j.get("result", {}) if j.get("ok") else {}
-        url = info.get("url") or ""
-        pending = info.get("pending_update_count", 0)
+        from db import get_cfg
+        mode = (get_cfg("bot_run_mode", "") or "").strip().lower()
     except Exception:
-        url, pending = "", 0
-    if url:
-        return (f'<div class="mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">'
-                f'✅ Webhook فعال است'
-                f'{f" — {pending} آپدیت در انتظار" if pending else ""}</div>')
+        mode = ""
+    if mode == "webhook":
+        return ('<div class="mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">'
+                '🚀 Webhook فعال — سریع‌ترین حالت</div>')
+    if mode == "polling":
+        return ('<div class="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">'
+                '🔄 Polling فعال</div>')
+    if mode == "stopped":
+        return ('<div class="mb-3 px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg text-sm text-gray-700">'
+                '⏸ ربات متوقف است</div>')
     return ('<div class="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">'
-            '⭕ در حالت Polling (Webhook غیرفعال)</div>')
+            '❓ حالت اتصال نامشخص — یک بار وارد صفحه مدیریت شوید</div>')
 
 
 @router.get("/settings/panel", response_class=HTMLResponse)
@@ -10509,142 +10509,153 @@ async def database_onedrive_poll(request: Request):
 # ─── 🔗 مدیریت Webhook ─────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🔗 مدیریت اتصال ربات (Webhook / Polling) ───────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
 @router.get("/webhook", response_class=HTMLResponse)
 async def webhook_management(request: Request, flash: str = ""):
-    """صفحه مدیریت وضعیت Webhook — نمایش وضعیت فعلی + ست/حذف دستی."""
+    """صفحه مدیریت حالت اتصال ربات — Webhook / Polling / Stopped."""
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
 
-    from config import BOT_TOKEN, WEBHOOK_BASE_URL, WEBHOOK_SECRET, USE_WEBHOOK
-    info = {"ok": False, "error": "خطای اتصال"}
+    from config import BOT_TOKEN, WEBHOOK_BASE_URL
+    # حالت جاری از bot_config
+    try:
+        from db import get_cfg
+        current_mode = (get_cfg("bot_run_mode", "") or "").strip().lower() or "unknown"
+    except Exception:
+        current_mode = "unknown"
+
+    # وضعیت واقعی از تلگرام
+    info = {}
     try:
         import requests as _req
-        r = _req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo", timeout=15)
+        r = _req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo", timeout=10)
         j = r.json()
-        info = j.get("result", {}) if j.get("ok") else {"error": j.get("description", "?")}
+        info = j.get("result", {}) if j.get("ok") else {}
     except Exception as ex:
         info = {"error": str(ex)[:120]}
 
-    _url         = info.get("url") or "—"
-    _pending     = info.get("pending_update_count", 0)
-    _last_err    = info.get("last_error_message", "") or ""
-    _last_err_dt = info.get("last_error_date")
-    _has_secret  = info.get("has_custom_certificate") is not None
-    _ip          = info.get("ip_address", "—")
+    tg_url     = info.get("url") or ""
+    tg_pending = info.get("pending_update_count", 0)
+    tg_err     = info.get("last_error_message", "") or ""
 
-    is_active = bool(_url and _url != "—")
-    status_badge = ('<span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">✅ فعال</span>'
-                    if is_active else
-                    '<span class="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm">⭕ غیرفعال (Polling)</span>')
+    def _badge(mode, label, color):
+        active = (current_mode == mode)
+        return (f'<span class="px-3 py-1 rounded-full text-xs font-semibold '
+                f'{"bg-"+color+"-100 text-"+color+"-700" if active else "bg-gray-100 text-gray-400"}">'
+                f'{"● " if active else ""}{label}</span>')
+
+    def _btn_mode(mode, label, icon, color, desc):
+        is_current = (current_mode == mode)
+        disabled = 'disabled style="opacity:.5;pointer-events:none"' if is_current else ''
+        return f"""
+        <form method="post" action="/admin/webhook/switch" class="flex-1">
+          <input type="hidden" name="mode" value="{mode}">
+          <button {disabled} class="w-full p-4 bg-{color}-50 border-2 border-{color}-200 hover:bg-{color}-100 rounded-xl text-right">
+            <div class="text-2xl mb-1">{icon}</div>
+            <div class="font-bold text-{color}-800 text-sm">{label}</div>
+            <div class="text-[10px] text-{color}-600 mt-1">{desc}</div>
+            {'<div class="text-[10px] text-'+color+'-500 mt-1">✓ حالت فعلی</div>' if is_current else ''}
+          </button>
+        </form>"""
 
     expected_url = f"{WEBHOOK_BASE_URL}/telegram/webhook/{BOT_TOKEN}"
 
     body = f"""
-    <div class="max-w-4xl mx-auto p-4">
-      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <div>
-          <h1 class="text-xl font-bold text-gray-800">🔗 مدیریت Webhook</h1>
-          <p class="text-xs text-gray-400 mt-1">وضعیت اتصال ربات به تلگرام از طریق Webhook</p>
-        </div>
-        {status_badge}
+    <div class="max-w-3xl mx-auto p-4">
+      <div class="mb-4">
+        <h1 class="text-xl font-bold text-gray-800">🔗 اتصال ربات</h1>
+        <p class="text-xs text-gray-400 mt-1">نحوه دریافت پیام‌های تلگرام — سوییچ نرم بدون restart</p>
       </div>
 
       <div class="card p-5 mb-4">
-        <h2 class="font-bold text-gray-700 text-sm mb-3">📊 وضعیت فعلی از تلگرام</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-          <div class="flex justify-between border-b py-1"><span class="text-gray-500">آدرس فعلی:</span>
-            <span class="font-mono text-xs break-all text-left" dir="ltr">{e(_url)}</span></div>
-          <div class="flex justify-between border-b py-1"><span class="text-gray-500">آپدیت‌های در انتظار:</span>
-            <span class="font-semibold {'text-red-600' if _pending>0 else 'text-green-600'}">{_pending}</span></div>
-          <div class="flex justify-between border-b py-1"><span class="text-gray-500">IP سرور تلگرام:</span>
-            <span class="font-mono text-xs" dir="ltr">{e(_ip)}</span></div>
-          <div class="flex justify-between border-b py-1"><span class="text-gray-500">Secret Token:</span>
-            <span class="text-xs">{'🔐 تنظیم شده' if _has_secret is not None else '—'}</span></div>
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
+          <span class="text-sm font-semibold text-gray-600">حالت فعلی:</span>
+          {_badge("webhook", "Webhook", "green")}
+          {_badge("polling", "Polling", "blue")}
+          {_badge("stopped", "متوقف", "gray")}
         </div>
-        {f'<div class="mt-3 p-3 bg-red-50 border-r-4 border-red-400 text-xs text-red-700"><b>آخرین خطا:</b> {e(_last_err)}</div>' if _last_err else ''}
-      </div>
-
-      <div class="card p-5 mb-4">
-        <h2 class="font-bold text-gray-700 text-sm mb-2">⚙️ تنظیمات پروژه</h2>
-        <div class="text-xs space-y-2">
-          <div class="flex justify-between p-2 bg-gray-50 rounded">
-            <span class="text-gray-500">WEBHOOK_BASE_URL:</span>
-            <span class="font-mono" dir="ltr">{e(WEBHOOK_BASE_URL or '(خالی)')}</span></div>
-          <div class="flex justify-between p-2 bg-gray-50 rounded">
-            <span class="text-gray-500">USE_WEBHOOK:</span>
-            <span class="font-semibold {'text-green-600' if USE_WEBHOOK else 'text-gray-500'}">{'1 (فعال)' if USE_WEBHOOK else '0 (غیرفعال — polling)'}</span></div>
-          <div class="flex justify-between p-2 bg-gray-50 rounded">
-            <span class="text-gray-500">آدرس مورد انتظار:</span>
-            <span class="font-mono text-xs break-all text-left" dir="ltr">{e(expected_url)}</span></div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {_btn_mode("webhook", "Webhook", "🚀", "green", "سریع، توصیه‌شده — تلگرام مستقیم پیام می‌فرستد")}
+          {_btn_mode("polling", "Polling", "🔄", "blue", "پایدارتر — ربات هر چند ثانیه از تلگرام می‌پرسد")}
+          {_btn_mode("stopped", "متوقف", "⏸", "gray", "ربات خاموش — برای تعمیر یا مواقع خاص")}
         </div>
       </div>
 
-      <div class="card p-5">
-        <h2 class="font-bold text-gray-700 text-sm mb-3">🛠 عملیات دستی</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <form method="post" action="/admin/webhook/set">
-            <button class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold">
-              🔗 ست کردن Webhook با آدرس مورد انتظار</button>
-            <p class="text-[10px] text-gray-400 mt-1 text-center">آدرس فعلی را حذف و آدرس بالا را ست می‌کند</p>
-          </form>
-          <form method="post" action="/admin/webhook/remove"
-            onsubmit="return confirm('⚠️ توجه: بعد از حذف Webhook، ربات تا زمانی که Polling را دستی فعال نکنید آفلاین می‌ماند. ادامه؟')">
-            <button class="w-full py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl text-sm font-semibold">
-              🚫 حذف Webhook (بازگشت به Polling)</button>
-            <p class="text-[10px] text-gray-400 mt-1 text-center">فقط برای مواقع اضطراری — نیاز به یک دستور دستی دارد ↓</p>
-          </form>
+      <div class="card p-4 mb-4">
+        <h2 class="font-bold text-gray-700 text-sm mb-3">📊 وضعیت واقعی از تلگرام</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div class="p-3 bg-gray-50 rounded">
+            <div class="text-gray-500 mb-1">Webhook ثبت‌شده:</div>
+            <div class="font-mono break-all" dir="ltr">{e(tg_url) if tg_url else "— (بدون webhook)"}</div>
+          </div>
+          <div class="p-3 bg-gray-50 rounded">
+            <div class="text-gray-500 mb-1">آپدیت‌های پندینگ:</div>
+            <div class="font-bold {'text-red-600' if tg_pending>0 else 'text-green-600'}">{tg_pending}</div>
+          </div>
+          <div class="p-3 bg-gray-50 rounded">
+            <div class="text-gray-500 mb-1">آخرین خطا:</div>
+            <div class="text-red-600">{e(tg_err[:60]) if tg_err else "—"}</div>
+          </div>
         </div>
+      </div>
 
-        <div class="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-          <p class="text-sm text-amber-800 font-semibold mb-2">⚠️ اگر به Polling برگشتید:</p>
-          <p class="text-xs text-amber-700 mb-2">ربات خودکار روشن نمی‌شود. روی سرور این دستور را بزنید تا سرویس Polling فعال شود:</p>
-          <code class="block bg-white px-3 py-2 rounded-lg text-xs no-fa" dir="ltr" style="user-select:all">systemctl start telegram-bot.service</code>
-          <p class="text-[10px] text-amber-600 mt-2">برای بازگشت به Webhook: سرویس بالا را stop کنید و از دکمه «ست کردن Webhook» استفاده کنید.</p>
+      <div class="card p-4">
+        <h2 class="font-bold text-gray-700 text-sm mb-2">ℹ️ راهنما</h2>
+        <ul class="text-xs text-gray-600 space-y-1 leading-6 list-disc pr-4">
+          <li><b>Webhook</b> — تلگرام مستقیم به سرور شما پیام می‌فرستد. سریع‌ترین حالت. نیاز به دامنه با HTTPS دارد.</li>
+          <li><b>Polling</b> — ربات هر چند ثانیه از تلگرام می‌پرسد. کندتر ولی روی هر سروری کار می‌کند.</li>
+          <li><b>متوقف</b> — ربات هیچ پیامی دریافت نمی‌کند. مناسب مواقع تعمیر یا مهاجرت.</li>
+          <li>تغییر حالت <b>بدون restart سرویس</b> انجام می‌شود و بلافاصله اعمال می‌گردد.</li>
+        </ul>
+        <div class="mt-3 p-2 bg-gray-50 rounded text-[10px] text-gray-500 font-mono" dir="ltr">
+          آدرس Webhook: {e(expected_url)}
         </div>
       </div>
     </div>"""
-    return _layout("مدیریت Webhook", body, adm, flash=flash)
+    return _layout("اتصال ربات", body, adm, flash=flash)
 
 
-@router.post("/webhook/set")
-async def webhook_set(request: Request):
+@router.post("/webhook/switch")
+async def webhook_switch(request: Request):
+    """سوییچ نرم بین Webhook / Polling / Stopped بدون restart."""
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
-    from config import BOT_TOKEN, WEBHOOK_BASE_URL, WEBHOOK_SECRET
+    form = await request.form()
+    mode = (form.get("mode") or "").strip().lower()
+    if mode not in ("webhook", "polling", "stopped"):
+        return _redir("/admin/webhook?flash=❌+حالت+نامعتبر")
     try:
-        import requests as _req
-        expected_url = f"{WEBHOOK_BASE_URL}/telegram/webhook/{BOT_TOKEN}"
-        _req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", timeout=15)
-        import time as _t; _t.sleep(1)
-        r = _req.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
-            json={"url": expected_url, "secret_token": WEBHOOK_SECRET,
-                  "allowed_updates": ["message", "callback_query", "inline_query"]},
-            timeout=20)
-        j = r.json()
-        if j.get("ok"):
-            _log(request, "ست Webhook", "تنظیمات", expected_url, admin_info=adm)
-            return _redir("/admin/webhook?flash=✅+Webhook+با+موفقیت+ست+شد")
-        return _redir(f"/admin/webhook?flash=❌+خطا:+{e(str(j.get('description'))[:100])}")
+        from payment_service import switch_bot_mode
+        ok, msg = switch_bot_mode(mode)
     except Exception as ex:
-        return _redir(f"/admin/webhook?flash=❌+خطا:+{e(str(ex)[:100])}")
+        ok, msg = False, f"خطا: {str(ex)[:80]}"
+    _log(request, f"سوییچ حالت ربات → {mode}", "تنظیمات", msg, admin_info=adm)
+    flag = "✅" if ok else "❌"
+    return _redir(f"/admin/webhook?flash={flag}+{e(msg)}")
 
+
+# نگه‌داشتن روت‌های قدیمی برای سازگاری — صرفاً redirect به نسخه جدید
+@router.post("/webhook/set")
+async def webhook_set(request: Request):
+    return await webhook_switch_impl(request, "webhook")
 
 @router.post("/webhook/remove")
 async def webhook_remove(request: Request):
+    return await webhook_switch_impl(request, "polling")
+
+async def webhook_switch_impl(request: Request, mode: str):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
-    from config import BOT_TOKEN
     try:
-        import requests as _req
-        r = _req.get(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=false",
-            timeout=15)
-        j = r.json()
-        _log(request, "حذف Webhook", "تنظیمات", str(j.get("description", "")), admin_info=adm)
-        return _redir("/admin/webhook?flash=✅+Webhook+حذف+شد+—+توجه:+ربات+تا+فعال‌سازی+Polling+آفلاین+است.+راهنمای+پایین+صفحه+را+ببینید")
+        from payment_service import switch_bot_mode
+        ok, msg = switch_bot_mode(mode)
     except Exception as ex:
-        return _redir(f"/admin/webhook?flash=❌+خطا:+{e(str(ex)[:100])}")
+        ok, msg = False, f"خطا: {str(ex)[:80]}"
+    _log(request, f"سوییچ حالت (سازگاری) → {mode}", "تنظیمات", msg, admin_info=adm)
+    return _redir(f"/admin/webhook?flash={'✅' if ok else '❌'}+{e(msg)}")
