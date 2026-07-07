@@ -2917,7 +2917,13 @@ def get_referral_settings() -> dict:
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute("SELECT * FROM referral_settings WHERE id=1;").fetchone()
-        return dict(row) if row else {"reward_amount": 5000, "is_active": 1}
+        d = dict(row) if row else {"reward_amount": 5000, "is_active": 1}
+        # فاز ۲: رفع باگ ریشه‌ای پاداش صفر — اگه صفره یعنی تنظیم نشده، پیش‌فرض ۵۰۰۰
+        if int(d.get("reward_amount") or 0) <= 0:
+            d["reward_amount"] = 5000
+        d.setdefault("max_invites", 0)
+        d.setdefault("is_active", 1)
+        return d
     finally:
         conn.close()
 
@@ -4103,6 +4109,11 @@ def ensure_partner_tiers_extended():
             ("color",             "TEXT DEFAULT '#6B7280'"),
             ("description",       "TEXT DEFAULT ''"),
             ("photo_file_id",     "TEXT DEFAULT ''"),
+            # فاز ۲: سقف و حداقل per-tier
+            ("min_order_amount",  "INTEGER DEFAULT 0"),   # حداقل مبلغ خرید برای دریافت پورسانت
+            ("max_payout",        "INTEGER DEFAULT 0"),   # سقف پورسانت هر خرید
+            ("levelup_message",   "TEXT DEFAULT ''"),     # متن پیام تبریک ارتقا اختصاصی
+            ("commission_type",   "TEXT DEFAULT 'percent'"),  # 'percent' یا 'fixed' — رادیویی
         ]:
             try:
                 conn.execute(f"ALTER TABLE partner_tiers ADD COLUMN {col} {default};")
