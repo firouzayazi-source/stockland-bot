@@ -4411,6 +4411,15 @@ def ensure_accounting_schema():
                 created_at  TEXT DEFAULT (datetime('now'))
             );
         """)
+        # فاز ۴: ستون‌های نوع پرداخت و طرف حساب
+        for col, decl in [
+            ("payment_type", "TEXT DEFAULT 'expense'"),   # expense/salary/partner_payout/other
+            ("payee_name",   "TEXT DEFAULT ''"),          # نام پرسنل/همکار/گیرنده
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE expenses ADD COLUMN {col} {decl};")
+            except Exception:
+                pass
         # دستهبندی هزینهها
         conn.execute("""
             CREATE TABLE IF NOT EXISTS expense_categories (
@@ -4418,8 +4427,9 @@ def ensure_accounting_schema():
                 name  TEXT UNIQUE NOT NULL
             );
         """)
-        # دستههای پیشفرض
-        defaults = ['تبلیغات','سرور و هاست','دامنه','حقوق','اینترنت','تجهیزات','مالیات','سایر']
+        # دستههای پیشفرض — فاز ۴ گسترده‌تر
+        defaults = ['تبلیغات','سرور و هاست','دامنه','حقوق پرسنل','پرداخت همکار',
+                    'اینترنت','تجهیزات','مالیات','آب و برق','بازاریابی','سایر']
         for cat in defaults:
             try:
                 conn.execute("INSERT OR IGNORE INTO expense_categories (name) VALUES (?);", (cat,))
@@ -4642,13 +4652,16 @@ def get_expenses(date_from="", date_to="", category="", limit=100) -> list:
 
 
 def create_expense(title: str, category: str, amount: int,
-                   expense_date: str = "", description: str = "") -> int:
+                   expense_date: str = "", description: str = "",
+                   payment_type: str = "expense", payee_name: str = "") -> int:
     ensure_accounting_schema()
     conn = _get_connection()
     try:
         cur = conn.execute(
-            "INSERT INTO expenses (title,category,amount,expense_date,description) VALUES (?,?,?,?,?);",
-            (title, category, amount, expense_date or datetime.utcnow().strftime('%Y-%m-%d'), description)
+            "INSERT INTO expenses (title,category,amount,expense_date,description,payment_type,payee_name) "
+            "VALUES (?,?,?,?,?,?,?);",
+            (title, category, amount, expense_date or datetime.utcnow().strftime('%Y-%m-%d'),
+             description, payment_type, payee_name)
         )
         conn.commit(); return cur.lastrowid
     finally: conn.close()
