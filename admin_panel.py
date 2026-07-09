@@ -987,6 +987,9 @@ def _layout(title: str, body: str, admin_info=None,
     body.sl-classic .sidebar-logout {{ color:#6B7280 !important; }}
     body.sl-classic .sidebar-logout:hover {{ background:#FEF2F2 !important; color:#DC2626 !important; }}
 
+    /* فاز ۵: اعداد جدول‌ها چپ‌چین (خوانایی مالی) */
+    table td.no-fa, table td[style*="direction:ltr"] {{ text-align:left; direction:ltr; font-variant-numeric:tabular-nums; }}
+
     /* ── Dark Mode ────────────────────────────────────────────── */
     body.sl-dark, body.dark-mode {{
       --bg-page:#0E1621; --bg-card:#17212B; --bg-input:#1B2530; --bg-subtle:#232E3C;
@@ -1043,6 +1046,35 @@ def _layout(title: str, body: str, admin_info=None,
     body.sl-dark [class*="border-green-2"], body.sl-dark [class*="border-red-2"],
     body.sl-dark [class*="border-amber-2"], body.sl-dark [class*="border-indigo-2"],
     body.sl-dark [class*="border-blue-2"], body.sl-dark [class*="border-teal-2"] {{ border-color:#2B3A4C !important; }}
+    /* فاز ۵: تکمیل Dark Mode — رنگ‌های جامانده + سازگاری dark-mode alias */
+    body.sl-dark [class*="bg-emerald-50"], body.dark-mode [class*="bg-emerald-50"],
+    body.sl-dark [class*="bg-emerald-100"], body.dark-mode [class*="bg-emerald-100"] {{ background:rgba(16,185,129,.14) !important; }}
+    body.sl-dark [class*="text-emerald-6"], body.sl-dark [class*="text-emerald-7"],
+    body.dark-mode [class*="text-emerald-6"], body.dark-mode [class*="text-emerald-7"] {{ color:#4EE0B0 !important; }}
+    body.sl-dark [class*="bg-slate-50"], body.dark-mode [class*="bg-slate-50"],
+    body.sl-dark [class*="bg-slate-100"], body.dark-mode [class*="bg-slate-100"] {{ background:#1B2530 !important; }}
+    body.sl-dark [class*="text-slate-7"], body.dark-mode [class*="text-slate-7"],
+    body.sl-dark [class*="text-slate-6"], body.dark-mode [class*="text-slate-6"] {{ color:#B5C3D4 !important; }}
+    body.sl-dark [class*="bg-purple-50"], body.dark-mode [class*="bg-purple-50"] {{ background:rgba(168,85,247,.14) !important; }}
+    body.dark-mode [class*="text-purple-7"], body.dark-mode [class*="text-purple-6"] {{ color:#D0A8FF !important; }}
+    body.dark-mode [class*="bg-green-100"], body.dark-mode [class*="bg-green-50"] {{ background:rgba(34,197,94,.16) !important; }}
+    body.dark-mode [class*="text-green-7"], body.dark-mode [class*="text-green-6"] {{ color:#5DDE8A !important; }}
+    body.dark-mode [class*="bg-red-100"], body.dark-mode [class*="bg-red-50"] {{ background:rgba(239,68,68,.16) !important; }}
+    body.dark-mode [class*="text-red-6"], body.dark-mode [class*="text-red-7"] {{ color:#FF7B7B !important; }}
+    body.dark-mode [class*="bg-amber-100"], body.dark-mode [class*="bg-amber-50"] {{ background:rgba(245,158,11,.16) !important; }}
+    body.dark-mode [class*="text-amber-7"] {{ color:#FFC46B !important; }}
+    body.dark-mode [class*="bg-indigo-100"], body.dark-mode [class*="bg-indigo-50"] {{ background:rgba(99,102,241,.18) !important; }}
+    body.dark-mode [class*="text-indigo-7"], body.dark-mode [class*="text-indigo-6"] {{ color:#A5B4FF !important; }}
+    body.dark-mode [class*="bg-blue-100"], body.dark-mode [class*="bg-blue-50"] {{ background:rgba(59,130,246,.16) !important; }}
+    body.dark-mode [class*="text-blue-7"], body.dark-mode [class*="text-blue-6"] {{ color:#7DB8FF !important; }}
+    body.dark-mode [class*="bg-teal-50"] {{ background:rgba(20,184,166,.16) !important; }}
+    body.dark-mode [class*="text-teal-7"] {{ color:#5EEAD4 !important; }}
+    /* گرادیان‌ها در دارک */
+    body.sl-dark [class*="bg-gradient"], body.dark-mode [class*="bg-gradient"] {{ background:#17212B !important; }}
+    /* جداول: اعداد چپ‌چین حفظ خوانایی */
+    body.sl-dark table td, body.dark-mode table td {{ color:#D9E1EA; }}
+    body.sl-dark summary, body.dark-mode summary {{ color:#E4EAF1 !important; }}
+    body.sl-dark details.acc, body.dark-mode details.acc {{ background:#17212B !important; }}
 
     /* ── Misc Helpers ─────────────────────────────────────────── */
     .section-title {{ font-size:14px; font-weight:700; color:var(--txt-primary); margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid var(--bdr); }}
@@ -1632,7 +1664,26 @@ async def dashboard(request: Request, err: str = ""):
       body.dark-mode .kpi-icon,body.dark-mode .table-product>span,body.dark-mode .rank-number {{ background:#172330; }} body.dark-mode .task-row,body.dark-mode .panel-header {{ border-color:#273244; }} body.dark-mode .status-success {{ background:rgba(34,197,94,.1); }} body.dark-mode .status-warning {{ background:rgba(245,158,11,.1); }} body.dark-mode .status-danger {{ background:rgba(239,68,68,.1); }}
       @media(max-width:1200px) {{ .kpi-grid {{ grid-template-columns:repeat(2,1fr); }} .three-column {{ grid-template-columns:1fr 1fr; }} .three-column>*:last-child {{ grid-column:1/-1; }} }}
       @media(max-width:940px) {{ .two-column {{ grid-template-columns:1fr; }} .command-grid {{ grid-template-columns:repeat(7,155px); }} }}
-      @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
+      /* فاز ۵: حالت Classic — مرکز فرمان روشن و ساده */
+      body.sl-classic .command-center {{ background:#FFFFFF !important; box-shadow:0 1px 4px rgba(0,0,0,.06) !important; border:1px solid #E5E7EB !important; }}
+      body.sl-classic .command-center::before {{ display:none !important; }}
+      body.sl-classic .command-title h3 {{ color:#111827 !important; }}
+      body.sl-classic .command-title p {{ color:#6B7280 !important; }}
+      body.sl-classic .command-title>span {{ background:#EFF6FF !important; color:#2563EB !important; border-color:#DBEAFE !important; }}
+      body.sl-classic .command-item {{ background:#F9FAFB !important; border:1px solid #E5E7EB !important; }}
+      body.sl-classic .command-item strong {{ color:#111827 !important; }}
+      body.sl-classic .command-item small {{ color:#6B7280 !important; }}
+      body.sl-classic .command-icon {{ background:#EFF6FF !important; color:#2563EB !important; }}
+      body.sl-classic .live-pill {{ background:#ECFDF5 !important; color:#059669 !important; border-color:#D1FAE5 !important; }}
+      body.sl-classic .kpi-card {{ background:#FFFFFF !important; border:1px solid #E5E7EB !important; box-shadow:0 1px 3px rgba(0,0,0,.05) !important; }}
+      body.sl-classic .kpi-label, body.sl-classic .kpi-unit {{ color:#6B7280 !important; }}
+      body.sl-classic .chart-card {{ background:#FFFFFF !important; border:1px solid #E5E7EB !important; }}
+      /* Dark mode هم برای مرکز فرمان */
+      body.sl-dark .command-item, body.dark-mode .command-item {{ background:#1B2530 !important; border-color:#2B3A4C !important; }}
+      body.sl-dark .kpi-card, body.dark-mode .kpi-card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
+      body.sl-dark .chart-card, body.dark-mode .chart-card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
+      body.sl-dark .activity-icon, body.dark-mode .activity-icon {{ background:#1B2530 !important; }}
+            @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
     </style>
 
     <main class="dashboard">
@@ -2755,6 +2806,7 @@ async def database_page(request: Request, flash: str = ""):
     from db import get_cfg as _gk
     _cb = _gcs()
     _cb_last_ok = _gk("cloudbk_last_ok", "")
+    _gdrive_env_ok = bool(os.getenv("GDRIVE_SA_JSON","").strip() and os.getenv("GDRIVE_FOLDER_ID","").strip())
     _cb_report_html = ""
     try:
         import json as _j
@@ -2904,12 +2956,16 @@ async def database_page(request: Request, flash: str = ""):
       var sel=document.getElementById('auto-restore-select');
       if(!sel||!sel.value){alert('یک بکاپ انتخاب کنید');return;}
       if(!confirm('⚠️ این عملیات داده‌های فعلی را با بکاپ جایگزین می‌کند. ادامه؟'))return;
+      if(_busy)return;_busy=true;
       ovShow('بازیابی بکاپ خودکار','در حال بازیابی...');
-      var fd=new FormData(); fd.append('filename',sel.value);
-      var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
-      var d=await r.json();
-      if(d.ok){ovDone('✅','بازیابی موفق','بکاپ با موفقیت بازیابی شد');}
-      else{ovDone('❌','خطا',d.error||'مشکلی پیش آمد');}
+      try{
+        var fd=new FormData(); fd.append('filename',sel.value);
+        var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
+        var d=await r.json();
+        if(d.ok){ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');}
+        else{ovResult(false,'خطا',d.error||'مشکلی پیش آمد');}
+      }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
+      finally{_busy=false;}
     }
     async function runRestore(){
       if(_busy)return;
@@ -3039,128 +3095,73 @@ async def database_page(request: Request, flash: str = ""):
     {_js}
     </script>
 
-    <!-- ☁️ بکاپ ابری -->
+    <!-- ☁️ بکاپ ابری — فاز ۶: Service Account -->
     <div class="card p-4 mt-6 mb-8" id="cloudbk">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
         <h2 class="font-bold text-gray-700 text-sm">☁️ بکاپ ابری</h2>
         <span class="text-[11px] {('text-green-600' if _cb_last_ok else 'text-gray-400')}">آخرین آپلود: <b>{e(_cb_last_ok or 'هرگز')}</b></span>
       </div>
-      <p class="text-[11px] text-gray-400 mb-3 leading-5">بی‌صدا آپلود می‌شود؛ فقط اگر مشکلی باشد نگهبان به چت شما هشدار می‌دهد. {_cb_report_html}</p>
+      <p class="text-[11px] text-gray-400 mb-3 leading-5">آپلود غیرهمزمان — ربات هرگز متوقف نمی‌شود. در صورت خطا فقط لاگ ثبت می‌شود. {_cb_report_html}</p>
 
       <form method="post" action="/admin/database/cloud-save">
         <div class="grid grid-cols-3 gap-2 mb-3">
           <label class="flex items-center gap-1.5 text-xs border border-gray-200 rounded-lg px-2 py-2 justify-center">
-            <input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}> فعال</label>
+            <input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}> بکاپ خودکار</label>
           <div class="border border-gray-200 rounded-lg px-2 py-1">
-            <label class="text-[10px] text-gray-400 block">ساعت</label>
+            <label class="text-[10px] text-gray-400 block">ساعت اجرا</label>
             <input type="number" name="hour" value="{int(_cb.get('hour') or 4)}" min="0" max="23" class="w-full text-xs bg-transparent outline-none"></div>
           <div class="border border-gray-200 rounded-lg px-2 py-1">
-            <label class="text-[10px] text-gray-400 block">نگهداری</label>
-            <input type="number" name="retention" value="{int(_cb.get('retention') or 7)}" min="1" max="60" class="w-full text-xs bg-transparent outline-none"></div>
+            <label class="text-[10px] text-gray-400 block">بکاپ محلی (تعداد)</label>
+            <input type="number" name="retention" value="{int(_cb.get('retention') or 6)}" min="1" max="60" class="w-full text-xs bg-transparent outline-none"></div>
         </div>
 
-        <!-- تلگرام -->
-        <details class="border border-gray-100 rounded-xl mb-2 overflow-hidden">
-          <summary class="flex items-center gap-2 px-3 py-2.5 cursor-pointer text-xs font-medium select-none">
-            <input type="checkbox" name="tg_enabled" onclick="event.stopPropagation()" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}>
+        <!-- مقصد ۱: کانال تلگرام -->
+        <details class="acc border border-gray-200 rounded-xl mb-2">
+          <summary class="px-3 py-2.5 text-xs font-semibold text-gray-700 cursor-pointer flex items-center gap-2">
             📢 کانال تلگرام
-            <span class="mr-auto text-[10px] {('text-green-600' if (_cb.get('tg_channel') or '').strip() else 'text-gray-300')}">{('تنظیم شده ✓' if (_cb.get('tg_channel') or '').strip() else 'تنظیم نشده')}</span>
+            {('<span class="text-green-600 text-[10px]">● فعال</span>' if int(_cb.get('tg_enabled') or 0) else '<span class="text-gray-300 text-[10px]">○ غیرفعال</span>')}
           </summary>
-          <div class="px-3 pb-3">
-            <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}" placeholder="-100xxxxxxxxxx یا @channel"
+          <div class="px-3 pb-3 pt-1 space-y-2">
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="tg_enabled" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}> ارسال بکاپ به کانال</label>
+            <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}" placeholder="@channel یا Chat ID عددی (مثلاً -1001234...)"
               class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
-            <p class="text-[10px] text-gray-400 mt-1">ربات باید ادمین کانال باشد.</p>
+            <p class="text-[10px] text-gray-400">ربات باید ادمین کانال باشد. نیازی به باز کردن چت ربات نیست.</p>
           </div>
         </details>
 
-        <!-- گوگل درایو -->
-        <details class="border border-gray-100 rounded-xl mb-2 overflow-hidden">
-          <summary class="flex items-center gap-2 px-3 py-2.5 cursor-pointer text-xs font-medium select-none">
-            <input type="checkbox" name="gd_enabled" onclick="event.stopPropagation()" {('checked' if int(_cb.get('gd_enabled') or 0) else '')}>
-            🟡 Google Drive
-            <span class="mr-auto text-[10px] {('text-green-600' if (_cb.get('gd_refresh') or '').strip() else 'text-gray-300')}">{('✅ متصل' if (_cb.get('gd_refresh') or '').strip() else 'متصل نیست')}</span>
+        <!-- مقصد ۲: Google Drive (Service Account) -->
+        <details class="acc border border-gray-200 rounded-xl mb-3">
+          <summary class="px-3 py-2.5 text-xs font-semibold text-gray-700 cursor-pointer flex items-center gap-2">
+            🗂 Google Drive
+            {('<span class="text-green-600 text-[10px]">● فعال</span>' if int(_cb.get('gdrive_enabled') or 0) else '<span class="text-gray-300 text-[10px]">○ غیرفعال</span>')}
           </summary>
-          <div class="px-3 pb-3 space-y-2">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <input type="text" name="gd_client_id" id="gd_cid" value="{e(_cb.get('gd_client_id',''))}" placeholder="Client ID"
-                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
-              <input type="text" name="gd_client_secret" id="gd_csec" value="{e(_cb.get('gd_client_secret',''))}" placeholder="Client Secret"
-                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
+          <div class="px-3 pb-3 pt-1 space-y-2">
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="gdrive_enabled" {('checked' if int(_cb.get('gdrive_enabled') or 0) else '')}> آپلود به Google Drive</label>
+            <div class="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-[10px] text-blue-700 leading-5">
+              <b>راه‌اندازی (یک‌بار):</b><br>
+              ۱. در Google Cloud یک Service Account بسازید و JSON key دانلود کنید<br>
+              ۲. فایل JSON را روی سرور بگذارید و در env سرویس اضافه کنید:<br>
+              <code class="no-fa block bg-white rounded px-2 py-1 mt-1" dir="ltr">GDRIVE_SA_JSON=/opt/stockland/gdrive-sa.json</code>
+              <code class="no-fa block bg-white rounded px-2 py-1 mt-1" dir="ltr">GDRIVE_FOLDER_ID=آیدی-پوشه-درایو</code>
+              ۳. پوشه‌ی درایو را با ایمیل Service Account به اشتراک بگذارید (Editor)<br>
+              <span class="text-blue-500">فقط ۳۰ بکاپ آخر در Drive نگه داشته می‌شود.</span>
             </div>
-            <button type="button" onclick="cloudConnect('gdrive')"
-              class="w-full py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100">📧 اتصال با ایمیل گوگل</button>
-            <div id="gdrive_box" class="hidden p-2.5 bg-amber-50 rounded-lg text-xs leading-6"></div>
-            <p class="text-[10px] text-gray-400 leading-5">یک‌بار در <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-indigo-500">Google Cloud Console</a> یک OAuth Client از نوع «TVs and Limited Input devices» بسازید و ID/Secret را اینجا بگذارید. پوشه بکاپ خودکار ساخته می‌شود — چیزی روی سرور نصب نمی‌شود.</p>
+            <div class="text-[10px] {('text-green-600' if _gdrive_env_ok else 'text-amber-600')}">
+              {('✅ env تنظیم شده — GDRIVE_SA_JSON و GDRIVE_FOLDER_ID موجودند' if _gdrive_env_ok else '⚠️ env هنوز تنظیم نشده (GDRIVE_SA_JSON / GDRIVE_FOLDER_ID)')}
+            </div>
           </div>
         </details>
 
-        <!-- وان‌درایو -->
-        <details class="border border-gray-100 rounded-xl mb-3 overflow-hidden">
-          <summary class="flex items-center gap-2 px-3 py-2.5 cursor-pointer text-xs font-medium select-none">
-            <input type="checkbox" name="od_enabled" onclick="event.stopPropagation()" {('checked' if int(_cb.get('od_enabled') or 0) else '')}>
-            🔵 OneDrive
-            <span class="mr-auto text-[10px] {('text-green-600' if (_cb.get('od_refresh') or '').strip() else 'text-gray-300')}">{('✅ متصل' if (_cb.get('od_refresh') or '').strip() else 'متصل نیست')}</span>
-          </summary>
-          <div class="px-3 pb-3 space-y-2">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <input type="text" name="od_client_id" id="od_cid" value="{e(_cb.get('od_client_id',''))}" placeholder="Client ID برنامه Azure"
-                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
-              <input type="text" name="od_folder" value="{e(_cb.get('od_folder','StockLand-Backups'))}" placeholder="نام پوشه"
-                class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
-            </div>
-            <button type="button" onclick="cloudConnect('onedrive')"
-              class="w-full py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold hover:bg-blue-100">📧 اتصال با ایمیل مایکروسافت</button>
-            <div id="onedrive_box" class="hidden p-2.5 bg-blue-50 rounded-lg text-xs leading-6"></div>
-            <p class="text-[10px] text-gray-400 leading-5">یک‌بار در <a href="https://portal.azure.com" target="_blank" class="text-indigo-500">Azure Portal</a> یک App Registration بسازید (Personal accounts + «Allow public client flows» روشن).</p>
-          </div>
-        </details>
-
-        <div class="grid grid-cols-2 gap-2">
-          <button type="submit" class="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold">💾 ذخیره</button>
-          <button type="submit" formaction="/admin/database/cloud-run"
-            class="py-2.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-xl text-xs font-semibold hover:bg-teal-100">▶ بکاپ و آپلود الان</button>
+        <div class="flex gap-2">
+          <button class="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold">💾 ذخیره تنظیمات</button>
         </div>
       </form>
-
-      <script>
-      var _devCodes = {{}};
-      function cloudConnect(prov) {{
-        var cid = document.getElementById(prov === 'gdrive' ? 'gd_cid' : 'od_cid').value.trim();
-        if (!cid) {{ alert('اول Client ID را وارد کنید'); return; }}
-        var body = 'client_id=' + encodeURIComponent(cid);
-        if (prov === 'gdrive') {{
-          var cs = document.getElementById('gd_csec').value.trim();
-          if (!cs) {{ alert('Client Secret را هم وارد کنید'); return; }}
-          body += '&client_secret=' + encodeURIComponent(cs);
-        }}
-        var box = document.getElementById(prov + '_box');
-        box.classList.remove('hidden');
-        box.innerHTML = 'در حال دریافت کد…';
-        fetch('/admin/database/' + prov + '/start', {{method:'POST',
-          headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body: body}})
-          .then(function(r) {{ return r.json(); }})
-          .then(function(d) {{
-            if (!d.user_code) {{ box.innerHTML = '❌ ' + (d.error || 'خطا'); return; }}
-            _devCodes[prov] = d.device_code;
-            box.innerHTML = '۱) وارد <a href="' + d.verification_uri + '" target="_blank" class="text-indigo-600 underline font-bold">' + d.verification_uri + '</a> شوید و با ایمیل خود لاگین کنید<br>'
-              + '۲) این کد را وارد کنید: <code style="font-size:15px;font-weight:800;letter-spacing:1px">' + d.user_code + '</code><br>'
-              + '۳) سپس: <button type="button" onclick="cloudPoll(\'' + prov + '\')" class="mt-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs">✅ بررسی اتصال</button>';
-          }}).catch(function() {{ box.innerHTML = '❌ خطا در ارتباط'; }});
-      }}
-      function cloudPoll(prov) {{
-        var cid = document.getElementById(prov === 'gdrive' ? 'gd_cid' : 'od_cid').value.trim();
-        var body = 'client_id=' + encodeURIComponent(cid) + '&device_code=' + encodeURIComponent(_devCodes[prov] || '');
-        if (prov === 'gdrive') body += '&client_secret=' + encodeURIComponent(document.getElementById('gd_csec').value.trim());
-        fetch('/admin/database/' + prov + '/poll', {{method:'POST',
-          headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body: body}})
-          .then(function(r) {{ return r.json(); }})
-          .then(function(d) {{
-            if (d.status === 'ok') {{ alert('✅ متصل شد!'); location.reload(); }}
-            else if (d.status === 'pending') {{ alert('⏳ هنوز تأیید نشده — بعد از واردکردن کد دوباره بزنید'); }}
-            else {{ alert('❌ ' + (d.error || 'خطا')); }}
-          }});
-      }}
-      </script>
+      <form method="post" action="/admin/database/cloud-run" class="mt-2">
+        <button class="w-full py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-semibold">▶ بکاپ و آپلود فوری (آزمایش)</button>
+      </form>
+    </div>
     </div>"""
 
     return _layout("پشتیبان‌گیری", body, adm, flash=flash)
@@ -7794,7 +7795,7 @@ _auto_backup_started = False
 
 
 def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه با فرمت .stbak — حداکثر ۵ فایل."""
+    """بکاپ خودکار روزانه با فرمت .stbak — همیشه ۶ بکاپ آخر محلی نگه داشته می‌شود."""
     import os, glob
     db_path = _env("DB_PATH")
     if not db_path or not os.path.exists(db_path):
@@ -7811,9 +7812,9 @@ def _do_auto_backup() -> None:
         _tg_logger.error("Auto-backup failed: %s", ex)
         return
 
-    # حذف بکاپ‌های قدیمی — فقط ۵ تا نگه دار
+    # فاز ۶: همیشه ۶ بکاپ آخر محلی
     all_backups = sorted(glob.glob(f"{_BACKUP_DIR}/auto_*.stbak"))
-    while len(all_backups) > 5:
+    while len(all_backups) > 6:
         try:
             os.remove(all_backups.pop(0))
         except Exception:
@@ -8036,65 +8037,80 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
     }}
     </script>"""
     body = f"""
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <h1 class="text-2xl font-bold text-gray-800">💰 حسابداری</h1>
-      <div class="flex gap-2 flex-wrap">
-        <a href="/admin/accounting/expenses" class="px-3 py-1.5 text-sm bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">📋 هزینه‌ها</a>
-        <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
-        <a href="/admin/accounting/products" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
-        <a href="/admin/accounting/partners" class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
-
+      <div class="flex gap-1 flex-wrap">
+        <a href="/admin/accounting/expenses" class="px-3 py-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">📋 ثبت هزینه/پرداخت</a>
+        <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
+        <a href="/admin/accounting/products" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
+        <a href="/admin/accounting/partners" class="px-3 py-1.5 text-xs bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
       </div>
     </div>
     {{filter_html}}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {_card("فروش امروز",_m(kpis["today_sales"]),"تومان","blue")}
-      {_card("فروش این ماه",_m(kpis["month_sales"]),"تومان","indigo")}
-      {_card("مجموع فروش",_m(kpis["total_sales"]),"تومان","slate")}
-      {_card("تعداد سفارش",_m(kpis["total_orders"]),"سفارش","gray")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {_card("سود ناخالص",_m(kpis["gross_profit"]),"تومان","green")}
-      {_card("سود خالص",_m(kpis["net_profit"]),"تومان","emerald")}
-      {_card("مجموع هزینه‌ها",_m(kpis["total_expenses"]),"تومان","red")}
-      {_card("پورسانت پرداختی",_m(kpis["total_commission"]),"تومان","amber")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-      {_card("هزینه خرید کالا",_m(kpis["total_cost"]),"تومان","orange")}
-      {_card("موجودی انبار",_m(kpis["stock_count"]),"آیتم","slate")}
-      {_card("تسویه‌های همکار",_m(kpis.get("total_payouts",0)),"تومان","purple")}
-      {_card("مانده صندوق",_m(max(0,kpis["net_profit"]-kpis.get("total_payouts",0))),"تومان","teal")}
-      {_card("تسویه انجام‌شده",str(kpis["payout_count"]),"مورد","purple")}
-      {_card("میانگین سود/سفارش",_m(kpis["avg_profit"]),"تومان","teal")}
-    </div>
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">📊 خلاصه سود و زیان</h2>
-      <div class="space-y-3">
-        {_acbar("فروش کل",kpis["total_sales"],kpis["total_sales"],"bg-blue-400")}
-        {_acbar("هزینه خرید",kpis["total_cost"],kpis["total_sales"],"bg-red-400")}
-        {_acbar("پورسانت",kpis["total_commission"],kpis["total_sales"],"bg-amber-400")}
-        {_acbar("هزینه‌ها",kpis["total_expenses"],kpis["total_sales"],"bg-orange-400")}
-        {_acbar("سود خالص",kpis["net_profit"],kpis["total_sales"],"bg-emerald-500")}
-      </div>
-    </div>
-    <div class="card p-6">
-      <h2 class="font-bold text-gray-700 mb-4">📈 تحلیل سود</h2>
-      <div class="grid md:grid-cols-3 gap-4">
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">حاشیه سود</div>
-          <div class="text-3xl font-bold text-emerald-600">{kpis["margin_pct"]}٪</div>
+
+    <!-- مانده صندوق — برجسته -->
+    <div class="card p-5 mb-4 bg-gradient-to-l from-emerald-50 to-transparent border-r-4 border-emerald-400">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div class="text-xs text-gray-500 mb-1">مانده صندوق</div>
+          <div class="text-3xl font-bold text-emerald-700">{_m(max(0,kpis["net_profit"]-kpis.get("total_payouts",0)))} <span class="text-sm font-normal text-gray-400">تومان</span></div>
         </div>
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">میانگین سود هر سفارش</div>
-          <div class="text-2xl font-bold text-indigo-600">{_m(kpis["avg_profit"])} ت</div>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">نسبت هزینه به فروش</div>
-          <div class="text-2xl font-bold text-red-500">
-            {round((kpis["total_expenses"]+kpis["total_cost"])/kpis["total_sales"]*100,1) if kpis["total_sales"] else 0}٪
-          </div>
+        <div class="text-xs text-gray-500 leading-6 text-left">
+          <div>سود خالص: <b class="text-gray-700">{_m(kpis["net_profit"])}</b></div>
+          <div>پرداخت‌شده: <b class="text-gray-700">-{_m(kpis.get("total_payouts",0))}</b></div>
         </div>
       </div>
+    </div>
+
+    <!-- جدول خلاصه سود و زیان — سبک، مثل صورت‌مالی -->
+    <div class="card overflow-hidden mb-4">
+      <div class="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+        <h2 class="font-bold text-gray-700 text-sm">📊 صورت سود و زیان</h2>
+        <span class="text-xs text-gray-400">حاشیه سود: <b class="text-emerald-600">٪{kpis["margin_pct"]}</b></span>
+      </div>
+      <table class="w-full text-sm">
+        <tbody>
+          <tr class="border-b hover:bg-gray-50"><td class="px-4 py-2.5 text-gray-600">فروش کل ({_m(kpis["total_orders"])} سفارش)</td><td class="px-4 py-2.5 text-left font-semibold text-blue-700 no-fa">{_m(kpis["total_sales"])}</td></tr>
+          <tr class="border-b hover:bg-gray-50 bg-red-50/30"><td class="px-4 py-2.5 text-gray-600">− هزینه خرید کالا</td><td class="px-4 py-2.5 text-left text-red-600 no-fa">-{_m(kpis["total_cost"])}</td></tr>
+          <tr class="border-b hover:bg-gray-50 bg-red-50/30"><td class="px-4 py-2.5 text-gray-600">− پورسانت همکاران</td><td class="px-4 py-2.5 text-left text-red-600 no-fa">-{_m(kpis["total_commission"])}</td></tr>
+          <tr class="border-b hover:bg-gray-50 bg-red-50/30"><td class="px-4 py-2.5 text-gray-600">− هزینه‌های عمومی</td><td class="px-4 py-2.5 text-left text-red-600 no-fa">-{_m(kpis["total_expenses"])}</td></tr>
+          <tr class="border-b-2 border-emerald-200 bg-emerald-50"><td class="px-4 py-3 font-bold text-emerald-700">= سود خالص</td><td class="px-4 py-3 text-left font-bold text-emerald-700 text-lg no-fa">{_m(kpis["net_profit"])}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- گزیده‌ی سریع — ۴ ستون کوچک جمع‌وجور -->
+    <div class="card p-3 mb-4">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+        <div class="p-2 border-l border-gray-100">
+          <div class="text-[10px] text-gray-400 mb-1">فروش امروز</div>
+          <div class="font-bold text-blue-700 no-fa">{_m(kpis["today_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+        </div>
+        <div class="p-2 border-l border-gray-100">
+          <div class="text-[10px] text-gray-400 mb-1">فروش این ماه</div>
+          <div class="font-bold text-indigo-700 no-fa">{_m(kpis["month_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+        </div>
+        <div class="p-2 border-l border-gray-100">
+          <div class="text-[10px] text-gray-400 mb-1">میانگین سود/سفارش</div>
+          <div class="font-bold text-teal-700 no-fa">{_m(kpis["avg_profit"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+        </div>
+        <div class="p-2">
+          <div class="text-[10px] text-gray-400 mb-1">موجودی انبار</div>
+          <div class="font-bold text-slate-700">{_m(kpis["stock_count"])} <span class="text-[10px] font-normal text-gray-400">آیتم</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- پرداخت‌های تسویه‌شده -->
+    <div class="card p-3 flex items-center justify-between text-sm bg-purple-50/40">
+      <div class="flex items-center gap-2">
+        <span class="text-lg">💸</span>
+        <div>
+          <div class="text-xs text-gray-500">مجموع تسویه‌های پرداخت‌شده به همکاران</div>
+          <div class="font-bold text-purple-700 no-fa">{_m(kpis.get("total_payouts",0))} تومان</div>
+        </div>
+      </div>
+      <a href="/admin/partners?tab=payouts" class="text-xs text-purple-600 hover:underline">مشاهده تسویه‌ها →</a>
     </div>"""
     return _layout("حسابداری", body.replace("{filter_html}", filter_html), adm, flash=flash)
 
@@ -8118,31 +8134,54 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
     expenses = get_expenses(df, dt, cat)
     total = sum(ex["amount"] for ex in expenses)
     cat_opts = "".join(f'<option value="{c}" {"selected" if cat==c else ""}>{c}</option>' for c in cats)
+    _PT_BADGE = {
+        "salary": '<span class="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px]">👤 حقوق</span>',
+        "partner_payout": '<span class="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px]">🤝 همکار</span>',
+        "other": '<span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-[10px]">📌 سایر</span>',
+    }
+    def _ptb(ex):
+        try: return _PT_BADGE.get(ex["payment_type"] or "expense",
+            '<span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">💳 هزینه</span>')
+        except Exception:
+            return '<span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">💳 هزینه</span>'
+    def _payee(ex):
+        try: return e((ex["payee_name"] or "")[:20])
+        except Exception: return ""
     rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 text-xs text-gray-400">{ex["expense_date"]}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{fa_date(ex["expense_date"])}</td>
+      <td class="px-3 py-2">{_ptb(ex)}</td>
       <td class="px-3 py-2 font-medium">{e(ex["title"])}</td>
-      <td class="px-3 py-2"><span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-xs">{e(ex["category"])}</span></td>
-      <td class="px-3 py-2 font-bold text-red-600">{int(ex["amount"]):,}</td>
+      <td class="px-3 py-2 text-xs text-gray-500">{_payee(ex)}</td>
+      <td class="px-3 py-2"><span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{e(ex["category"])}</span></td>
+      <td class="px-3 py-2 font-bold text-red-600 no-fa" style="direction:ltr;text-align:left">{int(ex["amount"]):,}</td>
       <td class="px-3 py-2 text-xs text-gray-400">{e((ex["description"] or "")[:30])}</td>
       <td class="px-3 py-2"><form method="post" action="/admin/accounting/expenses/{ex["id"]}/delete" onsubmit="return confirm(\'حذف؟\')"><button class="text-xs text-red-400 hover:text-red-600">حذف</button></form></td>
-    </tr>''' for ex in expenses) or "<tr><td colspan='6' class='text-center py-6 text-gray-400'>هزینه‌ای ثبت نشده</td></tr>"
+    </tr>''' for ex in expenses) or "<tr><td colspan='8' class='text-center py-6 text-gray-400'>پرداختی ثبت نشده</td></tr>"
     body = f"""
     <div class="flex items-center gap-3 mb-6">
       {_btn("← حسابداری","/admin/accounting","slate",small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">📋 هزینه‌ها</h1>
+      <h1 class="text-2xl font-bold text-gray-800">📋 ثبت هزینه و پرداخت‌ها</h1>
     </div>
     <div class="grid md:grid-cols-2 gap-4 mb-6">
       <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">+ ثبت هزینه جدید</h2>
+        <h2 class="font-bold text-gray-700 mb-4">+ ثبت پرداخت جدید</h2>
         <form method="post" action="/admin/accounting/expenses/new" class="space-y-3">
+          <div><label class="text-xs block mb-1">نوع پرداخت</label>
+            <select name="payment_type" class="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="expense">💳 هزینه عمومی</option>
+              <option value="salary">👤 حقوق پرسنل</option>
+              <option value="partner_payout">🤝 پرداخت همکار</option>
+              <option value="other">📌 سایر پرداخت‌ها</option>
+            </select></div>
           <div class="grid grid-cols-2 gap-3">
             <div><label class="text-xs block mb-1">عنوان</label><input type="text" name="title" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
             <div><label class="text-xs block mb-1">مبلغ (تومان)</label><input type="number" name="amount" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
             <div><label class="text-xs block mb-1">دسته</label><select name="category" class="w-full border rounded-lg px-3 py-2 text-sm"><option value="">انتخاب...</option>{cat_opts}</select></div>
             <div><label class="text-xs block mb-1">تاریخ</label><input type="date" name="expense_date" class="w-full border rounded-lg px-3 py-2 text-sm"></div>
           </div>
+          <input type="text" name="payee_name" placeholder="نام گیرنده (پرسنل/همکار — اختیاری)" class="w-full border rounded-lg px-3 py-2 text-sm">
           <input type="text" name="description" placeholder="توضیحات (اختیاری)" class="w-full border rounded-lg px-3 py-2 text-sm">
-          {_btn("ثبت هزینه","",color="red",small=True)}
+          {_btn("💾 ثبت پرداخت","",color="red",small=True)}
         </form>
       </div>
       <div class="card p-6">
@@ -8169,7 +8208,8 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
       </div>
       <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
         <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">عنوان</th><th class="px-3 py-2">دسته</th>
+          <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">نوع</th><th class="px-3 py-2">عنوان</th>
+          <th class="px-3 py-2">گیرنده</th><th class="px-3 py-2">دسته</th>
           <th class="px-3 py-2">مبلغ</th><th class="px-3 py-2">توضیح</th><th></th>
         </tr></thead><tbody>{rows}</tbody>
       </table></div>
@@ -8184,11 +8224,15 @@ async def accounting_expense_new(request: Request):
     from db import create_expense, ensure_accounting_schema
     ensure_accounting_schema()
     form = await request.form()
+    ptype = str(form.get("payment_type","expense")).strip()
+    if ptype not in ("expense","salary","partner_payout","other"): ptype = "expense"
     eid = create_expense(str(form.get("title","")).strip(), str(form.get("category","سایر")),
                          int(form.get("amount") or 0), str(form.get("expense_date","")),
-                         str(form.get("description","")))
-    _log(request, "ثبت هزینه", "حسابداری", f"id:{eid}")
-    return _redir("/admin/accounting/expenses?flash=هزینه+ثبت+شد")
+                         str(form.get("description","")),
+                         payment_type=ptype,
+                         payee_name=str(form.get("payee_name","")).strip())
+    _log(request, "ثبت پرداخت", "حسابداری", f"id:{eid} نوع:{ptype}", admin_info=adm)
+    return _redir("/admin/accounting/expenses?flash=✅+پرداخت+ثبت+شد")
 
 
 @router.post("/accounting/expenses/{eid}/delete")
@@ -10527,12 +10571,7 @@ async def database_cloud_save(request: Request):
         "retention":    max(1, min(60, int(g("retention", "7") or 7))),
         "tg_enabled":   onoff("tg_enabled"),
         "tg_channel":   g("tg_channel"),
-        "gd_enabled":       onoff("gd_enabled"),
-        "gd_client_id":     g("gd_client_id"),
-        "gd_client_secret": g("gd_client_secret"),
-        "od_enabled":   onoff("od_enabled"),
-        "od_client_id": g("od_client_id"),
-        "od_folder":    g("od_folder") or "StockLand-Backups",
+        "gdrive_enabled": onoff("gdrive_enabled"),
     })
     save_cloud_settings(cfg)
     _log(request, "تنظیمات بکاپ ابری", "دیتابیس", "cloud settings saved", admin_info=adm)
@@ -10553,106 +10592,6 @@ async def database_cloud_run(request: Request):
     _log(request, "بکاپ ابری دستی", "دیتابیس", "run-now", admin_info=adm)
     return _redir("/admin/database?flash=▶+بکاپ+و+آپلود+شروع+شد+—+نتیجه+چند+لحظه+دیگر+در+وضعیت+همین+کارت#cloudbk")
 
-
-@router.post("/database/gdrive/start")
-async def database_gdrive_start(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    form = await request.form()
-    client_id = str(form.get("client_id") or "").strip()
-    if not client_id:
-        return JSONResponse({"error": "Client ID خالی است"})
-    try:
-        from backup_uploader import gdrive_devicecode_start
-        d = gdrive_devicecode_start(client_id)
-        return JSONResponse({
-            "user_code":        d.get("user_code"),
-            "verification_uri": d.get("verification_uri"),
-            "device_code":      d.get("device_code"),
-            "error":            d.get("error_description") or d.get("error"),
-        })
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:200]})
-
-
-@router.post("/database/gdrive/poll")
-async def database_gdrive_poll(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    form = await request.form()
-    client_id     = str(form.get("client_id") or "").strip()
-    client_secret = str(form.get("client_secret") or "").strip()
-    device_code   = str(form.get("device_code") or "").strip()
-    if not client_id or not client_secret or not device_code:
-        return JSONResponse({"status": "error", "error": "پارامتر ناقص"})
-    try:
-        from backup_uploader import gdrive_devicecode_poll, get_cloud_settings, save_cloud_settings
-        res = gdrive_devicecode_poll(client_id, client_secret, device_code)
-        if res.get("status") == "ok":
-            cfg = get_cloud_settings()
-            cfg["gd_refresh"]       = res["refresh_token"]
-            cfg["gd_client_id"]     = client_id
-            cfg["gd_client_secret"] = client_secret
-            save_cloud_settings(cfg)
-            _log(request, "اتصال Google Drive", "دیتابیس", "connected", admin_info=adm)
-            return JSONResponse({"status": "ok"})
-        return JSONResponse(res)
-    except Exception as ex:
-        return JSONResponse({"status": "error", "error": str(ex)[:200]})
-
-
-@router.post("/database/onedrive/start")
-async def database_onedrive_start(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    form = await request.form()
-    client_id = str(form.get("client_id") or "").strip()
-    if not client_id:
-        return JSONResponse({"error": "Client ID خالی است"})
-    try:
-        from backup_uploader import onedrive_devicecode_start
-        d = onedrive_devicecode_start(client_id)
-        return JSONResponse({
-            "user_code":        d.get("user_code"),
-            "verification_uri": d.get("verification_uri"),
-            "device_code":      d.get("device_code"),
-            "error":            d.get("error_description"),
-        })
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:200]})
-
-
-@router.post("/database/onedrive/poll")
-async def database_onedrive_poll(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "database")
-    if guard: return guard
-    form = await request.form()
-    client_id   = str(form.get("client_id") or "").strip()
-    device_code = str(form.get("device_code") or "").strip()
-    if not client_id or not device_code:
-        return JSONResponse({"status": "error", "error": "پارامتر ناقص"})
-    try:
-        from backup_uploader import onedrive_devicecode_poll, get_cloud_settings, save_cloud_settings
-        res = onedrive_devicecode_poll(client_id, device_code)
-        if res.get("status") == "ok":
-            cfg = get_cloud_settings()
-            cfg["od_refresh"]   = res["refresh_token"]
-            cfg["od_client_id"] = client_id
-            save_cloud_settings(cfg)
-            _log(request, "اتصال OneDrive", "دیتابیس", "connected", admin_info=adm)
-            return JSONResponse({"status": "ok"})
-        return JSONResponse(res)
-    except Exception as ex:
-        return JSONResponse({"status": "error", "error": str(ex)[:200]})
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ─── 🔗 مدیریت Webhook ─────────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ─── 🔗 مدیریت اتصال ربات (Webhook / Polling) ───────────────────────────────
