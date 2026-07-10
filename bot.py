@@ -2990,6 +2990,32 @@ def send_admin_feed_panel_view(chat_id: int, feed_id: int, page: int = 0, mode: 
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
 
+@bot.message_handler(commands=["backup"])
+def handle_backup_cmd(message):
+    """بکاپ فوری PostgreSQL — فایل برای ادمین در چت ارسال می‌شود."""
+    if not ensure_admin(message.from_user.id):
+        return
+    bot.send_message(message.chat.id, "⏳ در حال تهیه بکاپ دیتابیس...")
+    try:
+        from pg_backup import create_backup
+        import os
+        fpath = create_backup()
+        size_mb = os.path.getsize(fpath) / (1024 * 1024)
+        with open(fpath, "rb") as f:
+            bot.send_document(
+                message.chat.id, f,
+                caption=f"💾 بکاپ دیتابیس\n📦 {size_mb:.2f} MB",
+                visible_file_name=os.path.basename(fpath))
+        # آپلود به مقاصد ابری هم (کانال + گوگل)
+        try:
+            from backup_uploader import upload_backup
+            upload_backup(fpath)
+        except Exception:
+            pass
+    except Exception as ex:
+        bot.send_message(message.chat.id, f"❌ خطا در بکاپ:\n{str(ex)[:200]}")
+
+
 @bot.message_handler(commands=["myid"])
 def handle_myid(message):
     bot.send_message(
