@@ -3103,71 +3103,106 @@ async def database_page(request: Request, flash: str = ""):
     {_js}
     </script>
 
-    <!-- ☁️ بکاپ ابری — فاز ۶: Service Account -->
-    <div class="card p-4 mt-6 mb-8" id="cloudbk">
-      <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
-        <h2 class="font-bold text-gray-700 text-sm">☁️ بکاپ ابری</h2>
-        <span class="text-[11px] {('text-green-600' if _cb_last_ok else 'text-gray-400')}">آخرین آپلود: <b>{e(_cb_last_ok or 'هرگز')}</b></span>
-      </div>
-      <p class="text-[11px] text-gray-400 mb-3 leading-5">آپلود غیرهمزمان — ربات هرگز متوقف نمی‌شود. در صورت خطا فقط لاگ ثبت می‌شود. {_cb_report_html}</p>
+    <!-- 💾 تنظیمات پشتیبان‌گیری -->
+    <div class="card p-5 mt-6 mb-8" id="cloudbk">
+      <h2 class="font-bold text-gray-800 text-lg mb-1">💾 پشتیبان‌گیری</h2>
+      <p class="text-xs text-gray-400 mb-4">مدیریت بکاپ خودکار و مقاصد ابری — هر بخش مستقل فعال/غیرفعال می‌شود.</p>
 
-      <form method="post" action="/admin/database/cloud-save">
-        <div class="grid grid-cols-3 gap-2 mb-3">
-          <label class="flex items-center gap-1.5 text-xs border border-gray-200 rounded-lg px-2 py-2 justify-center">
-            <input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}> بکاپ خودکار</label>
-          <div class="border border-gray-200 rounded-lg px-2 py-1">
-            <label class="text-[10px] text-gray-400 block">ساعت اجرا</label>
-            <input type="number" name="hour" value="{int(_cb.get('hour') or 4)}" min="0" max="23" class="w-full text-xs bg-transparent outline-none"></div>
-          <div class="border border-gray-200 rounded-lg px-2 py-1">
-            <label class="text-[10px] text-gray-400 block">بکاپ محلی (تعداد)</label>
-            <input type="number" name="retention" value="{int(_cb.get('retention') or 6)}" min="1" max="60" class="w-full text-xs bg-transparent outline-none"></div>
+      <form method="post" action="/admin/database/cloud-save" class="space-y-3">
+
+        <!-- ⏰ زمان‌بندی -->
+        <div class="p-4 bg-gray-50 border border-gray-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">⏰</span>
+              <span class="font-semibold text-gray-700 text-sm">بکاپ خودکار</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}
+                class="w-4 h-4 rounded border-gray-300 text-indigo-600">
+              <span class="text-gray-600">فعال</span>
+            </label>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex-1">
+              <label class="text-[10px] text-gray-400 block mb-1">ساعت اجرا (۰-۲۳)</label>
+              <input type="number" name="hour" value="{int(_cb.get('hour') or 4)}" min="0" max="23"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-center">
+            </div>
+          </div>
         </div>
 
-        <!-- مقصد ۱: کانال تلگرام -->
-        <details class="acc border border-gray-200 rounded-xl mb-2">
-          <summary class="px-3 py-2.5 text-xs font-semibold text-gray-700 cursor-pointer flex items-center gap-2">
-            📢 کانال تلگرام
-            {('<span class="text-green-600 text-[10px]">● فعال</span>' if int(_cb.get('tg_enabled') or 0) else '<span class="text-gray-300 text-[10px]">○ غیرفعال</span>')}
-          </summary>
-          <div class="px-3 pb-3 pt-1 space-y-2">
-            <label class="flex items-center gap-1.5 text-xs">
-              <input type="checkbox" name="tg_enabled" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}> ارسال بکاپ به کانال</label>
-            <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}" placeholder="@channel یا Chat ID عددی (مثلاً -1001234...)"
-              class="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-xs" dir="ltr">
-            <p class="text-[10px] text-gray-400">ربات باید ادمین کانال باشد. نیازی به باز کردن چت ربات نیست.</p>
-          </div>
-        </details>
-
-        <!-- مقصد ۲: Google Drive (Service Account) -->
-        <details class="acc border border-gray-200 rounded-xl mb-3">
-          <summary class="px-3 py-2.5 text-xs font-semibold text-gray-700 cursor-pointer flex items-center gap-2">
-            🗂 Google Drive
-            {('<span class="text-green-600 text-[10px]">● فعال</span>' if int(_cb.get('gdrive_enabled') or 0) else '<span class="text-gray-300 text-[10px]">○ غیرفعال</span>')}
-          </summary>
-          <div class="px-3 pb-3 pt-1 space-y-2">
-            <label class="flex items-center gap-1.5 text-xs">
-              <input type="checkbox" name="gdrive_enabled" {('checked' if int(_cb.get('gdrive_enabled') or 0) else '')}> آپلود به Google Drive</label>
-            <div class="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-[10px] text-blue-700 leading-5">
-              <b>راه‌اندازی (یک‌بار):</b><br>
-              ۱. در Google Cloud یک Service Account بسازید و JSON key دانلود کنید<br>
-              ۲. فایل JSON را روی سرور بگذارید و در env سرویس اضافه کنید:<br>
-              <code class="no-fa block bg-white rounded px-2 py-1 mt-1" dir="ltr">GDRIVE_SA_JSON=/opt/stockland/gdrive-sa.json</code>
-              <code class="no-fa block bg-white rounded px-2 py-1 mt-1" dir="ltr">GDRIVE_FOLDER_ID=آیدی-پوشه-درایو</code>
-              ۳. پوشه‌ی درایو را با ایمیل Service Account به اشتراک بگذارید (Editor)<br>
-              <span class="text-blue-500">فقط ۳۰ بکاپ آخر در Drive نگه داشته می‌شود.</span>
+        <!-- 💾 محلی -->
+        <div class="p-4 bg-emerald-50/50 border border-emerald-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">💾</span>
+              <span class="font-semibold text-gray-700 text-sm">بکاپ محلی</span>
             </div>
-            <div class="text-[10px] {('text-green-600' if _gdrive_env_ok else 'text-amber-600')}">
-              {('✅ env تنظیم شده — GDRIVE_SA_JSON و GDRIVE_FOLDER_ID موجودند' if _gdrive_env_ok else '⚠️ env هنوز تنظیم نشده (GDRIVE_SA_JSON / GDRIVE_FOLDER_ID)')}
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="local_enabled" checked disabled
+                class="w-4 h-4 rounded border-gray-300 text-emerald-600">
+              <span class="text-gray-500">همیشه فعال</span>
+            </label>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex-1">
+              <label class="text-[10px] text-gray-400 block mb-1">نگهداری (تعداد بکاپ)</label>
+              <input type="number" name="retention" value="{int(_cb.get('retention') or 3)}" min="1" max="30"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-center">
             </div>
           </div>
-        </details>
+          <p class="text-[10px] text-gray-400 mt-2">فایل‌ها در مسیر /opt/stockland/data/backups ذخیره می‌شوند. قدیمی‌ها خودکار حذف می‌شوند.</p>
+        </div>
 
-        <div class="flex gap-2">
-          <button class="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold">💾 ذخیره تنظیمات</button>
+        <!-- 📢 کانال تلگرام -->
+        <div class="p-4 bg-blue-50/50 border border-blue-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">📢</span>
+              <span class="font-semibold text-gray-700 text-sm">کانال تلگرام</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="tg_enabled" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}
+                class="w-4 h-4 rounded border-gray-300 text-blue-600">
+              <span class="text-gray-600">فعال</span>
+            </label>
+          </div>
+          <div>
+            <label class="text-[10px] text-gray-400 block mb-1">Chat ID کانال</label>
+            <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}"
+              placeholder="@channel یا -1001234567890"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="ltr">
+          </div>
+          <p class="text-[10px] text-gray-400 mt-2">ربات باید ادمین کانال باشد. بکاپ‌ها در تلگرام بدون محدودیت نگه‌داری می‌شوند.</p>
+        </div>
+
+        <!-- 🗂 Google Drive -->
+        <div class="p-4 bg-amber-50/50 border border-amber-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">🗂</span>
+              <span class="font-semibold text-gray-700 text-sm">Google Drive</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="gdrive_enabled" {('checked' if int(_cb.get('gdrive_enabled') or 0) else '')}
+                class="w-4 h-4 rounded border-gray-300 text-amber-600">
+              <span class="text-gray-600">فعال</span>
+            </label>
+          </div>
+          <div class="text-[11px] {('text-green-600' if _gdrive_env_ok else 'text-amber-600')} mb-2">
+            {('✅ تنظیمات env موجود (GDRIVE_SA_JSON + GDRIVE_FOLDER_ID)' if _gdrive_env_ok else '⚠️ env تنظیم نشده — GDRIVE_SA_JSON و GDRIVE_FOLDER_ID در .env لازم است')}
+          </div>
+          <p class="text-[10px] text-gray-400">فقط ۳۰ بکاپ آخر در Drive نگهداری می‌شود. قدیمی‌ها خودکار حذف می‌شوند.</p>
+        </div>
+
+        <!-- دکمه‌ها -->
+        <div class="flex gap-2 pt-1">
+          <button type="submit" class="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold">💾 ذخیره تنظیمات</button>
         </div>
       </form>
       <form method="post" action="/admin/database/cloud-run" class="mt-2">
-        <button class="w-full py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-semibold">▶ بکاپ و آپلود فوری (آزمایش)</button>
+        <button class="w-full py-2.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-xl text-sm font-semibold">▶ بکاپ فوری (همه مقاصد فعال)</button>
       </form>
     </div>
     </div>"""
@@ -3188,7 +3223,7 @@ async def backup_full_sync(request: Request):
         fpath = create_backup()
         _log(request, "بکاپ کامل دستی", "دیتابیس", os.path.basename(fpath), admin_info=adm)
         return FileResponse(fpath, filename=os.path.basename(fpath),
-                            media_type="application/gzip")
+                            media_type="application/octet-stream")
     except Exception as ex:
         return PlainTextResponse(f"خطا در بکاپ: {str(ex)[:150]}", status_code=500)
 
@@ -3208,7 +3243,7 @@ async def database_download_auto(request: Request, filename: str):
     if not os.path.exists(path):
         return PlainTextResponse("فایل یافت نشد", status_code=404)
     _log(request, "دانلود بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
-    return FileResponse(path, filename=filename, media_type="application/gzip")
+    return FileResponse(path, filename=filename, media_type="application/octet-stream")
 
 
 @router.post("/database/restore-auto")
@@ -7831,10 +7866,17 @@ _auto_backup_started = False
 
 
 def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه با pg_dump (PostgreSQL) — ۳ بکاپ محلی آخر + آپلود ابری."""
+    """بکاپ خودکار روزانه با pg_dump (PostgreSQL) + آپلود به مقاصد فعال."""
     try:
-        from pg_backup import create_backup
-        dst = create_backup()  # خودش چرخش ۳تایی + ذخیره در BACKUP_DIR را انجام می‌دهد
+        import pg_backup
+        # retention از تنظیمات پنل
+        try:
+            from backup_uploader import get_cloud_settings
+            _cs = get_cloud_settings()
+            pg_backup.LOCAL_RETENTION = max(1, int(_cs.get("retention") or 3))
+        except Exception:
+            pass
+        dst = pg_backup.create_backup()
     except Exception as ex:
         _tg_logger.error("Auto-backup failed: %s", ex)
         return
@@ -10586,13 +10628,18 @@ async def database_cloud_save(request: Request):
     def onoff(k): return 1 if form.get(k) is not None else 0
 
     cfg.update({
-        "enabled":      onoff("enabled"),
-        "hour":         max(0, min(23, int(g("hour", "4") or 4))),
-        "retention":    max(1, min(60, int(g("retention", "7") or 7))),
-        "tg_enabled":   onoff("tg_enabled"),
-        "tg_channel":   g("tg_channel"),
+        "enabled":        onoff("enabled"),
+        "hour":           max(0, min(23, int(g("hour", "4") or 4))),
+        "retention":      max(1, min(30, int(g("retention", "3") or 3))),
+        "tg_enabled":     onoff("tg_enabled"),
+        "tg_channel":     g("tg_channel"),
         "gdrive_enabled": onoff("gdrive_enabled"),
     })
+    # retention محلی را در pg_backup هم اعمال کن
+    try:
+        import pg_backup
+        pg_backup.LOCAL_RETENTION = int(cfg.get("retention") or 3)
+    except Exception: pass
     save_cloud_settings(cfg)
     _log(request, "تنظیمات بکاپ ابری", "دیتابیس", "cloud settings saved", admin_info=adm)
     return _redir("/admin/database?flash=✅+تنظیمات+بکاپ+ابری+ذخیره+شد#cloudbk")
