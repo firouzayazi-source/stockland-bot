@@ -86,58 +86,88 @@ def _up_telegram(filepath: str, cfg: dict) -> dict:
 # ══════════════════════════════════════════════════════════════════════════
 # ─── مقصد ۲: Google Drive — Service Account (بدون OAuth) ────────────────
 # ══════════════════════════════════════════════════════════════════════════
+# ─── مقصد ۲: Google Drive — OAuth (refresh token) ────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
 
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+RETENTION_DRIVE = 30
 
 
-def _gdrive_sa_token() -> str:
+def _gdrive_access_token() -> str:
     """
-    دریافت access_token با Service Account JWT — بدون هیچ کتابخانه‌ی گوگل.
-    JWT با RS256 امضا می‌شود (cryptography که وابستگی requests است).
+    دریافت access_token از refresh_token ذخیره‌شده در تنظیمات.
+    OAuth client_id و client_secret از env می‌آیند.
+    refresh_token یک‌بار توسط ادمین از پنل تأیید شده و ذخیره شده.
     """
-    import requests
-    sa_path = os.getenv("GDRIVE_SA_JSON", "").strip()
-    if not sa_path or not os.path.exists(sa_path):
-        raise ValueError("GDRIVE_SA_JSON تنظیم نشده یا فایل موجود نیست")
-    with open(sa_path) as f:
-        sa = json.load(f)
-
-    now = int(time.time())
-    header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
-    claims = _b64url(json.dumps({
-        "iss": sa["client_email"],
-        "scope": "https://www.googleapis.com/auth/drive.file",
-        "aud": "https://oauth2.googleapis.com/token",
-        "iat": now, "exp": now + 3600,
-    }).encode())
-    signing_input = f"{header}.{claims}".encode()
-
-    # امضای RS256 با cryptography
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding
-    key = serialization.load_pem_private_key(sa["private_key"].encode(), password=None)
-    signature = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
-    jwt = f"{header}.{claims}.{_b64url(signature)}"
-
-    r = requests.post("https://oauth2.googleapis.com/token", data={
-        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        "assertion": jwt,
+    import requests as _req
+    cfg = get_cloud_settings()
+    refresh = cfg.get("gdrive_refresh_token", "")
+    client_id = os.getenv("GDRIVE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GDRIVE_CLIENT_SECRET", "").strip()
+    if not refresh:
+        raise ValueError("اتصال گوگل درایو انجام نشده (refresh_token موجود نیست)")
+    if not client_id or not client_secret:
+        raise ValueError("GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET در env تنظیم نشده")
+    r = _req.post("https://oauth2.googleapis.com/token", data={
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh,
+        "grant_type": "refresh_token",
     }, timeout=30)
     j = r.json()
     if "access_token" not in j:
-        raise ValueError(f"token error: {str(j)[:120]}")
+        raise ValueError(f"token refresh failed: {str(j)[:120]}")
     return j["access_token"]
 
 
+def gdrive_device_start(client_id: str) -> dict:
+    """شروع Device Flow — کد تأیید + لینک برای کاربر."""
+    import requests as _req
+    r = _req.post("https://oauth2.googleapis.com/device/code", data={
+        "client_id": client_id,
+        "scope": "https://www.googleapis.com/auth/drive.file",
+    }, timeout=15)
+    j = r.json()
+    if "device_code" not in j:
+        return {"ok": False, "error": str(j)[:150]}
+    return {
+        "ok": True,
+        "device_code": j["device_code"],
+        "user_code": j["user_code"],
+        "verification_url": j.get("verification_url", "https://www.google.com/device"),
+        "expires_in": j.get("expires_in", 1800),
+        "interval": j.get("interval", 5),
+    }
+
+
+def gdrive_device_poll(client_id: str, client_secret: str, device_code: str) -> dict:
+    """چک وضعیت تأیید — اگر تأیید شده، refresh_token ذخیره می‌شود."""
+    import requests as _req
+    r = _req.post("https://oauth2.googleapis.com/token", data={
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "device_code": device_code,
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+    }, timeout=15)
+    j = r.json()
+    if "refresh_token" in j:
+        save_cloud_settings({"gdrive_refresh_token": j["refresh_token"]})
+        return {"ok": True, "message": "اتصال موفق — refresh token ذخیره شد"}
+    err = j.get("error", "")
+    if err == "authorization_pending":
+        return {"ok": False, "pending": True, "message": "منتظر تأیید کاربر..."}
+    if err == "slow_down":
+        return {"ok": False, "pending": True, "message": "کمی صبر..."}
+    return {"ok": False, "pending": False, "error": j.get("error_description", str(j)[:120])}
+
+
 def _up_gdrive(filepath: str) -> dict:
-    """آپلود به Google Drive + چرخش (فقط ۳۰ بکاپ آخر)."""
-    import requests
+    """آپلود به Google Drive با OAuth + چرخش (فقط ۳۰ بکاپ آخر)."""
+    import requests as _req
     folder_id = os.getenv("GDRIVE_FOLDER_ID", "").strip()
     if not folder_id:
         return {"ok": False, "error": "GDRIVE_FOLDER_ID تنظیم نشده"}
     try:
-        token = _gdrive_sa_token()
+        token = _gdrive_access_token()
         headers = {"Authorization": f"Bearer {token}"}
         fname = os.path.basename(filepath)
 
@@ -148,7 +178,7 @@ def _up_gdrive(filepath: str) -> dict:
                 "metadata": ("metadata", json.dumps(meta), "application/json"),
                 "file": (fname, f, "application/octet-stream"),
             }
-            r = requests.post(
+            r = _req.post(
                 "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
                 headers=headers, files=files, timeout=300)
         j = r.json()
@@ -157,7 +187,7 @@ def _up_gdrive(filepath: str) -> dict:
 
         # چرخش: فقط ۳۰ بکاپ آخر
         try:
-            lst = requests.get(
+            lst = _req.get(
                 "https://www.googleapis.com/drive/v3/files",
                 headers=headers,
                 params={"q": f"'{folder_id}' in parents and trashed=false",
@@ -165,10 +195,9 @@ def _up_gdrive(filepath: str) -> dict:
                         "fields": "files(id,name,createdTime)",
                         "pageSize": 100},
                 timeout=30).json()
-            files_list = lst.get("files", [])
-            for old in files_list[RETENTION_DRIVE:]:
+            for old in lst.get("files", [])[RETENTION_DRIVE:]:
                 try:
-                    requests.delete(
+                    _req.delete(
                         f"https://www.googleapis.com/drive/v3/files/{old['id']}",
                         headers=headers, timeout=30)
                 except Exception:
