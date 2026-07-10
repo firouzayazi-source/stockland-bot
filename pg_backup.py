@@ -4,7 +4,7 @@ pg_backup.py — موتور بکاپ PostgreSQL
 جایگزین سیستم قدیمی .stbak (که برای SQLite بود).
 از pg_dump/pg_restore استفاده می‌کند.
 
-خروجی: فایل .sql.gz (فشرده) با نام تاریخ‌دار.
+خروجی: فایل .stbak (فشرده) با نام تاریخ‌دار.
 سه مقصد: محلی (۳ بکاپ آخر) + کانال تلگرام + Google Drive.
 """
 import os
@@ -37,7 +37,7 @@ def _parse_dsn() -> dict:
 
 
 def backup_filename() -> str:
-    return f"pg_backup_{time.strftime('%Y%m%d_%H%M%S')}.sql.gz"
+    return f"pg_backup_{time.strftime('%Y%m%d_%H%M%S')}.stbak"
 
 
 def create_backup() -> str:
@@ -84,7 +84,7 @@ def _rotate_local():
     try:
         files = sorted(
             [os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR)
-             if f.startswith("pg_backup_") and f.endswith(".sql.gz")],
+             if f.startswith("pg_backup_") and f.endswith(".stbak")],
             key=os.path.getmtime, reverse=True)
         for old in files[LOCAL_RETENTION:]:
             try:
@@ -102,7 +102,7 @@ def list_local_backups() -> list:
         return []
     out = []
     for f in os.listdir(BACKUP_DIR):
-        if f.startswith("pg_backup_") and f.endswith(".sql.gz"):
+        if f.startswith("pg_backup_") and f.endswith(".stbak"):
             fp = os.path.join(BACKUP_DIR, f)
             out.append({
                 "name": f,
@@ -115,7 +115,7 @@ def list_local_backups() -> list:
 
 def restore_backup(filepath: str) -> dict:
     """
-    بازیابی از فایل .sql.gz — با psql اجرا می‌شود.
+    بازیابی از فایل .stbak — با psql اجرا می‌شود.
     ⚠️ داده‌های فعلی را جایگزین می‌کند (--clean در dump).
     """
     if not os.path.exists(filepath):
