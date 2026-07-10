@@ -73,6 +73,14 @@ _bot_thread_started = False
 from admin_panel import router as _admin_router, _get_admin as _panel_get_admin, _make_session as _panel_make_session
 app.include_router(_admin_router)
 
+# API رسمی برای PWA/اپ‌ها
+try:
+    from api import router as _api_router
+    app.include_router(_api_router)
+    logger.info("✅ API router registered at /api/v1")
+except Exception as _ex:
+    logger.warning("API router not loaded: %s", _ex)
+
 
 @app.middleware("http")
 async def _refresh_admin_session(request, call_next):
