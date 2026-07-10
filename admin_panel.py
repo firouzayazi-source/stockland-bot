@@ -2832,11 +2832,13 @@ async def database_page(request: Request, flash: str = ""):
         _fn  = _b["name"]
         _sz  = _b["size"]
         _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
-        _ts  = _fn.replace("pg_backup_","").replace(".sql.gz","")
+        _ts  = _fn.replace("pg_backup_","").replace(".stbak","")
         try:
             from datetime import datetime as _dt
+            from db import fa_date as _fad
             _dto = _dt.strptime(_ts, "%Y%m%d_%H%M%S")
-            _tfa = _dto.strftime("%Y/%m/%d — %H:%M")
+            _iso = _dto.strftime("%Y-%m-%d %H:%M:%S")
+            _tfa = _fad(_iso, with_time=True)  # شمسی + اعداد فارسی
         except Exception:
             _tfa = _ts
         _auto_rows += f"""<tr class="border-b hover:bg-gray-50">
@@ -2874,11 +2876,13 @@ async def database_page(request: Request, flash: str = ""):
     _restore_options = ""
     for _b in _auto_list:
         _fn = _b["name"]
-        _ts = _fn.replace("pg_backup_","").replace(".sql.gz","")
+        _ts = _fn.replace("pg_backup_","").replace(".stbak","")
         try:
             from datetime import datetime as _dt2
+            from db import fa_date as _fad2
             _dto = _dt2.strptime(_ts, "%Y%m%d_%H%M%S")
-            _label = _dto.strftime("%Y/%m/%d — %H:%M")
+            _iso = _dto.strftime("%Y-%m-%d %H:%M:%S")
+            _label = _fad2(_iso, with_time=True)  # شمسی + اعداد فارسی
         except Exception:
             _label = _ts
         _sz = _b["size"]
@@ -2975,7 +2979,7 @@ async def database_page(request: Request, flash: str = ""):
       if(_busy)return;
       var file=document.getElementById('restore-file').files[0];
       if(!file){alert('فایل انتخاب نشده');return;}
-      if(!file.name.endsWith('.stbak')){alert('فقط .stbak مجاز است');return;}
+      if(!file.name.endsWith('.stbak')){alert('فقط فایل .stbak مجاز است');return;}
       _busy=true;ovShow('در حال بازیابی...','لطفاً صبر کنید');
       try{
         var fd=new FormData();fd.append('backup_file',file);
@@ -3191,7 +3195,7 @@ async def backup_full_sync(request: Request):
 
 @router.get("/database/download/{filename}")
 async def database_download_auto(request: Request, filename: str):
-    """دانلود یک بکاپ خودکار (فایل .sql.gz)."""
+    """دانلود یک بکاپ خودکار (فایل .stbak)."""
     from fastapi.responses import FileResponse, PlainTextResponse
     adm = _get_admin(request)
     guard = _require(adm, "database")
@@ -3241,14 +3245,19 @@ async def restore_sync(request: Request, backup_file: UploadFile = None):
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    from stbak_engine import restore_stbak, validate_stbak, StbakError
+    import os, tempfile
+    from pg_backup import restore_backup
     try:
-        validate_stbak(raw)
-        result = restore_stbak(raw, _DB_PATH())
-        _log(request, "بازیابی", "دیتابیس", f"{result['total']} رکورد")
-        return JSONResponse({"ok": True, "total": result["total"], "errors": result["errors"]})
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
+        # ذخیره موقت و بازیابی با pg_restore
+        tmp = tempfile.NamedTemporaryFile(suffix=".stbak", delete=False)
+        tmp.write(raw); tmp.close()
+        res = restore_backup(tmp.name)
+        try: os.remove(tmp.name)
+        except Exception: pass
+        if not res.get("ok"):
+            return JSONResponse({"error": res.get("error", "خطا در بازیابی")})
+        _log(request, "بازیابی از فایل", "دیتابیس", backup_file.filename, admin_info=adm)
+        return JSONResponse({"ok": True})
     except Exception as ex:
         return JSONResponse({"error": str(ex)[:100]})
 
@@ -3337,15 +3346,20 @@ async def restore_start(request: Request, backup_file: UploadFile = None):
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    db  = _DB_PATH()
-    from stbak_engine import restore_stbak, validate_stbak, StbakError
+    import os, tempfile
+    from pg_backup import restore_backup
     try:
-        validate_stbak(raw)
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
-    job_id = _job_start(restore_stbak, raw, db)
-    _log(request, "شروع بازیابی", "دیتابیس", f"job:{job_id}")
-    return JSONResponse({"job_id": job_id})
+        tmp = tempfile.NamedTemporaryFile(suffix=".stbak", delete=False)
+        tmp.write(raw); tmp.close()
+        res = restore_backup(tmp.name)
+        try: os.remove(tmp.name)
+        except Exception: pass
+        if not res.get("ok"):
+            return JSONResponse({"error": res.get("error", "خطا")})
+        _log(request, "بازیابی از فایل", "دیتابیس", backup_file.filename, admin_info=adm)
+        return JSONResponse({"ok": True})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:100]})
 
 
 @router.post("/database/reset/start")
