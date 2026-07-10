@@ -2806,7 +2806,8 @@ async def database_page(request: Request, flash: str = ""):
     from db import get_cfg as _gk
     _cb = _gcs()
     _cb_last_ok = _gk("cloudbk_last_ok", "")
-    _gdrive_env_ok = bool(os.getenv("GDRIVE_SA_JSON","").strip() and os.getenv("GDRIVE_FOLDER_ID","").strip())
+    _gdrive_env_ok = bool(os.getenv("GDRIVE_CLIENT_ID","").strip() and os.getenv("GDRIVE_FOLDER_ID","").strip())
+    _gdrive_connected = bool(_cb.get("gdrive_refresh_token",""))
     _cb_report_html = ""
     try:
         import json as _j
@@ -3177,7 +3178,7 @@ async def database_page(request: Request, flash: str = ""):
           <p class="text-[10px] text-gray-400 mt-2">ربات باید ادمین کانال باشد. بکاپ‌ها در تلگرام بدون محدودیت نگه‌داری می‌شوند.</p>
         </div>
 
-        <!-- 🗂 Google Drive -->
+        <!-- 🗂 Google Drive (OAuth) -->
         <div class="p-4 bg-amber-50/50 border border-amber-200 rounded-xl">
           <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
             <div class="flex items-center gap-2">
@@ -3190,10 +3191,12 @@ async def database_page(request: Request, flash: str = ""):
               <span class="text-gray-600">فعال</span>
             </label>
           </div>
-          <div class="text-[11px] {('text-green-600' if _gdrive_env_ok else 'text-amber-600')} mb-2">
-            {('✅ تنظیمات env موجود (GDRIVE_SA_JSON + GDRIVE_FOLDER_ID)' if _gdrive_env_ok else '⚠️ env تنظیم نشده — GDRIVE_SA_JSON و GDRIVE_FOLDER_ID در .env لازم است')}
+          <div class="text-[11px] mb-2">
+            {('<span class="text-green-600">✅ متصل به Google Drive</span>' if _gdrive_connected else '<span class="text-amber-600">⚠️ هنوز متصل نشده — از دکمه زیر اتصال بزنید</span>')}
           </div>
-          <p class="text-[10px] text-gray-400">فقط ۳۰ بکاپ آخر در Drive نگهداری می‌شود. قدیمی‌ها خودکار حذف می‌شوند.</p>
+          {('' if _gdrive_connected else '<button type="button" onclick="startGdriveConnect()" class="mb-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold">🔗 اتصال به Google Drive</button>')}
+          <div id="gdrive_connect_box" class="hidden mb-2 p-3 bg-white border border-blue-200 rounded-lg text-sm"></div>
+          <p class="text-[10px] text-gray-400">فقط ۳۰ بکاپ آخر در Drive نگهداری. اتصال یک‌بار انجام می‌شود و برای همیشه کار می‌کند.</p>
         </div>
 
         <!-- دکمه‌ها -->
@@ -3204,6 +3207,41 @@ async def database_page(request: Request, flash: str = ""):
       <form method="post" action="/admin/database/cloud-run" class="mt-2">
         <button class="w-full py-2.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-xl text-sm font-semibold">▶ بکاپ فوری (همه مقاصد فعال)</button>
       </form>
+
+      <script>
+      async function startGdriveConnect(){{
+        const box=document.getElementById('gdrive_connect_box');
+        box.classList.remove('hidden');
+        box.innerHTML='<span class="text-gray-500">⏳ در حال دریافت کد...</span>';
+        try{{
+          const r=await fetch('/admin/database/gdrive/start',{{method:'POST'}});
+          const d=await r.json();
+          if(!d.ok){{box.innerHTML='<span class="text-red-600">❌ '+d.error+'</span>';return;}}
+          box.innerHTML=`
+            <div class="text-center space-y-3">
+              <p class="text-sm text-gray-700">لینک زیر را باز کنید و کد را وارد کنید:</p>
+              <a href="${{d.url}}" target="_blank" class="block px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">🔗 باز کردن لینک تأیید</a>
+              <div class="text-2xl font-bold tracking-widest text-indigo-700 bg-indigo-50 rounded-lg py-3 no-fa" dir="ltr">${{d.user_code}}</div>
+              <p class="text-xs text-gray-400">پس از تأیید در گوگل، دکمه زیر را بزنید</p>
+              <button onclick="pollGdrive('${{d.device_code}}')" class="px-6 py-2 bg-green-600 text-white rounded-lg text-sm">✅ تأیید کردم</button>
+            </div>`;
+        }}catch(e){{box.innerHTML='<span class="text-red-600">خطا: '+e.message+'</span>';}}
+      }}
+      async function pollGdrive(dc){{
+        const box=document.getElementById('gdrive_connect_box');
+        box.innerHTML='<span class="text-gray-500">⏳ بررسی تأیید...</span>';
+        for(let i=0;i<24;i++){{
+          await new Promise(r=>setTimeout(r,5000));
+          try{{
+            const r=await fetch('/admin/database/gdrive/poll',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{device_code:dc}})}});
+            const d=await r.json();
+            if(d.ok){{box.innerHTML='<span class="text-green-600 font-bold">✅ اتصال موفق! صفحه را رفرش کنید.</span>';return;}}
+            if(!d.pending){{box.innerHTML='<span class="text-red-600">❌ '+(d.error||'خطا')+'</span>';return;}}
+          }}catch(e){{}}
+        }}
+        box.innerHTML='<span class="text-red-600">⏱ زمان منقضی شد. دوباره تلاش کنید.</span>';
+      }}
+      </script>
     </div>
     </div>"""
 
@@ -10614,6 +10652,59 @@ async def partners_manual_referral(request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # ─── ☁️ روت‌های بکاپ ابری ────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/database/gdrive/start")
+async def gdrive_oauth_start(request: Request):
+    """شروع OAuth Device Flow برای Google Drive."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    if not adm:
+        return JSONResponse({"ok": False, "error": "unauthorized"})
+    client_id = os.getenv("GDRIVE_CLIENT_ID", "").strip()
+    if not client_id:
+        return JSONResponse({"ok": False, "error": "GDRIVE_CLIENT_ID در env تنظیم نشده"})
+    try:
+        from backup_uploader import gdrive_device_start
+        res = gdrive_device_start(client_id)
+        if not res.get("ok"):
+            return JSONResponse(res)
+        return JSONResponse({
+            "ok": True,
+            "user_code": res["user_code"],
+            "url": res["verification_url"],
+            "device_code": res["device_code"],
+        })
+    except Exception as ex:
+        return JSONResponse({"ok": False, "error": str(ex)[:120]})
+
+
+@router.post("/database/gdrive/poll")
+async def gdrive_oauth_poll(request: Request):
+    """چک وضعیت تأیید OAuth — ذخیره refresh_token."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    if not adm:
+        return JSONResponse({"ok": False, "error": "unauthorized"})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dc = str(body.get("device_code", "")).strip()
+    if not dc:
+        return JSONResponse({"ok": False, "error": "device_code خالی"})
+    client_id = os.getenv("GDRIVE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GDRIVE_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return JSONResponse({"ok": False, "error": "GDRIVE_CLIENT_ID/SECRET تنظیم نشده"})
+    try:
+        from backup_uploader import gdrive_device_poll
+        res = gdrive_device_poll(client_id, client_secret, dc)
+        if res.get("ok"):
+            _log(request, "اتصال Google Drive", "دیتابیس", "OAuth refresh token ذخیره شد", admin_info=adm)
+        return JSONResponse(res)
+    except Exception as ex:
+        return JSONResponse({"ok": False, "error": str(ex)[:120]})
+
 
 @router.post("/database/cloud-save")
 async def database_cloud_save(request: Request):
