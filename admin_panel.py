@@ -2820,15 +2820,19 @@ async def database_page(request: Request, flash: str = ""):
     from stbak_engine import MODULES, SECTION_LABELS
     import glob as _gl, os as _os
 
-    # لیست بکاپ‌های خودکار
-    _auto_dir = "/tmp/stockland_backups"
-    _auto_files = sorted(_gl.glob(f"{_auto_dir}/auto_*.stbak"), reverse=True)[:5]
+    # لیست بکاپ‌های خودکار — از pg_backup (PostgreSQL)
+    try:
+        from pg_backup import list_local_backups
+        _auto_list = list_local_backups()[:3]
+    except Exception:
+        _auto_list = []
+    _auto_files = [b["path"] for b in _auto_list]
     _auto_rows = ""
-    for _f in _auto_files:
-        _fn  = _os.path.basename(_f)
-        _sz  = _os.path.getsize(_f)
+    for _b in _auto_list:
+        _fn  = _b["name"]
+        _sz  = _b["size"]
         _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
-        _ts  = _fn.replace("auto_","").replace(".stbak","")
+        _ts  = _fn.replace("pg_backup_","").replace(".sql.gz","")
         try:
             from datetime import datetime as _dt
             _dto = _dt.strptime(_ts, "%Y%m%d_%H%M%S")
@@ -2868,16 +2872,16 @@ async def database_page(request: Request, flash: str = ""):
 
     # لیست بکاپ‌های خودکار برای dropdown بازیابی
     _restore_options = ""
-    for _f in _auto_files:
-        _fn = _os.path.basename(_f)
-        _ts = _fn.replace("auto_","").replace(".stbak","")
+    for _b in _auto_list:
+        _fn = _b["name"]
+        _ts = _fn.replace("pg_backup_","").replace(".sql.gz","")
         try:
             from datetime import datetime as _dt2
             _dto = _dt2.strptime(_ts, "%Y%m%d_%H%M%S")
             _label = _dto.strftime("%Y/%m/%d — %H:%M")
         except Exception:
             _label = _ts
-        _sz = _os.path.getsize(_f)
+        _sz = _b["size"]
         _szs = f"{_sz//1024} KB"
         _restore_options += f'<option value="{e(_fn)}">{_label} ({_szs})</option>'
 
@@ -3172,17 +3176,35 @@ async def backup_full_sync(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "database")
     if guard: return guard
-    from fastapi.responses import Response as FResponse
-    from stbak_engine import create_stbak, stbak_filename, resolve_sections
-    form = await request.form()
-    is_full = form.get("full") == "1"
-    secs = None if is_full else (form.getlist("sections") or None)
-    if secs: secs = resolve_sections(secs)
-    raw   = create_stbak(_DB_PATH(), modules=secs)
-    fname = stbak_filename("full" if is_full else "custom")
-    _log(request, "بکاپ", "دیتابیس", fname)
-    return FResponse(content=raw, media_type="application/octet-stream",
-                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    from fastapi.responses import FileResponse, PlainTextResponse
+    # بکاپ کامل PostgreSQL با pg_dump
+    try:
+        from pg_backup import create_backup
+        import os
+        fpath = create_backup()
+        _log(request, "بکاپ کامل دستی", "دیتابیس", os.path.basename(fpath), admin_info=adm)
+        return FileResponse(fpath, filename=os.path.basename(fpath),
+                            media_type="application/gzip")
+    except Exception as ex:
+        return PlainTextResponse(f"خطا در بکاپ: {str(ex)[:150]}", status_code=500)
+
+
+@router.get("/database/download/{filename}")
+async def database_download_auto(request: Request, filename: str):
+    """دانلود یک بکاپ خودکار (فایل .sql.gz)."""
+    from fastapi.responses import FileResponse, PlainTextResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    import os
+    if ".." in filename or "/" in filename:
+        return PlainTextResponse("نام فایل نامعتبر", status_code=400)
+    from pg_backup import BACKUP_DIR
+    path = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(path):
+        return PlainTextResponse("فایل یافت نشد", status_code=404)
+    _log(request, "دانلود بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
+    return FileResponse(path, filename=filename, media_type="application/gzip")
 
 
 @router.post("/database/restore-auto")
@@ -3196,15 +3218,15 @@ async def restore_auto(request: Request):
     if not filename or ".." in filename or "/" in filename:
         return JSONResponse({"error": "فایل نامعتبر"})
     import os
-    path = f"/tmp/stockland_backups/{filename}"
+    from pg_backup import BACKUP_DIR, restore_backup
+    path = os.path.join(BACKUP_DIR, filename)
     if not os.path.exists(path):
         return JSONResponse({"error": "فایل یافت نشد"})
     try:
-        with open(path, "rb") as f:
-            raw = f.read()
-        from stbak_engine import restore_stbak
-        restore_stbak(raw, _DB_PATH())
-        _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename)
+        res = restore_backup(path)
+        if not res.get("ok"):
+            return JSONResponse({"error": res.get("error","خطا در بازیابی")})
+        _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
         return JSONResponse({"ok": True})
     except Exception as ex:
         return JSONResponse({"error": str(ex)[:100]})
@@ -7795,38 +7817,22 @@ _auto_backup_started = False
 
 
 def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه با فرمت .stbak — همیشه ۶ بکاپ آخر محلی نگه داشته می‌شود."""
-    import os, glob
-    db_path = _env("DB_PATH")
-    if not db_path or not os.path.exists(db_path):
-        return
-    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    """بکاپ خودکار روزانه با pg_dump (PostgreSQL) — ۳ بکاپ محلی آخر + آپلود ابری."""
     try:
-        from stbak_engine import create_stbak
-        raw   = create_stbak(db_path)
-        ts    = _time.strftime("%Y%m%d_%H%M%S")
-        dst   = f"{_BACKUP_DIR}/auto_{ts}.stbak"
-        with open(dst, "wb") as f:
-            f.write(raw)
+        from pg_backup import create_backup
+        dst = create_backup()  # خودش چرخش ۳تایی + ذخیره در BACKUP_DIR را انجام می‌دهد
     except Exception as ex:
         _tg_logger.error("Auto-backup failed: %s", ex)
         return
+    _tg_logger.info("Auto-backup done: %s", dst)
 
-    # فاز ۶: همیشه ۶ بکاپ آخر محلی
-    all_backups = sorted(glob.glob(f"{_BACKUP_DIR}/auto_*.stbak"))
-    while len(all_backups) > 6:
-        try:
-            os.remove(all_backups.pop(0))
-        except Exception:
-            break
-    _tg_logger.info("Auto-backup done: %s (total: %d)", dst, len(all_backups))
-
-    # ☁️ آپلود ابری (بی‌صدا — نگهبان در صورت مشکل هشدار می‌دهد)
+    # ☁️ آپلود ابری (کانال تلگرام + گوگل درایو) — غیرهمزمان
     try:
         from backup_uploader import get_cloud_settings, upload_backup
-        if int(get_cloud_settings().get("enabled") or 0):
+        cs = get_cloud_settings()
+        if int(cs.get("tg_enabled") or 0) or int(cs.get("gdrive_enabled") or 0):
             rep = upload_backup(dst)
-            _tg_logger.info("Cloud backup: %s", rep)
+            _tg_logger.info("Cloud backup queued: %s", rep)
     except Exception as ex:
         _tg_logger.error("Cloud backup failed: %s", ex)
 
