@@ -732,31 +732,19 @@ def get_products_by_category(category: str):
         cur = conn.cursor()
         # بررسی وجود ستون partner_price
         try:
-            cur.execute("PRAGMA table_info(products);")
-            cols = {row[1] for row in cur.fetchall()}
+            pass
         except Exception:
-            cols = set()
-        has_partner = 'partner_price' in cols
-        if has_partner:
-            cur.execute(
-                """
-                SELECT id, category, title, price, description, is_active, partner_price
-                FROM products
-                WHERE category = ?
-                ORDER BY id ASC;
-                """,
-                (category,),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT id, category, title, price, description, is_active, NULL as partner_price
-                FROM products
-                WHERE category = ?
-                ORDER BY id ASC;
-                """,
-                (category,),
-            )
+            pass
+        cur.execute(
+            """
+            SELECT id, category, title, price, description, is_active,
+                   COALESCE(partner_price, 0) AS partner_price
+            FROM products
+            WHERE category = ?
+            ORDER BY id ASC;
+            """,
+            (category,),
+        )
         rows = cur.fetchall()
     finally:
         conn.close()
@@ -768,20 +756,15 @@ def get_product_by_id(pid: int):
         cur = conn.cursor()
         # بررسی وجود ستونها (برای سازگاری با دیتابیسهای قدیمی)
         try:
-            cur.execute('PRAGMA table_info(products);')
-            cols = {row[1] for row in cur.fetchall()}
+            pass
         except Exception:
-            cols = set()
-
-        has_partner = 'partner_price' in cols
-        has_lim_c = 'daily_limit_customer' in cols
-        has_lim_p = 'daily_limit_partner' in cols
+            pass
 
         select_cols = [
             'id', 'category', 'title', 'price', 'description', 'is_active',
-            ('partner_price' if has_partner else 'NULL AS partner_price'),
-            ('daily_limit_customer' if has_lim_c else '0 AS daily_limit_customer'),
-            ('daily_limit_partner' if has_lim_p else '0 AS daily_limit_partner'),
+            'COALESCE(partner_price, 0) AS partner_price',
+            'COALESCE(daily_limit_customer, 0) AS daily_limit_customer',
+            'COALESCE(daily_limit_partner, 0) AS daily_limit_partner',
         ]
         cur.execute(
             f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
@@ -851,8 +834,7 @@ def add_product(category: str, title: str, price: int, description: str = "", is
     cur = conn.cursor()
     # discover columns in products table
     try:
-        cur.execute("PRAGMA table_info(products);")
-        cols = {row[1] for row in cur.fetchall()}
+        cols = set()  # ستون‌ها از مهاجرت تضمین شده‌اند
     except Exception:
         cols = set()
 
@@ -3559,12 +3541,12 @@ def ensure_partner_system_schema():
         """)
         conn.commit()
 
-        # سطوح پیشفرض اگه خالی بود
+        # سطوح پیشفرض اگه خالی بود — با پورسانت و متن تبریک
         cnt = conn.execute("SELECT COUNT(*) FROM partner_tiers;").fetchone()[0]
         if cnt == 0:
             defaults = [
                 ("برنز", "🥉", 0, 1),
-                ("نقرهای", "🥈", 10, 2),
+                ("نقره‌ای", "🥈", 10, 2),
                 ("طلایی", "🥇", 30, 3),
                 ("الماس", "💎", 70, 4),
             ]
@@ -3580,9 +3562,7 @@ def ensure_partner_system_schema():
             conn.execute("INSERT INTO partner_commission (id,percent,min_order,max_payout,is_active) VALUES (1,5.0,0,0,1);")
             # مهاجرت ستون notified_tier در جدول partners
         try:
-            pcols = {r[1] for r in conn.execute("PRAGMA table_info(partners);").fetchall()}
-            if "notified_tier" not in pcols:
-                conn.execute("ALTER TABLE partners ADD COLUMN notified_tier INTEGER DEFAULT 0;")
+            conn.execute("ALTER TABLE partners ADD COLUMN notified_tier INTEGER DEFAULT 0;")
         except Exception:
             pass
         conn.commit()
@@ -4146,11 +4126,13 @@ def ensure_partner_bank_schema():
             );
         """)
         conn.commit()
-        # migration: ستون آدرس
-        try:
-            conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
-            conn.commit()
-        except Exception:
+        # migration: ستون آدرس + صاحب حساب
+        for _mc, _md in [("address", "TEXT DEFAULT ''"), ("owner_name", "TEXT DEFAULT ''")]:
+            try:
+                conn.execute(f"ALTER TABLE partner_bank_info ADD COLUMN {_mc} {_md};")
+                conn.commit()
+            except Exception:
+                pass
             pass
     finally:
         conn.close()
@@ -5374,7 +5356,7 @@ PROMO_DEFAULTS  = {"text": (
     "✅ قیمت‌های رقابتی و تضمینی\n"
     "✅ سابقه و اعتبار بالا\n\n"
     "🔗 با لینک اختصاصی من عضو شو:\n"
-    "<b>{link}</b>\n\n"
+    "{link}\n\n"
     "🎁 با عضویت از طریق لینک من، هدیه خوش‌آمدگویی دریافت کن!"
 )}
 
