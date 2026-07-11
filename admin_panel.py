@@ -1575,7 +1575,7 @@ async def dashboard(request: Request, err: str = ""):
     <tr>
       <td><a class="order-id" href="/admin/orders/{o['id']}/edit">#{o['id']}</a></td>
       <td><div class="table-product"><span><i data-lucide="package"></i></span><strong>{e(o['title'][:34])}</strong></div></td>
-      <td><span class="muted-cell">{o['user_id']}</span></td>
+      <td><code class="no-fa text-xs">{o['user_id']}</code></td>
       <td><strong class="money-cell">{int(o['price']):,}</strong><small class="currency">تومان</small></td>
       <td>{status_badge(o['status'] or 'active')}</td>
       <td><a class="table-action" href="/admin/orders/{o['id']}/edit" aria-label="مشاهده سفارش"><i data-lucide="arrow-up-left"></i></a></td>
