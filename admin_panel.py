@@ -1074,6 +1074,19 @@ def _layout(title: str, body: str, admin_info=None,
     /* جداول: اعداد چپ‌چین حفظ خوانایی */
     body.sl-dark table td, body.dark-mode table td {{ color:#D9E1EA; }}
     body.sl-dark summary, body.dark-mode summary {{ color:#E4EAF1 !important; }}
+    /* فیکس: اعداد و متون مشکی در dark */
+    body.sl-dark input, body.sl-dark select, body.sl-dark textarea,
+    body.dark-mode input, body.dark-mode select, body.dark-mode textarea {{
+      color:#E4EAF1 !important; background:#1B2530 !important; border-color:#2B3A4C !important;
+    }}
+    body.sl-dark td, body.sl-dark th, body.dark-mode td, body.dark-mode th {{ color:#D9E1EA !important; }}
+    body.sl-dark .text-gray-800, body.sl-dark .text-gray-700, body.sl-dark .text-gray-600,
+    body.dark-mode .text-gray-800, body.dark-mode .text-gray-700, body.dark-mode .text-gray-600 {{ color:#D0DAE6 !important; }}
+    body.sl-dark .text-gray-500, body.sl-dark .text-gray-400,
+    body.dark-mode .text-gray-500, body.dark-mode .text-gray-400 {{ color:#8899AA !important; }}
+    body.sl-dark .command-center::before, body.dark-mode .command-center::before {{ display:none !important; }}
+    body.sl-dark .command-center, body.dark-mode .command-center {{ background:#0F1923 !important; }}
+    body.sl-dark .dashboard, body.dark-mode .dashboard {{ background:#0F1923 !important; }}
     body.sl-dark details.acc, body.dark-mode details.acc {{ background:#17212B !important; }}
 
     /* ── Misc Helpers ─────────────────────────────────────────── */
@@ -1683,7 +1696,13 @@ async def dashboard(request: Request, err: str = ""):
       body.sl-dark .kpi-card, body.dark-mode .kpi-card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
       body.sl-dark .chart-card, body.dark-mode .chart-card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
       body.sl-dark .activity-icon, body.dark-mode .activity-icon {{ background:#1B2530 !important; }}
-            @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
+            /* موبایل: دکمه collapse sidebar مخفی + body fixed وقتی sidebar بازه */
+    @media(max-width:768px) {{
+      .sidebar-collapse-btn {{ display:none !important; }}
+      body.sidebar-open {{ overflow:hidden !important; position:fixed !important; width:100% !important; }}
+      .sidebar {{ overflow-y:auto !important; -webkit-overflow-scrolling:touch; }}
+    }}
+    @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
     </style>
 
     <main class="dashboard">
@@ -9149,7 +9168,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
              +'<span style="font-size:15px">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</span>'
              +'<span class="font-medium text-gray-800">'+esc(n.name)+'</span>'
              +(n.username?'<span class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</span>':'')
-             +'<code class="text-xs">'+n.id+'</code>'
+             +'<code class="text-xs no-fa" dir="ltr">'+n.id+'</code>'
              +'<span class="tn-badge bg-indigo-50 text-indigo-600">🛒 '+fmt(n.sales)+'</span>'
              +'<span class="tn-badge bg-teal-50 text-teal-700">💰 '+fmt(n.income)+' ت</span>'
              +'<span class="tn-badge bg-gray-100 text-gray-500">👥 '+fmt(n.direct)+' / '+fmt(n.total)+'</span>'
@@ -10439,7 +10458,7 @@ async def shop_webapp(request: Request):
     """صفحه Mini App — عمومی؛ احراز داخل خودش با initData انجام می‌شود."""
     html_page = """<!DOCTYPE html>
 <html lang="fa" dir="rtl"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>فروشگاه</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
