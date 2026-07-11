@@ -46,6 +46,9 @@ _INSERT_REPLACE = re.compile(r"INSERT\s+OR\s+REPLACE\s+INTO", re.I)
 # AUTOINCREMENT
 _AUTOINC = re.compile(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", re.I)
 
+# PRAGMA table_info(X) → information_schema query
+_PRAGMA_TABLE_INFO = re.compile(r"PRAGMA\s+table_info\(\s*(\w+)\s*\)", re.I)
+
 
 def translate(sql: str) -> str:
     """کوئری SQLite را به Postgres ترجمه می‌کند. در حالت sqlite بدون تغییر."""
@@ -73,6 +76,18 @@ def translate(sql: str) -> str:
 
     # ۵) AUTOINCREMENT → SERIAL
     out = _AUTOINC.sub("SERIAL PRIMARY KEY", out)
+
+    # ۶) PRAGMA table_info(X) → information_schema equivalent
+    m = _PRAGMA_TABLE_INFO.search(out)
+    if m:
+        table = m.group(1)
+        out = (f"SELECT ordinal_position AS cid, column_name AS name, "
+               f"data_type AS type, 0 AS notnull, NULL AS dflt_value, 0 AS pk "
+               f"FROM information_schema.columns WHERE table_name='{table}' "
+               f"ORDER BY ordinal_position")
+
+    # ۷) SELECT changes() — خاص SQLite، در Postgres وجود ندارد
+    out = out.replace("SELECT changes()", "SELECT 1")
 
     return out
 
