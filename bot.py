@@ -3506,7 +3506,7 @@ def cb_partner_ref_link(call):
 
     text = (
         f"🔗 <b>لینک معرفی و ابزار تبلیغ</b>\n\n"
-        f"لینک اختصاصی شما:\n<code>{link}</code>\n\n"
+        f"👤 {call.from_user.first_name or 'همکار'} — <code>{uid}</code>\n\n"
         f"💰 پاداش هر عضویت: <b>{reward:,}</b> تومان\n"
         f"💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
         f"📊 آمار تیم فروش شما:\n"
@@ -3740,10 +3740,23 @@ def handle_payout_collect_bank(message):
 
     if step == "owner_name":
         state["owner_name"] = text
+        state["step"] = "card_number"
+        user_states[uid] = state
+        bot.reply_to(message,
+            "✅ نام صاحب حساب ذخیره شد.\n\n"
+            "حالا <b>شماره کارت بانکی</b> (۱۶ رقم) را وارد کنید:",
+            parse_mode="HTML")
+    elif step == "card_number":
+        card = text.replace(" ", "").replace("-", "")
+        if len(card) != 16 or not card.isdigit():
+            bot.reply_to(message,
+                "❌ شماره کارت نامعتبر (باید ۱۶ رقم باشد).\nدوباره وارد کنید:")
+            return
+        state["card_number"] = card
         state["step"] = "iban"
         user_states[uid] = state
         bot.reply_to(message,
-            "✅ نام ذخیره شد.\n\n"
+            "✅ شماره کارت ذخیره شد.\n\n"
             "حالا <b>شماره شبا</b> را وارد کنید (با یا بدون IR):",
             parse_mode="HTML")
     elif step == "iban":
@@ -3752,26 +3765,27 @@ def handle_payout_collect_bank(message):
             iban = "IR" + iban
         if len(iban) != 26 or not iban[2:].isdigit():
             bot.reply_to(message,
-                "❌ شماره شبا نامعتبر است.\n"
-                "شبا باید ۲۴ رقم داشته باشد (IR + ۲۴ رقم).\n"
-                "دوباره وارد کنید:")
+                "❌ شماره شبا نامعتبر (IR + ۲۴ رقم).\nدوباره وارد کنید:")
             return
         owner = state.get("owner_name", "")
+        card = state.get("card_number", "")
         try:
-            conn = _sq.connect(_DBP)
+            from db import _get_connection
+            conn = _get_connection()
             existing = conn.execute(
                 "SELECT 1 FROM partner_bank_info WHERE user_id=?;", (uid,)).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE partner_bank_info SET owner_name=?,iban=?,updated_at=datetime('now') WHERE user_id=?;",
-                    (owner, iban, uid))
+                    "UPDATE partner_bank_info SET owner_name=?,card_number=?,iban=?,updated_at=datetime('now') WHERE user_id=?;",
+                    (owner, card, iban, uid))
             else:
                 conn.execute(
-                    "INSERT INTO partner_bank_info (user_id,owner_name,iban) VALUES (?,?,?);",
-                    (uid, owner, iban))
+                    "INSERT INTO partner_bank_info (user_id,owner_name,card_number,iban) VALUES (?,?,?,?);",
+                    (uid, owner, card, iban))
             conn.commit(); conn.close()
         except Exception as ex:
             bot.reply_to(message, f"❌ خطا در ذخیره: {ex}")
+            user_states.pop(uid, None)
             return
 
         # ادامه به تسویه
@@ -5013,22 +5027,18 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "wallet_card2card":
         bot.answer_callback_query(call.id)
-        user_states[uid] = {"mode": "card2card_receipt"}
+        user_states[uid] = {"mode": "card2card_amount"}
         text_msg = (
-            "برای افزایش موجودی کیف پول، مبلغ مورد نظر را به حساب زیر واریز کرده و سپس عکس رسید را در همین چت ارسال کنید:\n\n"
+            "💳 <b>پرداخت کارت‌به‌کارت</b>\n\n"
+            "مبلغ مورد نظر را به حساب زیر واریز کنید:\n\n"
             "💳 شماره کارت:\n"
             "<code>6037701608004393</code>\n"
             "به نام: <b>سید فیروز ایازی</b>\n\n"
-            "📍 پس از بررسی، موجودی کیف پول شما شارژ خواهد شد.\n\n"
-            "⚠️ فقط عکس واضح از رسید را ارسال کنید.\n"
+            "سپس <b>مبلغ واریزی (به تومان)</b> را وارد کنید:"
         )
         kb = types.InlineKeyboardMarkup()
-        kb.add(
-            types.InlineKeyboardButton(
-                "❌ انصراف", callback_data="wallet_cancel_card2card"
-            )
-        )
-        bot.send_message(call.message.chat.id, text_msg, reply_markup=kb)
+        kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
+        bot.send_message(call.message.chat.id, text_msg, reply_markup=kb, parse_mode="HTML")
         return
 
     if data == "wallet_cancel_card2card":
@@ -6069,6 +6079,24 @@ def handle_callbacks(call: types.CallbackQuery):
 
 
 @bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_amount",
+    content_types=["text"]
+)
+def handle_card2card_amount(message):
+    uid = message.from_user.id
+    txt = (message.text or "").strip().replace(",", "").replace("٬", "")
+    if not txt.isdigit() or int(txt) < 1000:
+        bot.reply_to(message, "❌ مبلغ نامعتبر — حداقل ۱,۰۰۰ تومان.\nدوباره وارد کنید:")
+        return
+    amount = int(txt)
+    user_states[uid] = {"mode": "card2card_receipt", "amount": amount}
+    bot.reply_to(message,
+        f"✅ مبلغ: <b>{amount:,}</b> تومان\n\n"
+        "حالا <b>عکس رسید واریز</b> را ارسال کنید:",
+        parse_mode="HTML")
+
+
+@bot.message_handler(
     func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt",
     content_types=["photo"]
 )
@@ -6206,25 +6234,42 @@ def _send_invite_view(chat_id, uid):
     except Exception:
         stats = {"total": 0, "total_reward": 0}
     bot_username = _bot_username() or "your_bot"
-    link = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = int(settings.get("reward_amount") or 0)
-    promo = str(get_promo_settings().get("text") or "").format(link=link)
 
-    text = (
-        "🎁 <b>دعوت دوستان</b>\n\n"
-        f"لینک اختصاصی شما:\n<code>{link}</code>\n\n"
-    )
-    if settings.get("is_active") and reward > 0:
-        text += f"💰 با هر عضویت: <b>{reward:,}</b> تومان پاداش\n"
-    text += (
-        "💸 + پورسانت از هر خرید دعوت‌شده‌ها\n\n"
-        f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
-        + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
-        + "\n\n📣 متن آماده برای ارسال:\n➖➖➖➖➖➖➖➖\n"
-        + promo + "\n➖➖➖➖➖➖➖➖"
-    )
-    import urllib.parse as _up
-    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
+    # اگه همکار تأییدشده‌ست: لینک اختصاصی + پورسانت + آمار
+    # اگه کاربر عادیه: فقط دعوت ساده با نام ربات
+    is_partner = is_partner_approved(uid)
+
+    if is_partner:
+        link = f"https://t.me/{bot_username}?start=ref_{uid}"
+        promo = str(get_promo_settings().get("text") or "").format(link=link)
+        text = (
+            "🔗 <b>لینک معرفی شما</b>\n\n"
+            f"👤 {stats.get('name', 'همکار')} — <code>{uid}</code>\n\n"
+        )
+        if settings.get("is_active") and reward > 0:
+            text += f"💰 پاداش هر عضویت: <b>{reward:,}</b> تومان\n"
+        text += (
+            "💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
+            f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
+            + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
+            + "\n\n📣 متن آماده تبلیغ:\n➖➖➖➖➖➖➖➖\n"
+            + promo + "\n➖➖➖➖➖➖➖➖"
+        )
+        import urllib.parse as _up
+        share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
+    else:
+        # کاربر عادی: فقط معرفی ربات بدون لینک شخصی
+        bot_link = f"https://t.me/{bot_username}"
+        text = (
+            "🎁 <b>معرفی ربات به دوستان</b>\n\n"
+            f"با ارسال لینک زیر، دوستانتان را به ربات دعوت کنید:\n"
+            f"<code>{bot_link}</code>\n\n"
+            "💡 برای دریافت لینک اختصاصی + پاداش و پورسانت،\n"
+            "درخواست همکاری ثبت کنید."
+        )
+        import urllib.parse as _up
+        share_url = "https://t.me/share/url?url=" + _up.quote(bot_link)
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
     bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
