@@ -456,7 +456,7 @@ def ensure_pending_schema():
                 """
             )
             # Add missing columns if table existed before (SQLite safe migration)
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(pending_deliveries);").fetchall()}
+            # مهاجرت ستون‌ها — هر ALTER جدا (سازگار Postgres)
             needed = {
                 "order_id": "INTEGER UNIQUE",
                 "user_id": "INTEGER",
@@ -470,8 +470,10 @@ def ensure_pending_schema():
                 "delivered_at": "TEXT",
             }
             for col, decl in needed.items():
-                if col not in cols:
+                try:
                     conn.execute(f"ALTER TABLE pending_deliveries ADD COLUMN {col} {decl};")
+                except Exception:
+                    pass
             conn.commit()
         finally:
             conn.close()
