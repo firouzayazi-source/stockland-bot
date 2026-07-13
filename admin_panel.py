@@ -8216,6 +8216,7 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
         <div class="p-2">
           <div class="text-[10px] text-gray-400 mb-1">موجودی انبار</div>
           <div class="font-bold text-slate-700">{_m(kpis["stock_count"])} <span class="text-[10px] font-normal text-gray-400">آیتم</span></div>
+          <div class="text-[10px] text-gray-400 mt-0.5">ارزش: {_m(kpis.get("stock_value",0))} ت</div>
         </div>
       </div>
     </div>
