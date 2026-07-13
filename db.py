@@ -4465,9 +4465,10 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             f"SELECT COUNT(*) FROM orders o WHERE status='active'{where_order};"
         ).fetchone()[0]
 
-        # هزینه خرید — فقط برای آیتمهای تحویلشده (sold)
+        # هزینه خرید — محصولات تحویل‌شده (با batch + بدون batch)
         try:
-            total_cost = conn.execute("""
+            # ۱) آیتم‌هایی که batch و purchase_price دارن
+            batch_cost = conn.execute("""
                 SELECT COALESCE(SUM(
                     CASE WHEN fb.item_count > 0
                     THEN (fb.purchase_price + CAST(fb.side_cost AS REAL)/fb.item_count)
@@ -4478,13 +4479,27 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
                 WHERE pf.delivered = 1;
             """).fetchone()[0]
         except Exception:
-            total_cost = 0
+            batch_cost = 0
+        try:
+            # ۲) آیتم‌هایی بدون batch (txt import) — تعداد تحویل‌شده × قیمت محصول
+            no_batch_cost = conn.execute("""
+                SELECT COALESCE(SUM(COALESCE(p.partner_price, p.price)), 0)
+                FROM product_feed pf
+                JOIN products p ON pf.product_id = p.id
+                WHERE pf.delivered = 1 AND (pf.batch_id IS NULL OR pf.batch_id = 0);
+            """).fetchone()[0]
+        except Exception:
+            no_batch_cost = 0
+        total_cost = int(batch_cost) + int(no_batch_cost)
 
         # پورسانت پرداختی
-        commission_q = "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1"
-        if date_from:
-            commission_q += f" AND date(rewarded_at)>='{date_from}'" if 'rewarded_at' in [r[1] for r in conn.execute("PRAGMA table_info(referrals);").fetchall()] else ""
-        total_commission = conn.execute(commission_q + ";").fetchone()[0]
+        try:
+            commission_q = "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1"
+            if date_from:
+                commission_q += f" AND date(rewarded_at)>='{date_from}'"
+            total_commission = conn.execute(commission_q + ";").fetchone()[0]
+        except Exception:
+            total_commission = 0
 
         # هزینههای ثبتشده
         exp_q = "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE 1=1"
@@ -4500,11 +4515,20 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
         except Exception:
             payout_count = payout_total = 0
 
-        # موجودی انبار
+        # موجودی انبار + ارزش
         try:
             stock_count = conn.execute("SELECT COUNT(*) FROM product_feed WHERE delivered=0;").fetchone()[0]
         except Exception:
             stock_count = 0
+        try:
+            stock_value = conn.execute("""
+                SELECT COALESCE(SUM(p.price), 0)
+                FROM product_feed pf
+                JOIN products p ON pf.product_id = p.id
+                WHERE pf.delivered = 0;
+            """).fetchone()[0]
+        except Exception:
+            stock_value = 0
 
         gross_profit = int(total_sales or 0) - int(total_cost or 0)
         net_profit   = gross_profit - int(total_commission or 0) - int(total_expenses or 0)
