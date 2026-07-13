@@ -324,7 +324,8 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
         back_cb = f"back_list_{category}"
 
     partner_ok = (user_id is not None) and is_partner_approved(int(user_id))
-    eff_price = partner_price if (partner_ok and partner_price) else price
+    # partner_price باید > 0 و < price باشه تا اعمال شه
+    eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
     from db import apply_flash_price as _afp
     eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
@@ -376,7 +377,7 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     _raw_base = int(price)  # قیمت پایه قبل از فلش
     if _flash_sale:
         _price_line = f"💰 قیمت: <s>{_raw_base:,}</s> ← <b>{int(eff_price):,}</b> تومان 🔥\n"
-    elif partner_ok_view and partner_price and int(partner_price) < int(price):
+    elif partner_ok_view and partner_price and int(partner_price) > 0 and int(partner_price) < int(price):
         saving = int(price) - int(eff_price)
         pct = round(saving * 100 / int(price))
         # طراحی سه‌سطحی: قیمت عادی، قیمت همکاری، سود
@@ -1866,7 +1867,7 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
             text = f"{status_icon} {title} | {price:,} تومان"
             cb = f"admin_product_{pid}"
         else:
-            eff_price = partner_price if (partner_ok and partner_price) else price
+            eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
             from db import apply_flash_price as _afp
             eff_price, _flash_sale = _afp(int(pid), int(eff_price))
             text = f"{title} | {eff_price:,} تومان"
@@ -1893,7 +1894,7 @@ def _get_eff_price(product, uid):
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
-    base = partner_price if (partner_ok and partner_price) else price
+    base = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
     from db import apply_flash_price
     eff, _ = apply_flash_price(int(product[0]), int(base))
     return eff
@@ -2197,7 +2198,7 @@ def handle_confirm_full(call):
     price  = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok    = is_partner_approved(uid)
-    eff_price     = partner_price if (partner_ok and partner_price) else price
+    eff_price     = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
 
     # تخفیف اعمال شده از _show_order_summary
     discount  = int(user_states.get(uid, {}).get("applied_discount", 0))
@@ -2247,7 +2248,7 @@ def handle_confirm_wallet(call):
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
-    eff_price = partner_price if (partner_ok and partner_price) else price
+    eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
     from db import apply_flash_price as _afp
     eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
@@ -4089,6 +4090,17 @@ def _pre_handle_crypto_amount(message):
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_txid")
 def _pre_handle_crypto_txid(message):
     return handle_crypto_txid(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_amount")
+def _pre_handle_card2card_amount(message):
+    """ثبت زودهنگام — قبل از catch-all ادمین."""
+    return handle_card2card_amount(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "payout_collect_bank")
+def _pre_handle_payout_bank_early(message):
+    return handle_payout_collect_bank(message)
 
 
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
