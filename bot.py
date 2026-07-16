@@ -1136,6 +1136,32 @@ def _check_maintenance_cb(call) -> bool:
         return False
 
 
+def _app_pwa_url() -> str:
+    try:
+        from config import WEBHOOK_BASE_URL
+        return WEBHOOK_BASE_URL.rstrip("/") + "/app/"
+    except Exception:
+        return "https://panel.stland.ir/app/"
+
+
+@bot.message_handler(commands=["app"])
+def handle_app_command(message):
+    url = _app_pwa_url()
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    try:
+        kb.add(types.InlineKeyboardButton("📱 باز کردن اپلیکیشن", web_app=types.WebAppInfo(url)))
+    except Exception:
+        pass
+    kb.add(types.InlineKeyboardButton("🌐 باز کردن در مرورگر (برای نصب)", url=url))
+    bot.send_message(
+        message.chat.id,
+        "📱 <b>اپلیکیشن استوک‌لند</b>\n\n"
+        "آموزش‌ها، اخبار و امکانات ربات — با ظاهر و حس یک اپ واقعی.\n\n"
+        "💡 برای نصب روی صفحه اصلی گوشی: گزینه «مرورگر» را بزنید و از منوی "
+        "Share گزینه <b>Add to Home Screen</b> را انتخاب کنید.",
+        parse_mode="HTML", reply_markup=kb)
+
+
 @bot.message_handler(commands=["start"])
 def handle_start(message):
     init_db(DB_PATH)
@@ -6582,3 +6608,20 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception("Polling crashed, restarting in 5s: %s", e)
             time.sleep(5)
+
+
+# ── دکمه منوی اپ (کنار باکس پیام) — سراسری، یک‌بار در استارتاپ ──────────────
+def _setup_app_menu_button():
+    try:
+        url = _app_pwa_url()
+        bot.set_chat_menu_button(
+            menu_button=types.MenuButtonWebApp(type="web_app", text="📱 اپ",
+                                               web_app=types.WebAppInfo(url)))
+        logger.info("✅ Menu button → %s", url)
+    except Exception as _e:
+        try:
+            logger.warning("Menu button not set: %s", _e)
+        except Exception:
+            pass
+
+_setup_app_menu_button()

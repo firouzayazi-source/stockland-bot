@@ -510,6 +510,7 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>فروش</span></div>
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
+            {nav_item("/admin/app-content", "smartphone", "محتوای اپ", "settings")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
             {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
             <div class="nav-divider"><span>کاربران</span></div>
@@ -10921,3 +10922,177 @@ async def webhook_switch_impl(request: Request, mode: str):
         ok, msg = False, f"خطا: {str(ex)[:80]}"
     _log(request, f"سوییچ حالت (سازگاری) → {mode}", "تنظیمات", msg, admin_info=adm)
     return _redir(f"/admin/webhook?flash={'✅' if ok else '❌'}+{e(msg)}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── محتوای اپ PWA (آموزش / اخبار / امکانات) ──────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+APP_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_media")
+
+_KIND_LABELS = {"tutorial": "📚 آموزش", "news": "📰 خبر", "feature": "✨ امکانات"}
+
+
+@router.get("/app-content", response_class=HTMLResponse)
+async def app_content_page(request: Request, kind: str = "", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_app_content
+    k = kind if kind in _KIND_LABELS else None
+    items = get_app_content(kind=k, active_only=False, limit=100)
+
+    tabs = ''.join(
+        f'<a href="/admin/app-content?kind={s}" class="px-3 py-1.5 rounded-lg text-xs border '
+        f'{"bg-indigo-600 text-white" if kind==s else "bg-white text-gray-500"}">{l}</a>'
+        for s, l in [("", "همه"), ("tutorial", "📚 آموزش"), ("news", "📰 اخبار"), ("feature", "✨ امکانات")]
+    )
+
+    rows = ""
+    for it in items:
+        badge = _KIND_LABELS.get(it.get("kind"), it.get("kind"))
+        active = '<span class="text-green-600 text-xs">فعال</span>' if int(it.get("is_active") or 0) \
+                 else '<span class="text-gray-400 text-xs">غیرفعال</span>'
+        img = f'<img src="{html.escape(it.get("image_url") or "")}" class="w-10 h-10 rounded-lg object-cover">' \
+              if it.get("image_url") else '<div class="w-10 h-10 rounded-lg bg-gray-100"></div>'
+        rows += f"""
+        <tr class="border-b">
+          <td class="p-2">{img}</td>
+          <td class="p-2 text-sm font-medium">{html.escape(it.get('title') or '')}</td>
+          <td class="p-2 text-xs">{badge}</td>
+          <td class="p-2">{active}</td>
+          <td class="p-2 text-xs text-gray-400">{html.escape(str(it.get('created_at') or '')[:16])}</td>
+          <td class="p-2 whitespace-nowrap">
+            <a href="/admin/app-content/{it['id']}/edit" class="text-indigo-600 text-xs ml-2">✏️ ویرایش</a>
+            <form method="post" action="/admin/app-content/{it['id']}/delete" class="inline"
+                  onsubmit="return confirm('حذف شود؟')">
+              <button class="text-red-500 text-xs">🗑 حذف</button>
+            </form>
+          </td>
+        </tr>"""
+    if not rows:
+        rows = '<tr><td colspan="6" class="p-6 text-center text-gray-400 text-sm">هنوز محتوایی ثبت نشده.</td></tr>'
+
+    body = f"""
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex gap-2">{tabs}</div>
+      <a href="/admin/app-content/new" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">＋ افزودن محتوا</a>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b">
+          <th class="p-2">تصویر</th><th class="p-2">عنوان</th><th class="p-2">نوع</th>
+          <th class="p-2">وضعیت</th><th class="p-2">تاریخ</th><th class="p-2">عملیات</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _layout("محتوای اپ", body, adm, flash=flash)
+
+
+def _app_content_form(it=None):
+    it = it or {}
+    kind_opts = ''.join(
+        f'<option value="{k}" {"selected" if it.get("kind")==k else ""}>{l}</option>'
+        for k, l in _KIND_LABELS.items()
+    )
+    checked = "checked" if (it.get("is_active", 1) in (1, "1", True, None) and int(it.get("is_active", 1) or 0) == 1) or not it else ""
+    return f"""
+    <form method="post" action="/admin/app-content/save" enctype="multipart/form-data"
+          class="bg-white rounded-xl shadow-sm p-5 max-w-2xl space-y-4">
+      <input type="hidden" name="cid" value="{it.get('id','')}">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">نوع محتوا</label>
+        <select name="kind" class="w-full border rounded-lg p-2 text-sm">{kind_opts}</select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">عنوان</label>
+        <input name="title" required value="{html.escape(str(it.get('title') or ''))}"
+               class="w-full border rounded-lg p-2 text-sm">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">متن</label>
+        <textarea name="body" rows="8" class="w-full border rounded-lg p-2 text-sm">{html.escape(str(it.get('body') or ''))}</textarea>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">تصویر (اختیاری — آپلود)</label>
+        <input type="file" name="image" accept="image/*" class="w-full text-sm">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">یا آدرس تصویر</label>
+        <input name="image_url" value="{html.escape(str(it.get('image_url') or ''))}"
+               class="w-full border rounded-lg p-2 text-sm" placeholder="https://…">
+      </div>
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="is_active" value="1" {checked}> فعال (نمایش در اپ)
+      </label>
+      <div class="flex gap-2">
+        <button class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm">ذخیره</button>
+        <a href="/admin/app-content" class="px-5 py-2 rounded-lg text-sm border">انصراف</a>
+      </div>
+    </form>"""
+
+
+@router.get("/app-content/new", response_class=HTMLResponse)
+async def app_content_new(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    return _layout("افزودن محتوا", _app_content_form(), adm)
+
+
+@router.get("/app-content/{cid}/edit", response_class=HTMLResponse)
+async def app_content_edit(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_app_content_item
+    it = get_app_content_item(cid)
+    if not it:
+        return _redir("/admin/app-content")
+    return _layout("ویرایش محتوا", _app_content_form(it), adm)
+
+
+@router.post("/app-content/save")
+async def app_content_save(request: Request, cid: str = Form(""), kind: str = Form("news"),
+                           title: str = Form(...), body: str = Form(""),
+                           image_url: str = Form(""), is_active: str = Form(""),
+                           image: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+
+    # آپلود تصویر (در صورت انتخاب فایل)
+    final_image = (image_url or "").strip()
+    try:
+        if image is not None and getattr(image, "filename", ""):
+            os.makedirs(APP_MEDIA_DIR, exist_ok=True)
+            ext = os.path.splitext(image.filename)[1].lower() or ".jpg"
+            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                ext = ".jpg"
+            fname = f"c{int(time.time())}{ext}"
+            data = await image.read()
+            if data:
+                with open(os.path.join(APP_MEDIA_DIR, fname), "wb") as f:
+                    f.write(data)
+                final_image = f"/app-media/{fname}"
+    except Exception:
+        pass
+
+    kind = kind if kind in _KIND_LABELS else "news"
+    from db import add_app_content, update_app_content
+    if cid.strip().isdigit():
+        update_app_content(int(cid), kind, title.strip(), body, final_image,
+                           1 if is_active == "1" else 0)
+    else:
+        add_app_content(kind, title.strip(), body, final_image)
+    return _redir("/admin/app-content")
+
+
+@router.post("/app-content/{cid}/delete")
+async def app_content_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import delete_app_content
+    delete_app_content(cid)
+    return _redir("/admin/app-content")

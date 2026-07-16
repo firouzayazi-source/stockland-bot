@@ -81,6 +81,22 @@ try:
 except Exception as _ex:
     logger.warning("API router not loaded: %s", _ex)
 
+# ── PWA استاتیک (/app) + مدیای آپلودی (/app-media) ─────────────────────────
+try:
+    from fastapi.staticfiles import StaticFiles
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    _PWA_DIR = os.path.join(_BASE_DIR, "app")
+    _PWA_MEDIA = os.path.join(_BASE_DIR, "app_media")
+    os.makedirs(_PWA_MEDIA, exist_ok=True)
+    if os.path.isdir(_PWA_DIR):
+        app.mount("/app", StaticFiles(directory=_PWA_DIR, html=True), name="pwa")
+        app.mount("/app-media", StaticFiles(directory=_PWA_MEDIA), name="pwa_media")
+        logger.info("✅ PWA mounted at /app")
+    else:
+        logger.warning("PWA dir not found: %s", _PWA_DIR)
+except Exception as _ex:
+    logger.warning("PWA mount failed: %s", _ex)
+
 
 @app.middleware("http")
 async def _refresh_admin_session(request, call_next):
