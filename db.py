@@ -5584,3 +5584,107 @@ def get_active_flash_map() -> dict:
 
 def flash_map_invalidate():
     _FLASH_MAP_CACHE["t"] = 0.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── App Content (PWA) — آموزش/اخبار/امکانات ─────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+_ENSURE_APP_CONTENT_DONE = False
+
+def ensure_app_content_schema():
+    """جدول محتوای اپ PWA — الگوی مشابه card_receipts (سازگار SQLite/PG)."""
+    global _ENSURE_APP_CONTENT_DONE
+    if _ENSURE_APP_CONTENT_DONE:
+        return
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_content (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL DEFAULT 'news',
+                title TEXT NOT NULL,
+                body TEXT DEFAULT '',
+                image_url TEXT DEFAULT '',
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+        _ENSURE_APP_CONTENT_DONE = True
+    finally:
+        conn.close()
+
+
+def add_app_content(kind: str, title: str, body: str = "", image_url: str = "") -> int:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        from db_conn import is_postgres as _is_pg
+        if _is_pg():
+            cur = conn.execute(
+                "INSERT INTO app_content (kind,title,body,image_url) VALUES (?,?,?,?) RETURNING id;",
+                (kind, title, body, image_url))
+            row = cur.fetchone()
+            conn.commit()
+            if row is None:
+                return 0
+            return int(row["id"] if hasattr(row, "keys") else row[0])
+        cur = conn.execute(
+            "INSERT INTO app_content (kind,title,body,image_url) VALUES (?,?,?,?);",
+            (kind, title, body, image_url))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_app_content(cid: int, kind: str, title: str, body: str,
+                       image_url: str, is_active: int) -> None:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE app_content SET kind=?, title=?, body=?, image_url=?, is_active=? WHERE id=?;",
+            (kind, title, body, image_url, int(is_active), int(cid)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_app_content(cid: int) -> None:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM app_content WHERE id=?;", (int(cid),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_app_content(kind: str | None = None, active_only: bool = True, limit: int = 100) -> list:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        q = "SELECT * FROM app_content WHERE 1=1"
+        params = []
+        if kind:
+            q += " AND kind=?"
+            params.append(kind)
+        if active_only:
+            q += " AND is_active=1"
+        q += " ORDER BY id DESC LIMIT ?;"
+        params.append(int(limit))
+        rows = conn.execute(q, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_app_content_item(cid: int):
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        r = conn.execute("SELECT * FROM app_content WHERE id=?;", (int(cid),)).fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()

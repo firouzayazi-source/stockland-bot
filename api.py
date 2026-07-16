@@ -152,3 +152,44 @@ async def api_health():
         "dialect": db_conn.get_dialect(),
         "time": int(time.time()),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── محتوای اپ (عمومی — بدون احراز هویت) ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/content")
+async def api_content_list(kind: str = "", limit: int = 50):
+    """فهرست محتوا برای PWA — kind: tutorial | news | feature (خالی = همه)."""
+    from db import get_app_content
+    kind = kind if kind in ("tutorial", "news", "feature") else None
+    items = get_app_content(kind=kind, active_only=True, limit=min(int(limit or 50), 100))
+    out = []
+    for it in items:
+        body = (it.get("body") or "").strip()
+        out.append({
+            "id": it["id"],
+            "kind": it.get("kind"),
+            "title": it.get("title"),
+            "excerpt": (body[:160] + "…") if len(body) > 160 else body,
+            "image_url": it.get("image_url") or "",
+            "created_at": str(it.get("created_at") or "")[:16],
+        })
+    return {"ok": True, "items": out}
+
+
+@router.get("/content/{cid}")
+async def api_content_item(cid: int):
+    """یک آیتم کامل محتوا برای PWA."""
+    from db import get_app_content_item
+    it = get_app_content_item(cid)
+    if not it or not int(it.get("is_active") or 0):
+        raise HTTPException(status_code=404, detail="یافت نشد")
+    return {"ok": True, "item": {
+        "id": it["id"],
+        "kind": it.get("kind"),
+        "title": it.get("title"),
+        "body": it.get("body") or "",
+        "image_url": it.get("image_url") or "",
+        "created_at": str(it.get("created_at") or "")[:16],
+    }}
