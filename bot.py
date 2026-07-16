@@ -6137,10 +6137,10 @@ def handle_card2card_photo(message):
         bot.send_photo(ADMIN_ID, file_id,
             caption=(f"💳 <b>رسید کارت‌به‌کارت جدید</b>\n"
                      f"شناسه: #{rid}\n"
-                     f"کاربر: {name} (<code>{uid}</code>)\n\n"
-                     f"⚠️ مبلغ هنگام تأیید در پنل وارد شود.\n"
-                     f"پنل: /admin/receipts/{rid}/view\n"
-                     f"تأیید: /approve_receipt_{rid}\n"
+                     f"کاربر: {name} (<code>{uid}</code>)\n"
+                     f"مبلغ اعلامی: <b>{amount:,}</b> تومان\n\n"
+                     f"پنل (مبلغ قابل ویرایش): /admin/receipts/{rid}/view\n"
+                     f"تأیید با همین مبلغ: /approve_receipt_{rid}\n"
                      f"رد: /reject_receipt_{rid}"),
             parse_mode="HTML")
     except Exception:
@@ -6150,20 +6150,24 @@ def handle_card2card_photo(message):
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
                      (m.text or "").startswith("/approve_receipt_"))
 def handle_approve_receipt(message):
-    rid = int((message.text or "").replace("/approve_receipt_", "").strip())
+    try:
+        rid = int((message.text or "").replace("/approve_receipt_", "").strip())
+    except ValueError:
+        bot.reply_to(message, "❌ شناسه رسید نامعتبر است."); return
     from db import update_card_receipt, get_card_receipts
     from db import get_wallet_balance, add_wallet_balance
     receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
     if not receipts:
         bot.reply_to(message, "رسید یافت نشد یا قبلاً بررسی شده."); return
     r = receipts[0]
+    amount = int(r["amount"] or 0)
     update_card_receipt(rid, "approved", "تأیید توسط ادمین")
-    add_wallet_balance(r["user_id"], r["amount"])
-    bot.reply_to(message, f"✅ رسید #{rid} تأیید شد. {r['amount']:,} تومان به کیف پول افزوده شد.")
+    add_wallet_balance(r["user_id"], amount)
+    bot.reply_to(message, f"✅ رسید #{rid} تأیید شد. {amount:,} تومان به کیف پول افزوده شد.")
     try:
         bot.send_message(r["user_id"],
             f"✅ پرداخت شما تأیید شد!\n"
-            f"مبلغ <b>{r['amount']:,}</b> تومان به کیف پول شما اضافه شد.",
+            f"مبلغ <b>{amount:,}</b> تومان به کیف پول شما اضافه شد.",
             parse_mode="HTML")
     except Exception: pass
 
@@ -6171,7 +6175,10 @@ def handle_approve_receipt(message):
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
                      (m.text or "").startswith("/reject_receipt_"))
 def handle_reject_receipt(message):
-    rid = int((message.text or "").replace("/reject_receipt_", "").strip())
+    try:
+        rid = int((message.text or "").replace("/reject_receipt_", "").strip())
+    except ValueError:
+        bot.reply_to(message, "❌ شناسه رسید نامعتبر است."); return
     from db import update_card_receipt, get_card_receipts
     receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
     if not receipts:
