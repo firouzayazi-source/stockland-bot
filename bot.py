@@ -5059,12 +5059,9 @@ def handle_callbacks(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         user_states[uid] = {"mode": "card2card_amount"}
         text_msg = (
-            "💳 <b>پرداخت کارت‌به‌کارت</b>\n\n"
-            "مبلغ مورد نظر را به حساب زیر واریز کنید:\n\n"
-            "💳 شماره کارت:\n"
-            "<code>6037701608004393</code>\n"
-            "به نام: <b>سید فیروز ایازی</b>\n\n"
-            "سپس <b>مبلغ واریزی (به تومان)</b> را وارد کنید:"
+            "💳 <b>شارژ کیف پول — کارت‌به‌کارت</b>\n\n"
+            "لطفاً مبلغ مورد نظر خود را <b>به تومان</b> جهت شارژ کیف پول وارد کنید:\n\n"
+            "(حداقل ۱,۰۰۰ تومان — فقط عدد، مثلاً: 500000)"
         )
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
@@ -6120,10 +6117,17 @@ def handle_card2card_amount(message):
         return
     amount = int(txt)
     user_states[uid] = {"mode": "card2card_receipt", "amount": amount}
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
     bot.reply_to(message,
-        f"✅ مبلغ: <b>{amount:,}</b> تومان\n\n"
-        "حالا <b>عکس رسید واریز</b> را ارسال کنید:",
-        parse_mode="HTML")
+        f"✅ مبلغ شارژ: <b>{amount:,}</b> تومان\n\n"
+        "لطفاً این مبلغ را به کارت زیر واریز کنید:\n\n"
+        "💳 شماره کارت:\n"
+        "<code>6037701608004393</code>\n"
+        "به نام: <b>سید فیروز ایازی</b>\n\n"
+        "سپس <b>عکس رسید واریز</b> را همین‌جا ارسال کنید.\n"
+        "(برای تغییر مبلغ، فقط عدد جدید را بفرستید)",
+        parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(
