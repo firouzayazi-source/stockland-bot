@@ -1917,17 +1917,29 @@ def _show_order_summary(chat_id, uid, product, category, pid):
     final     = max(0, base - discount)
     wallet_bal = get_wallet_balance(uid)
 
+    # آیا نمایش همکاری فعال است؟ (همکار تاییدشده + قیمت همکاری معتبر + بدون فروش فوری)
+    _partner_view = (
+        (not _fl) and is_partner_approved(uid)
+        and _pp and int(_pp) > 0 and int(_pp) < int(_p)
+    )
+
     lines = [f"🛒 <b>{title}</b>\n"]
     if _fl:
         lines.append(f"⚡️ <b>فروش فوری {_fl['percent']}٪ فعال است!</b> ⏰ تا {_fl['left_str']} دیگر")
         lines.append(f"مبلغ کالا: <s>{int(raw_base):,}</s> ← <b>{base:,}</b> تومان 🔥")
         lines.append("🎟 در زمان فروش فوری، کد تخفیف قابل استفاده نیست.")
+    elif _partner_view:
+        # نمایش انگیزشی برای همکار: قیمت واقعی مشتری (خط‌خورده) + مبلغ قابل پرداخت همکار
+        lines.append(f"💰 قیمت واقعی محصول: <s>{int(_p):,}</s> تومان")
+        lines.append(f"🤝 مبلغ قابل پرداخت شما: <b>{base:,}</b> تومان")
     else:
         lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
     if discount > 0:
         lines.append(f"🎟 کد تخفیف: <code>{code_name}</code>")
         lines.append(f"💸 تخفیف: <b>−{discount:,}</b> تومان")
-    lines.append(f"\n💰 مبلغ قابل پرداخت: <b>{final:,}</b> تومان")
+    # خط «مبلغ قابل پرداخت» برای همکارِ بدون کد تخفیف تکراری است، پس حذف می‌شود
+    if discount > 0 or not _partner_view:
+        lines.append(f"\n💰 مبلغ قابل پرداخت: <b>{final:,}</b> تومان")
     if 0 < wallet_bal < final:
         lines.append(f"👛 موجودی کیف‌پول: <b>{wallet_bal:,}</b> تومان")
         lines.append(f"💳 باقیمانده از درگاه: <b>{final - wallet_bal:,}</b> تومان")
