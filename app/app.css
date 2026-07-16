@@ -1,0 +1,111 @@
+/* ── فونت وزیرمتن (self-host از vendor/fonts) ─────────────────────────── */
+@font-face {
+  font-family: 'Vazirmatn'; font-weight: 400; font-display: swap;
+  src: url('vendor/fonts/Vazirmatn-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Vazirmatn'; font-weight: 500; font-display: swap;
+  src: url('vendor/fonts/Vazirmatn-Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Vazirmatn'; font-weight: 700; font-display: swap;
+  src: url('vendor/fonts/Vazirmatn-Bold.woff2') format('woff2');
+}
+
+:root {
+  --f7-font-family: 'Vazirmatn', -apple-system, 'SF Pro Text', Segoe UI, Roboto, sans-serif;
+  --f7-theme-color: #007aff;
+  --sl-card-bg: #ffffff;
+  --sl-muted: #8e8e93;
+  --sl-page-bg: #f2f2f7;
+}
+html.dark {
+  --sl-card-bg: #1c1c1e;
+  --sl-muted: #98989e;
+  --sl-page-bg: #000000;
+}
+
+.page { background: var(--sl-page-bg); }
+.navbar .title, .navbar .title-large-text { font-weight: 700; }
+
+/* ── لیست کارت‌ها ─────────────────────────────────────────────────────── */
+.sl-list { padding: 4px 16px calc(16px + var(--f7-safe-area-bottom)); }
+
+.sl-card {
+  background: var(--sl-card-bg);
+  border-radius: 18px;
+  margin: 14px 0;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 6px 20px rgba(0,0,0,.05);
+  transform: translateZ(0);
+  transition: transform .15s ease;
+  cursor: pointer;
+}
+.sl-card:active { transform: scale(.977); }
+.sl-card img.sl-cover {
+  width: 100%; height: 168px; object-fit: cover; display: block;
+  background: rgba(120,120,128,.12);
+}
+.sl-card-content { padding: 13px 16px 14px; }
+.sl-card-title { font-weight: 700; font-size: 16px; line-height: 1.5; }
+.sl-card-excerpt {
+  color: var(--sl-muted); font-size: 13.5px; line-height: 1.7; margin-top: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sl-card-date { color: var(--sl-muted); font-size: 11.5px; margin-top: 8px; direction: ltr; text-align: right; }
+
+/* ── حالت خالی و خطا ──────────────────────────────────────────────────── */
+.sl-empty { text-align: center; color: var(--sl-muted); padding: 72px 24px; }
+.sl-empty .sl-emoji { font-size: 44px; display: block; margin-bottom: 12px; }
+
+/* ── اسکلتون لودینگ ───────────────────────────────────────────────────── */
+.sl-skel {
+  background: var(--sl-card-bg); border-radius: 18px; margin: 14px 0; padding: 16px;
+}
+.sl-skel .b {
+  height: 14px; border-radius: 7px; margin: 10px 0;
+  background: linear-gradient(90deg, rgba(120,120,128,.12) 25%, rgba(120,120,128,.22) 50%, rgba(120,120,128,.12) 75%);
+  background-size: 400% 100%;
+  animation: sl-shimmer 1.3s infinite;
+}
+.sl-skel .b.w60 { width: 60%; } .sl-skel .b.w90 { width: 90%; } .sl-skel .b.w40 { width: 40%; }
+@keyframes sl-shimmer { 0% {background-position: 100% 0} 100% {background-position: -100% 0} }
+
+/* ── متن کامل پست ─────────────────────────────────────────────────────── */
+.sl-post-body { padding: 4px 18px calc(24px + var(--f7-safe-area-bottom)); }
+.sl-post-body img.sl-cover {
+  width: 100%; border-radius: 16px; margin: 12px 0 4px; display: block;
+}
+.sl-post-title { font-size: 20px; font-weight: 700; line-height: 1.6; margin: 14px 0 2px; }
+.sl-post-date { color: var(--sl-muted); font-size: 12px; margin-bottom: 10px; direction: ltr; text-align: right; }
+.sl-post-text { font-size: 15.5px; line-height: 2; white-space: normal; }
+
+/* ── آیکون‌های تب‌بار (SVG) ───────────────────────────────────────────── */
+.tabbar .icon svg { width: 26px; height: 26px; display: block; }
+.tabbar-label { font-family: var(--f7-font-family); }
+
+/* ── بنر نصب ──────────────────────────────────────────────────────────── */
+.sl-install-hint {
+  position: fixed; z-index: 6000;
+  left: 12px; right: 12px;
+  bottom: calc(64px + var(--f7-safe-area-bottom));
+  background: var(--sl-card-bg);
+  border-radius: 16px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.18);
+  padding: 12px 14px;
+  display: flex; align-items: center; gap: 10px;
+}
+.sl-install-text { flex: 1; font-size: 12.5px; line-height: 1.7; }
+.sl-install-text b { display: block; font-size: 13.5px; }
+.sl-install-text span { color: var(--sl-muted); }
+.sl-install-btn {
+  background: var(--f7-theme-color); color: #fff; border: 0;
+  border-radius: 10px; padding: 8px 16px; font-size: 13px; font-family: inherit;
+}
+.sl-install-close {
+  background: rgba(120,120,128,.14); color: var(--sl-muted); border: 0;
+  border-radius: 50%; width: 26px; height: 26px; font-size: 12px; flex: none;
+}
+
+/* داخل تلگرام: بنر نصب و ناحیه‌های اضافی مخفی */
+html.in-telegram .sl-install-hint { display: none !important; }
