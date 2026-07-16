@@ -4098,6 +4098,22 @@ def _pre_handle_card2card_amount(message):
     return handle_card2card_amount(message)
 
 
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt")
+def _pre_handle_card2card_receipt_text(message):
+    """متن در مرحله‌ی رسید — قبل از catch-all ادمین: راهنمایی یا اصلاح مبلغ."""
+    uid = message.from_user.id
+    txt = (message.text or "").strip().replace(",", "").replace("٬", "")
+    if txt.isdigit() and int(txt) >= 1000:
+        user_states[uid] = {"mode": "card2card_receipt", "amount": int(txt)}
+        bot.reply_to(message,
+            f"✅ مبلغ به <b>{int(txt):,}</b> تومان تغییر کرد.\n"
+            "حالا عکس رسید را بفرستید:", parse_mode="HTML")
+        return
+    bot.reply_to(message,
+        "📷 لطفاً <b>عکس رسید</b> را ارسال کنید (نه متن).\n"
+        "برای تغییر مبلغ، فقط عدد جدید را بفرستید.", parse_mode="HTML")
+
+
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "payout_collect_bank")
 def _pre_handle_payout_bank_early(message):
     return handle_payout_collect_bank(message)
@@ -6111,19 +6127,40 @@ def handle_card2card_amount(message):
 
 
 @bot.message_handler(
-    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt",
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") in ("card2card_receipt", "card2card_amount"),
     content_types=["photo"]
 )
 def handle_card2card_photo(message):
     uid = message.from_user.id
-    st  = user_states.pop(uid, {})
+    st  = user_states.get(uid) or {}
+
+    # عکس قبل از وارد کردن مبلغ — راهنمایی به‌جای سکوت
+    if st.get("mode") == "card2card_amount":
+        bot.reply_to(message,
+            "❗️ اول <b>مبلغ واریزی (به تومان)</b> را به صورت عدد بفرستید،\n"
+            "بعد عکس رسید را ارسال کنید.",
+            parse_mode="HTML")
+        return
+
     amount  = int(st.get("amount", 0))
     file_id = message.photo[-1].file_id
 
-    from db import save_card_receipt, ensure_card_receipts_schema
-    ensure_card_receipts_schema()
-    rid = save_card_receipt(uid, amount, file_id)
+    try:
+        from db import save_card_receipt, ensure_card_receipts_schema
+        ensure_card_receipts_schema()
+        rid = save_card_receipt(uid, amount, file_id)
+    except Exception as ex:
+        bot.reply_to(message,
+            "⚠️ خطا در ثبت رسید. لطفاً چند لحظه بعد دوباره عکس را بفرستید.")
+        try:
+            bot.send_message(ADMIN_ID,
+                f"🐞 خطای ثبت رسید کارت‌به‌کارت (user {uid}):\n"
+                f"<code>{type(ex).__name__}: {ex}</code>", parse_mode="HTML")
+        except Exception:
+            pass
+        return
 
+    user_states.pop(uid, None)
     bot.reply_to(message,
         f"رسید شما ثبت شد ✅\n"
         f"شناسه پیگیری: <code>#{rid}</code>\n\n"
