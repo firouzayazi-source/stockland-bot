@@ -4916,6 +4916,17 @@ def save_card_receipt(user_id: int, amount: int, file_id: str) -> int:
     ensure_card_receipts_schema()
     conn = _get_connection()
     try:
+        from db_conn import is_postgres as _is_pg
+        if _is_pg():
+            # Postgres: lastrowid کار نمی‌کند — باید RETURNING id استفاده شود
+            cur = conn.execute(
+                "INSERT INTO card_receipts (user_id,amount,file_id) VALUES (?,?,?) RETURNING id;",
+                (user_id, amount, file_id))
+            row = cur.fetchone()
+            conn.commit()
+            if row is None:
+                return 0
+            return int(row["id"] if hasattr(row, "keys") else row[0])
         cur = conn.execute(
             "INSERT INTO card_receipts (user_id,amount,file_id) VALUES (?,?,?);",
             (user_id, amount, file_id))
