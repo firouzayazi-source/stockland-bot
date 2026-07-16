@@ -378,14 +378,10 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     if _flash_sale:
         _price_line = f"💰 قیمت: <s>{_raw_base:,}</s> ← <b>{int(eff_price):,}</b> تومان 🔥\n"
     elif partner_ok_view and partner_price and int(partner_price) > 0 and int(partner_price) < int(price):
-        saving = int(price) - int(eff_price)
-        pct = round(saving * 100 / int(price))
-        # طراحی سه‌سطحی: قیمت عادی، قیمت همکاری، سود
-        # با فاصله‌گذاری خفیف که در تلگرام شفاف‌تر نمایش داده می‌شود
+        # نمایش دو‌خطی ساده برای همکار: قیمت واقعی (خط‌خورده) + مبلغ قابل پرداخت
         _price_line = (
-            f"💰 قیمت مشتری: <s>{int(price):,}</s> تومان\n"
-            f"🤝 قیمت همکاری: <b>{int(eff_price):,}</b> تومان\n"
-            f"💎 سود شما: <b>{saving:,}</b> تومان (<b>٪{pct}</b> تخفیف)\n"
+            f"💰 قیمت واقعی محصول: <s>{int(price):,}</s> تومان\n"
+            f"🤝 مبلغ قابل پرداخت شما: <b>{int(eff_price):,}</b> تومان\n"
         )
     else:
         _price_line = f"💰 قیمت: <b>{int(eff_price):,}</b> تومان\n"
