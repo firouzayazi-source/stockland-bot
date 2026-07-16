@@ -193,3 +193,51 @@ async def api_content_item(cid: int):
         "image_url": it.get("image_url") or "",
         "created_at": str(it.get("created_at") or "")[:16],
     }}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── دسته‌بندی‌ها (عمومی) ──────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/categories")
+async def api_categories():
+    """درخت دسته‌بندی‌ها برای PWA — فعال‌ها، مرتب‌شده."""
+    from db import get_root_categories, get_subcategories, get_category_products
+    roots = [dict(r) for r in get_root_categories(active_only=True)]
+    from db import apply_flash_price
+    out = []
+    for rc in roots:
+        subs = [dict(s) for s in get_subcategories(int(rc["id"]), active_only=True)]
+        # محصولات دسته اصلی (بدون زیردسته)
+        prods = [dict(p) for p in get_category_products(int(rc["id"]), active_only=True)]
+        for sub in subs:
+            sub["products"] = []
+            for p in get_category_products(int(sub["id"]), active_only=True):
+                p = dict(p)
+                base = int(p.get("price") or 0)
+                eff, fl = apply_flash_price(int(p["id"]), base)
+                p["effective_price"] = int(eff)
+                p["flash_active"] = bool(fl)
+                p["partner_price"] = int(p.get("partner_price") or 0)
+                sub["products"].append(p)
+        cat_out = {
+            "id": int(rc["id"]), "name": rc.get("name"), "emoji": rc.get("emoji") or "",
+            "slug": rc.get("slug") or "",
+            "subcategories": [{
+                "id": int(s["id"]), "name": s.get("name"), "emoji": s.get("emoji") or "",
+                "products": s["products"]
+            } for s in subs],
+        }
+        # اگر محصولات مستقیم زیر دسته اصلی هم داشت
+        for p in prods:
+            p = dict(p)
+            base = int(p.get("price") or 0)
+            eff, fl = apply_flash_price(int(p["id"]), base)
+            p["effective_price"] = int(eff)
+            p["flash_active"] = bool(fl)
+            p["partner_price"] = int(p.get("partner_price") or 0)
+            if not cat_out.get("products"):
+                cat_out["products"] = []
+            cat_out["products"].append(p)
+        out.append(cat_out)
+    return {"ok": True, "categories": out}
