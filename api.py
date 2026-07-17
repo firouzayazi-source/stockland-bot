@@ -162,7 +162,7 @@ async def api_health():
 async def api_content_list(kind: str = "", limit: int = 50):
     """فهرست محتوا برای PWA — kind: tutorial | news | feature (خالی = همه)."""
     from db import get_app_content
-    kind = kind if kind in ("tutorial", "news", "feature") else None
+    kind = kind if kind in ("tutorial", "news", "feature", "daily") else None
     items = get_app_content(kind=kind, active_only=True, limit=min(int(limit or 50), 100))
     out = []
     for it in items:
@@ -241,3 +241,30 @@ async def api_categories():
             cat_out["products"].append(p)
         out.append(cat_out)
     return {"ok": True, "categories": out}
+
+
+@router.get("/bot-info")
+async def api_bot_info():
+    """اطلاعات عمومی ربات — یوزرنیم برای ساخت دیپ‌لینک در PWA."""
+    try:
+        from bot import _bot_username
+        u = _bot_username()
+    except Exception:
+        u = ""
+    return {"ok": True, "username": u or "stock_land_ir"}
+
+
+@router.get("/content/daily")
+async def api_daily_post():
+    """آخرین پست روزانه (نوع daily) — برای بخش خانه‌ی PWA."""
+    from db import get_app_content
+    items = get_app_content(kind="daily", active_only=True, limit=1)
+    if not items:
+        return {"ok": True, "item": None}
+    it = items[0]
+    return {"ok": True, "item": {
+        "id": it["id"], "kind": "daily", "title": it.get("title"),
+        "body": it.get("body") or "",
+        "image_url": it.get("image_url") or "",
+        "created_at": str(it.get("created_at") or "")[:16],
+    }}

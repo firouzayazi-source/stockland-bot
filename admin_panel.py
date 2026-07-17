@@ -10929,7 +10929,7 @@ async def webhook_switch_impl(request: Request, mode: str):
 # ══════════════════════════════════════════════════════════════════════════
 APP_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_media")
 
-_KIND_LABELS = {"tutorial": "📚 آموزش", "news": "📰 خبر", "feature": "✨ امکانات"}
+_KIND_LABELS = {"tutorial": "📚 آموزش", "news": "📰 خبر", "feature": "✨ امکانات", "daily": "📋 لیست روزانه"}
 
 
 @router.get("/app-content", response_class=HTMLResponse)
