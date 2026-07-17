@@ -67,9 +67,10 @@ html.dark .sl-search{background:rgba(255,255,255,.12);color:#98989E}
 /* ═══ چیپس ═══ */
 .sl-chips{display:flex;gap:8px;overflow-x:auto;padding:12px 20px 2px;scrollbar-width:none}
 .sl-chips::-webkit-scrollbar{display:none}
-.sl-chip{flex:none;padding:8px 15px;border-radius:999px;background:var(--card);
- font-size:13px;font-weight:600;color:var(--mu);border:1px solid var(--ln);cursor:pointer;transition:.15s}
-.sl-chip.on{background:var(--ink);color:var(--bg);border-color:transparent}
+.sl-chip{flex:none;padding:10px 18px;border-radius:13px;background:var(--card);
+ font-size:13px;font-weight:700;color:var(--mu);border:1.5px solid var(--ln);cursor:pointer;
+ transition:.15s;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.sl-chip.on{background:var(--br);color:#fff;border-color:var(--br);box-shadow:0 2px 8px rgba(10,99,255,.25)}
 
 /* ═══ خبرهای افقی ═══ */
 .sl-hrow{display:flex;gap:10px;overflow-x:auto;padding:12px 20px 6px;scrollbar-width:none}
