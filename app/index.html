@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no">
 <title>استوک‌لند</title>
-<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme:light)">
+<meta name="theme-color" content="#0A63FF" media="(prefers-color-scheme:light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme:dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="استوک‌لند">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="stylesheet" href="vendor/framework7-bundle-rtl.min.css">
-<link rel="stylesheet" href="app.css?v=3">
+<link rel="stylesheet" href="app.css?v=4">
 <script src="https://telegram.org/js/telegram-web-app.js" onerror="void(0)"></script>
 </head>
 <body>
@@ -24,16 +24,16 @@
   <div class="toolbar toolbar-bottom tabbar tabbar-icons">
    <div class="toolbar-inner">
     <a href="#tab-home" class="tab-link tab-link-active">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>
+     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>
      <span class="tabbar-label">خانه</span></a>
     <a href="#tab-shop" class="tab-link">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 7h12l1.5 13.5h-15z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/></svg></span>
+     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 7h12l1.5 13.5h-15z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/></svg></span>
      <span class="tabbar-label">فروشگاه</span></a>
     <a href="#tab-learn" class="tab-link">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
+     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
      <span class="tabbar-label">آموزش</span></a>
     <a href="#tab-me" class="tab-link">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 5-6 8-6s6.5 2 8 6"/></svg></span>
+     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 5-6 8-6s6.5 2 8 6"/></svg></span>
      <span class="tabbar-label">حساب</span></a>
    </div>
   </div>
@@ -43,20 +43,33 @@
    <!-- خانه -->
    <div id="tab-home" class="page-content tab tab-active ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
-    <div class="sl-head"><div class="sl-eyebrow" id="today-date"></div><div class="sl-big">استوک‌لند</div></div>
-    <div class="sl-search" id="search-bar">
-     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-     جستجو در محصولات و آموزش‌ها
+    <!-- هدر گرادیانی -->
+    <div class="sl-header-gradient">
+     <div class="sl-header-top">
+      <img src="icons/icon-192.png" class="sl-header-logo" alt="SL">
+      <div class="sl-header-info">
+       <div class="sl-header-brand">استوک‌لند</div>
+       <div class="sl-header-sub" id="today-date"></div>
+      </div>
+     </div>
+     <div class="sl-search" id="search-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span>جستجو در محصولات و آموزش‌ها</span>
+     </div>
     </div>
-    <div class="sl-hero">
-     <img src="icons/icon-192.png" class="sl-hero-logo" alt="SL">
-     <div class="sl-hero-t">استوک‌لند — فروشگاه دیجیتال</div>
-     <div class="sl-hero-s">تحویل فوری، گارانتی واقعی — همان کیفیت ربات، این‌بار با یک اپ کامل.</div>
-     <span class="sl-hero-cta" data-tab="tab-shop">🛒 مشاهده فروشگاه</span>
-    </div>
-    <div class="sl-sec"><b>لیست روزانه</b><span class="sl-livebadge"><span class="sl-dot"></span><span id="ticker-time">به‌روز</span></span></div>
+
+    <!-- دسته‌بندی دایره‌ای -->
+    <div class="sl-sec"><b>دسته‌بندی‌ها</b></div>
+    <div class="sl-cat-circles" id="home-cats"></div>
+
+    <!-- لیست روزانه -->
+    <div class="sl-sec"><b>قیمت لحظه‌ای</b><span class="sl-livebadge"><span class="sl-dot"></span><span id="ticker-time">به‌روز</span></span></div>
     <div class="sl-ticker" id="ticker-row"></div>
+
+    <!-- پست روزانه -->
     <div id="daily-post"></div>
+
+    <!-- اخبار -->
     <div class="sl-sec"><b>تازه‌ها</b><a class="sl-link" data-tab="tab-learn">همه</a></div>
     <div class="sl-hrow" id="news-row"></div>
     <div style="height:20px"></div>
@@ -66,7 +79,7 @@
    <div id="tab-shop" class="page-content tab ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-head"><div class="sl-eyebrow" id="shop-count"></div><div class="sl-big">فروشگاه</div></div>
-    <div class="sl-chips" id="cat-chips"></div>
+    <div class="sl-cat-circles sl-cat-circles-sm" id="shop-cats"></div>
     <div class="sl-plist" id="prod-list"></div>
     <div style="height:20px"></div>
    </div>
@@ -94,37 +107,30 @@
   </div>
  </div>
 
- <!-- پاپ‌آپ محصول -->
- <div class="popup" id="prod-popup">
-  <div class="view"><div class="page">
-   <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner">
-    <div class="title" id="pp-title">​</div>
-    <div class="right"><a href="#" class="link popup-close">بستن</a></div>
-   </div></div>
-   <div class="page-content" id="pp-body"></div>
+ <!-- پاپ‌آپ‌ها -->
+ <div class="popup" id="prod-popup"><div class="view"><div class="page">
+  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner">
+   <div class="title" id="pp-title">​</div>
+   <div class="right"><a href="#" class="link popup-close">بستن</a></div>
   </div></div>
- </div>
+  <div class="page-content" id="pp-body"></div>
+ </div></div></div>
 
- <!-- پاپ‌آپ پست -->
- <div class="popup" id="post-popup">
-  <div class="view"><div class="page">
-   <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner">
-    <div class="title" id="post-title">​</div>
-    <div class="right"><a href="#" class="link popup-close">بستن</a></div>
-   </div></div>
-   <div class="page-content sl-post-body" id="post-body"></div>
+ <div class="popup" id="post-popup"><div class="view"><div class="page">
+  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner">
+   <div class="title" id="post-title">​</div>
+   <div class="right"><a href="#" class="link popup-close">بستن</a></div>
   </div></div>
- </div>
+  <div class="page-content sl-post-body" id="post-body"></div>
+ </div></div></div>
 
- <!-- بنر نصب -->
  <div id="install-hint" class="sl-install-hint" style="display:none">
   <div class="sl-install-text"><b>نصب اپ روی گوشی</b><span id="install-hint-text"></span></div>
   <button id="install-btn" class="sl-install-btn" style="display:none">نصب</button>
   <button id="install-close" class="sl-install-close">✕</button>
  </div>
 </div>
-
 <script src="vendor/framework7-bundle.min.js"></script>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
