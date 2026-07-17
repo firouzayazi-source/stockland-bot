@@ -118,9 +118,10 @@ function openP(pid){
       (f?'<div class="sl-pp-flash"><span class="old">'+fmt(bs)+' تومان</span> <span class="tag">⚡️ فروش فوری</span></div>':'')+
       '<div class="sl-pp-price">'+fmt(e)+' <small>تومان</small></div></div>'+
       (hs?'<div class="sl-pp-stock">'+(ok?'✅ موجود — '+p.stock+' عدد':'❌ ناموجود')+'</div>':'')+
+      '<div class="sl-pp-divider"></div>'+
       (p.description?'<div class="sl-pp-desc">'+nl2br(p.description)+'</div>':'')+
       '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+'" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">'+
-      (hs&&!ok?'اطلاع‌رسانی موجود شدن':'خرید از ربات')+'</a>';
+      (hs&&!ok?'🔔 اطلاع‌رسانی موجود شدن':'🛒 خرید از ربات')+'</a>';
   }).catch(function(){b.innerHTML=err('خطا')});
 }
 
