@@ -10,8 +10,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="استوک‌لند">
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/framework7-bundle-rtl.min.css">
 <link rel="stylesheet" href="app.css">
 <script src="https://telegram.org/js/telegram-web-app.js" onerror="void(0)"></script>
@@ -42,32 +43,37 @@
   <div class="tabs">
 
    <!-- ── خانه ── -->
-   <div id="tab-home" class="page-content tab tab-active">
+   <div id="tab-home" class="page-content tab tab-active ptr-content" data-ptr-distance="55" data-ptr-mousewheel="false">
+    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-head"><div class="sl-eyebrow" id="today-date"></div><div class="sl-big">استوک‌لند</div></div>
     <div class="sl-search" id="search-bar">
      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
      جستجو در محصولات و آموزش‌ها
     </div>
     <div class="sl-hero">
-     <div class="sl-hero-sl">SL</div>
+     <img src="icons/icon-192.png" class="sl-hero-logo" alt="SL">
      <div class="sl-hero-t">اپل آیدی آماده، در چند ثانیه</div>
      <div class="sl-hero-s">تحویل فوری، گارانتی واقعی — همان کیفیت ربات، این‌بار با یک اپ کامل.</div>
      <span class="sl-hero-cta" data-tab="tab-shop">مشاهده فروشگاه</span>
     </div>
     <div class="sl-sec"><b>لیست روزانه</b><span class="sl-livebadge"><span class="sl-dot"></span> <span id="ticker-time">به‌روز</span></span></div>
     <div class="sl-ticker" id="ticker-row"></div>
+    <div id="daily-post"></div>
     <div class="sl-sec"><b>تازه‌ها</b><a class="sl-link" data-tab="tab-learn">همه</a></div>
     <div class="sl-hrow" id="news-row"></div>
    </div>
 
    <!-- ── فروشگاه ── -->
-   <div id="tab-shop" class="page-content tab">
+   <div id="tab-shop" class="page-content tab ptr-content" data-ptr-distance="55">
+    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-head"><div class="sl-eyebrow" id="shop-count"></div><div class="sl-big">فروشگاه</div></div>
     <div class="sl-chips" id="cat-chips"></div>
     <div class="sl-plist" id="prod-list"></div>
    </div>
 
    <!-- ── آموزش ── -->
+   <div id="tab-learn" class="page-content tab ptr-content" data-ptr-distance="55">
+    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
    <div id="tab-learn" class="page-content tab">
     <div class="sl-head"><div class="sl-eyebrow">مرکز یادگیری</div><div class="sl-big">آموزش</div></div>
     <div class="sl-seg" id="learn-seg">
