@@ -19,7 +19,7 @@ import time
 from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, Request, HTTPException, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 router = APIRouter(prefix="/api/v1")
 
@@ -268,3 +268,119 @@ async def api_daily_post():
         "image_url": it.get("image_url") or "",
         "created_at": str(it.get("created_at") or "")[:16],
     }}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── خرید از اپ ───────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.post("/checkout")
+async def api_checkout(request: Request):
+    """
+    شروع خرید از PWA.
+    body: { product_id, payment_type: "wallet"|"gateway"|"combined",
+            wallet_amount?, initData }
+    برای wallet: کسر از کیف‌پول و ثبت سفارش.
+    برای gateway/combined: درخواست Zarinpal و بازگشت redirect_url.
+    """
+    uid = _get_uid(request)
+    if not uid:
+        raise HTTPException(401, "احراز هویت لازم است")
+
+    body = await request.json()
+    pid = int(body.get("product_id", 0))
+    ptype = str(body.get("payment_type", "wallet")).lower()
+
+    if not pid:
+        raise HTTPException(400, "product_id الزامی است")
+    if ptype not in ("wallet", "gateway", "combined"):
+        raise HTTPException(400, "payment_type نامعتبر")
+
+    from core.products import get_product
+    from db import (get_wallet_balance, subtract_wallet_balance,
+                    create_order, is_partner_approved)
+
+    prod = get_product(pid)
+    if not prod or not prod.get("is_active"):
+        raise HTTPException(404, "محصول یافت نشد")
+
+    # قیمت موثر (همکار یا عادی)
+    is_partner = is_partner_approved(uid)
+    partner_price = int(prod.get("partner_price") or 0)
+    base_price = int(prod["effective_price"])
+    final_price = (partner_price if is_partner and partner_price > 0 and partner_price < base_price
+                   else base_price)
+
+    wallet_bal = get_wallet_balance(uid)
+
+    if ptype == "wallet":
+        if wallet_bal < final_price:
+            raise HTTPException(400, f"موجودی کیف‌پول کافی نیست (موجودی: {wallet_bal:,} — نیاز: {final_price:,} تومان)")
+        ok = subtract_wallet_balance(uid, final_price)
+        if not ok:
+            raise HTTPException(400, "کسر از کیف‌پول ناموفق بود")
+        oid = create_order(uid, prod.get("category",""), prod["title"],
+                           final_price, product_id=pid,
+                           buyer_type="partner" if is_partner else "customer")
+        return {"ok": True, "method": "wallet", "order_id": oid,
+                "message": f"✅ خرید موفق! سفارش #{oid} ثبت شد."}
+
+    gateway_amount = final_price
+    wallet_used = 0
+    if ptype == "combined":
+        wallet_used = min(wallet_bal, final_price)
+        gateway_amount = final_price - wallet_used
+        if gateway_amount <= 0:
+            # کافیه از کیف‌پول
+            ok = subtract_wallet_balance(uid, final_price)
+            if not ok:
+                raise HTTPException(400, "کسر از کیف‌پول ناموفق بود")
+            oid = create_order(uid, prod.get("category",""), prod["title"],
+                               final_price, product_id=pid,
+                               buyer_type="partner" if is_partner else "customer")
+            return {"ok": True, "method": "wallet", "order_id": oid,
+                    "message": f"✅ خرید از کیف‌پول موفق! سفارش #{oid}"}
+
+    # درگاه زرین‌پال
+    import httpx
+    from config import WEBHOOK_BASE_URL
+    callback = WEBHOOK_BASE_URL.rstrip("/") + "/api/v1/payment/verify"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                "http://127.0.0.1:8001/payment/create",
+                json={
+                    "user_id": uid,
+                    "amount": gateway_amount,
+                    "wallet_reserved": wallet_used,
+                    "payment_type": "product",
+                    "product_id": pid,
+                    "chat_id": uid,
+                })
+        data = r.json()
+    except Exception as e:
+        raise HTTPException(502, f"خطا در اتصال به درگاه: {e}")
+
+    if r.status_code != 200 or not data.get("redirect_url"):
+        raise HTTPException(502, data.get("detail") or "درگاه پاسخ نداد")
+
+    return {"ok": True, "method": "gateway",
+            "redirect_url": data["redirect_url"],
+            "wallet_used": wallet_used,
+            "gateway_amount": gateway_amount}
+
+
+@router.get("/payment/verify")
+async def api_payment_verify(
+    request: Request, Authority: str = "", Status: str = ""):
+    """
+    زرین‌پال بعد از پرداخت به این آدرس redirect می‌کنه.
+    چون داخل مینی‌اپ هستیم، کاربر را به صفحه موفقیت در اپ برمی‌گردونیم.
+    """
+    from config import WEBHOOK_BASE_URL
+    base = WEBHOOK_BASE_URL.rstrip("/")
+    if Status != "OK" or not Authority:
+        return RedirectResponse(url=f"{base}/app/?payment=canceled")
+    # تأیید را به روت اصلی واگذار می‌کنیم
+    return RedirectResponse(
+        url=f"{base}/payment/callback?Authority={Authority}&Status={Status}")
