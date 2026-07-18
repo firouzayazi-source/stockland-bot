@@ -28,41 +28,31 @@ html.dark,:root.dark{
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
-/* ═══ هدر بزرگ iOS ═══ */
-.sl-head{padding:16px 20px 4px}
-.sl-eyebrow{font-size:11.5px;color:var(--mu);font-weight:500;letter-spacing:.3px}
-.sl-big{font-size:34px;font-weight:800;letter-spacing:-.6px;line-height:1.25;margin-top:2px}
-
-/* ═══ جستجو ═══ */
+/* ═══ هدر گرادیانی (Mira-style) ═══ */
+.sl-gradient-header{
+ background:linear-gradient(180deg,#5B6EF5 0%,#7B8FF7 35%,#A8B8FA 65%,var(--bg) 100%);
+ padding:calc(14px + env(safe-area-inset-top,0px)) 20px 22px;
+}
+html.dark .sl-gradient-header{
+ background:linear-gradient(180deg,#2D3A8C 0%,#3D4EA0 35%,#4A5DB3 65%,var(--bg) 100%);
+}
+.sl-hdr-top{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.sl-hdr-logo{width:42px;height:42px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.2)}
+.sl-hdr-brand{color:#fff;font-size:20px;font-weight:800}
+.sl-hdr-sub{color:rgba(255,255,255,.75);font-size:11.5px;margin-top:1px}
 .sl-search{
- margin:10px 20px 6px;background:rgba(120,120,128,.1);border-radius:12px;padding:10px 14px;
- color:var(--mu);font-size:14px;display:flex;gap:8px;align-items:center;cursor:pointer;
- transition:background .2s;
+ background:rgba(255,255,255,.92);border-radius:14px;padding:12px 14px;
+ color:#8E8E93;font-size:14px;display:flex;gap:8px;align-items:center;cursor:pointer;
+ box-shadow:0 2px 10px rgba(0,0,0,.08);
 }
-.sl-search:active{background:rgba(120,120,128,.18)}
-.sl-search svg{width:16px;height:16px;flex:none;opacity:.55}
+html.dark .sl-search{background:rgba(255,255,255,.12);color:#98989E}
+.sl-search svg{width:18px;height:18px;flex:none;opacity:.5}
+.sl-search span{flex:1}
 
-/* ═══ هیرو ═══ */
-.sl-hero{
- margin:12px 20px 0;border-radius:24px;overflow:hidden;position:relative;
- background:linear-gradient(145deg,#060E24 0%,#0B1B4A 30%,#0A45D6 65%,#3B82F6 100%);
- color:#fff;padding:22px 20px 20px;
-}
-.sl-hero::after{
- content:'';position:absolute;top:-60px;left:-40px;width:200px;height:200px;border-radius:50%;
- background:radial-gradient(circle,rgba(59,130,246,.35),transparent 70%);
-}
-.sl-hero-logo{width:52px;height:52px;border-radius:14px;margin-bottom:12px;display:block;position:relative;z-index:1;
- box-shadow:0 4px 16px rgba(0,0,0,.3)}
-.sl-hero-t{font-size:20px;font-weight:800;line-height:1.5;position:relative;z-index:1}
-.sl-hero-s{font-size:13px;opacity:.8;margin-top:6px;line-height:1.85;position:relative;z-index:1}
-.sl-hero-cta{
- margin-top:16px;display:inline-block;position:relative;z-index:1;
- background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);
- padding:10px 20px;border-radius:999px;font-size:13.5px;font-weight:700;cursor:pointer;
- transition:background .2s;
-}
-.sl-hero-cta:active{background:rgba(255,255,255,.28)}
+/* ═══ هدر معمولی (سایر تب‌ها) ═══ */
+.sl-head{padding:18px 20px 6px}
+.sl-eyebrow{font-size:12px;color:var(--mu);font-weight:500}
+.sl-big{font-size:32px;font-weight:800;letter-spacing:-.5px;line-height:1.35}
 
 /* ═══ سکشن ═══ */
 .sl-sec{padding:20px 20px 4px;display:flex;align-items:baseline;justify-content:space-between}
