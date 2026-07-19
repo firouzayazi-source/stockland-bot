@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="stylesheet" href="vendor/framework7-bundle-rtl.min.css">
-<link rel="stylesheet" href="app.css?v=21">
+<link rel="stylesheet" href="app.css?v=23">
 <script src="https://telegram.org/js/telegram-web-app.js" onerror="void(0)"></script>
 </head>
 <body>
@@ -58,12 +58,14 @@
      </div>
     </div>
 
-    <div class="sl-sec"><b>دسته‌بندی‌ها</b></div>
-    <div class="sl-chips" id="home-cats"></div>
+    <div class="sl-sec"><b>🔥 ویژه امروز</b><a class="sl-link" data-tab="tab-shop">همه محصولات</a></div>
+    <div class="sl-feat-row" id="featured-row"></div>
     <div class="sl-sec"><b>قیمت لحظه‌ای</b><span class="sl-livebadge"><span class="sl-dot"></span><span id="ticker-time">به‌روز</span></span></div>
     <div class="sl-ticker" id="ticker-row"></div>
     <div id="daily-post"></div>
-    <div class="sl-sec"><b>تازه‌ها</b><a class="sl-link" data-tab="tab-learn">همه</a></div>
+    <div class="sl-sec" id="learn-sec"><b>📚 بیاموز</b><a class="sl-link" data-tab="tab-learn">همه</a></div>
+    <div id="learn-card"></div>
+    <div class="sl-sec" id="news-sec"><b>📰 تازه‌ها</b></div>
     <div class="sl-hrow" id="news-row"></div>
     <div style="height:20px"></div>
    </div>
@@ -127,6 +129,6 @@
  </div>
 </div>
 <script src="vendor/framework7-bundle.min.js"></script>
-<script src="app.js?v=21"></script>
+<script src="app.js?v=23"></script>
 </body>
 </html>
