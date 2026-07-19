@@ -152,7 +152,7 @@ document.getElementById('shop-cats').addEventListener('click',function(e){
 /* ═══ پاپ‌آپ محصول ═══ */
 function openP(pid){
   var t=document.getElementById('pp-title'),b=document.getElementById('pp-body');
-  t.textContent='…';b.innerHTML=skel(2);app.popup.open('#prod-popup');
+  t.textContent='…';b.innerHTML=skel(2);app.popup.open('#prod-popup'); setTimeout(function(){ var cb=document.querySelector('[data-checkout]'); if(cb) cb.addEventListener('click',function(){openCheckout(cb.dataset.checkout)}); },300);
   api('/products/'+pid).then(function(d){
     var p=d.product||{};t.textContent=p.title||'';
     var f=p.flash_active,e=p.effective_price,bs=p.price,hs=p.stock!=null,ok=p.stock>0;
