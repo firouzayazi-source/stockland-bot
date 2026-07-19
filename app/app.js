@@ -165,7 +165,7 @@ function openP(pid){
       (p.description?'<div class="sl-pp-desc">'+nl2br(p.description)+'</div>':'')+
       (initData&&ok!==false?
         '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید از اپ</button>':
-        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+" href=\"https://t.me/\"+botUser+\"?start=buy_\"+p.id+'\" target=\"_blank\">'+
+        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+'" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">'+
         (hs&&!ok?'🔔 اطلاع‌رسانی موجود شدن':'🛒 خرید از ربات')+'</a>');
     setTimeout(function(){
       var bn=document.getElementById('sl-buy-'+p.id);
