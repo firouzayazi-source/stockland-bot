@@ -20,26 +20,96 @@ html.dark,:root.dark{
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 /* ═══ هیرو (Mira-style) ═══ */
 .sl-hero{
- background:linear-gradient(180deg,#5B6EF5 0%,#7B8FF7 30%,#A8B8FA 60%,#C8D3FC 85%,var(--bg) 100%);
- padding:calc(56px + env(safe-area-inset-top,0px)) 20px 28px;
- position:relative;z-index:1;
+ position:relative;z-index:1;overflow:hidden;
+ /* لوگو absolute روی hero = فضای بالا برابر navbar + logo + gap */
+ padding-top:calc(env(safe-area-inset-top,0px) + 44px + 76px + 30px);
+ padding-bottom:22px;padding-left:20px;padding-right:20px;
+ background:
+  /* ۱. لبه‌ها تیره (edge shading) */
+  linear-gradient(90deg,rgba(0,0,50,.22) 0%,transparent 24%,transparent 76%,rgba(0,0,50,.22) 100%),
+  /* ۲. glow اصلی — دقیقاً پشت لوگو، مرکز افقی، ۲۲٪ از بالا */
+  radial-gradient(58% 50% at 50% 22%,rgba(88,200,255,.52) 0%,rgba(68,155,255,.20) 38%,rgba(55,80,255,0) 66%),
+  /* ۳. ambient ملایم بالای hero */
+  radial-gradient(72% 38% at 50% 4%,rgba(110,145,255,.24) 0%,rgba(66,90,255,0) 58%),
+  /* ۴. vignette کلی */
+  radial-gradient(112% 96% at 50% 34%,transparent 40%,rgba(0,0,52,.22) 100%),
+  /* ۵. violet tint پایین — فقط احساس می‌شه */
+  radial-gradient(60% 20% at 50% 96%,rgba(82,44,190,.07) 0%,rgba(60,24,170,0) 60%),
+  /* ۶. base — Royal→Electric، پایین آبی نه خاکستری */
+  linear-gradient(180deg,
+    #4255FF 0%,
+    #4255FF 5%,
+    #4A5EFF 24%,
+    #5272FF 46%,
+    #6888FA 64%,
+    #96AEFA 80%,
+    var(--bg) 100%);
 }
 html.dark .sl-hero{
- background:linear-gradient(180deg,#2D3A8C 0%,#3D4EA0 30%,#4A5DB3 60%,#3A4A7A 85%,var(--bg) 100%);
+ background:
+  linear-gradient(90deg,rgba(0,0,40,.26) 0%,transparent 24%,transparent 76%,rgba(0,0,40,.26) 100%),
+  radial-gradient(58% 50% at 50% 22%,rgba(60,160,255,.38) 0%,rgba(48,120,255,.14) 38%,rgba(36,60,220,0) 66%),
+  radial-gradient(72% 38% at 50% 4%,rgba(80,118,255,.18) 0%,rgba(48,72,220,0) 58%),
+  radial-gradient(112% 96% at 50% 34%,transparent 40%,rgba(0,0,40,.26) 100%),
+  radial-gradient(60% 20% at 50% 96%,rgba(58,30,160,.06) 0%,rgba(42,16,140,0) 60%),
+  linear-gradient(180deg,
+    #2838D8 0%,
+    #2838D8 5%,
+    #3248E8 24%,
+    #3A58E0 46%,
+    #4A68CC 64%,
+    #3A4E90 80%,
+    var(--bg) 100%);
 }
-.sl-hero-inner{display:flex;flex-direction:column;align-items:flex-start}
-.sl-hero-logo{width:48px;height:48px;border-radius:14px;margin-bottom:12px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
-.sl-hero-brand{color:#fff;font-size:24px;font-weight:800;letter-spacing:-.3px}
-.sl-hero-sub{color:rgba(255,255,255,.75);font-size:12px;margin-top:3px}
-.sl-hero-tagline{color:rgba(255,255,255,.8);font-size:13px;font-weight:500;margin-top:10px;line-height:1.7}
+/* نویز ظریف */
+.sl-hero::before{
+ content:'';position:absolute;inset:0;pointer-events:none;z-index:1;
+ background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+ opacity:.028;mix-blend-mode:overlay;
+ -webkit-mask-image:linear-gradient(180deg,#000 0%,#000 62%,transparent 84%);
+ mask-image:linear-gradient(180deg,#000 0%,#000 62%,transparent 84%);
+}
+/* وینیت نرم */
+.sl-hero::after{
+ content:'';position:absolute;inset:0;pointer-events:none;z-index:1;
+ background:radial-gradient(130% 108% at 50% 28%,rgba(0,0,0,0) 52%,rgba(6,4,50,.14) 100%);
+ -webkit-mask-image:linear-gradient(180deg,#000 0%,#000 60%,transparent 82%);
+ mask-image:linear-gradient(180deg,#000 0%,#000 60%,transparent 82%);
+}
+/* لوگو: absolute، زیر navbar، وسط */
+.sl-hero-logo-abs{
+ position:absolute;
+ top:calc(env(safe-area-inset-top,0px) + 44px + 12px);
+ left:50%;transform:translateX(-50%);
+ z-index:3;
+}
+.sl-hero-logo-c{
+ width:76px;height:76px;
+ border-radius:0;/* لوگو جدید بدون پس‌زمینه — corner-radius لازم نیست */
+ display:block;
+ filter:drop-shadow(0 6px 24px rgba(20,80,255,.38)) drop-shadow(0 0 40px rgba(80,200,255,.28));
+}
+/* محتوا: بعد از لوگو */
+.sl-hero-inner{
+ position:relative;z-index:2;
+ display:flex;flex-direction:column;align-items:flex-start;width:100%;
+}
+.sl-hero-brand{color:#fff;font-size:22px;font-weight:800;letter-spacing:-.3px;
+ text-shadow:0 2px 10px rgba(8,8,80,.28);width:100%}
+.sl-hero-sub{color:rgba(255,255,255,.76);font-size:12px;margin-top:2px}
+.sl-hero-tagline{color:rgba(255,255,255,.80);font-size:13px;font-weight:500;margin-top:8px;line-height:1.7}
 .sl-search{
- margin-top:16px;width:100%;
- background:rgba(255,255,255,.92);border-radius:14px;padding:12px 14px;
+ margin-top:14px;
+ background:rgba(255,255,255,.94);border-radius:14px;padding:12px 14px;
  color:#8E8E93;font-size:14px;display:flex;gap:8px;align-items:center;cursor:pointer;
- box-shadow:0 2px 10px rgba(0,0,0,.08);
+ box-shadow:0 4px 16px rgba(10,14,80,.16);
+ width:100%;box-sizing:border-box;
 }
 html.dark .sl-search{background:rgba(255,255,255,.12);color:#98989E}
 .sl-search svg{width:18px;height:18px;flex:none;opacity:.5}
+/* بک‌کامپت */
+.sl-hero-logo-wrap{display:none}
+.sl-hero-logo{display:none}
 /* ═══ نوار ناوبری شناور ═══ */
 .sl-nav{
  position:fixed;top:0;left:0;right:0;z-index:100;

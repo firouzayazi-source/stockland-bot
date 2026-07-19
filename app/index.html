@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="stylesheet" href="vendor/framework7-bundle-rtl.min.css">
-<link rel="stylesheet" href="app.css?v=20">
+<link rel="stylesheet" href="app.css?v=21">
 <script src="https://telegram.org/js/telegram-web-app.js" onerror="void(0)"></script>
 </head>
 <body>
@@ -40,10 +40,14 @@
    <div id="tab-home" class="page-content tab tab-active ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
 
-    <!-- هیرو — گرادیان یکپارچه -->
+    <!-- هیرو — Mira-style -->
     <div class="sl-hero" id="sl-hero">
+     <!-- لوگو: absolute، دقیقاً زیر navbar، مرکز -->
+     <div class="sl-hero-logo-abs">
+      <img src="icons/logo-sl.png" class="sl-hero-logo-c" alt="SL">
+     </div>
+     <!-- محتوا: flow عادی -->
      <div class="sl-hero-inner">
-      <img src="icons/icon-192.png" class="sl-hero-logo" alt="SL">
       <div class="sl-hero-brand">استوک‌لند</div>
       <div class="sl-hero-sub" id="today-date"></div>
       <div class="sl-hero-tagline">فروشگاه دیجیتال — تحویل فوری، گارانتی واقعی</div>
@@ -123,6 +127,6 @@
  </div>
 </div>
 <script src="vendor/framework7-bundle.min.js"></script>
-<script src="app.js?v=20"></script>
+<script src="app.js?v=21"></script>
 </body>
 </html>
