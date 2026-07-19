@@ -33,9 +33,9 @@ var _h=0;
 function loadHome(){
   if(_h)return;_h=1;
   var tr=document.getElementById('ticker-row'),nr=document.getElementById('news-row'),
-      dp=document.getElementById('daily-post'),hc=document.getElementById('home-cats');
+      dp=document.getElementById('daily-post');
 
-  // دسته‌بندی‌ها
+  // دسته‌بندی‌ها — فقط برای فروشگاه
   api('/categories').then(function(d){
     cats=(d&&d.categories)||[];prods=[];
     cats.forEach(function(c){
@@ -44,23 +44,11 @@ function loadHome(){
         (s.products||[]).forEach(function(p){p._c=c.name;p._e=c.emoji;p._s=s.name;prods.push(p)});
       });
     });
-    renderCircles(hc,false);
-    // کلیک دایره‌ها → تب فروشگاه
-    hc.addEventListener('click',function(e){
-      var c=e.target.closest('.sl-cat-c');if(!c)return;
-      var lnk=document.querySelector('.tab-link[href="#tab-shop"]');if(lnk)lnk.click();
-      setTimeout(function(){
-        var slug=c.dataset.slug||c.dataset.name;
-        document.querySelectorAll('#shop-cats .sl-cat-c').forEach(function(x){
-          x.classList.toggle('on',(x.dataset.slug||x.dataset.name)===slug||(x.dataset.name==='همه'&&!slug));
-        });
-        renderP(c.dataset.name==='همه'?'':c.dataset.name);
-      },100);
-    });
-    // فروشگاه هم آماده بشه
     var sc=document.getElementById('shop-cats');
-    renderCircles(sc,true);
+    if(sc){renderCircles(sc,true);}
     document.getElementById('shop-count').textContent=prods.length+' محصول فعال';
+    // ویژه امروز — فلش‌سیل یا ۴ محصول اول
+    loadFeatured(prods);
   }).catch(function(){});
 
   // تیکر
@@ -90,11 +78,17 @@ function loadHome(){
 
   // اخبار
   nr.innerHTML=skel(1);
+  // آخرین آموزش
+  loadLearnCard();
+
   var colors=['linear-gradient(120deg,#123,#0A63FF)','linear-gradient(120deg,#1B2B1B,#22C55E)',
     'linear-gradient(120deg,#2B1B2B,#A855F7)','linear-gradient(120deg,#2B1B1B,#EF4444)',
     'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
   api('/content?kind=news&limit=6').then(function(d){
-    var it=(d&&d.items)||[];if(!it.length){nr.innerHTML='';return}
+    var it=(d&&d.items)||[];
+    var ns=document.getElementById('news-sec');
+    if(!it.length){nr.innerHTML='';if(ns)ns.style.display='none';return}
+    if(ns)ns.style.display='';
     nr.innerHTML=it.map(function(p,i){
       return '<div class="sl-mini" data-cid="'+p.id+'"><div class="sl-mini-cv" style="background:'+colors[i%colors.length]+'">'+
         (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'📰')+'</div>'+
@@ -102,7 +96,56 @@ function loadHome(){
     }).join('');
   }).catch(function(){nr.innerHTML=''});
 }
-window.loadHome=loadHome;loadHome();
+window.loadHome=loadHome;
+
+function loadFeatured(allProds){
+  var fr=document.getElementById('featured-row');if(!fr)return;
+  var featured=(allProds||[]).filter(function(p){return p.flash_active});
+  if(!featured.length)featured=(allProds||[]).slice(0,4);
+  if(!featured.length){fr.style.display='none';fr.previousElementSibling&&(fr.previousElementSibling.style.display='none');return}
+  fr.innerHTML=featured.slice(0,6).map(function(p){
+    var f=p.flash_active,e=p.effective_price,b=p.price;
+    return '<div class="sl-feat" data-pid="'+p.id+'">'+
+      '<div class="sl-feat-img">'+(p._e||'📦')+
+        (f?'<span class="sl-feat-badge">⚡️ فروش فوری</span>':'')+
+      '</div>'+
+      '<div class="sl-feat-body">'+
+        '<div class="sl-feat-name">'+esc(p.title)+'</div>'+
+        (f?'<div class="sl-feat-old">'+fmt(b)+' تومان</div>':'')+
+        '<div class="sl-feat-price">'+fmt(e)+' <small>تومان</small></div>'+
+        '<div class="sl-feat-btn">مشاهده و خرید</div>'+
+      '</div></div>';
+  }).join('');
+}
+window.loadFeatured=loadFeatured;
+
+function loadLearnCard(){
+  var lc=document.getElementById('learn-card');
+  var ls=document.getElementById('learn-sec');
+  if(!lc)return;
+  var kinds=['tutorial','news','feature'];
+  var idx=0;
+  function tryNext(){
+    if(idx>=kinds.length){lc.style.display='none';if(ls)ls.style.display='none';return}
+    api('/content?kind='+kinds[idx]+'&limit=1').then(function(d){
+      var it=(d&&d.items&&d.items[0]);
+      if(!it){idx++;tryNext();return}
+      var labels={tutorial:'📚 آموزش',news:'📰 خبر',feature:'✨ امکانات'};
+      lc.innerHTML='<div class="sl-learn-card" data-cid="'+it.id+'">'+
+        '<div class="sl-learn-img">'+(it.image_url?'<img src="'+esc(it.image_url)+'" alt="">':'📚')+'</div>'+
+        '<div class="sl-learn-body">'+
+          '<div class="sl-learn-tag">'+(labels[kinds[idx]]||'آموزش')+'</div>'+
+          '<div class="sl-learn-title">'+esc(it.title)+'</div>'+
+          '<div class="sl-learn-meta"><span>'+esc(it.created_at||'')+'</span></div>'+
+        '</div></div>';
+    }).catch(function(){idx++;tryNext();});
+    idx++;
+  }
+  tryNext();
+}
+window.loadLearnCard=loadLearnCard;
+
+loadHome();
 
 /* ═══ فروشگاه ═══ */
 var _s=0;
