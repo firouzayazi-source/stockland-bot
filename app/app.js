@@ -164,10 +164,26 @@ function openP(pid){
       '<div class="sl-pp-divider"></div>'+
       (p.description?'<div class="sl-pp-desc">'+nl2br(p.description)+'</div>':'')+
       (initData&&ok!==false?
-        '<button class="sl-pp-btn" onclick="openCheckout('+p.id+')">🛒 خرید از اپ</button>':
-        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+'" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">'+
+        '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید از اپ</button>':
+        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+" href=\"https://t.me/\"+botUser+\"?start=buy_\"+p.id+'\" target=\"_blank\">'+
         (hs&&!ok?'🔔 اطلاع‌رسانی موجود شدن':'🛒 خرید از ربات')+'</a>');
-  }).catch(function(){b.innerHTML=err('خطا')});
+    setTimeout(function(){
+      var bn=document.getElementById('sl-buy-'+p.id);
+      if(!bn)return;
+      bn.addEventListener('click',function(){
+        bn.textContent='⏳ صبر کنید...';bn.disabled=true;
+        fetch('https://panel.stland.ir/api/v1/checkout',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
+          body:JSON.stringify({product_id:p.id,payment_type:'gateway'})
+        }).then(function(r){return r.json()}).then(function(d){
+          if(d.redirect_url){if(tg&&tg.openLink)tg.openLink(d.redirect_url);else window.open(d.redirect_url,'_blank');}
+          else if(d.method==='wallet'){bn.textContent='✅ خرید موفق!';}
+          else{alert(d.detail||'خطا');bn.textContent='🛒 خرید از اپ';bn.disabled=false;}
+        }).catch(function(err){alert('خطا: '+err.message);bn.textContent='🛒 خرید از اپ';bn.disabled=false;});
+      });
+    },150);
+  }).catch(function(){b.innerHTML=err('خطا');});
 }
 
 /* ═══ آموزش ═══ */
@@ -342,7 +358,7 @@ window._doPay=function(method){
   if(btns) btns.querySelectorAll('button').forEach(function(x){x.disabled=true;x.textContent='⏳ در حال پردازش...'});
 
   api('/checkout',true).then(function(){}).catch(function(){});// warming
-  fetch('/api/v1/checkout',{
+  fetch('https://panel.stland.ir/api/v1/checkout',{
     method:'POST',
     headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
     body:JSON.stringify({product_id:_checkoutPid,payment_type:method})

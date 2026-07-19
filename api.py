@@ -301,13 +301,13 @@ async def api_checkout(request: Request):
                     create_order, is_partner_approved)
 
     prod = get_product(pid)
-    if not prod or not prod.get("is_active"):
+    if not prod or prod.get("is_active") in (0, False):
         raise HTTPException(404, "محصول یافت نشد")
 
     # قیمت موثر (همکار یا عادی)
     is_partner = is_partner_approved(uid)
     partner_price = int(prod.get("partner_price") or 0)
-    base_price = int(prod["effective_price"])
+    base_price = int(prod.get("effective_price") or prod.get("price") or 0)
     final_price = (partner_price if is_partner and partner_price > 0 and partner_price < base_price
                    else base_price)
 
@@ -319,7 +319,7 @@ async def api_checkout(request: Request):
         ok = subtract_wallet_balance(uid, final_price)
         if not ok:
             raise HTTPException(400, "کسر از کیف‌پول ناموفق بود")
-        oid = create_order(uid, prod.get("category",""), prod["title"],
+        oid = create_order(uid, prod.get("category",""), prod.get("title",""),
                            final_price, product_id=pid,
                            buyer_type="partner" if is_partner else "customer")
         return {"ok": True, "method": "wallet", "order_id": oid,
@@ -335,7 +335,7 @@ async def api_checkout(request: Request):
             ok = subtract_wallet_balance(uid, final_price)
             if not ok:
                 raise HTTPException(400, "کسر از کیف‌پول ناموفق بود")
-            oid = create_order(uid, prod.get("category",""), prod["title"],
+            oid = create_order(uid, prod.get("category",""), prod.get("title",""),
                                final_price, product_id=pid,
                                buyer_type="partner" if is_partner else "customer")
             return {"ok": True, "method": "wallet", "order_id": oid,
@@ -361,11 +361,12 @@ async def api_checkout(request: Request):
     except Exception as e:
         raise HTTPException(502, f"خطا در اتصال به درگاه: {e}")
 
-    if r.status_code != 200 or not data.get("redirect_url"):
+    pay_url = data.get("payment_url") or data.get("redirect_url")
+    if r.status_code != 200 or not pay_url:
         raise HTTPException(502, data.get("detail") or "درگاه پاسخ نداد")
 
     return {"ok": True, "method": "gateway",
-            "redirect_url": data["redirect_url"],
+            "redirect_url": pay_url,
             "wallet_used": wallet_used,
             "gateway_amount": gateway_amount}
 
