@@ -171,6 +171,8 @@ function openP(pid){
       var bn=document.getElementById('sl-buy-'+p.id);
       if(!bn)return;
       bn.addEventListener('click',function(){
+        app.dialog.create({title:'پرداخت امن',text:'⚠️ لطفاً قبل از ورود به درگاه، فیلترشکن (VPN) خود را خاموش کنید؛ درگاه بانکی با فیلترشکن روشن پرداخت را رد می‌کند. پس از پرداخت موفق، سفارش به‌صورت خودکار ثبت می‌شود.',buttons:[{text:'انصراف'},{text:'ادامه به درگاه',bold:true,onClick:function(){_slGo()}}]}).open();
+        function _slGo(){
         bn.textContent='⏳ صبر کنید...';bn.disabled=true;
         fetch('https://panel.stland.ir/api/v1/checkout',{
           method:'POST',
@@ -181,6 +183,7 @@ function openP(pid){
           else if(d.method==='wallet'){bn.textContent='✅ خرید موفق!';}
           else{alert(d.detail||'خطا');bn.textContent='🛒 خرید از اپ';bn.disabled=false;}
         }).catch(function(err){alert('خطا: '+err.message);bn.textContent='🛒 خرید از اپ';bn.disabled=false;});
+        }
       });
     },150);
   }).catch(function(){b.innerHTML=err('خطا');});
