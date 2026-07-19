@@ -385,3 +385,10 @@ async def api_payment_verify(
     # تأیید را به روت اصلی واگذار می‌کنیم
     return RedirectResponse(
         url=f"{base}/payment/callback?Authority={Authority}&Status={Status}")
+
+
+def _get_uid(request: Request):
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    if not init_data:
+        return None
+    return _verify_telegram_init_data(init_data)

@@ -4,8 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no">
 <title>استوک‌لند</title>
-<meta name="theme-color" content="#0A63FF" media="(prefers-color-scheme:light)">
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme:dark)">
+<meta name="theme-color" content="#5B6EF5">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="استوک‌لند">
@@ -13,7 +12,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="stylesheet" href="vendor/framework7-bundle-rtl.min.css">
-<link rel="stylesheet" href="app.css?v=1784448057">
+<link rel="stylesheet" href="app.css?v=15">
 <script src="https://telegram.org/js/telegram-web-app.js" onerror="void(0)"></script>
 </head>
 <body>
@@ -36,18 +35,20 @@
    </div>
   </div>
   <div class="tabs">
-
-   <!-- خانه -->
    <div id="tab-home" class="page-content tab tab-active ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-gradient-header">
      <div class="sl-hdr-top">
       <img src="icons/icon-192.png" class="sl-hdr-logo" alt="SL">
-      <div><div class="sl-hdr-brand">استوک‌لند</div><div class="sl-hdr-sub" id="today-date"></div></div>
+      <div>
+       <div class="sl-hdr-brand">استوک‌لند</div>
+       <div class="sl-hdr-sub" id="today-date"></div>
+      </div>
      </div>
+     <div class="sl-hdr-tagline">فروشگاه دیجیتال — تحویل فوری، گارانتی واقعی</div>
      <div class="sl-search" id="search-bar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-      <span>جستجو در محصولات و آموزش‌ها</span>
+      جستجو در محصولات و آموزش‌ها
      </div>
     </div>
     <div class="sl-sec"><b>دسته‌بندی‌ها</b></div>
@@ -59,8 +60,6 @@
     <div class="sl-hrow" id="news-row"></div>
     <div style="height:20px"></div>
    </div>
-
-   <!-- فروشگاه -->
    <div id="tab-shop" class="page-content tab ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-head"><div class="sl-eyebrow" id="shop-count"></div><div class="sl-big">فروشگاه</div></div>
@@ -68,8 +67,6 @@
     <div class="sl-plist" id="prod-list"></div>
     <div style="height:20px"></div>
    </div>
-
-   <!-- آموزش -->
    <div id="tab-learn" class="page-content tab ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-head"><div class="sl-eyebrow">مرکز یادگیری</div><div class="sl-big">آموزش</div></div>
@@ -81,33 +78,25 @@
     <div id="learn-list"></div>
     <div style="height:20px"></div>
    </div>
-
-   <!-- حساب -->
    <div id="tab-me" class="page-content tab ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-head"><div class="sl-eyebrow">حساب کاربری</div><div class="sl-big" id="me-name">حساب من</div></div>
     <div id="me-body"></div>
    </div>
-
   </div>
  </div>
  <div class="popup" id="prod-popup"><div class="view"><div class="page">
-  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title" id="pp-title">​</div><div class="right"><a href="#" class="link popup-close">بستن</a></div></div></div>
+  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title" id="pp-title"></div><div class="right"><a href="#" class="link popup-close">بستن</a></div></div></div>
   <div class="page-content" id="pp-body"></div>
  </div></div></div>
  <div class="popup" id="post-popup"><div class="view"><div class="page">
-  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title" id="post-title">​</div><div class="right"><a href="#" class="link popup-close">بستن</a></div></div></div>
+  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title" id="post-title"></div><div class="right"><a href="#" class="link popup-close">بستن</a></div></div></div>
   <div class="page-content sl-post-body" id="post-body"></div>
  </div></div></div>
- <!-- پاپ‌آپ خرید -->
  <div class="popup" id="checkout-popup"><div class="view"><div class="page">
-  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner">
-   <div class="title">خرید محصول</div>
-   <div class="right"><a href="#" class="link popup-close">انصراف</a></div>
-  </div></div>
+  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title">خرید محصول</div><div class="right"><a href="#" class="link popup-close">انصراف</a></div></div></div>
   <div class="page-content" id="checkout-body"></div>
  </div></div></div>
-
  <div id="install-hint" class="sl-install-hint" style="display:none">
   <div class="sl-install-text"><b>نصب اپ روی گوشی</b><span id="install-hint-text"></span></div>
   <button id="install-btn" class="sl-install-btn" style="display:none">نصب</button>
@@ -115,10 +104,6 @@
  </div>
 </div>
 <script src="vendor/framework7-bundle.min.js"></script>
-<<<<<<< HEAD
-<script src="app.js?v=1784460631"></script>
-=======
-<script src="app.js?v=1784460631"></script>
->>>>>>> e480c2ba704c7dca3130b4c81d0343c0dec10def
+<script src="app.js?v=15"></script>
 </body>
 </html>
