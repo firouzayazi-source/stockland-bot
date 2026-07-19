@@ -165,14 +165,16 @@ function openP(pid){
       (p.description?'<div class="sl-pp-desc">'+nl2br(p.description)+'</div>':'')+
       (initData&&ok!==false?
         '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید از اپ</button>':
-        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+" href=\"https://t.me/\"+botUser+\"?start=buy_\"+p.id+'\" target=\"_blank\">'+
+        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+'" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">'+
         (hs&&!ok?'🔔 اطلاع‌رسانی موجود شدن':'🛒 خرید از ربات')+'</a>');
     setTimeout(function(){
       var bn=document.getElementById('sl-buy-'+p.id);
       if(!bn)return;
       bn.addEventListener('click',function(){
+        app.dialog.create({title:'پرداخت امن',text:'⚠️ لطفاً قبل از ورود به درگاه، فیلترشکن (VPN) خود را خاموش کنید؛ درگاه بانکی با فیلترشکن روشن پرداخت را رد می‌کند. پس از پرداخت موفق، سفارش به‌صورت خودکار ثبت می‌شود.',buttons:[{text:'انصراف'},{text:'ادامه به درگاه',bold:true,onClick:function(){_slGo()}}]}).open();
+        function _slGo(){
         bn.textContent='⏳ صبر کنید...';bn.disabled=true;
-        fetch('/api/v1/checkout',{
+        fetch('https://panel.stland.ir/api/v1/checkout',{
           method:'POST',
           headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
           body:JSON.stringify({product_id:p.id,payment_type:'gateway'})
@@ -180,7 +182,8 @@ function openP(pid){
           if(d.redirect_url){if(tg&&tg.openLink)tg.openLink(d.redirect_url);else window.open(d.redirect_url,'_blank');}
           else if(d.method==='wallet'){bn.textContent='✅ خرید موفق!';}
           else{alert(d.detail||'خطا');bn.textContent='🛒 خرید از اپ';bn.disabled=false;}
-        }).catch(function(){alert('خطای شبکه');bn.textContent='🛒 خرید از اپ';bn.disabled=false;});
+        }).catch(function(err){alert('خطا: '+err.message);bn.textContent='🛒 خرید از اپ';bn.disabled=false;});
+        }
       });
     },150);
   }).catch(function(){b.innerHTML=err('خطا');});
@@ -287,6 +290,59 @@ document.addEventListener('click',function(e){
   var co=e.target.closest('[data-checkout]');if(co){openCheckout(co.dataset.checkout);return}
   var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click()}
 });
+
+/* ═══ Mira-style scroll morph ═══ */
+(function(){
+  var nav=document.getElementById('sl-nav');
+  var navTitle=document.getElementById('sl-nav-title');
+  var hero=document.getElementById('sl-hero');
+  var homeTab=document.getElementById('tab-home');
+  if(!nav||!hero||!homeTab)return;
+
+  var ticking=false;
+  function onScroll(){
+    if(ticking)return;
+    ticking=true;
+    requestAnimationFrame(function(){
+      ticking=false;
+      var activeTab=document.querySelector('.tab.tab-active');
+      if(!activeTab||activeTab.id!=='tab-home'){
+        nav.style.background='transparent';
+        nav.style.backdropFilter='none';
+        nav.style.webkitBackdropFilter='none';
+        nav.style.boxShadow='none';
+        navTitle.style.opacity='0';
+        nav.classList.remove('sl-nav--solid');
+        return;
+      }
+      var heroH=hero.offsetHeight;
+      var scrollY=homeTab.scrollTop;
+      var progress=Math.min(Math.max(scrollY/(heroH*0.6),0),1);
+
+      var bgA=progress;
+      nav.style.background='rgba(255,255,255,'+bgA+')';
+      nav.style.backdropFilter='saturate('+(100+80*progress)+'%) blur('+(20*progress)+'px)';
+      nav.style.webkitBackdropFilter='saturate('+(100+80*progress)+'%) blur('+(20*progress)+'px)';
+
+      if(progress>0.5){
+        nav.style.boxShadow='0 2px 12px rgba(0,0,0,'+(0.06*(progress-0.5)*2)+')';
+      }else{
+        nav.style.boxShadow='none';
+      }
+
+      navTitle.style.opacity=progress>0.6?((progress-0.6)/0.4):0;
+      navTitle.style.color=progress>0.5?'rgba(0,0,0,'+(progress*1.2)+')':'rgba(255,255,255,1)';
+
+      if(progress>0.3){nav.classList.add('sl-nav--solid');}
+      else{nav.classList.remove('sl-nav--solid');}
+    });
+  }
+
+  homeTab.addEventListener('scroll',onScroll,{passive:true});
+  app.on('tabShow',function(){setTimeout(onScroll,50)});
+  onScroll();
+})();
+
 if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
 var sa=window.matchMedia('(display-mode:standalone)').matches||window.navigator.standalone===true;
 var di=false;try{di=sessionStorage.getItem('sl-hint-off')==='1'}catch(e){}
@@ -358,7 +414,7 @@ window._doPay=function(method){
   if(btns) btns.querySelectorAll('button').forEach(function(x){x.disabled=true;x.textContent='⏳ در حال پردازش...'});
 
   api('/checkout',true).then(function(){}).catch(function(){});// warming
-  fetch('/api/v1/checkout',{
+  fetch('https://panel.stland.ir/api/v1/checkout',{
     method:'POST',
     headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
     body:JSON.stringify({product_id:_checkoutPid,payment_type:method})
