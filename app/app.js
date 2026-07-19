@@ -164,10 +164,26 @@ function openP(pid){
       '<div class="sl-pp-divider"></div>'+
       (p.description?'<div class="sl-pp-desc">'+nl2br(p.description)+'</div>':'')+
       (initData&&ok!==false?
-        '<button class="sl-pp-btn" onclick="openCheckout('+p.id+')">🛒 خرید از اپ</button>':
-        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+'" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">'+
+        '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید از اپ</button>':
+        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+" href=\"https://t.me/\"+botUser+\"?start=buy_\"+p.id+'\" target=\"_blank\">'+
         (hs&&!ok?'🔔 اطلاع‌رسانی موجود شدن':'🛒 خرید از ربات')+'</a>');
-  }).catch(function(){b.innerHTML=err('خطا')});
+    setTimeout(function(){
+      var bn=document.getElementById('sl-buy-'+p.id);
+      if(!bn)return;
+      bn.addEventListener('click',function(){
+        bn.textContent='⏳ صبر کنید...';bn.disabled=true;
+        fetch('/api/v1/checkout',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
+          body:JSON.stringify({product_id:p.id,payment_type:'gateway'})
+        }).then(function(r){return r.json()}).then(function(d){
+          if(d.redirect_url){if(tg&&tg.openLink)tg.openLink(d.redirect_url);else window.open(d.redirect_url,'_blank');}
+          else if(d.method==='wallet'){bn.textContent='✅ خرید موفق!';}
+          else{alert(d.detail||'خطا');bn.textContent='🛒 خرید از اپ';bn.disabled=false;}
+        }).catch(function(){alert('خطای شبکه');bn.textContent='🛒 خرید از اپ';bn.disabled=false;});
+      });
+    },150);
+  }).catch(function(){b.innerHTML=err('خطا');});
 }
 
 /* ═══ آموزش ═══ */
@@ -268,6 +284,7 @@ app.on('ptrRefresh',function(el,done){var t=document.querySelector('.tab.tab-act
 document.addEventListener('click',function(e){
   var p=e.target.closest('[data-pid]');if(p){openP(p.dataset.pid);return}
   var c=e.target.closest('[data-cid]');if(c){openC(c.dataset.cid);return}
+  var co=e.target.closest('[data-checkout]');if(co){openCheckout(co.dataset.checkout);return}
   var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click()}
 });
 if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
