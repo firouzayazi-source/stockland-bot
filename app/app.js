@@ -268,6 +268,7 @@ app.on('ptrRefresh',function(el,done){var t=document.querySelector('.tab.tab-act
 document.addEventListener('click',function(e){
   var p=e.target.closest('[data-pid]');if(p){openP(p.dataset.pid);return}
   var c=e.target.closest('[data-cid]');if(c){openC(c.dataset.cid);return}
+  var co=e.target.closest('[data-checkout]');if(co){openCheckout(co.dataset.checkout);return}
   var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click()}
 });
 if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
