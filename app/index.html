@@ -1,134 +1,49 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no">
-<title>استوک‌لند</title>
-<meta name="theme-color" content="#5B6EF5">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="استوک‌لند">
-<link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
-<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
-<link rel="stylesheet" href="vendor/framework7-bundle-rtl.min.css">
-<link rel="stylesheet" href="app.css?v=23">
-<script src="https://telegram.org/js/telegram-web-app.js" onerror="void(0)"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="StockLand Mini App" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <title>StockLand Mini App</title>
+  <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
-<div id="app">
- <div class="view view-main view-init safe-areas">
-  <div class="toolbar toolbar-bottom tabbar tabbar-icons">
-   <div class="toolbar-inner">
-    <a href="#tab-home" class="tab-link tab-link-active">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></span>
-     <span class="tabbar-label">خانه</span></a>
-    <a href="#tab-shop" class="tab-link">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 7h12l1.5 13.5h-15z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/></svg></span>
-     <span class="tabbar-label">فروشگاه</span></a>
-    <a href="#tab-learn" class="tab-link">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
-     <span class="tabbar-label">آموزش</span></a>
-    <a href="#tab-me" class="tab-link">
-     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 5-6 8-6s6.5 2 8 6"/></svg></span>
-     <span class="tabbar-label">حساب</span></a>
-   </div>
-  </div>
-  <div class="tabs">
+  <header class="topbar">
+    <h1>StockLand</h1>
+    <button id="installBtn" class="btn ghost" hidden>نصب اپ</button>
+  </header>
 
-   <!-- خانه -->
-   <div id="tab-home" class="page-content tab tab-active ptr-content" data-ptr-distance="55">
-    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
+  <main class="container">
+    <section class="card">
+      <h2>جستجوی نماد</h2>
+      <form id="searchForm" class="row" autocomplete="on">
+        <input
+          id="symbolInput"
+          name="symbol"
+          type="text"
+          inputmode="search"
+          placeholder="مثلاً: فولاد"
+          required
+        />
+        <button class="btn" type="submit">جستجو</button>
+      </form>
+      <p id="status" class="status" aria-live="polite"></p>
+    </section>
 
-    <!-- هیرو — Mira-style -->
-    <div class="sl-hero" id="sl-hero">
-     <!-- لوگو: absolute، دقیقاً زیر navbar، مرکز -->
-     <div class="sl-hero-logo-abs">
-      <img src="icons/logo-sl.png" class="sl-hero-logo-c" alt="SL">
-     </div>
-     <!-- محتوا: flow عادی -->
-     <div class="sl-hero-inner">
-      <div class="sl-hero-brand">استوک‌لند</div>
-      <div class="sl-hero-sub" id="today-date"></div>
-      <div class="sl-hero-tagline">فروشگاه دیجیتال — تحویل فوری، گارانتی واقعی</div>
-      <div class="sl-search" id="search-bar">
-       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-       جستجو در محصولات و آموزش‌ها
-      </div>
-     </div>
-    </div>
+    <section class="card">
+      <h2>نتیجه</h2>
+      <div id="result" class="result empty">هنوز داده‌ای دریافت نشده.</div>
+    </section>
+  </main>
 
-    <div class="sl-sec"><b>🔥 ویژه امروز</b><a class="sl-link" data-tab="tab-shop">همه محصولات</a></div>
-    <div class="sl-feat-row" id="featured-row"></div>
-    <div class="sl-sec"><b>قیمت لحظه‌ای</b><span class="sl-livebadge"><span class="sl-dot"></span><span id="ticker-time">به‌روز</span></span></div>
-    <div class="sl-ticker" id="ticker-row"></div>
-    <div id="daily-post"></div>
-    <div class="sl-sec" id="learn-sec"><b>📚 بیاموز</b><a class="sl-link" data-tab="tab-learn">همه</a></div>
-    <div id="learn-card"></div>
-    <div class="sl-sec" id="news-sec"><b>📰 تازه‌ها</b></div>
-    <div class="sl-hrow" id="news-row"></div>
-    <div style="height:20px"></div>
-   </div>
+  <footer class="footer">
+    <small>© StockLand</small>
+  </footer>
 
-   <!-- فروشگاه -->
-   <div id="tab-shop" class="page-content tab ptr-content" data-ptr-distance="55">
-    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
-    <div class="sl-head"><div class="sl-eyebrow" id="shop-count"></div><div class="sl-big">فروشگاه</div></div>
-    <div class="sl-chips" id="shop-cats"></div>
-    <div class="sl-plist" id="prod-list"></div>
-    <div style="height:20px"></div>
-   </div>
-
-   <!-- آموزش -->
-   <div id="tab-learn" class="page-content tab ptr-content" data-ptr-distance="55">
-    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
-    <div class="sl-head"><div class="sl-eyebrow">مرکز یادگیری</div><div class="sl-big">آموزش</div></div>
-    <div class="sl-seg" id="learn-seg">
-     <button class="on" data-k="tutorial">📚 آموزش‌ها</button>
-     <button data-k="news">📰 اخبار</button>
-     <button data-k="feature">✨ امکانات</button>
-    </div>
-    <div id="learn-list"></div>
-    <div style="height:20px"></div>
-   </div>
-
-   <!-- حساب -->
-   <div id="tab-me" class="page-content tab ptr-content" data-ptr-distance="55">
-    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
-    <div class="sl-head"><div class="sl-eyebrow">حساب کاربری</div><div class="sl-big" id="me-name">حساب من</div></div>
-    <div id="me-body"></div>
-   </div>
-
-  </div>
- </div>
-
- <!-- نوار ناوبری شناور — شروع شفاف، با اسکرول morph می‌شه -->
- <div class="sl-nav" id="sl-nav">
-  <div class="sl-nav-inner">
-   <span class="sl-nav-title" id="sl-nav-title">استوک‌لند</span>
-  </div>
- </div>
-
- <!-- پاپ‌آپ‌ها -->
- <div class="popup" id="prod-popup"><div class="view"><div class="page">
-  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title" id="pp-title"></div><div class="right"><a href="#" class="link popup-close">بستن</a></div></div></div>
-  <div class="page-content" id="pp-body"></div>
- </div></div></div>
- <div class="popup" id="post-popup"><div class="view"><div class="page">
-  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title" id="post-title"></div><div class="right"><a href="#" class="link popup-close">بستن</a></div></div></div>
-  <div class="page-content sl-post-body" id="post-body"></div>
- </div></div></div>
- <div class="popup" id="checkout-popup"><div class="view"><div class="page">
-  <div class="navbar"><div class="navbar-bg"></div><div class="navbar-inner"><div class="title">خرید محصول</div><div class="right"><a href="#" class="link popup-close">انصراف</a></div></div></div>
-  <div class="page-content" id="checkout-body"></div>
- </div></div></div>
- <div id="install-hint" class="sl-install-hint" style="display:none">
-  <div class="sl-install-text"><b>نصب اپ روی گوشی</b><span id="install-hint-text"></span></div>
-  <button id="install-btn" class="sl-install-btn" style="display:none">نصب</button>
-  <button id="install-close" class="sl-install-close">✕</button>
- </div>
-</div>
-<script src="vendor/framework7-bundle.min.js"></script>
-<script src="app.js?v=23"></script>
+  <script src="./app.js" defer></script>
 </body>
 </html>
