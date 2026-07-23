@@ -137,6 +137,66 @@ async def api_partner(request: Request):
     }
 
 
+@router.get("/me/invite")
+async def api_me_invite(request: Request):
+    """لینک دعوت + آمار معرفی کاربر (چه همکار باشد چه کاربر عادی)."""
+    uid = _auth(request)
+    from core import partners, referrals
+    from db import get_referral_settings
+
+    try:
+        from bot import _bot_username
+        username = _bot_username()
+    except Exception:
+        username = ""
+    username = username or "stock_land_ir"
+
+    settings = get_referral_settings()
+    return {
+        "ok": True,
+        "referral_link": f"https://t.me/{username}?start=ref_{uid}",
+        "is_partner": partners.is_approved(uid),
+        "reward_amount": int(settings.get("reward_amount") or 0),
+        "stats": referrals.stats(uid),
+    }
+
+
+@router.post("/wallet/topup")
+async def api_wallet_topup(request: Request):
+    """شروع شارژ کیف‌پول از PWA — درخواست پرداخت به زرین‌پال و بازگشت redirect_url."""
+    uid = _auth(request)
+
+    body = await request.json()
+    try:
+        amount = int(body.get("amount", 0))
+    except (TypeError, ValueError):
+        amount = 0
+
+    from config import MIN_TOPUP_AMOUNT
+    if amount < MIN_TOPUP_AMOUNT:
+        raise HTTPException(400, f"حداقل مبلغ شارژ {MIN_TOPUP_AMOUNT:,} تومان است")
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                "http://127.0.0.1:8001/payment/create",
+                json={
+                    "user_id": uid,
+                    "amount": amount,
+                    "payment_type": "wallet",
+                    "chat_id": uid,
+                })
+        data = r.json()
+    except Exception as e:
+        raise HTTPException(502, f"خطا در اتصال به درگاه: {e}")
+
+    if r.status_code != 200 or not data.get("payment_url"):
+        raise HTTPException(502, data.get("detail") or "درگاه پاسخ نداد")
+
+    return {"ok": True, "redirect_url": data["payment_url"]}
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # ─── سلامت API ─────────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
