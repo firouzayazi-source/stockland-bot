@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# ── deploy.sh — دیپلوی کامل استوک‌لند ──
-# استفاده:  bash deploy.sh
-# کارها: git pull → کش PWA پاک → سرویس ری‌استارت
+# ── deploy.sh — دیپلوی کامل استوک‌لند (کاملاً خودکار) ──
+# استفاده:  bash deploy.sh   (یا با alias:  deploy)
+# کارها: git pull → نصب/آپدیت وابستگی‌های پایتون (در صورت تغییر requirements.txt)
+#        → چک vendor مینی‌اپ (دانلود در صورت نبود) → پاک‌سازی کش PWA → ری‌استارت سرویس
 set -e
 APP_DIR="/opt/stockland/app"
 cd "$APP_DIR"
@@ -16,7 +17,28 @@ echo "📥 دریافت تغییرات از گیت..."
 git pull --ff-only 2>&1 || git pull 2>&1
 echo "✅ کد به‌روز شد"
 
-# ۲. پاک‌سازی کش PWA
+# ۲. آپدیت وابستگی‌های پایتون (فقط اگر requirements.txt عوض شده باشه — سریع و بی‌خطر در غیر این صورت)
+if [ -f venv/bin/pip ]; then
+    PIP=venv/bin/pip
+elif [ -f "/opt/stockland/venv/bin/pip" ]; then
+    PIP=/opt/stockland/venv/bin/pip
+else
+    PIP=""
+fi
+if [ -n "$PIP" ] && [ -f requirements.txt ]; then
+    echo ""
+    echo "📦 بررسی وابستگی‌های پایتون..."
+    "$PIP" install -q -r requirements.txt && echo "   ✅ وابستگی‌ها به‌روزند" || echo "   ⚠️  نصب وابستگی‌ها با خطا مواجه شد — بررسی کن"
+fi
+
+# ۳. چک vendor مینی‌اپ (Framework7 + فونت — در گیت نیست، فقط یک‌بار لازمه)
+if [ ! -f app/vendor/framework7-bundle.min.js ] && [ -f app/get_vendor.sh ]; then
+    echo ""
+    echo "📦 vendor مینی‌اپ موجود نیست — دانلود..."
+    bash app/get_vendor.sh && echo "   ✅ vendor نصب شد" || echo "   ⚠️  دانلود vendor با خطا مواجه شد — بررسی کن"
+fi
+
+# ۴. پاک‌سازی کش PWA
 V=$(date +%s)
 echo ""
 echo "🔄 پاک‌سازی کش PWA — نسخه: v${V}"
@@ -30,7 +52,7 @@ if [ -f app/index.html ]; then
     echo "   ✅ index.html → ?v=${V}"
 fi
 
-# ۳. ری‌استارت سرویس
+# ۵. ری‌استارت سرویس
 echo ""
 echo "♻️  ری‌استارت سرویس..."
 sudo systemctl restart stockland.service
