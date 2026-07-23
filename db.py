@@ -6,22 +6,142 @@ from config import DB_PATH, BASE_DIR
 
 # اگر DB_PATH در config نسبی باشد، به BASE_DIR وصل میکنیم
 DB_FULL_PATH = DB_PATH
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── تقویم شمسی + اعداد فارسی ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+from datetime import date as _date, timedelta as _td
+
+_NRZ = {
+    1395:_date(2016,3,20),1396:_date(2017,3,21),1397:_date(2018,3,21),
+    1398:_date(2019,3,21),1399:_date(2020,3,20),1400:_date(2021,3,21),
+    1401:_date(2022,3,21),1402:_date(2023,3,21),1403:_date(2024,3,20),
+    1404:_date(2025,3,20),1405:_date(2026,3,21),1406:_date(2027,3,21),
+    1407:_date(2028,3,20),1408:_date(2029,3,20),1409:_date(2030,3,20),
+    1410:_date(2031,3,21),
+}
+_REF_JY, _REF_G = 1403, _NRZ[1403]
+
+def _is_leap_j(jy):
+    return (((jy-474)%2820+475)*682)%2816 < 682
+
+def _to_jalali(gy, gm, gd):
+    try:
+        g = _date(gy, gm, gd)
+    except Exception:
+        return 1400, 1, 1
+    jy = _REF_JY + (g - _REF_G).days // 365
+    for _ in range(5):
+        if jy in _NRZ:
+            nrz = _NRZ[jy]
+        else:
+            d = 0
+            if jy > _REF_JY:
+                for y in range(_REF_JY, jy): d += 366 if _is_leap_j(y) else 365
+                nrz = _REF_G + _td(days=d)
+            else:
+                for y in range(jy, _REF_JY): d += 366 if _is_leap_j(y) else 365
+                nrz = _REF_G - _td(days=d)
+        nxt = _NRZ.get(jy+1, nrz+_td(days=366 if _is_leap_j(jy) else 365))
+        if g < nrz: jy -= 1; continue
+        if g >= nxt: jy += 1; continue
+        break
+    diff = (g - nrz).days
+    mlen = [31]*6+[30]*5+[30 if _is_leap_j(jy) else 29]
+    for jm, ml in enumerate(mlen, 1):
+        if diff < ml: return jy, jm, diff+1
+        diff -= ml
+    return jy, 12, 29
+
+_FA_TBL = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+class _RowCompat:
+    """
+    پل سازگاری بین tuple و dict برای نتایج کوئری.
+    هم product[0] (ایندکس عددی)، هم product["title"] (کلید)، هم product.get("x", default) کار می‌کند.
+    برای حفظ سازگاری با کدی که به هر دو شکل به یک ردیف دسترسی دارد.
+    """
+    __slots__ = ("_row", "_keys")
+
+    def __init__(self, row):
+        self._row = row
+        try:
+            self._keys = list(row.keys())
+        except Exception:
+            self._keys = []
+
+    def __getitem__(self, k):
+        # ایندکس عددی یا کلید رشته‌ای
+        if isinstance(k, int):
+            return self._row[k]
+        return self._row[k]
+
+    def get(self, k, default=None):
+        try:
+            if k in self._keys:
+                return self._row[k]
+        except Exception:
+            pass
+        return default
+
+    def keys(self):
+        return self._keys
+
+    def __len__(self):
+        return len(self._keys)
+
+    def __iter__(self):
+        return iter(self._row)
+
+    def __contains__(self, k):
+        return k in self._keys
+
+def fa_date(dt_str, with_time: bool = False) -> str:
+    """تبدیل ISO تاریخ به شمسی فارسی."""
+    if not dt_str: return "—"
+    try:
+        s = str(dt_str).strip()[:19].replace("T"," ")
+        jy,jm,jd = _to_jalali(int(s[:4]),int(s[5:7]),int(s[8:10]))
+        r = f"{jy}/{jm:02d}/{jd:02d}"
+        if with_time and len(s) >= 16: r += f"  {s[11:16]}"
+        return r.translate(_FA_TBL)
+    except Exception:
+        return str(dt_str)[:10]
+
+def fa_now(with_time: bool = True) -> str:
+    import datetime as _dtt
+    now = _dtt.datetime.now()
+    jy,jm,jd = _to_jalali(now.year, now.month, now.day)
+    r = f"{jy}/{jm:02d}/{jd:02d}"
+    if with_time: r += f"  {now.strftime('%H:%M')}"
+    return r.translate(_FA_TBL)
+
 if not os.path.isabs(DB_FULL_PATH):
     DB_FULL_PATH = os.path.join(BASE_DIR, DB_PATH)
 
 
 def _get_connection():
     """
-    همیشه یک کانکشن جدید میسازد تا با Threadهای تلگرام مشکل نداشته باشیم.
+    اتصال دیتابیس — سازگار SQLite/PostgreSQL از طریق db_conn wrapper.
+    با DB_DIALECT=postgres + DATABASE_URL به Postgres سوییچ می‌کند،
+    بدون نیاز به تغییر کوئری‌ها (ترجمه خودکار).
     """
-    conn = sqlite3.connect(DB_FULL_PATH, timeout=30)
-    # Configure SQLite to handle concurrent writers better
     try:
-        conn.execute('PRAGMA journal_mode=WAL;')
-        conn.execute('PRAGMA busy_timeout=5000;')
+        import db_conn
+        return db_conn.get_connection(DB_FULL_PATH)
     except Exception:
-        pass
-    return conn
+        # fallback مستقیم SQLite
+        conn = sqlite3.connect(DB_FULL_PATH, timeout=30)
+        try:
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('PRAGMA busy_timeout=5000;')
+        except Exception:
+            pass
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def init_db(db_path=None):
@@ -364,8 +484,85 @@ def init_db(db_path=None):
     finally:
         conn.close()
 
+    # ⚡ ساخت ایندکس‌ها برای سرعت — حیاتی برای عملکرد در حجم بالا
+    ensure_indexes()
 
-# ========= WALLET HELPERS =========
+
+_INDEXES_READY = False
+_ENSURE_PARTNER_TIERS_EXTENDED_DONE = False
+_ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE = False
+_ENSURE_REFERRAL_SCHEMA_DONE = False
+_ENSURE_PARTNER_WALLET_SCHEMA_DONE = False
+_ENSURE_PARTNER_SYSTEM_SCHEMA_DONE = False
+_ENSURE_PARTNER_BANK_SCHEMA_DONE = False
+_ENSURE_PARTNER_BANK_ADDRESS_DONE = False
+_ENSURE_INVITE_CAP_SCHEMA_DONE = False
+_ENSURE_ACCOUNTING_SCHEMA_DONE = False
+_ENSURE_RATINGS_SCHEMA_DONE = False
+_ENSURE_CARD_RECEIPTS_SCHEMA_DONE = False
+_ENSURE_USER_EXTRA_SCHEMA_DONE = False
+_ENSURE_ADMIN_NOTES_SCHEMA_DONE = False
+_ENSURE_FAQ_SCHEMA_DONE = False
+
+def ensure_indexes():
+    """
+    ساخت ایندکس روی ستون‌های پرمصرف — فقط یک‌بار در هر پروسه.
+    ⚡ این توابع نتیجه‌ی کوئری‌ها را تغییر نمی‌دهند، فقط سرعت را چند صد برابر می‌کنند.
+    بدون ایندکس، هر JOIN/WHERE روی این ستون‌ها = اسکن کامل جدول.
+    """
+    global _INDEXES_READY
+    # مهاجرت ستون‌های orders — فقط یک‌بار (چون ALTER گران است)
+    if not _INDEXES_READY:
+        _INDEXES_READY = True
+        for _col, _decl in [("status", "TEXT DEFAULT 'active'"), ("feed_id", "INTEGER"), ("returned_at", "TEXT")]:
+            try:
+                _c = _get_connection()
+                _c.execute(f"ALTER TABLE orders ADD COLUMN {_col} {_decl};")
+                _c.commit(); _c.close()
+            except Exception:
+                try: _c.close()
+                except Exception: pass
+    # هر ایندکس در try جدا — اگر جدول/ستون نبود، بی‌صدا رد شود (قانون ۱۳)
+    index_defs = [
+        # سفارش‌ها — پرمصرف‌ترین: JOIN با users، فیلتر status، جستجوی user_id
+        ("idx_orders_user_id",       "orders(user_id)"),
+        ("idx_orders_status",        "orders(status)"),
+        ("idx_orders_product_id",    "orders(product_id)"),
+        # معرفی‌ها — محاسبه پورسانت و آمار
+        ("idx_referrals_referrer",   "referrals(referrer_id)"),
+        ("idx_referrals_referred",   "referrals(referred_id)"),
+        # کیف‌پول و تراکنش‌ها
+        ("idx_wallets_user",         "wallets(user_id)"),
+        ("idx_ptx_user",             "partner_transactions(user_id)"),
+        ("idx_ppayouts_user",        "partner_payouts(user_id)"),
+        ("idx_ppayouts_status",      "partner_payouts(status)"),
+        ("idx_pwallets_user",        "partner_wallets(user_id)"),
+        # موجودی محصولات — feed
+        ("idx_feed_product",         "product_feed(product_id)"),
+        ("idx_feed_delivered",       "product_feed(product_id, delivered)"),
+        # دسته‌بندی محصولات
+        ("idx_products_category",    "products(category)"),
+        ("idx_products_active",      "products(is_active)"),
+        # کاربران
+        ("idx_users_username",       "users(username)"),
+        # همکاران
+        ("idx_partners_tg",          "partners(tg_user_id)"),
+        ("idx_partners_status",      "partners(status)"),
+        # فروش فوری
+        ("idx_flash_product",        "flash_sales(product_id, is_active)"),
+        # امتیازها
+        ("idx_ratings_product",      "product_ratings(product_id)"),
+    ]
+    conn = _get_connection()
+    try:
+        for name, target in index_defs:
+            try:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target};")
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_wallet_balance(user_id: int) -> int:
@@ -535,31 +732,19 @@ def get_products_by_category(category: str):
         cur = conn.cursor()
         # بررسی وجود ستون partner_price
         try:
-            cur.execute("PRAGMA table_info(products);")
-            cols = {row[1] for row in cur.fetchall()}
+            pass
         except Exception:
-            cols = set()
-        has_partner = 'partner_price' in cols
-        if has_partner:
-            cur.execute(
-                """
-                SELECT id, category, title, price, description, is_active, partner_price
-                FROM products
-                WHERE category = ?
-                ORDER BY id ASC;
-                """,
-                (category,),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT id, category, title, price, description, is_active, NULL as partner_price
-                FROM products
-                WHERE category = ?
-                ORDER BY id ASC;
-                """,
-                (category,),
-            )
+            pass
+        cur.execute(
+            """
+            SELECT id, category, title, price, description, is_active,
+                   COALESCE(partner_price, 0) AS partner_price
+            FROM products
+            WHERE category = ?
+            ORDER BY id ASC;
+            """,
+            (category,),
+        )
         rows = cur.fetchall()
     finally:
         conn.close()
@@ -571,20 +756,15 @@ def get_product_by_id(pid: int):
         cur = conn.cursor()
         # بررسی وجود ستونها (برای سازگاری با دیتابیسهای قدیمی)
         try:
-            cur.execute('PRAGMA table_info(products);')
-            cols = {row[1] for row in cur.fetchall()}
+            pass
         except Exception:
-            cols = set()
-
-        has_partner = 'partner_price' in cols
-        has_lim_c = 'daily_limit_customer' in cols
-        has_lim_p = 'daily_limit_partner' in cols
+            pass
 
         select_cols = [
             'id', 'category', 'title', 'price', 'description', 'is_active',
-            ('partner_price' if has_partner else 'NULL AS partner_price'),
-            ('daily_limit_customer' if has_lim_c else '0 AS daily_limit_customer'),
-            ('daily_limit_partner' if has_lim_p else '0 AS daily_limit_partner'),
+            'COALESCE(partner_price, 0) AS partner_price',
+            'COALESCE(daily_limit_customer, 0) AS daily_limit_customer',
+            'COALESCE(daily_limit_partner, 0) AS daily_limit_partner',
         ]
         cur.execute(
             f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
@@ -593,7 +773,11 @@ def get_product_by_id(pid: int):
         row = cur.fetchone()
     finally:
         conn.close()
-    return row
+    # همیشه dict برگردان تا هم [index] هم ["key"] هم .get() کار کند
+    # (سازگاری با کدی که product را به هر دو شکل استفاده می‌کند)
+    if row is None:
+        return None
+    return _RowCompat(row)
 
 def update_product_field(pid: int, field: str, value):
     """
@@ -650,8 +834,7 @@ def add_product(category: str, title: str, price: int, description: str = "", is
     cur = conn.cursor()
     # discover columns in products table
     try:
-        cur.execute("PRAGMA table_info(products);")
-        cols = {row[1] for row in cur.fetchall()}
+        cols = set()  # ستون‌ها از مهاجرت تضمین شده‌اند
     except Exception:
         cols = set()
 
@@ -1590,8 +1773,43 @@ def get_category_products(cat_id: int, active_only: bool = True) -> list:
         conn.close()
 
 
+_CAT_BTN_CACHE = {"t": 0.0, "map": {}}
+
+def _cat_btn_map() -> dict:
+    """نقشه متن دکمه ← دسته ریشه — کش ۲۰ ثانیه (این تابع در فیلتر هر پیام صدا می‌خورد)."""
+    import time as _t
+    now = _t.time()
+    if now - _CAT_BTN_CACHE["t"] < 20:
+        return _CAT_BTN_CACHE["map"]
+    m = {}
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        for cat in conn.execute(
+            "SELECT * FROM categories WHERE parent_id IS NULL AND is_active=1;"
+        ).fetchall():
+            emoji = (cat["emoji"] or "").strip()
+            btn = f"{emoji} {cat['name']}".strip() if emoji else cat["name"]
+            m[btn] = dict(cat)
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    _CAT_BTN_CACHE["t"] = now
+    _CAT_BTN_CACHE["map"] = m
+    return m
+
+
+def cat_btn_cache_clear():
+    _CAT_BTN_CACHE["t"] = 0.0
+
+
 def get_category_by_button_text(text: str):
-    """یافتن دسته ریشه بر اساس متن دکمه Reply Keyboard"""
+    """یافتن دسته ریشه بر اساس متن دکمه Reply Keyboard — از کش."""
+    return _cat_btn_map().get((text or "").strip())
+
+
+def _legacy_get_category_by_button_text(text: str):
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
@@ -2404,6 +2622,28 @@ def ensure_discount_table():
                 FOREIGN KEY(code_id) REFERENCES discount_codes(id)
             );
         """)
+        # ─── مهاجرت: افزودن ستون‌های جدید به جدول‌های قدیمی ───────────────
+        try:
+            existing = {r[1] for r in conn.execute("PRAGMA table_info(discount_codes);").fetchall()}
+            for col, decl in [
+                ("max_value",         "INTEGER DEFAULT 0"),
+                ("min_amount",        "INTEGER DEFAULT 0"),
+                ("max_uses",          "INTEGER DEFAULT 0"),
+                ("max_uses_per_user", "INTEGER DEFAULT 0"),
+                ("used_count",        "INTEGER DEFAULT 0"),
+                ("product_id",        "INTEGER DEFAULT NULL"),
+                ("category_id",       "INTEGER DEFAULT NULL"),
+                ("first_buy_only",    "INTEGER DEFAULT 0"),
+                ("vip_only",          "INTEGER DEFAULT 0"),
+                ("starts_at",         "TEXT DEFAULT NULL"),
+                ("expires_at",        "TEXT DEFAULT NULL"),
+                ("is_active",         "INTEGER DEFAULT 1"),
+                ("description",       "TEXT DEFAULT ''"),
+            ]:
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE discount_codes ADD COLUMN {col} {decl};")
+        except Exception:
+            pass
         conn.commit()
     finally:
         conn.close()
@@ -2445,11 +2685,34 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
                     return {"valid": False, "error": "سقف استفاده شما از این کد تمام شده است"}
             if row["first_buy_only"]:
                 has_order = conn.execute(
-                    "SELECT COUNT(*) FROM orders WHERE user_id=? AND status='active';",
-                    (str(user_id),)
+                    "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? "
+                    "AND COALESCE(status,'active') != 'returned';",
+                    (int(user_id),)
                 ).fetchone()[0]
                 if has_order > 0:
                     return {"valid": False, "error": "این کد فقط برای اولین خرید است"}
+            if row["vip_only"]:
+                # VIP = کاربر دارای برچسب VIP یا همکار تأییدشده
+                is_vip = False
+                try:
+                    tag_row = conn.execute(
+                        "SELECT tags FROM users WHERE CAST(user_id AS INTEGER)=?;", (int(user_id),)
+                    ).fetchone()
+                    if tag_row and tag_row["tags"] and "vip" in str(tag_row["tags"]).lower():
+                        is_vip = True
+                except Exception:
+                    pass
+                if not is_vip:
+                    try:
+                        pr = conn.execute(
+                            "SELECT 1 FROM partners WHERE CAST(tg_user_id AS INTEGER)=? AND status='approved' LIMIT 1;",
+                            (int(user_id),)
+                        ).fetchone()
+                        is_vip = bool(pr)
+                    except Exception:
+                        pass
+                if not is_vip:
+                    return {"valid": False, "error": "این کد مخصوص کاربران VIP است"}
 
         # محاسبه تخفیف
         if row["type"] == "percent":
@@ -2614,6 +2877,10 @@ def get_product_setup_message(product_id: int) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_referral_schema():
+    global _ENSURE_REFERRAL_SCHEMA_DONE
+    if _ENSURE_REFERRAL_SCHEMA_DONE:
+        return
+    _ENSURE_REFERRAL_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.executescript("""
@@ -2636,6 +2903,13 @@ def ensure_referral_schema():
                 rewarded_at     TEXT    DEFAULT NULL
             );
         """)
+        # مهاجرت max_invites در referral_settings (قانون ۱۳)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(referral_settings);").fetchall()}
+            if "max_invites" not in cols:
+                conn.execute("ALTER TABLE referral_settings ADD COLUMN max_invites INTEGER DEFAULT 0;")
+        except Exception:
+            pass
         conn.commit()
     finally:
         conn.close()
@@ -2647,7 +2921,13 @@ def get_referral_settings() -> dict:
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute("SELECT * FROM referral_settings WHERE id=1;").fetchone()
-        return dict(row) if row else {"reward_amount": 5000, "is_active": 1}
+        d = dict(row) if row else {"reward_amount": 5000, "is_active": 1}
+        # فاز ۲: رفع باگ ریشه‌ای پاداش صفر — اگه صفره یعنی تنظیم نشده، پیش‌فرض ۵۰۰۰
+        if int(d.get("reward_amount") or 0) <= 0:
+            d["reward_amount"] = 5000
+        d.setdefault("max_invites", 0)
+        d.setdefault("is_active", 1)
+        return d
     finally:
         conn.close()
 
@@ -2657,15 +2937,23 @@ def register_referral(referrer_id: int, referred_id: int) -> bool:
     ensure_referral_schema()
     conn = _get_connection()
     try:
+        # چک اول (سازگار هر دو dialect)
+        existing = conn.execute(
+            "SELECT 1 FROM referrals WHERE referred_id=? LIMIT 1;",
+            (referred_id,)).fetchone()
+        if existing:
+            conn.close()
+            return False
         conn.execute(
-            "INSERT OR IGNORE INTO referrals (referrer_id, referred_id) VALUES (?,?);",
-            (referrer_id, referred_id)
-        )
-        changed = conn.execute("SELECT changes();").fetchone()[0]
+            "INSERT INTO referrals (referrer_id, referred_id) VALUES (?,?);",
+            (referrer_id, referred_id))
         conn.commit()
-        return bool(changed)
+        return True
+    except Exception:
+        return False
     finally:
-        conn.close()
+        try: conn.close()
+        except Exception: pass
 
 
 def process_referral_reward(referred_id: int, order_id: int) -> dict:
@@ -2701,7 +2989,7 @@ def process_referral_reward(referred_id: int, order_id: int) -> dict:
 
 def process_referral_commission(referred_id: int, order_id: int, order_price: int) -> dict:
     """
-    پورسانت روی «هر» خرید زیرمجموعه — بر اساس سطح معرف:
+    پورسانت روی خرید دعوت‌شده — فقط برای معرفِ همکار تأییدشده:
       1. اگر سطح معرف مبلغ ثابت (commission_fixed) دارد → همان مبلغ
       2. وگرنه اگر سطح درصد (commission_percent) دارد → درصدی از مبلغ سفارش
       3. وگرنه → درصد عمومی از partner_commission
@@ -2719,6 +3007,9 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
         if not ref:
             return {"paid": False}
         referrer_id = int(ref["referrer_id"])
+        # ← مورد ۱۰: فقط همکار تأییدشده پورسانت می‌گیرد
+        if not _is_approved_partner(referrer_id):
+            return {"paid": False}
 
         # تنظیمات عمومی پورسانت
         gset = conn.execute("SELECT * FROM partner_commission WHERE id=1;").fetchone()
@@ -2732,14 +3023,22 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
             return {"paid": False}
 
         # سطح معرف
-        order_count = conn.execute(
-            "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
-            (referrer_id,)
-        ).fetchone()[0]
+        try:
+            order_count = conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
+                (referrer_id,)
+            ).fetchone()[0]
+        except Exception:
+            order_count = 0
+        # سطح فعلی — اگه خریدی ندارد، پایین‌ترین سطح (کمترین min_orders)
         tier = conn.execute("""
             SELECT * FROM partner_tiers WHERE min_orders <= ?
             ORDER BY min_orders DESC LIMIT 1;
         """, (order_count,)).fetchone()
+        if not tier:
+            tier = conn.execute(
+                "SELECT * FROM partner_tiers ORDER BY min_orders ASC LIMIT 1;"
+            ).fetchone()
 
         tier_name  = tier["name"] if tier else "—"
         tier_fixed = int(tier["commission_fixed"] or 0) if tier and "commission_fixed" in tier.keys() else 0
@@ -2750,6 +3049,7 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
         elif tier_pct > 0:
             amount = int(order_price * tier_pct / 100)
         else:
+            # سطح تنظیم نشده → درصد عمومی (fallback اضطراری)
             amount = int(order_price * global_pct / 100)
 
         if max_payout > 0:
@@ -2759,10 +3059,53 @@ def process_referral_commission(referred_id: int, order_id: int, order_price: in
     finally:
         conn.close()
 
-    credit_partner_wallet(referrer_id, amount,
-                          note=f"پورسانت خرید زیرمجموعه — سفارش #{order_id} (سطح {tier_name})")
-    return {"paid": True, "referrer_id": referrer_id, "amount": amount, "tier_name": tier_name}
+    wallet = credit_referrer(referrer_id, amount,
+                             note=f"پاداش فروش — سفارش #{order_id} (سطح {tier_name})")
+    return {"paid": True, "referrer_id": referrer_id, "amount": amount,
+            "tier_name": tier_name, "wallet": wallet}
 
+
+
+
+def check_and_notify_tier_up(user_id: int) -> dict | None:
+    """سطح فعلی و قبلی همکار را مقایسه می‌کند — اگر ارتقا یافته، اطلاعات برمی‌گرداند."""
+    ensure_partner_tiers_extended()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        # تعداد خریدهای همکاری
+        order_count = conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE CAST(user_id AS INTEGER)=? "
+            "AND buyer_type='partner' AND COALESCE(status,'active')!='returned';",
+            (user_id,)).fetchone()[0]
+        tiers = conn.execute(
+            "SELECT * FROM partner_tiers ORDER BY min_orders ASC;"
+        ).fetchall()
+        if not tiers:
+            return None
+        # سطح فعلی
+        cur_tier = tiers[0]
+        for t in tiers:
+            if order_count >= int(t["min_orders"] or 0):
+                cur_tier = t
+        # سطح ثبت‌شده در پارتنر (notified_tier)
+        pr = conn.execute(
+            "SELECT notified_tier FROM partners WHERE CAST(tg_user_id AS INTEGER)=?;",
+            (user_id,)).fetchone()
+        old_tier_id = int(pr["notified_tier"] or 0) if pr and pr["notified_tier"] else 0
+        new_tier_id = int(cur_tier["id"])
+        if new_tier_id > old_tier_id:
+            # به‌روزرسانی ستون notified_tier
+            conn.execute(
+                "UPDATE partners SET notified_tier=? WHERE CAST(tg_user_id AS INTEGER)=?;",
+                (new_tier_id, user_id))
+            conn.commit()
+            return {"tier": dict(cur_tier), "old_tier_id": old_tier_id}
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
 
 def get_referral_stats(referrer_id: int) -> dict:
     ensure_referral_schema()
@@ -3100,6 +3443,10 @@ def seller_approve_application(user_id: int) -> str:
 # ─── ستونهای اضافی کاربران (یادداشت، برچسب، مسدودسازی) ──────────────────────
 
 def ensure_user_extra_schema():
+    global _ENSURE_USER_EXTRA_SCHEMA_DONE
+    if _ENSURE_USER_EXTRA_SCHEMA_DONE:
+        return
+    _ENSURE_USER_EXTRA_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         for col, default in [
@@ -3194,6 +3541,10 @@ def get_user_tickets(user_id: int, limit: int = 20) -> list:
 
 def ensure_partner_system_schema():
     """جداول سطوح همکاری + تنظیمات پورسانت."""
+    global _ENSURE_PARTNER_SYSTEM_SCHEMA_DONE
+    if _ENSURE_PARTNER_SYSTEM_SCHEMA_DONE:
+        return
+    _ENSURE_PARTNER_SYSTEM_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         # سطوح همکاری
@@ -3219,12 +3570,12 @@ def ensure_partner_system_schema():
         """)
         conn.commit()
 
-        # سطوح پیشفرض اگه خالی بود
+        # سطوح پیشفرض اگه خالی بود — با پورسانت و متن تبریک
         cnt = conn.execute("SELECT COUNT(*) FROM partner_tiers;").fetchone()[0]
         if cnt == 0:
             defaults = [
                 ("برنز", "🥉", 0, 1),
-                ("نقرهای", "🥈", 10, 2),
+                ("نقره‌ای", "🥈", 10, 2),
                 ("طلایی", "🥇", 30, 3),
                 ("الماس", "💎", 70, 4),
             ]
@@ -3238,7 +3589,12 @@ def ensure_partner_system_schema():
         c2 = conn.execute("SELECT COUNT(*) FROM partner_commission;").fetchone()[0]
         if c2 == 0:
             conn.execute("INSERT INTO partner_commission (id,percent,min_order,max_payout,is_active) VALUES (1,5.0,0,0,1);")
-            conn.commit()
+            # مهاجرت ستون notified_tier در جدول partners
+        try:
+            conn.execute("ALTER TABLE partners ADD COLUMN notified_tier INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+        conn.commit()
     finally:
         conn.close()
 
@@ -3348,6 +3704,10 @@ def get_referral_stats_for(referrer_id: int) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_partner_wallet_schema():
+    global _ENSURE_PARTNER_WALLET_SCHEMA_DONE
+    if _ENSURE_PARTNER_WALLET_SCHEMA_DONE:
+        return
+    _ENSURE_PARTNER_WALLET_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -3460,13 +3820,53 @@ def transfer_partner_to_main(user_id: int, amount: int) -> dict:
 
 def get_partner_payout_settings() -> dict:
     ensure_partner_wallet_schema()
+    ensure_payout_settings_extended()  # ← حیاتی: بدون این فراخوانی، ستون‌های متنی اصلاً در DB وجود ندارند
+    _TEXT_DEFAULTS = {
+        "guide_text": (
+            "📤 <b>شرایط و راهنمای درخواست تسویه</b>\n\n"
+            "برای ثبت درخواست تسویه، موارد زیر را رعایت کنید:\n\n"
+            "۱. اطلاعات حساب بانکی (شبا و نام صاحب حساب) باید ثبت شده باشد\n"
+            "۲. موجودی کیف‌پول همکاری باید به حداقل تعیین‌شده رسیده باشد\n"
+            "۳. پس از ثبت درخواست، تیم مالی آن را بررسی و تأیید می‌کند\n"
+            "۴. پرداخت معمولاً ظرف ۴۸ ساعت کاری انجام می‌شود\n\n"
+            "⚠️ درخواست‌های با اطلاعات نادرست یا مغایرت حساب رد خواهند شد."
+        ),
+        "approval_message": (
+            "✅ <b>درخواست تسویه شما تأیید شد!</b>\n\n"
+            "💰 مبلغ درخواستی به حساب بانکی ثبت‌شده واریز خواهد شد.\n"
+            "⏰ پردازش: ۲۴ تا ۴۸ ساعت کاری\n\n"
+            "ممنون از همکاری شما 🙏"
+        ),
+        "rejection_message": (
+            "❌ <b>درخواست تسویه رد شد</b>\n\n"
+            "درخواست تسویه شما تأیید نشد. لطفاً موارد زیر را بررسی کنید:\n"
+            "• صحت اطلاعات حساب بانکی\n"
+            "• کافی بودن موجودی\n\n"
+            "برای اطلاعات بیشتر با پشتیبانی تماس بگیرید 💬"
+        ),
+    }
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute("SELECT * FROM partner_payout_settings WHERE id=1;").fetchone()
         if row:
-            return dict(row)
-        return {"min_amount": 50000, "max_amount": 0, "max_per_month": 2, "is_active": 1}
+            d = dict(row)
+            # نکته حیاتی: حتی اگه ردیف در DB وجود دارد، فیلدهای متنیِ خالی
+            # (سرور قدیمی که قبل از این آپدیت یک‌بار ذخیره شده) با پیش‌فرض حرفه‌ای پر شوند
+            for key, default_text in _TEXT_DEFAULTS.items():
+                if not (d.get(key) or "").strip():
+                    d[key] = default_text
+            d.setdefault("min_amount", 50000)
+            d.setdefault("max_amount", 0)
+            d.setdefault("max_per_month", 2)
+            d.setdefault("is_active", 1)
+            d.setdefault("review_hours", 48)
+            return d
+        return {
+            "min_amount": 50000, "max_amount": 0, "max_per_month": 2,
+            "is_active": 1, "review_hours": 48,
+            **_TEXT_DEFAULTS,
+        }
     finally:
         conn.close()
 
@@ -3593,6 +3993,10 @@ def get_partner_payouts(user_id: int = None, status: str = "", limit: int = 50) 
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_admin_notes_schema():
+    global _ENSURE_ADMIN_NOTES_SCHEMA_DONE
+    if _ENSURE_ADMIN_NOTES_SCHEMA_DONE:
+        return
+    _ENSURE_ADMIN_NOTES_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -3702,6 +4106,11 @@ def delete_admin_note(note_id: int):
 # ─── ستونهای اضافی partner_tiers ────────────────────────────────────────────
 
 def ensure_partner_tiers_extended():
+    global _ENSURE_PARTNER_TIERS_EXTENDED_DONE
+    if _ENSURE_PARTNER_TIERS_EXTENDED_DONE:
+        return
+    ensure_partner_system_schema()  # ابتدا جدول پایه ساخته شود (قبل از set flag)
+    _ENSURE_PARTNER_TIERS_EXTENDED_DONE = True
     conn = _get_connection()
     try:
         for col, default in [
@@ -3710,6 +4119,11 @@ def ensure_partner_tiers_extended():
             ("color",             "TEXT DEFAULT '#6B7280'"),
             ("description",       "TEXT DEFAULT ''"),
             ("photo_file_id",     "TEXT DEFAULT ''"),
+            # فاز ۲: سقف و حداقل per-tier
+            ("min_order_amount",  "INTEGER DEFAULT 0"),   # حداقل مبلغ خرید برای دریافت پورسانت
+            ("max_payout",        "INTEGER DEFAULT 0"),   # سقف پورسانت هر خرید
+            ("levelup_message",   "TEXT DEFAULT ''"),     # متن پیام تبریک ارتقا اختصاصی
+            ("commission_type",   "TEXT DEFAULT 'percent'"),  # 'percent' یا 'fixed' — رادیویی
         ]:
             try:
                 conn.execute(f"ALTER TABLE partner_tiers ADD COLUMN {col} {default};")
@@ -3725,6 +4139,10 @@ def ensure_partner_tiers_extended():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_partner_bank_schema():
+    global _ENSURE_PARTNER_BANK_SCHEMA_DONE
+    if _ENSURE_PARTNER_BANK_SCHEMA_DONE:
+        return
+    _ENSURE_PARTNER_BANK_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -3737,11 +4155,13 @@ def ensure_partner_bank_schema():
             );
         """)
         conn.commit()
-        # migration: ستون آدرس
-        try:
-            conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
-            conn.commit()
-        except Exception:
+        # migration: ستون آدرس + صاحب حساب
+        for _mc, _md in [("address", "TEXT DEFAULT ''"), ("owner_name", "TEXT DEFAULT ''")]:
+            try:
+                conn.execute(f"ALTER TABLE partner_bank_info ADD COLUMN {_mc} {_md};")
+                conn.commit()
+            except Exception:
+                pass
             pass
     finally:
         conn.close()
@@ -3885,6 +4305,11 @@ def get_financial_report() -> dict:
 # ─── migration آدرس در partner_bank_info ────────────────────────────────────
 
 def ensure_partner_bank_address():
+    global _ENSURE_PARTNER_BANK_ADDRESS_DONE
+    if _ENSURE_PARTNER_BANK_ADDRESS_DONE:
+        return
+    ensure_partner_bank_schema()  # جدول پایه partner_bank_info
+    _ENSURE_PARTNER_BANK_ADDRESS_DONE = True
     conn = _get_connection()
     try:
         conn.execute("ALTER TABLE partner_bank_info ADD COLUMN address TEXT DEFAULT '';")
@@ -3898,6 +4323,11 @@ def ensure_partner_bank_address():
 # ─── تنظیمات تسویه — فیلدهای اضافی ────────────────────────────────────────
 
 def ensure_payout_settings_extended():
+    global _ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE
+    if _ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE:
+        return
+    ensure_partner_wallet_schema()  # جدول پایه partner_payout_settings باید وجود داشته باشد
+    _ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE = True
     conn = _get_connection()
     try:
         for col, default in [
@@ -3926,7 +4356,26 @@ def get_payout_settings_full() -> dict:
         return {
             "min_amount": 50000, "max_amount": 0, "max_per_month": 2,
             "is_active": 1, "review_hours": 48,
-            "guide_text": "", "approval_message": "", "rejection_message": "",
+            "guide_text": (
+                "📤 <b>شرایط و راهنمای درخواست تسویه</b>\n\n"
+                "برای ثبت درخواست تسویه، موارد زیر را رعایت کنید:\n\n"
+                "۱. اطلاعات حساب بانکی (شبا و نام صاحب حساب) باید ثبت شده باشد\n"
+                "۲. موجودی کیف‌پول همکاری باید به حداقل تعیین‌شده رسیده باشد\n"
+                "۳. پس از ثبت درخواست، تیم مالی آن را بررسی و تأیید می‌کند\n"
+                "۴. پرداخت معمولاً ظرف ۴۸ ساعت کاری انجام می‌شود\n\n"
+                "⚠️ درخواست‌های با اطلاعات نادرست یا مغایرت حساب رد خواهند شد."
+            ), "approval_message": (
+                "✅ <b>درخواست تسویه شما تأیید شد!</b>\n\n"
+                "💰 مبلغ درخواستی به حساب بانکی ثبت‌شده واریز خواهد شد.\n"
+                "⏰ پردازش: ۲۴ تا ۴۸ ساعت کاری\n\n"
+                "ممنون از همکاری شما 🙏"
+            ), "rejection_message": (
+                "❌ <b>درخواست تسویه رد شد</b>\n\n"
+                "درخواست تسویه شما تأیید نشد. لطفاً موارد زیر را بررسی کنید:\n"
+                "• صحت اطلاعات حساب بانکی\n"
+                "• کافی بودن موجودی\n\n"
+                "برای اطلاعات بیشتر با پشتیبانی تماس بگیرید 💬"
+            ),
         }
     finally:
         conn.close()
@@ -3956,6 +4405,10 @@ def save_payout_settings_full(data: dict):
 
 def ensure_accounting_schema():
     """ساخت جداول حسابداری."""
+    global _ENSURE_ACCOUNTING_SCHEMA_DONE
+    if _ENSURE_ACCOUNTING_SCHEMA_DONE:
+        return
+    _ENSURE_ACCOUNTING_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         # هزینهها
@@ -3970,6 +4423,15 @@ def ensure_accounting_schema():
                 created_at  TEXT DEFAULT (datetime('now'))
             );
         """)
+        # فاز ۴: ستون‌های نوع پرداخت و طرف حساب
+        for col, decl in [
+            ("payment_type", "TEXT DEFAULT 'expense'"),   # expense/salary/partner_payout/other
+            ("payee_name",   "TEXT DEFAULT ''"),          # نام پرسنل/همکار/گیرنده
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE expenses ADD COLUMN {col} {decl};")
+            except Exception:
+                pass
         # دستهبندی هزینهها
         conn.execute("""
             CREATE TABLE IF NOT EXISTS expense_categories (
@@ -3977,8 +4439,9 @@ def ensure_accounting_schema():
                 name  TEXT UNIQUE NOT NULL
             );
         """)
-        # دستههای پیشفرض
-        defaults = ['تبلیغات','سرور و هاست','دامنه','حقوق','اینترنت','تجهیزات','مالیات','سایر']
+        # دستههای پیشفرض — فاز ۴ گسترده‌تر
+        defaults = ['تبلیغات','سرور و هاست','دامنه','حقوق پرسنل','پرداخت همکار',
+                    'اینترنت','تجهیزات','مالیات','آب و برق','بازاریابی','سایر']
         for cat in defaults:
             try:
                 conn.execute("INSERT OR IGNORE INTO expense_categories (name) VALUES (?);", (cat,))
@@ -4023,9 +4486,10 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             f"SELECT COUNT(*) FROM orders o WHERE status='active'{where_order};"
         ).fetchone()[0]
 
-        # هزینه خرید — فقط برای آیتمهای تحویلشده (sold)
+        # هزینه خرید — محصولات تحویل‌شده (با batch + بدون batch)
         try:
-            total_cost = conn.execute("""
+            # ۱) آیتم‌هایی که batch و purchase_price دارن
+            batch_cost = conn.execute("""
                 SELECT COALESCE(SUM(
                     CASE WHEN fb.item_count > 0
                     THEN (fb.purchase_price + CAST(fb.side_cost AS REAL)/fb.item_count)
@@ -4036,13 +4500,27 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
                 WHERE pf.delivered = 1;
             """).fetchone()[0]
         except Exception:
-            total_cost = 0
+            batch_cost = 0
+        try:
+            # ۲) آیتم‌هایی بدون batch (txt import) — تعداد تحویل‌شده × قیمت محصول
+            no_batch_cost = conn.execute("""
+                SELECT COALESCE(SUM(COALESCE(p.partner_price, p.price)), 0)
+                FROM product_feed pf
+                JOIN products p ON pf.product_id = p.id
+                WHERE pf.delivered = 1 AND (pf.batch_id IS NULL OR pf.batch_id = 0);
+            """).fetchone()[0]
+        except Exception:
+            no_batch_cost = 0
+        total_cost = int(batch_cost) + int(no_batch_cost)
 
         # پورسانت پرداختی
-        commission_q = "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1"
-        if date_from:
-            commission_q += f" AND date(rewarded_at)>='{date_from}'" if 'rewarded_at' in [r[1] for r in conn.execute("PRAGMA table_info(referrals);").fetchall()] else ""
-        total_commission = conn.execute(commission_q + ";").fetchone()[0]
+        try:
+            commission_q = "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1"
+            if date_from:
+                commission_q += f" AND date(rewarded_at)>='{date_from}'"
+            total_commission = conn.execute(commission_q + ";").fetchone()[0]
+        except Exception:
+            total_commission = 0
 
         # هزینههای ثبتشده
         exp_q = "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE 1=1"
@@ -4058,11 +4536,20 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
         except Exception:
             payout_count = payout_total = 0
 
-        # موجودی انبار
+        # موجودی انبار + ارزش
         try:
             stock_count = conn.execute("SELECT COUNT(*) FROM product_feed WHERE delivered=0;").fetchone()[0]
         except Exception:
             stock_count = 0
+        try:
+            stock_value = conn.execute("""
+                SELECT COALESCE(SUM(p.price), 0)
+                FROM product_feed pf
+                JOIN products p ON pf.product_id = p.id
+                WHERE pf.delivered = 0;
+            """).fetchone()[0]
+        except Exception:
+            stock_value = 0
 
         gross_profit = int(total_sales or 0) - int(total_cost or 0)
         net_profit   = gross_profit - int(total_commission or 0) - int(total_expenses or 0)
@@ -4081,6 +4568,9 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             "gross_profit":      gross_profit,
             "net_profit":        net_profit,
             "payout_count":      payout_count,
+            "total_payouts":     int(conn.execute(
+                "SELECT COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='paid';"
+            ).fetchone()[0] or 0),
             "payout_total":      payout_total,
             "stock_count":       int(stock_count or 0),
             "avg_profit":        avg_profit,
@@ -4198,13 +4688,16 @@ def get_expenses(date_from="", date_to="", category="", limit=100) -> list:
 
 
 def create_expense(title: str, category: str, amount: int,
-                   expense_date: str = "", description: str = "") -> int:
+                   expense_date: str = "", description: str = "",
+                   payment_type: str = "expense", payee_name: str = "") -> int:
     ensure_accounting_schema()
     conn = _get_connection()
     try:
         cur = conn.execute(
-            "INSERT INTO expenses (title,category,amount,expense_date,description) VALUES (?,?,?,?,?);",
-            (title, category, amount, expense_date or datetime.utcnow().strftime('%Y-%m-%d'), description)
+            "INSERT INTO expenses (title,category,amount,expense_date,description,payment_type,payee_name) "
+            "VALUES (?,?,?,?,?,?,?);",
+            (title, category, amount, expense_date or datetime.utcnow().strftime('%Y-%m-%d'),
+             description, payment_type, payee_name)
         )
         conn.commit(); return cur.lastrowid
     finally: conn.close()
@@ -4241,6 +4734,10 @@ def add_expense_category(name: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_ratings_schema():
+    global _ENSURE_RATINGS_SCHEMA_DONE
+    if _ENSURE_RATINGS_SCHEMA_DONE:
+        return
+    _ENSURE_RATINGS_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -4315,6 +4812,10 @@ def has_rated_order(order_id: int) -> bool:
 # ─── FAQ ─────────────────────────────────────────────────────────────────────
 
 def ensure_faq_schema():
+    global _ENSURE_FAQ_SCHEMA_DONE
+    if _ENSURE_FAQ_SCHEMA_DONE:
+        return
+    _ENSURE_FAQ_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""
@@ -4374,13 +4875,21 @@ def delete_product_faq(faq_id: int):
 
 # ─── Maintenance Mode ─────────────────────────────────────────────────────────
 
+_MAINT_CACHE = {"t": 0.0, "v": False}
+
 def get_maintenance_mode() -> bool:
+    import time as _t
+    now = _t.time()
+    if now - _MAINT_CACHE["t"] < 10:
+        return _MAINT_CACHE["v"]
+    _MAINT_CACHE["t"] = now
     conn = _get_connection()
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
             (key TEXT PRIMARY KEY, value TEXT);""")
         row = conn.execute("SELECT value FROM bot_config WHERE key='maintenance';").fetchone()
-        return row and row[0] == "1"
+        _MAINT_CACHE["v"] = bool(row and row[0] == "1")
+        return _MAINT_CACHE["v"]
     except Exception:
         return False
     finally:
@@ -4388,6 +4897,7 @@ def get_maintenance_mode() -> bool:
 
 
 def set_maintenance_mode(enabled: bool):
+    _MAINT_CACHE["t"] = 0.0
     conn = _get_connection()
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
@@ -4402,6 +4912,10 @@ def set_maintenance_mode(enabled: bool):
 # ─── رسیدهای کارتبهکارت ────────────────────────────────────────────────────
 
 def ensure_card_receipts_schema():
+    global _ENSURE_CARD_RECEIPTS_SCHEMA_DONE
+    if _ENSURE_CARD_RECEIPTS_SCHEMA_DONE:
+        return
+    _ENSURE_CARD_RECEIPTS_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS card_receipts (
@@ -4423,6 +4937,17 @@ def save_card_receipt(user_id: int, amount: int, file_id: str) -> int:
     ensure_card_receipts_schema()
     conn = _get_connection()
     try:
+        from db_conn import is_postgres as _is_pg
+        if _is_pg():
+            # Postgres: lastrowid کار نمی‌کند — باید RETURNING id استفاده شود
+            cur = conn.execute(
+                "INSERT INTO card_receipts (user_id,amount,file_id) VALUES (?,?,?) RETURNING id;",
+                (user_id, amount, file_id))
+            row = cur.fetchone()
+            conn.commit()
+            if row is None:
+                return 0
+            return int(row["id"] if hasattr(row, "keys") else row[0])
         cur = conn.execute(
             "INSERT INTO card_receipts (user_id,amount,file_id) VALUES (?,?,?);",
             (user_id, amount, file_id))
@@ -4521,5 +5046,666 @@ def delete_all_card_receipts():
     try:
         conn.execute("DELETE FROM card_receipts;")
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🚀 لایه رشد و فروش — Flash Sale، بازگردانی، لیدربرد، نظرات، رمزارز ────
+# ══════════════════════════════════════════════════════════════════════════════
+
+import json as _json
+import time as _time
+
+_CFG_CACHE: dict = {}
+_CFG_TTL = 60  # ثانیه
+
+
+def get_cfg(key: str, default: str = "") -> str:
+    """خواندن تنظیم از bot_config با کش ۶۰ ثانیه‌ای."""
+    now = _time.time()
+    hit = _CFG_CACHE.get(key)
+    if hit and now - hit[1] < _CFG_TTL:
+        return hit[0]
+    val = default
+    conn = _get_connection()
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);")
+        row = conn.execute("SELECT value FROM bot_config WHERE key=?;", (key,)).fetchone()
+        if row is not None and row[0] is not None:
+            val = str(row[0])
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    _CFG_CACHE[key] = (val, now)
+    return val
+
+
+def set_cfg(key: str, value) -> None:
+    conn = _get_connection()
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);")
+        conn.execute(
+            "INSERT INTO bot_config (key,value) VALUES (?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+            (key, str(value)))
+        conn.commit()
+    finally:
+        conn.close()
+    _CFG_CACHE.pop(key, None)
+
+
+def get_cfg_json(key: str, default: dict) -> dict:
+    raw = get_cfg(key, "")
+    if not raw:
+        return dict(default)
+    try:
+        d = dict(default)
+        d.update(_json.loads(raw))
+        return d
+    except Exception:
+        return dict(default)
+
+
+_GROWTH_SCHEMA_READY = False
+
+def ensure_growth_schema():
+    """جدول‌های فروش فوری و بازگردانی + مهاجرت رسیدها — فقط یک‌بار در هر پروسه."""
+    global _GROWTH_SCHEMA_READY
+    if _GROWTH_SCHEMA_READY:
+        return
+    _GROWTH_SCHEMA_READY = True
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS flash_sales (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                percent    INTEGER NOT NULL,
+                starts_at  TEXT NOT NULL,
+                ends_at    TEXT NOT NULL,
+                is_active  INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS winback_log (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                code_id INTEGER,
+                sent_at TEXT DEFAULT (datetime('now','localtime'))
+            );""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_ratings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                order_id    INTEGER NOT NULL,
+                product_id  INTEGER NOT NULL,
+                rating      INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                comment     TEXT DEFAULT '',
+                created_at  TEXT DEFAULT (datetime('now')),
+                UNIQUE(order_id)
+            );""")
+        # مهاجرت card_receipts برای رمزارز (قانون ۱۳)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(card_receipts);").fetchall()}
+            if cols:
+                if "method" not in cols:
+                    conn.execute("ALTER TABLE card_receipts ADD COLUMN method TEXT DEFAULT 'card';")
+                if "txid" not in cols:
+                    conn.execute("ALTER TABLE card_receipts ADD COLUMN txid TEXT DEFAULT '';")
+        except Exception:
+            pass
+        conn.commit()
+    finally:
+        conn.close()
+    # ایندکس‌های جدول‌های growth (flash_sales, product_ratings) پس از ساخت‌شان
+    try:
+        ensure_indexes()
+    except Exception:
+        pass
+
+
+# ─── ۳) فروش فوری (Flash Sale) ────────────────────────────────────────────
+
+def create_flash_sale(product_id: int, percent: int, hours: int) -> int:
+    ensure_growth_schema()
+    conn = _get_connection()
+    try:
+        # فقط یک فروش فعال برای هر محصول
+        conn.execute("UPDATE flash_sales SET is_active=0 WHERE product_id=?;", (product_id,))
+        cur = conn.execute("""
+            INSERT INTO flash_sales (product_id, percent, starts_at, ends_at)
+            VALUES (?,?, datetime('now','localtime'), datetime('now','localtime', ?));
+        """, (product_id, max(1, min(90, int(percent))), f"+{int(hours)} hours"))
+        conn.commit()
+        try: flash_map_invalidate()
+        except Exception: pass
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def deactivate_flash_sale(sale_id: int):
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE flash_sales SET is_active=0 WHERE id=?;", (sale_id,))
+        conn.commit()
+        try: flash_map_invalidate()
+        except Exception: pass
+    finally:
+        conn.close()
+
+
+def get_flash_sale(product_id: int):
+    """فروش فوری فعال محصول — dict یا None."""
+    ensure_growth_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("""
+            SELECT *, CAST((julianday(ends_at)-julianday('now','localtime'))*24*60 AS INTEGER) AS mins_left
+            FROM flash_sales
+            WHERE product_id=? AND is_active=1
+              AND datetime('now','localtime') BETWEEN starts_at AND ends_at
+            ORDER BY id DESC LIMIT 1;
+        """, (product_id,)).fetchone()
+        if not row:
+            return None
+        mins = max(0, int(row["mins_left"] or 0))
+        if mins >= 60:
+            left = f"{mins//60} ساعت و {mins%60} دقیقه"
+        else:
+            left = f"{mins} دقیقه"
+        return {"id": row["id"], "percent": int(row["percent"]),
+                "ends_at": row["ends_at"], "mins_left": mins, "left_str": left}
+    finally:
+        conn.close()
+
+
+def apply_flash_price(product_id: int, price: int):
+    """(قیمت نهایی، فروش‌فوری یا None)"""
+    try:
+        sale = get_flash_sale(product_id)
+        if sale:
+            return max(0, int(price) - int(price) * sale["percent"] // 100), sale
+    except Exception:
+        pass
+    return int(price), None
+
+
+def list_flash_sales(limit: int = 30) -> list:
+    ensure_growth_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT f.*, COALESCE(p.title,'#'||f.product_id) AS title,
+                   (datetime('now','localtime') BETWEEN f.starts_at AND f.ends_at AND f.is_active=1) AS live
+            FROM flash_sales f LEFT JOIN products p ON p.id=f.product_id
+            ORDER BY f.id DESC LIMIT ?;
+        """, (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
+# ─── ۶) امتیاز محصول ─────────────────────────────────────────────────────
+
+def save_product_rating(user_id: int, order_id: int, product_id: int, rating: int) -> bool:
+    ensure_growth_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO product_ratings (user_id,order_id,product_id,rating) VALUES (?,?,?,?);",
+            (user_id, order_id, product_id, max(1, min(5, int(rating)))))
+        ok = conn.execute("SELECT changes();").fetchone()[0]
+        conn.commit()
+        return bool(ok)
+    finally:
+        conn.close()
+
+
+# نکته: get_product_rating نسخه dict قدیمی (بالاتر در همین فایل) مرجع است.
+
+
+# ─── ۲) پیشنهاد بعد از خرید (Upsell) ─────────────────────────────────────
+
+def get_upsell_products(product_id: int, category_id, limit: int = 2) -> list:
+    """پرفروش‌های موجودِ همان دسته، غیر از محصول خریداری‌شده."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT p.id, p.title, p.price, p.category_id,
+                   (SELECT COUNT(*) FROM product_feed f WHERE f.product_id=p.id AND f.delivered=0) AS stock,
+                   (SELECT COUNT(*) FROM orders o WHERE o.product_id=p.id
+                        AND COALESCE(o.status,'active')!='returned') AS sold
+            FROM products p
+            WHERE p.id != ? AND COALESCE(p.is_active,1)=1
+              AND (? IS NULL OR p.category_id = ?)
+            GROUP BY p.id
+            HAVING stock > 0
+            ORDER BY sold DESC, p.id DESC
+            LIMIT ?;
+        """, (product_id, category_id, category_id, limit)).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+# ─── ۱) کمپین بازگردانی (Win-back) ────────────────────────────────────────
+
+WINBACK_DEFAULTS = {
+    "enabled": 0, "days_inactive": 14, "percent": 15,
+    "expire_days": 3, "cooldown_days": 30, "hour": 11, "batch": 30,
+    "message": ("سلام {name} 👋\n\nدلمون برات تنگ شده! 💜\n"
+                "یه هدیه مخصوص خودت داریم:\n\n"
+                "🎁 کد تخفیف <code>{code}</code> — {percent}٪ تخفیف\n"
+                "⏳ فقط تا {days} روز اعتبار داره!\n\n"
+                "همین حالا از منوی فروشگاه استفاده‌ش کن 🛍"),
+}
+
+
+def get_winback_settings() -> dict:
+    return get_cfg_json("winback", WINBACK_DEFAULTS)
+
+
+def find_winback_candidates(days_inactive: int, cooldown_days: int, batch: int = 30) -> list:
+    """کاربرانی که خرید داشته‌اند ولی N روز است نخریده‌اند و اخیراً پیام نگرفته‌اند."""
+    ensure_growth_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT CAST(o.user_id AS INTEGER) AS uid,
+                   COALESCE(u.full_name, u.username, '') AS name,
+                   MAX(o.created_at) AS last_order
+            FROM orders o
+            LEFT JOIN users u ON CAST(u.user_id AS INTEGER)=CAST(o.user_id AS INTEGER)
+            WHERE COALESCE(o.status,'active') != 'returned'
+            GROUP BY CAST(o.user_id AS INTEGER)
+            HAVING MAX(o.created_at) < datetime('now','localtime', ?)
+               AND NOT EXISTS (
+                   SELECT 1 FROM winback_log w
+                   WHERE w.user_id = CAST(o.user_id AS INTEGER)
+                     AND w.sent_at > datetime('now','localtime', ?)
+               )
+            ORDER BY last_order ASC
+            LIMIT ?;
+        """, (f"-{int(days_inactive)} days", f"-{int(cooldown_days)} days", int(batch))).fetchall()
+    finally:
+        conn.close()
+
+
+def create_winback_code(user_id: int, percent: int, expire_days: int) -> str:
+    """کد تخفیف شخصی یک‌بارمصرف — برمی‌گرداند: متن کد."""
+    ensure_discount_table()
+    import random, string
+    conn = _get_connection()
+    try:
+        for _ in range(6):
+            code = "WB" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            try:
+                cur = conn.execute("""
+                    INSERT INTO discount_codes
+                        (code, type, value, max_uses, max_uses_per_user, is_active,
+                         expires_at, description)
+                    VALUES (?,?,?,?,?,?, datetime('now','localtime', ?), ?);
+                """, (code, "percent", int(percent), 1, 1, 1,
+                      f"+{int(expire_days)} days", f"بازگردانی کاربر {user_id}"))
+                code_id = cur.lastrowid
+                conn.execute("INSERT INTO winback_log (user_id, code_id) VALUES (?,?);",
+                             (user_id, code_id))
+                conn.commit()
+                return code
+            except sqlite3.IntegrityError:
+                continue
+        return ""
+    finally:
+        conn.close()
+
+
+# ─── ۴) لیدربرد هفتگی همکاران ────────────────────────────────────────────
+
+LEADERBOARD_DEFAULTS = {
+    "enabled": 0, "weekday": 4,  # 4 = جمعه (Mon=0)
+    "rewards": "100000,60000,30000",
+    "message": ("🏆 <b>نتایج مسابقه هفتگی همکاران</b>\n\n"
+                "تبریک! شما در جایگاه {rank} این هفته قرار گرفتید 🎉\n"
+                "🛒 فروش شما: {count} سفارش\n"
+                "🎁 جایزه: <b>{reward}</b> تومان به کیف‌پول همکاری شما اضافه شد.\n\n"
+                "هفته بعد هم منتظرتیم 💪"),
+}
+
+
+def get_leaderboard_settings() -> dict:
+    return get_cfg_json("leaderboard", LEADERBOARD_DEFAULTS)
+
+
+def weekly_top_partners(limit: int = 3) -> list:
+    """برترین همکاران ۷ روز اخیر بر اساس تعداد خرید همکاری."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("""
+            SELECT CAST(user_id AS INTEGER) AS uid, COUNT(*) AS cnt,
+                   COALESCE(SUM(price),0) AS total
+            FROM orders
+            WHERE buyer_type='partner'
+              AND COALESCE(status,'active') != 'returned'
+              AND created_at > datetime('now','localtime','-7 days')
+            GROUP BY CAST(user_id AS INTEGER)
+            ORDER BY cnt DESC, total DESC
+            LIMIT ?;
+        """, (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
+# ─── ۷) تنظیمات رمزارز / کانال / تبلیغ / وب‌اپ ────────────────────────────
+
+CRYPTO_DEFAULTS = {"enabled": 0, "usdt_trc20": "", "trx": "",
+                   "note": ("💡 <b>راهنمای پرداخت رمزارز:</b>\n\n""۱. مبلغ به تومان را وارد کنید\n""۲. به آدرس نشان‌داده‌شده واریز کنید\n""۳. TXID (هش تراکنش) را برای ما ارسال کنید\n\n""⏳ پس از تأیید تراکنش (معمولاً ۱۵-۳۰ دقیقه)، کیف‌پول شارژ می‌شود.")}
+SOCIAL_DEFAULTS = {"channel_id": "", "sale_post": 0, "rating": 1, "upsell": 1,
+                   "sale_post_text": (
+                       "✅ <b>فروش موفق!</b>\n\n"
+                       "🛍 محصول «{title}» همین الان خریداری شد.\n\n"
+                       "از ربات ما خرید کنید — تحویل آنی و تضمینی 🚀"
+                   )}
+PROMO_DEFAULTS  = {"text": (
+    "🔥 <b>فروشگاه دیجیتال</b>\n\n"
+    "✅ تحویل فوری و آنی پس از پرداخت\n"
+    "✅ پشتیبانی ۲۴ ساعته\n"
+    "✅ قیمت‌های رقابتی و تضمینی\n"
+    "✅ سابقه و اعتبار بالا\n\n"
+    "🔗 با لینک اختصاصی من عضو شو:\n"
+    "{link}\n\n"
+    "🎁 با عضویت از طریق لینک من، هدیه خوش‌آمدگویی دریافت کن!"
+)}
+
+
+def get_crypto_settings() -> dict:
+    return get_cfg_json("crypto", CRYPTO_DEFAULTS)
+
+
+def get_social_settings() -> dict:
+    return get_cfg_json("social", SOCIAL_DEFAULTS)
+
+
+def get_promo_settings() -> dict:
+    return get_cfg_json("promo", PROMO_DEFAULTS)
+
+
+def save_crypto_receipt(user_id: int, amount: int, network: str, txid: str) -> int:
+    """رسید رمزارز — در همان جدول card_receipts با method مجزا."""
+    ensure_card_receipts_schema()
+    ensure_growth_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO card_receipts (user_id, amount, file_id, method, txid) VALUES (?,?,?,?,?);",
+            (user_id, amount, "", f"crypto_{network}", txid.strip()))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+# ─── ۶) پاداش عضویت (به‌جای اولین خرید) + مسیریابی کیف‌پول ─────────────────
+
+def _is_approved_partner(user_id: int) -> bool:
+    conn = _get_connection()
+    try:
+        r = conn.execute(
+            "SELECT 1 FROM partners WHERE CAST(tg_user_id AS INTEGER)=? AND status='approved' LIMIT 1;",
+            (int(user_id),)).fetchone()
+        return bool(r)
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def credit_referrer(referrer_id: int, amount: int, note: str) -> str:
+    """پرداخت به معرف — همکار → کیف همکاری، کاربر عادی → کیف اصلی. برمی‌گرداند نوع کیف."""
+    if _is_approved_partner(referrer_id):
+        credit_partner_wallet(referrer_id, amount, note=note)
+        return "partner"
+    add_wallet_balance(referrer_id, amount)
+    return "main"
+
+
+
+
+def ensure_invite_cap_schema():
+    """ستون invite_count در جدول users."""
+    global _ENSURE_INVITE_CAP_SCHEMA_DONE
+    if _ENSURE_INVITE_CAP_SCHEMA_DONE:
+        return
+    _ENSURE_INVITE_CAP_SCHEMA_DONE = True
+    conn = _get_connection()
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(users);").fetchall()}
+        if "invite_count" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN invite_count INTEGER DEFAULT 0;")
+        if "invite_cap_reset" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN invite_cap_reset INTEGER DEFAULT 0;")
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def check_invite_cap(referrer_id: int) -> dict:
+    """بررسی سقف دعوت — {ok, count, cap, reset_needed}."""
+    from db import get_cfg_json
+    settings = get_cfg_json("referral_settings_ext", {
+        "max_invites": 0, "cap_reset_on_purchase": 1})
+    cap = int(settings.get("max_invites") or 0)
+    if cap <= 0:
+        return {"ok": True, "count": 0, "cap": 0}
+    ensure_invite_cap_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT invite_count, invite_cap_reset FROM users WHERE CAST(user_id AS INTEGER)=?;",
+            (referrer_id,)).fetchone()
+        count = int(row[0] if row else 0)
+        reset = int(row[1] if row else 0)
+        return {"ok": count < cap or bool(reset), "count": count, "cap": cap,
+                "reset_after_purchase": int(settings.get("cap_reset_on_purchase") or 1)}
+    finally:
+        conn.close()
+
+
+def increment_invite_count(referrer_id: int):
+    ensure_invite_cap_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET invite_count=COALESCE(invite_count,0)+1 WHERE CAST(user_id AS INTEGER)=?;",
+            (referrer_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reset_invite_cap_after_purchase(user_id: int):
+    """بعد از خرید، سقف دعوت مجدداً فعال می‌شود."""
+    ensure_invite_cap_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET invite_count=0, invite_cap_reset=0 WHERE CAST(user_id AS INTEGER)=?;",
+            (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def pay_signup_referral_reward(referrer_id: int, referred_id: int) -> dict:
+    """پاداش ثابت معرفی — همان لحظه عضویت، فقط یک‌بار (قفل با پرچم rewarded).
+    Returns: {paid, amount, wallet}"""
+    ensure_referral_schema()
+    settings = get_referral_settings()
+    if not settings.get("is_active"):
+        return {"paid": False}
+    amount = int(settings.get("reward_amount") or 0)
+    if amount <= 0:
+        return {"paid": False}
+    conn = _get_connection()
+    try:
+        # چک اول: آیا قبلاً پاداش داده شده؟
+        row = conn.execute(
+            "SELECT id FROM referrals WHERE referrer_id=? AND referred_id=? AND rewarded=0 LIMIT 1;",
+            (referrer_id, referred_id)).fetchone()
+        if not row:
+            conn.close()
+            return {"paid": False}
+        conn.execute(
+            "UPDATE referrals SET rewarded=1, reward_amount=?, rewarded_at=datetime('now','localtime') "
+            "WHERE referrer_id=? AND referred_id=? AND rewarded=0;",
+            (amount, referrer_id, referred_id))
+        conn.commit()
+    finally:
+        try: conn.close()
+        except Exception: pass
+    # ← مورد ۱۰: فقط همکار تأییدشده پاداش دعوت می‌گیرد
+    if not _is_approved_partner(referrer_id):
+        return {"paid": False}
+    wallet = credit_referrer(referrer_id, amount,
+                             note=f"پاداش معرفی کاربر {referred_id}")
+    return {"paid": True, "amount": amount, "wallet": wallet}
+
+
+_FLASH_MAP_CACHE = {"t": 0.0, "map": {}}
+
+def get_active_flash_map() -> dict:
+    """{product_id: percent} فروش‌های فوری زنده — کش ۳۰ ثانیه برای لیبل لیست‌ها."""
+    now = _time.time()
+    if now - _FLASH_MAP_CACHE["t"] < 30:
+        return _FLASH_MAP_CACHE["map"]
+    ensure_growth_schema()
+    m = {}
+    conn = _get_connection()
+    try:
+        for r in conn.execute("""
+            SELECT product_id, percent FROM flash_sales
+            WHERE is_active=1 AND datetime('now','localtime') BETWEEN starts_at AND ends_at;"""):
+            m[int(r[0])] = int(r[1])
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    _FLASH_MAP_CACHE["t"] = now
+    _FLASH_MAP_CACHE["map"] = m
+    return m
+
+
+def flash_map_invalidate():
+    _FLASH_MAP_CACHE["t"] = 0.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── App Content (PWA) — آموزش/اخبار/امکانات ─────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+_ENSURE_APP_CONTENT_DONE = False
+
+def ensure_app_content_schema():
+    """جدول محتوای اپ PWA — الگوی مشابه card_receipts (سازگار SQLite/PG)."""
+    global _ENSURE_APP_CONTENT_DONE
+    if _ENSURE_APP_CONTENT_DONE:
+        return
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_content (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL DEFAULT 'news',
+                title TEXT NOT NULL,
+                body TEXT DEFAULT '',
+                image_url TEXT DEFAULT '',
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+        _ENSURE_APP_CONTENT_DONE = True
+    finally:
+        conn.close()
+
+
+def add_app_content(kind: str, title: str, body: str = "", image_url: str = "") -> int:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        from db_conn import is_postgres as _is_pg
+        if _is_pg():
+            cur = conn.execute(
+                "INSERT INTO app_content (kind,title,body,image_url) VALUES (?,?,?,?) RETURNING id;",
+                (kind, title, body, image_url))
+            row = cur.fetchone()
+            conn.commit()
+            if row is None:
+                return 0
+            return int(row["id"] if hasattr(row, "keys") else row[0])
+        cur = conn.execute(
+            "INSERT INTO app_content (kind,title,body,image_url) VALUES (?,?,?,?);",
+            (kind, title, body, image_url))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_app_content(cid: int, kind: str, title: str, body: str,
+                       image_url: str, is_active: int) -> None:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE app_content SET kind=?, title=?, body=?, image_url=?, is_active=? WHERE id=?;",
+            (kind, title, body, image_url, int(is_active), int(cid)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_app_content(cid: int) -> None:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM app_content WHERE id=?;", (int(cid),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_app_content(kind: str | None = None, active_only: bool = True, limit: int = 100) -> list:
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        q = "SELECT * FROM app_content WHERE 1=1"
+        params = []
+        if kind:
+            q += " AND kind=?"
+            params.append(kind)
+        if active_only:
+            q += " AND is_active=1"
+        q += " ORDER BY id DESC LIMIT ?;"
+        params.append(int(limit))
+        rows = conn.execute(q, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_app_content_item(cid: int):
+    ensure_app_content_schema()
+    conn = _get_connection()
+    try:
+        r = conn.execute("SELECT * FROM app_content WHERE id=?;", (int(cid),)).fetchone()
+        return dict(r) if r else None
     finally:
         conn.close()

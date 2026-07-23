@@ -73,6 +73,30 @@ _bot_thread_started = False
 from admin_panel import router as _admin_router, _get_admin as _panel_get_admin, _make_session as _panel_make_session
 app.include_router(_admin_router)
 
+# API رسمی برای PWA/اپ‌ها
+try:
+    from api import router as _api_router
+    app.include_router(_api_router)
+    logger.info("✅ API router registered at /api/v1")
+except Exception as _ex:
+    logger.warning("API router not loaded: %s", _ex)
+
+# ── PWA استاتیک (/app) + مدیای آپلودی (/app-media) ─────────────────────────
+try:
+    from fastapi.staticfiles import StaticFiles
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    _PWA_DIR = os.path.join(_BASE_DIR, "app")
+    _PWA_MEDIA = os.path.join(_BASE_DIR, "app_media")
+    os.makedirs(_PWA_MEDIA, exist_ok=True)
+    if os.path.isdir(_PWA_DIR):
+        app.mount("/app", StaticFiles(directory=_PWA_DIR, html=True), name="pwa")
+        app.mount("/app-media", StaticFiles(directory=_PWA_MEDIA), name="pwa_media")
+        logger.info("✅ PWA mounted at /app")
+    else:
+        logger.warning("PWA dir not found: %s", _PWA_DIR)
+except Exception as _ex:
+    logger.warning("PWA mount failed: %s", _ex)
+
 
 @app.middleware("http")
 async def _refresh_admin_session(request, call_next):
@@ -440,77 +464,211 @@ _bot_module_ref = None  # برای webhook mode
 
 
 def maybe_start_bot_polling() -> None:
+    """
+    نقطه‌ی ورود ربات — بر اساس تنظیم ذخیره‌شده در bot_config شروع می‌کند:
+    - bot_run_mode = 'webhook' → webhook ست می‌شود
+    - bot_run_mode = 'polling' → thread polling استارت می‌شود
+    - bot_run_mode = 'stopped' → ربات متوقف می‌ماند تا از پنل روشن شود
+    اگر تنظیم نبود، از env var USE_WEBHOOK استفاده می‌کند (سازگاری قدیم).
+    """
     global _bot_thread_started, _bot_module_ref
     if _bot_thread_started or not RUN_BOT_IN_PAYMENT_SERVICE or not BOT_TOKEN:
         return
 
-    USE_WEBHOOK = os.getenv("USE_WEBHOOK", "0") == "1"
+    import bot as bot_module
+    _bot_module_ref = bot_module
+    bot_module.init_db(bot_module.DB_PATH)
+    bot_module.ensure_pending_schema()
+    bot_module._ensure_delivery_table()
+    bot_module.ticket_ensure_schema()
 
-    if USE_WEBHOOK:
-        # ── Webhook mode ──────────────────────────────────────────────
-        import bot as bot_module
-        _bot_module_ref = bot_module
-        bot_module.init_db(bot_module.DB_PATH)
-        bot_module.ensure_pending_schema()
-        bot_module._ensure_delivery_table()
-        bot_module.ticket_ensure_schema()
-        webhook_url = os.getenv("WEBHOOK_URL", "")
-        if webhook_url:
-            try:
-                bot_module.bot.remove_webhook()
-                import time; time.sleep(1)
-                bot_module.bot.set_webhook(url=webhook_url)
-                logger.info("Webhook set: %s", webhook_url)
-            except Exception as ex:
-                logger.error("set_webhook failed: %s", ex)
+    # تصمیم اولیه: از bot_config یا env
+    try:
+        from db import get_cfg
+        mode = (get_cfg("bot_run_mode", "") or "").strip().lower()
+    except Exception:
+        mode = ""
+    if mode not in ("webhook", "polling", "stopped"):
+        # سازگاری قدیم: اگه تنظیم نبود، از env
+        mode = "webhook" if os.getenv("USE_WEBHOOK", "0") == "1" else "polling"
+
+    # endpoint webhook در هر حالتی روی FastAPI ثبت می‌شود، فقط تلگرام تصمیم می‌گیرد
+    # از آن استفاده کند یا نه. این کار سوییچ نرم را ممکن می‌سازد.
+    _register_webhook_endpoint(bot_module)
+
+    if mode == "stopped":
+        logger.info("Bot run mode: stopped (waiting for panel action)")
         _bot_thread_started = True
         return
 
-    # ── Polling mode ──────────────────────────────────────────────────
-    def runner() -> None:
-        import bot as bot_module
-        import time
+    if mode == "webhook":
+        _activate_webhook(bot_module)
+    else:
+        _activate_polling(bot_module)
 
-        bot_module.init_db(bot_module.DB_PATH)
-        bot_module.ensure_pending_schema()
-        bot_module._ensure_delivery_table()
-        bot_module.ticket_ensure_schema()
+    _bot_thread_started = True
 
+
+# ── سه تابع کمکی برای مدیریت رانتایم ───────────────────────────────────
+
+_polling_thread = None
+_polling_stop_flag = threading.Event()
+
+
+def _register_webhook_endpoint(bot_module) -> None:
+    """endpoint webhook را روی FastAPI ثبت می‌کند (idempotent)."""
+    if getattr(app, "_webhook_registered", False):
+        return
+    from config import WEBHOOK_SECRET
+    from fastapi import Request as _Req, HTTPException as _HTTPExc
+    from telebot import types as _tg_types
+
+    webhook_path = f"/telegram/webhook/{BOT_TOKEN}"
+
+    @app.post(webhook_path)
+    async def _telegram_webhook(request: _Req):
+        hdr = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if hdr != WEBHOOK_SECRET:
+            raise _HTTPExc(status_code=403, detail="invalid secret")
         try:
-            bot_module.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Webhook cleared")
+            payload = await request.json()
+            update  = _tg_types.Update.de_json(payload)
+            threading.Thread(
+                target=lambda: bot_module.bot.process_new_updates([update]),
+                name="tg-update-handler",
+                daemon=True,
+            ).start()
         except Exception as ex:
-            logger.warning("delete_webhook: %s", ex)
+            logger.exception("webhook processing error: %s", ex)
+        return {"ok": True}
 
-        time.sleep(3)
+    app._webhook_registered = True
 
-        logger.info("Bot polling started (ticket v2)")
+
+def _activate_webhook(bot_module) -> bool:
+    """فعال کردن webhook + توقف polling اگر در حال اجراست."""
+    from config import WEBHOOK_BASE_URL, WEBHOOK_SECRET
+    _stop_polling_thread()
+    webhook_url = f"{WEBHOOK_BASE_URL}/telegram/webhook/{BOT_TOKEN}"
+    try:
+        bot_module.bot.remove_webhook()
+        import time as _t; _t.sleep(1)
+        bot_module.bot.set_webhook(
+            url=webhook_url,
+            secret_token=WEBHOOK_SECRET,
+            allowed_updates=["message", "callback_query", "inline_query"],
+            drop_pending_updates=False,
+        )
+        logger.info("✅ Webhook activated: %s", webhook_url)
+        try:
+            from db import set_cfg
+            set_cfg("bot_run_mode", "webhook")
+        except Exception: pass
+        return True
+    except Exception as ex:
+        logger.error("Webhook activation failed: %s", ex)
+        return False
+
+
+def _activate_polling(bot_module) -> bool:
+    """فعال کردن polling در یک thread + حذف webhook از سمت تلگرام."""
+    global _polling_thread
+    if _polling_thread and _polling_thread.is_alive():
+        return True  # از قبل روشنه
+    try:
+        bot_module.bot.delete_webhook(drop_pending_updates=False)
+    except Exception as ex:
+        logger.warning("delete_webhook: %s", ex)
+
+    _polling_stop_flag.clear()
+
+    def runner() -> None:
+        import time
+        logger.info("✅ Polling activated")
         backoff = 5
-        while True:
+        while not _polling_stop_flag.is_set():
             try:
                 bot_module.bot.infinity_polling(
-                    timeout=30,
-                    long_polling_timeout=20,
+                    timeout=20,
+                    long_polling_timeout=10,
                     allowed_updates=["message", "callback_query"],
                     restart_on_change=False,
                 )
                 backoff = 5
             except Exception as ex:
+                if _polling_stop_flag.is_set():
+                    break
                 err_str = str(ex)
                 if "409" in err_str or "Conflict" in err_str:
                     logger.warning("409 Conflict — waiting %ds", backoff)
                     time.sleep(backoff)
                     backoff = min(backoff * 2, 60)
-                    try:
-                        bot_module.bot.delete_webhook(drop_pending_updates=True)
-                    except Exception:
-                        pass
+                    try: bot_module.bot.delete_webhook(drop_pending_updates=True)
+                    except Exception: pass
                 else:
-                    logger.exception("Bot polling crashed; restarting in 5s")
+                    logger.exception("Polling crashed; restarting in 5s")
                     time.sleep(5)
+        logger.info("Polling thread exited")
 
-    threading.Thread(target=runner, name="telegram-bot-polling", daemon=True).start()
-    _bot_thread_started = True
+    _polling_thread = threading.Thread(target=runner, name="stockland-polling", daemon=True)
+    _polling_thread.start()
+    try:
+        from db import set_cfg
+        set_cfg("bot_run_mode", "polling")
+    except Exception: pass
+    return True
+
+
+def _stop_polling_thread() -> None:
+    """polling thread را به آرامی متوقف می‌کند."""
+    global _polling_thread
+    if not _polling_thread or not _polling_thread.is_alive():
+        return
+    _polling_stop_flag.set()
+    try:
+        # trick برای بیدار کردن infinity_polling
+        import bot as _bm
+        _bm.bot.stop_polling()
+    except Exception:
+        pass
+    _polling_thread.join(timeout=3)
+    _polling_thread = None
+
+
+# ── API عمومی برای پنل — سوییچ نرم بدون restart ───────────────────────
+
+def switch_bot_mode(new_mode: str) -> tuple:
+    """
+    تغییر حالت ربات از پنل. new_mode ∈ {'webhook','polling','stopped'}
+    Returns: (ok: bool, message: str)
+    """
+    global _bot_thread_started
+    if new_mode not in ("webhook", "polling", "stopped"):
+        return False, "حالت نامعتبر"
+    try:
+        import bot as bot_module
+    except Exception as ex:
+        return False, f"خطای import ربات: {ex}"
+
+    _register_webhook_endpoint(bot_module)
+
+    if new_mode == "webhook":
+        ok = _activate_webhook(bot_module)
+        return (ok, "Webhook فعال شد" if ok else "خطا در فعال‌سازی Webhook")
+    if new_mode == "polling":
+        try:
+            bot_module.bot.remove_webhook()
+        except Exception: pass
+        ok = _activate_polling(bot_module)
+        return (ok, "Polling فعال شد" if ok else "خطا در فعال‌سازی Polling")
+    # stopped
+    _stop_polling_thread()
+    try:
+        bot_module.bot.remove_webhook()
+        from db import set_cfg
+        set_cfg("bot_run_mode", "stopped")
+    except Exception: pass
+    return True, "ربات متوقف شد"
 
 
 @app.post("/webhook")
