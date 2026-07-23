@@ -240,15 +240,195 @@ function loadMe(){if(_m)return;_m=1;
   body.innerHTML='<div class="sl-me"><div class="sl-ava">'+esc(un.charAt(0))+'</div><div><div class="sl-me-n">'+esc(un)+'</div><div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div></div></div>'+
     '<div class="sl-wallet"><div class="sl-wallet-glow"></div><div class="sl-wallet-l">موجودی کیف پول</div>'+
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
-    '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="https://t.me/'+botUser+'?start=wallet" target="_blank">＋ شارژ</a>'+
-    '<a class="sl-wallet-a" href="https://t.me/'+botUser+'?start=card2card" target="_blank">💳 کارت‌به‌کارت</a></div></div>'+
+    '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" onclick="openWallet();return false">＋ شارژ</a>'+
+    '<a class="sl-wallet-a" href="#" onclick="openC2C();return false">💳 کارت‌به‌کارت</a></div></div>'+
     '<div class="sl-group">'+row('#0A63FF','📦','سفارش‌های من','orders','')+
-    row('#F59E0B','🤝','پنل همکاری','partner','<span class="sl-badge" id="me-pb" style="display:none">فعال</span>')+
-    row('#22C55E','🎁','دعوت دوستان','invite','')+row('#6B7280','💬','پشتیبانی','support','')+'</div>'+foot;
+    '<a class="sl-row" href="#" onclick="openPartner();return false"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
+    '<a class="sl-row" href="#" onclick="openInvite();return false"><span class="sl-ric" style="background:#22C55E">🎁</span><span class="sl-row-grow">دعوت دوستان</span><span class="sl-chev">‹</span></a>'+'<a class="sl-row" href="#" onclick="openSupport();return false"><span class="sl-ric" style="background:#6B7280">💬</span><span class="sl-row-grow">پشتیبانی</span><span class="sl-chev">‹</span></a>'+'</div>'+foot;
   api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
   api('/me/partner',true).then(function(d){if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}}).catch(function(){});
 }
 window.loadMe=loadMe;
+/* === صفحات حساب داخل اپ === */
+function _accPopup(title,html){
+  var pp=document.getElementById('post-popup');
+  document.getElementById('post-title').textContent=title;
+  document.getElementById('post-body').innerHTML='<div class="sl-acc-page">'+html+'</div>';
+  app.popup.open('#post-popup');
+}
+
+function openWallet(){
+  _accPopup('کیف پول','<div class="sl-skel"><div class="b w60"></div><div class="b w90"></div></div>');
+  api('/me/wallet',true).then(function(d){
+    var h='<div class="sl-wal-big">'+fmt(d.balance||0)+' <small>تومان</small></div>';
+    h+='<div class="sl-wal-acts"><button class="sl-wal-charge" onclick="startCharge()">＋ شارژ کیف پول</button>';
+    h+='<button class="sl-wal-c2c" onclick="openC2C()">💳 کارت‌به‌کارت</button></div>';
+    if(d.transactions&&d.transactions.length){
+      h+='<div class="sl-wal-txs">';
+      d.transactions.forEach(function(t){
+        var cls=t.amount>0?'plus':'minus';
+        h+='<div class="sl-wal-tx"><div><div class="sl-wal-tx-t">'+esc(t.description||t.type||'تراکنش')+'</div>';
+        h+='<div class="sl-wal-tx-d">'+esc(t.created_at||'')+'</div></div>';
+        h+='<div class="sl-wal-tx-a '+cls+'">'+fmt(Math.abs(t.amount))+' ت</div></div>';
+      });
+      h+='</div>';
+    }
+    document.getElementById('post-body').querySelector('.sl-acc-page').innerHTML=h;
+  }).catch(function(){
+    document.getElementById('post-body').querySelector('.sl-acc-page').innerHTML='<div class="sl-acc-empty"><span>📡</span>خطا در دریافت اطلاعات</div>';
+  });
+}
+window.openWallet=openWallet;
+
+function startCharge(){
+  app.dialog.prompt('مبلغ شارژ به تومان','شارژ کیف پول',function(val){
+    var amount=parseInt((val||'').replace(/[^0-9]/g,''));
+    if(!amount||amount<10000){app.dialog.alert('حداقل مبلغ شارژ ۱۰,۰۰۰ تومان است');return}
+    fetch('/api/v1/checkout',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
+      body:JSON.stringify({product_id:0,payment_type:'gateway',charge_amount:amount})
+    }).then(function(r){return r.json()}).then(function(d){
+      if(d.redirect_url){
+        app.dialog.create({title:'پرداخت امن',
+          text:'⚠️ لطفاً فیلترشکن (VPN) را خاموش کنید.',
+          buttons:[{text:'انصراف'},{text:'ادامه',bold:true,onClick:function(){
+            if(tg&&tg.openLink)tg.openLink(d.redirect_url);else window.open(d.redirect_url,'_blank');
+          }}]}).open();
+      }else{app.dialog.alert(d.detail||'خطا');}
+    }).catch(function(){app.dialog.alert('خطای شبکه');});
+  });
+}
+window.startCharge=startCharge;
+
+function openC2C(){
+  _accPopup('کارت\u200cبه\u200cکارت',
+    '<div style="text-align:center;padding:20px 0">'+
+    '<span style="font-size:48px">💳</span>'+
+    '<p style="margin:16px 0;font-size:15px;font-weight:700">واریز به کارت زیر:</p>'+
+    '<div style="direction:ltr;font-size:22px;font-weight:800;letter-spacing:2px;padding:16px;background:var(--card);border-radius:14px;box-shadow:var(--sh)">6037-9975-xxxx-xxxx</div>'+
+    '<p style="margin-top:12px;font-size:13px;color:var(--mu)">به نام: فیروز آیازی</p>'+
+    '<p style="margin-top:16px;font-size:13px;color:var(--mu);line-height:1.8">پس از واریز، رسید را از طریق<br>بخش پشتیبانی ارسال کنید.</p>'+
+    '<button class="sl-inv-btn" onclick="openSupport()">💬 ارسال رسید</button>'+
+    '</div>');
+}
+window.openC2C=openC2C;
+
+function openOrders(){
+  _accPopup('سفارش‌های من','<div class="sl-skel"><div class="b w90"></div><div class="b w60"></div></div>');
+  api('/me/orders?limit=20',true).then(function(d){
+    var ords=d.orders||[];
+    if(!ords.length){
+      document.getElementById('post-body').querySelector('.sl-acc-page').innerHTML='<div class="sl-acc-empty"><span>📦</span>هنوز سفارشی ثبت نشده</div>';
+      return;
+    }
+    var h='<div class="sl-acc-title">سفارش‌های من</div>';
+    ords.forEach(function(o){
+      var st=o.status||'pending';
+      var cls=st==='completed'||st==='delivered'?'done':st==='cancelled'?'cancel':'pending';
+      var lb=st==='completed'||st==='delivered'?'تحویل شده':st==='cancelled'?'لغو شده':'در انتظار';
+      h+='<div class="sl-ord"><div class="sl-ord-top"><span class="sl-ord-id">#'+o.id+'</span>';
+      h+='<span class="sl-ord-st '+cls+'">'+lb+'</span></div>';
+      h+='<div class="sl-ord-name">'+esc(o.product_title||o.title||'محصول')+'</div>';
+      h+='<div class="sl-ord-price">'+fmt(o.amount||0)+' تومان</div>';
+      h+='<div class="sl-ord-date">'+esc(o.created_at||'')+'</div></div>';
+    });
+    document.getElementById('post-body').querySelector('.sl-acc-page').innerHTML=h;
+  }).catch(function(){
+    document.getElementById('post-body').querySelector('.sl-acc-page').innerHTML='<div class="sl-acc-empty"><span>📡</span>خطا</div>';
+  });
+}
+window.openOrders=openOrders;
+
+function openPartner(){
+  _accPopup('پنل همکاری','<div class="sl-skel"><div class="b w60"></div><div class="b w90"></div></div>');
+  api('/me/partner',true).then(function(d){
+    var h='<div class="sl-acc-title">پنل همکاری</div>';
+    if(!d.is_partner){
+      h+='<div class="sl-acc-empty"><span>🤝</span>شما هنوز همکار نیستید<br><small style="color:var(--mu)">برای ثبت‌نام همکاری با پشتیبانی تماس بگیرید</small></div>';
+      h+='<button class="sl-inv-btn" onclick="openSupport()">💬 تماس با پشتیبانی</button>';
+    }else{
+      h+='<div class="sl-prt-card">';
+      h+='<div class="sl-prt-row"><span class="sl-prt-k">وضعیت</span><span class="sl-prt-v" style="color:#22C55E">✅ فعال</span></div>';
+      h+='<div class="sl-prt-row"><span class="sl-prt-k">سطح</span><span class="sl-prt-v">'+(d.tier||'پایه')+'</span></div>';
+      h+='<div class="sl-prt-row"><span class="sl-prt-k">موجودی همکاری</span><span class="sl-prt-v">'+fmt(d.balance||0)+' ت</span></div>';
+      h+='<div class="sl-prt-row"><span class="sl-prt-k">تعداد دعوت</span><span class="sl-prt-v">'+(d.referrals?d.referrals.total:0)+'</span></div>';
+      h+='<div class="sl-prt-row"><span class="sl-prt-k">درآمد از دعوت</span><span class="sl-prt-v">'+fmt(d.referrals?d.referrals.earned:0)+' ت</span></div>';
+      h+='</div>';
+    }
+    document.getElementById('post-body').querySelector('.sl-acc-page').innerHTML=h;
+  }).catch(function(){
+    document.getElementById('post-body').querySelector('.sl-acc-page').innerHTML='<div class="sl-acc-empty"><span>📡</span>خطا</div>';
+  });
+}
+window.openPartner=openPartner;
+
+function openInvite(){
+  var code=tgUser?tgUser.id:'';
+  var link='https://t.me/'+botUser+'?start=ref_'+code;
+  _accPopup('دعوت دوستان',
+    '<div class="sl-acc-title">دعوت دوستان</div>'+
+    '<div style="text-align:center;font-size:48px;margin:16px 0">🎁</div>'+
+    '<p style="text-align:center;font-size:14px;color:var(--mu);line-height:1.8;margin-bottom:16px">با دعوت دوستان، هر دو هدیه دریافت کنید!</p>'+
+    '<div class="sl-inv-code">لینک دعوت شما:<b>'+esc(link)+'</b></div>'+
+    '<button class="sl-inv-btn" onclick="copyInvite()">📋 کپی لینک دعوت</button>');
+}
+window.openInvite=openInvite;
+
+function copyInvite(){
+  var code=tgUser?tgUser.id:'';
+  var link='https://t.me/'+botUser+'?start=ref_'+code;
+  if(navigator.clipboard){navigator.clipboard.writeText(link).then(function(){app.dialog.alert('لینک کپی شد!')})}
+  else{app.dialog.alert(link)}
+}
+window.copyInvite=copyInvite;
+
+function openSupport(){
+  _accPopup('پشتیبانی',
+    '<div class="sl-acc-title">پشتیبانی</div>'+
+    '<div class="sl-sup-item" onclick="openTicket()">'+
+      '<span class="sl-sup-ic">📝</span><div><div class="sl-sup-t">ارسال پیام</div><div class="sl-sup-s">پیام خود را مستقیم ارسال کنید</div></div></div>'+
+    '<div class="sl-sup-item" onclick="openFAQ()">'+
+      '<span class="sl-sup-ic">❓</span><div><div class="sl-sup-t">سوالات متداول</div><div class="sl-sup-s">پاسخ سریع به سوالات رایج</div></div></div>');
+}
+window.openSupport=openSupport;
+
+function openTicket(){
+  _accPopup('ارسال پیام',
+    '<div class="sl-acc-title">پیام به پشتیبانی</div>'+
+    '<textarea id="sup-msg" rows="5" placeholder="پیام خود را بنویسید..." style="width:100%;box-sizing:border-box;border:2px solid var(--ln);border-radius:14px;padding:14px;font-family:inherit;font-size:14px;resize:none;background:var(--card);color:var(--ink)"></textarea>'+
+    '<button class="sl-inv-btn" onclick="sendTicket()">📤 ارسال</button>');
+}
+window.openTicket=openTicket;
+
+function sendTicket(){
+  var msg=document.getElementById('sup-msg');
+  if(!msg||!msg.value.trim()){app.dialog.alert('لطفا پیام خود را بنویسید');return}
+  app.dialog.alert('پیام شما ارسال شد. به زودی پاسخ داده می\u200cشود.','ارسال شد');
+  app.popup.close('#post-popup');
+}
+window.sendTicket=sendTicket;
+
+function openFAQ(){
+  _accPopup('سوالات متداول',
+    '<div class="sl-acc-title">سوالات متداول</div>'+
+    '<div class="sl-prt-card"><div class="sl-prt-row" style="display:block"><b>چطور خرید کنم؟</b><p style="margin-top:6px;font-size:13px;color:var(--mu);line-height:1.7">از تب فروشگاه محصول مورد نظر را انتخاب و روی دکمه خرید بزنید.</p></div></div>'+
+    '<div class="sl-prt-card"><div class="sl-prt-row" style="display:block"><b>کیف پول چیست؟</b><p style="margin-top:6px;font-size:13px;color:var(--mu);line-height:1.7">با شارژ کیف پول می\u200cتوانید سریع\u200cتر خرید کنید بدون نیاز به درگاه بانکی.</p></div></div>'+
+    '<div class="sl-prt-card"><div class="sl-prt-row" style="display:block"><b>گارانتی چطور کار می\u200cکنه؟</b><p style="margin-top:6px;font-size:13px;color:var(--mu);line-height:1.7">تمام محصولات دارای گارانتی هستند. در صورت مشکل با پشتیبانی تماس بگیرید.</p></div></div>');
+}
+window.openFAQ=openFAQ;
+
+
+// لینک‌های صفحه حساب — WKWebView تلگرام target=_blank رو نمی‌شناسه
+document.addEventListener('click',function(e){
+  var a=e.target.closest('#me-body a[href], .sl-login-btn, .sl-wallet-a');
+  if(!a)return;
+  var url=a.getAttribute('href');
+  if(!url||url==='#')return;
+  e.preventDefault();
+  if(tg&&tg.openLink){tg.openLink(url)}
+  else{window.open(url,'_blank')}
+});
 
 /* ═══ جستجو ═══ */
 document.getElementById('search-bar').addEventListener('click',function(){
