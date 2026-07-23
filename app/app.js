@@ -215,7 +215,7 @@ function openP(pid){
       if(!bn)return;
       bn.addEventListener('click',function(){
         app.popup.close('#prod-popup');
-        openCheckout(p.id);
+        setTimeout(function(){openCheckout(p.id)},350);
       });
     },150);
   }).catch(function(){b.innerHTML=err('خطا');});
