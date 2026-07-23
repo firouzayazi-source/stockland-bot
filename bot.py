@@ -17,6 +17,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 apihelper.CONNECT_TIMEOUT = 15
 apihelper.READ_TIMEOUT = 60
 import re
+import time
+import threading
 import html
 from db import subtract_wallet_balance
 from db import (
@@ -175,6 +177,59 @@ set_ui_cache_clear_callback(ui_cache_clear)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ─── اعداد فارسی — تبدیل سراسری همه پیام‌های خروجی ربات ────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+import re as _fa_re
+_FA_DIGIT_MAP = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+# لینک‌ها، بلوک‌های code/pre، یوزرنیم‌ها و دستورات دست نمی‌خورند
+_FA_SKIP_RE = _fa_re.compile(
+    r'(<code>.*?</code>|<pre>.*?</pre>|https?://[^\s<]+|t\.me/[^\s<]+|@\w+|/\w+)',
+    _fa_re.S
+)
+
+def _fa_digits(text):
+    """تبدیل ارقام لاتین به فارسی — به‌جز لینک‌ها و بلوک‌های کد."""
+    if not isinstance(text, str) or not text:
+        return text
+    parts = _FA_SKIP_RE.split(text)
+    return "".join(p if i % 2 else p.translate(_FA_DIGIT_MAP)
+                   for i, p in enumerate(parts) if p is not None)
+
+# پچ توابع ارسال — یک‌بار، سراسری
+_orig_send_message = bot.send_message
+def _fa_send_message(chat_id, text, *args, **kwargs):
+    return _orig_send_message(chat_id, _fa_digits(text), *args, **kwargs)
+bot.send_message = _fa_send_message
+
+_orig_edit_message_text = bot.edit_message_text
+def _fa_edit_message_text(text, *args, **kwargs):
+    return _orig_edit_message_text(_fa_digits(text), *args, **kwargs)
+bot.edit_message_text = _fa_edit_message_text
+
+_orig_reply_to = bot.reply_to
+def _fa_reply_to(message, text, *args, **kwargs):
+    return _orig_reply_to(message, _fa_digits(text), *args, **kwargs)
+bot.reply_to = _fa_reply_to
+
+_orig_send_photo = bot.send_photo
+def _fa_send_photo(chat_id, photo, *args, **kwargs):
+    if "caption" in kwargs:
+        kwargs["caption"] = _fa_digits(kwargs["caption"])
+    return _orig_send_photo(chat_id, photo, *args, **kwargs)
+bot.send_photo = _fa_send_photo
+
+_orig_answer_cbq = bot.answer_callback_query
+def _fa_answer_cbq(callback_query_id, text=None, *args, **kwargs):
+    return _orig_answer_cbq(callback_query_id, _fa_digits(text) if text else text, *args, **kwargs)
+bot.answer_callback_query = _fa_answer_cbq
+
+_orig_edit_caption = bot.edit_message_caption
+def _fa_edit_caption(caption=None, *args, **kwargs):
+    return _orig_edit_caption(_fa_digits(caption) if caption else caption, *args, **kwargs)
+bot.edit_message_caption = _fa_edit_caption
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ─── Rate Limiting ربات ───────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -241,17 +296,21 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     # product می‌تونه tuple یا sqlite3.Row باشه
     if hasattr(product, 'keys'):
+        # sqlite3.Row متد keys() دارد ولی get() ندارد — دسترسی امن:
+        _pk = set(product.keys())
+        def _pg(k, default=None):
+            return product[k] if k in _pk else default
         pid = product["id"]
-        category = category or product.get("category") or str(product.get("category_id", ""))
+        category = category or _pg("category") or str(_pg("category_id", "") or "")
         title = product["title"]
         price = product["price"]
-        description = product.get("description")
-        is_active = product.get("is_active", 1)
-        partner_price = product.get("partner_price")
-        daily_lim_c = product.get("daily_limit_customer") or 0
-        daily_lim_p = product.get("daily_limit_partner") or 0
+        description = _pg("description")
+        is_active = _pg("is_active", 1)
+        partner_price = _pg("partner_price")
+        daily_lim_c = _pg("daily_limit_customer") or 0
+        daily_lim_p = _pg("daily_limit_partner") or 0
         if cat_id is None:
-            cat_id = product.get("category_id")
+            cat_id = _pg("category_id")
     else:
         pid, category, title, price, description, is_active = product[0:6]
         partner_price = product[6] if len(product) > 6 else None
@@ -265,7 +324,10 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
         back_cb = f"back_list_{category}"
 
     partner_ok = (user_id is not None) and is_partner_approved(int(user_id))
-    eff_price = partner_price if (partner_ok and partner_price) else price
+    # partner_price باید > 0 و < price باشه تا اعمال شه
+    eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+    from db import apply_flash_price as _afp
+    eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
     # بررسی سقف خرید روزانه
     if user_id is not None:
@@ -310,9 +372,24 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     # ضمانت
     guarantee = _build_guarantee_text()
 
+    # فاز ۱: نمایش قیمت همکاری — طرح شفاف و سبک برای تلگرام
+    partner_ok_view = (user_id and is_partner_approved(int(user_id)))
+    _raw_base = int(price)  # قیمت پایه قبل از فلش
+    if _flash_sale:
+        _price_line = f"💰 قیمت: <s>{_raw_base:,}</s> ← <b>{int(eff_price):,}</b> تومان 🔥\n"
+    elif partner_ok_view and partner_price and int(partner_price) > 0 and int(partner_price) < int(price):
+        # نمایش دو‌خطی ساده برای همکار: قیمت واقعی (خط‌خورده) + مبلغ قابل پرداخت
+        _price_line = (
+            f"💰 قیمت واقعی محصول: <s>{int(price):,}</s> تومان\n"
+            f"🤝 مبلغ قابل پرداخت شما: <b>{int(eff_price):,}</b> تومان\n"
+        )
+    else:
+        _price_line = f"💰 قیمت: <b>{int(eff_price):,}</b> تومان\n"
+
     text = (
+        f"{_flash_badge(pid, _flash_sale, price, eff_price)}"
         f"نام سرویس: <b>{title}</b>{rating_text}\n"
-        f"قیمت: <b>{eff_price:,}</b> تومان\n\n"
+        f"{_price_line}\n"
         f"{description or 'بدون توضیحات'}"
         f"{faq_text}"
         f"{guarantee}"
@@ -376,7 +453,7 @@ def ensure_pending_schema():
                 """
             )
             # Add missing columns if table existed before (SQLite safe migration)
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(pending_deliveries);").fetchall()}
+            # مهاجرت ستون‌ها — هر ALTER جدا (سازگار Postgres)
             needed = {
                 "order_id": "INTEGER UNIQUE",
                 "user_id": "INTEGER",
@@ -390,8 +467,10 @@ def ensure_pending_schema():
                 "delivered_at": "TEXT",
             }
             for col, decl in needed.items():
-                if col not in cols:
+                try:
                     conn.execute(f"ALTER TABLE pending_deliveries ADD COLUMN {col} {decl};")
+                except Exception:
+                    pass
             conn.commit()
         finally:
             conn.close()
@@ -773,7 +852,7 @@ def _is_menu_or_system_button(text: str) -> bool:
     try:
         system_keys = (
             "MAIN_BTN_MY_ORDERS", "MAIN_BTN_WALLET", "MAIN_BTN_PARTNER_REQUEST",
-            "MAIN_BTN_PARTNER_PANEL", "BTN_PARTNER_GUIDE", "MAIN_BTN_SUPPORT",
+            "MAIN_BTN_PARTNER_PANEL", "BTN_PARTNER_GUIDE", "MAIN_BTN_SUPPORT", "MAIN_BTN_INVITE",
             "MAIN_BTN_OTHER_PRODUCTS", "MAIN_BTN_BUY_APPLE_ID",
         )
         for key in system_keys:
@@ -1057,6 +1136,32 @@ def _check_maintenance_cb(call) -> bool:
         return False
 
 
+def _app_pwa_url() -> str:
+    try:
+        from config import WEBHOOK_BASE_URL
+        return WEBHOOK_BASE_URL.rstrip("/") + "/app/"
+    except Exception:
+        return "https://panel.stland.ir/app/"
+
+
+@bot.message_handler(commands=["app"])
+def handle_app_command(message):
+    url = _app_pwa_url()
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    try:
+        kb.add(types.InlineKeyboardButton("📱 باز کردن اپلیکیشن", web_app=types.WebAppInfo(url)))
+    except Exception:
+        pass
+    kb.add(types.InlineKeyboardButton("🌐 باز کردن در مرورگر (برای نصب)", url=url))
+    bot.send_message(
+        message.chat.id,
+        "📱 <b>اپلیکیشن استوک‌لند</b>\n\n"
+        "آموزش‌ها، اخبار و امکانات ربات — با ظاهر و حس یک اپ واقعی.\n\n"
+        "💡 برای نصب روی صفحه اصلی گوشی: گزینه «مرورگر» را بزنید و از منوی "
+        "Share گزینه <b>Add to Home Screen</b> را انتخاب کنید.",
+        parse_mode="HTML", reply_markup=kb)
+
+
 @bot.message_handler(commands=["start"])
 def handle_start(message):
     init_db(DB_PATH)
@@ -1084,20 +1189,64 @@ def handle_start(message):
                     ensure_referral_schema()
                     settings = get_referral_settings()
                     if settings.get("is_active"):
+                        from db import check_invite_cap, increment_invite_count
+                        _cap = check_invite_cap(referrer_id)
+                        if not _cap["ok"]:
+                            # سقف پر است
+                            try:
+                                _cap_msg = (
+                                    "\u2705 \u06cc\u06a9 \u062f\u0648\u0633\u062a "
+                                    "\u062c\u062f\u06cc\u062f \u0628\u0627 \u0644\u06cc\u0646\u06a9 "
+                                    "\u0634\u0645\u0627 \u0639\u0636\u0648 \u0634\u062f!\n\n"
+                                    "\u26a0\ufe0f \u0634\u0645\u0627 \u0628\u0647 \u0633\u0642\u0641 "
+                                    "\u062f\u0631\u06cc\u0627\u0641\u062a \u067e\u0627\u062f\u0627\u0634 "
+                                    "\u062f\u0639\u0648\u062a \u0631\u0633\u06cc\u062f\u0647\u200c\u0627\u06cc\u062f.\n"
+                                    "\u0628\u0631\u0627\u06cc \u0641\u0639\u0627\u0644\u200c\u0633\u0627\u0632\u06cc "
+                                    "\u0645\u062c\u062f\u062f\u060c \u062d\u062f\u0627\u0642\u0644 "
+                                    "\u06cc\u06a9 \u062e\u0631\u06cc\u062f \u0645\u0648\u0641\u0642 "
+                                    "\u0627\u0646\u062c\u0627\u0645 \u062f\u0647\u06cc\u062f."
+                                )
+                                bot.send_message(referrer_id, _cap_msg)
+                            except Exception:
+                                pass
+                            return  # ثبت نمی‌شود
                         is_new = register_referral(referrer_id, uid)
-                        # اطلاع‌رسانی به معرف — فقط برای عضویت جدید
+                        if is_new:
+                            increment_invite_count(referrer_id)
+                        # 🔎 لاگ تشخیصی — برای ردیابی معرفی‌های ثبت‌نشده
+                        try:
+                            if is_new:
+                                logger.info("REFERRAL ✅ ثبت شد: %s → %s", referrer_id, uid)
+                            else:
+                                from db import _get_connection as _gc
+                                _c = _gc()
+                                _ex = _c.execute("SELECT referrer_id FROM referrals WHERE referred_id=?;", (uid,)).fetchone()
+                                _c.close()
+                                logger.warning("REFERRAL ⛔ ثبت نشد: %s → %s | معرف قبلی: %s",
+                                               referrer_id, uid, (_ex[0] if _ex else "—"))
+                        except Exception:
+                            pass
+                    else:
+                        logger.warning("REFERRAL ⛔ سیستم معرفی غیرفعال است — %s → %s", referrer_id, uid)
+                    if settings.get("is_active"):
+                        # پاداش عضویت + اطلاع‌رسانی به معرف — فقط برای عضویت جدید
                         if is_new:
                             try:
+                                from db import pay_signup_referral_reward
+                                pr = pay_signup_referral_reward(referrer_id, uid)
                                 new_name = (full_name or username or "کاربر جدید").strip()
-                                bot.send_message(
-                                    referrer_id,
+                                msg = (
                                     "🎉 <b>خبر خوب!</b>\n\n"
-                                    f"«{new_name}» با لینک دعوت شما به ربات پیوست.\n\n"
-                                    "زیرمجموعه‌های خود را می‌توانید از بخش "
-                                    "«👥 فروشندگان من» در پنل همکاری مشاهده کنید.\n"
-                                    "هرچه شبکه شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪",
-                                    parse_mode="HTML"
+                                    f"«{new_name}» با لینک دعوت شما به ربات پیوست."
                                 )
+                                if pr.get("paid"):
+                                    wallet_lbl = "کیف‌پول همکاری" if pr.get("wallet") == "partner" else "کیف‌پول"
+                                    msg += f"\n\n💰 پاداش عضویت: <b>{pr['amount']:,}</b> تومان به {wallet_lbl} شما اضافه شد!"
+                                msg += (
+                                    "\n\n💸 از این پس با هر خرید ایشان، پورسانت هم دریافت می‌کنید.\n"
+                                    "هرچه تیم فروش شما بزرگ‌تر شود، درآمد شما بیشتر می‌شود 💪"
+                                )
+                                bot.send_message(referrer_id, msg, parse_mode="HTML")
                             except Exception:
                                 pass
             except Exception:
@@ -1111,25 +1260,8 @@ def handle_start(message):
 
 @bot.message_handler(commands=["referral", "invite"])
 def handle_referral_cmd(message):
-    uid = message.from_user.id
-    from db import get_referral_stats, get_referral_settings, ensure_referral_schema
-    ensure_referral_schema()
-    settings = get_referral_settings()
-    if not settings.get("is_active"):
-        bot.send_message(message.chat.id, "❌ سیستم معرفی فعلاً غیرفعال است.")
-        return
-    stats    = get_referral_stats(uid)
-    bot_info = bot.get_me()
-    link     = f"https://t.me/{bot_info.username}?start=ref_{uid}"
-    bot.send_message(message.chat.id,
-        f"🔗 <b>لینک معرفی شما:</b>\n<code>{link}</code>\n\n"
-        f"👥 معرفی‌شدگان: <b>{stats['total']}</b>\n"
-        f"✅ پرداخت‌شده: <b>{stats['rewarded']}</b>\n"
-        f"💰 کل درآمد: <b>{stats['earned']:,}</b> تومان\n\n"
-        f"📌 به ازای هر خرید اول دوستی که معرفی می‌کنید "
-        f"<b>{settings.get('reward_amount',5000):,}</b> تومان به کیف‌پول شما اضافه می‌شود.",
-        parse_mode="HTML"
-    )
+    """دستور /invite — همان نمای یکپارچه دعوت دوستان."""
+    return _send_invite_view(message.chat.id, message.from_user.id)
 
 
 
@@ -1368,6 +1500,7 @@ def process_wallet_charge_amount(message):
         t("MAIN_BTN_SUPPORT",        DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "")),
         t("MAIN_BTN_PARTNER_REQUEST",DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "")),
         t("MAIN_BTN_PARTNER_PANEL",  DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_PANEL", "")),
+        t("MAIN_BTN_INVITE",         DEFAULT_UI_TEXTS.get("MAIN_BTN_INVITE", "")),
     ]
     if text in system_buttons:
         clear_user_state(uid)
@@ -1419,6 +1552,40 @@ def start_product_payment(
 import sqlite3
 from datetime import datetime
 import html
+
+
+_BOT_USERNAME_CACHE = {"v": ""}
+
+def _bot_username() -> str:
+    """یوزرنیم ربات — فقط یک‌بار از API گرفته می‌شود (حذف تأخیر شبکه از هر بازدید)."""
+    if not _BOT_USERNAME_CACHE["v"]:
+        try:
+            _BOT_USERNAME_CACHE["v"] = bot.get_me().username or ""
+        except Exception:
+            return ""
+    return _BOT_USERNAME_CACHE["v"]
+
+def _flash_badge(pid, sale, base_price, eff_price) -> str:
+    """بنر برجسته فروش فوری: تخفیف + شمارش معکوس + موجودی محدود."""
+    if not sale:
+        return ""
+    try:
+        from db import get_feed_stats
+        _tot, _rem, _dlv = get_feed_stats(int(pid))
+        stock = int(_rem or 0)
+    except Exception:
+        stock = None
+    saving = max(0, int(base_price) - int(eff_price))
+    lines = [
+        "🔥⚡️ <b>فــروش فــوری</b> ⚡️🔥",
+        f"🏷 <b>{sale['percent']}٪ تخفیف</b> — سود شما: <b>{saving:,}</b> تومان",
+        f"⏰ فقط تا <b>{sale['left_str']}</b> دیگر!",
+    ]
+    if stock is not None and 0 < stock <= 10:
+        lines.append(f"⚡ عجله کنید — تنها <b>{stock}</b> عدد باقی مانده!")
+    lines.append("━━━━━━━━━━━━━━━")
+    return "\n".join(lines) + "\n"
+
 
 def finalize_product_order(call, uid, product, category, eff_price, wallet_used=0):
 
@@ -1496,36 +1663,100 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         buyer_type=buyer_type
     )
 
-    # پاداش معرفی — فقط اگه این اولین خرید کاربره
-    try:
-        from db import process_referral_reward, ensure_referral_schema
-        ensure_referral_schema()
-        ref_result = process_referral_reward(uid, order_id)
-        if ref_result.get("rewarded"):
-            try:
-                bot.send_message(ref_result["referrer_id"],
-                    f"🎉 یکی از دوستانی که معرفی کردید خرید کرد!\n"
-                    f"💰 <b>{ref_result['amount']:,}</b> تومان به کیف‌پول شما اضافه شد.",
-                    parse_mode="HTML")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
     # پورسانت سطحی — روی «هر» خرید زیرمجموعه (درصد یا مبلغ ثابت سطح معرف)
     try:
         from db import process_referral_commission
         comm = process_referral_commission(uid, order_id, eff_price)
         if comm.get("paid"):
             try:
+                _wl = "کیف‌پول همکاری" if comm.get("wallet") == "partner" else "کیف‌پول"
                 bot.send_message(comm["referrer_id"],
                     f"💸 <b>پورسانت جدید!</b>\n\n"
-                    f"یکی از زیرمجموعه‌های شما خرید کرد و\n"
+                    f"یکی از دعوت‌شده‌های شما خرید کرد و\n"
                     f"💰 <b>{comm['amount']:,}</b> تومان پورسانت (سطح {comm['tier_name']}) "
-                    f"به کیف‌پول همکاری شما اضافه شد.",
+                    f"به {_wl} شما اضافه شد.",
                     parse_mode="HTML")
             except Exception:
                 pass
+    except Exception:
+        pass
+
+    # مورد ۶: بررسی Level Up بعد از هر خرید همکاری
+    try:
+        from db import check_and_notify_tier_up
+        lu = check_and_notify_tier_up(uid)
+        if lu:
+            t = lu["tier"]
+            cfixed = int(t.get("commission_fixed") or 0)
+            cpct = t.get("commission_percent") or 0
+            ctype = t.get("commission_type") or ("fixed" if cfixed > 0 else "percent")
+            comm_lbl = (f"{cfixed:,} تومان ثابت" if ctype == "fixed"
+                        else f"٪{cpct}")
+            desc = str(t.get("description") or "").strip()
+            tier_icon = t.get("icon","⭐")
+            tier_name = t.get("name","")
+            banner_id = str(t.get("photo_file_id") or "").strip()
+            custom_msg = str(t.get("levelup_message") or "").strip()
+
+            # نام همکار برای متغیر {name}
+            try:
+                from db import _get_connection as _gc
+                _c = _gc()
+                _r = _c.execute("SELECT full_name FROM users WHERE user_id=?;", (uid,)).fetchone()
+                _c.close()
+                partner_name = (_r[0] if _r and _r[0] else "همکار")
+            except Exception:
+                partner_name = "همکار"
+
+            if custom_msg:
+                # جایگزینی متغیرها در متن اختصاصی سطح
+                lvl_msg = (custom_msg
+                    .replace("{name}", str(partner_name))
+                    .replace("{tier}", tier_name)
+                    .replace("{icon}", tier_icon)
+                    .replace("{percent}", str(cpct))
+                    .replace("{fixed}", f"{cfixed:,}")
+                    .replace("{orders}", str(int(t.get("min_orders") or 0)))
+                    .replace("{min_amount}", f"{int(t.get('min_order_amount') or 0):,}")
+                    .replace("{max_payout}", f"{int(t.get('max_payout') or 0):,}")
+                )
+            else:
+                # پیش‌فرض جامع
+                lvl_msg = (
+                    f"{tier_icon} <b>تبریک! به سطح «{tier_name}» ارتقا یافتید!</b>\n\n"
+                    f"💰 پورسانت جدید: <b>{comm_lbl}</b> از هر فروش\n"
+                )
+                if desc:
+                    lvl_msg += f"✨ {desc}\n"
+                lvl_msg += "\n💪 تیم فروش شما رشد می‌کند — ادامه دهید!"
+
+            try:
+                if banner_id:
+                    bot.send_photo(uid, banner_id, caption=lvl_msg, parse_mode="HTML")
+                else:
+                    bot.send_message(uid, lvl_msg, parse_mode="HTML")
+            except Exception:
+                # fallback بدون بنر
+                try: bot.send_message(uid, lvl_msg, parse_mode="HTML")
+                except Exception: pass
+    except Exception:
+        pass
+
+    # مورد ۷ج: reset سقف دعوت بعد از خرید
+    try:
+        from db import reset_invite_cap_after_purchase
+        reset_invite_cap_after_purchase(uid)
+    except Exception:
+        pass
+
+    # 🚀 پست کانال + امتیازدهی + Upsell (با تأخیر، بعد از تحویل)
+    try:
+        _cat_for_upsell = None
+        try:
+            _cat_for_upsell = product.get("category_id") if isinstance(product, dict) else None
+        except Exception:
+            pass
+        _after_purchase_extras(uid, call.message.chat.id, order_id, pid, _cat_for_upsell, title)
     except Exception:
         pass
 
@@ -1658,7 +1889,9 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
             text = f"{status_icon} {title} | {price:,} تومان"
             cb = f"admin_product_{pid}"
         else:
-            eff_price = partner_price if (partner_ok and partner_price) else price
+            eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+            from db import apply_flash_price as _afp
+            eff_price, _flash_sale = _afp(int(pid), int(eff_price))
             text = f"{title} | {eff_price:,} تومان"
             cb = f"{category}_select_{pid}"
         kb.add(types.InlineKeyboardButton(text, callback_data=cb))
@@ -1679,29 +1912,60 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
 #======================= ORDER SUMMARY + DISCOUNT =======================
 
 def _get_eff_price(product, uid):
-    """قیمت موثر بر اساس همکار یا مشتری بودن."""
+    """قیمت موثر بر اساس همکار یا مشتری بودن + فروش فوری."""
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
-    return partner_price if (partner_ok and partner_price) else price
+    base = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+    from db import apply_flash_price
+    eff, _ = apply_flash_price(int(product[0]), int(base))
+    return eff
 
 
 def _show_order_summary(chat_id, uid, product, category, pid):
-    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی."""
+    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی و فروش فوری."""
     title     = product[2]
-    base      = _get_eff_price(product, uid)
+    # قیمت پایه (بدون فلش) برای نمایش خط‌خورده
+    _p = product[3]
+    _pp = product[6] if len(product) > 6 else None
+    raw_base  = _pp if (is_partner_approved(uid) and _pp) else _p
+    from db import apply_flash_price, get_flash_sale
+    base, _fl = apply_flash_price(int(pid), int(raw_base))
+
     state     = user_states.get(uid, {})
+    # 🔥 در فروش فوری، کد تخفیف غیرفعال است — اگر قبلاً اعمال شده، حذف شود
+    if _fl and state.get("applied_discount"):
+        state.pop("applied_discount", None)
+        state.pop("applied_code", None)
+        user_states[uid] = state
     discount  = int(state.get("applied_discount", 0))
     code_name = state.get("applied_code", "")
     final     = max(0, base - discount)
     wallet_bal = get_wallet_balance(uid)
 
+    # آیا نمایش همکاری فعال است؟ (همکار تاییدشده + قیمت همکاری معتبر + بدون فروش فوری)
+    _partner_view = (
+        (not _fl) and is_partner_approved(uid)
+        and _pp and int(_pp) > 0 and int(_pp) < int(_p)
+    )
+
     lines = [f"🛒 <b>{title}</b>\n"]
-    lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
+    if _fl:
+        lines.append(f"⚡️ <b>فروش فوری {_fl['percent']}٪ فعال است!</b> ⏰ تا {_fl['left_str']} دیگر")
+        lines.append(f"مبلغ کالا: <s>{int(raw_base):,}</s> ← <b>{base:,}</b> تومان 🔥")
+        lines.append("🎟 در زمان فروش فوری، کد تخفیف قابل استفاده نیست.")
+    elif _partner_view:
+        # نمایش انگیزشی برای همکار: قیمت واقعی مشتری (خط‌خورده) + مبلغ قابل پرداخت همکار
+        lines.append(f"💰 قیمت واقعی محصول: <s>{int(_p):,}</s> تومان")
+        lines.append(f"🤝 مبلغ قابل پرداخت شما: <b>{base:,}</b> تومان")
+    else:
+        lines.append(f"مبلغ کالا: <b>{base:,}</b> تومان")
     if discount > 0:
         lines.append(f"🎟 کد تخفیف: <code>{code_name}</code>")
         lines.append(f"💸 تخفیف: <b>−{discount:,}</b> تومان")
-    lines.append(f"\n💰 مبلغ قابل پرداخت: <b>{final:,}</b> تومان")
+    # خط «مبلغ قابل پرداخت» برای همکارِ بدون کد تخفیف تکراری است، پس حذف می‌شود
+    if discount > 0 or not _partner_view:
+        lines.append(f"\n💰 مبلغ قابل پرداخت: <b>{final:,}</b> تومان")
     if 0 < wallet_bal < final:
         lines.append(f"👛 موجودی کیف‌پول: <b>{wallet_bal:,}</b> تومان")
         lines.append(f"💳 باقیمانده از درگاه: <b>{final - wallet_bal:,}</b> تومان")
@@ -1735,7 +1999,9 @@ def _show_order_summary(chat_id, uid, product, category, pid):
             callback_data=f"confirm_full_{category}_{pid}"
         ))
 
-    if discount > 0:
+    if _fl:
+        pass  # 🔥 فروش فوری — دکمه کد تخفیف نمایش داده نمی‌شود
+    elif discount > 0:
         kb.row(
             types.InlineKeyboardButton("🔄 تغییر کد", callback_data=f"enter_code_{category}_{pid}"),
             types.InlineKeyboardButton("🗑 حذف کد",   callback_data=f"remove_code_{category}_{pid}")
@@ -1757,6 +2023,16 @@ def _show_order_summary(chat_id, uid, product, category, pid):
 def handle_enter_code(call):
     uid  = call.from_user.id
     suf  = call.data[len("enter_code_"):]
+    # 🔥 فروش فوری فعال → کد تخفیف مسدود
+    try:
+        _pid_chk = int(suf.rsplit("_", 1)[-1])
+        from db import get_flash_sale
+        if get_flash_sale(_pid_chk):
+            bot.answer_callback_query(call.id,
+                "⚡️ در زمان فروش فوری، کد تخفیف قابل استفاده نیست.", show_alert=True)
+            return
+    except Exception:
+        pass
     # ذخیره info برای برگشت بعد از کد
     user_states.setdefault(uid, {})["code_context"] = suf
     kb = types.InlineKeyboardMarkup()
@@ -1785,7 +2061,16 @@ def _handle_code_input(message):
         bot.send_message(message.chat.id, "❌ محصول یافت نشد"); return
 
     base   = _get_eff_price(product, uid)
-    result = validate_discount(code, product_id=pid, amount=base)
+    # 🔥 فروش فوری فعال → کد تخفیف پذیرفته نمی‌شود
+    from db import get_flash_sale as _gfs
+    if _gfs(pid):
+        user_states.setdefault(uid, {}).pop("code_context", None)
+        bot.send_message(message.chat.id,
+            "⚡️ این محصول در <b>فروش فوری</b> است و کد تخفیف قابل استفاده نیست.\n"
+            "قیمت ویژه به‌صورت خودکار اعمال شده 🔥", parse_mode="HTML")
+        _show_order_summary(message.chat.id, uid, product, category, pid)
+        return
+    result = validate_discount(code, product_id=pid, amount=base, user_id=uid)
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🔙 بازگشت به سفارش",
@@ -1947,7 +2232,7 @@ def handle_confirm_full(call):
     price  = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok    = is_partner_approved(uid)
-    eff_price     = partner_price if (partner_ok and partner_price) else price
+    eff_price     = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
 
     # تخفیف اعمال شده از _show_order_summary
     discount  = int(user_states.get(uid, {}).get("applied_discount", 0))
@@ -1997,7 +2282,9 @@ def handle_confirm_wallet(call):
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
-    eff_price = partner_price if (partner_ok and partner_price) else price
+    eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+    from db import apply_flash_price as _afp
+    eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
     # تخفیف اعمال شده از _show_order_summary
     discount = int(user_states.get(uid, {}).get("applied_discount", 0))
@@ -2074,7 +2361,7 @@ def _process_discount_code(message):
     eff_price = state.get("eff_price", 0)
     pending_cb = state.get("pending_cb", "")
 
-    result = validate_discount(code, product_id=pid, amount=eff_price)
+    result = validate_discount(code, product_id=pid, amount=eff_price, user_id=uid)
 
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
@@ -2087,7 +2374,7 @@ def _process_discount_code(message):
         return
 
     discount = result["discount_amount"]
-    use_discount(result["code_id"])
+    use_discount(result["code_id"], user_id=uid)
     final_price = max(0, eff_price - discount)
 
     state["applied_discount"] = discount
@@ -2134,7 +2421,7 @@ def _process_discount_code(message):
     category = state.get("category", "")
     eff_price = state.get("eff_price", 0)
 
-    result = validate_discount(code, product_id=pid, amount=eff_price)
+    result = validate_discount(code, product_id=pid, amount=eff_price, user_id=uid)
     if not result["valid"]:
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton(
@@ -2147,7 +2434,7 @@ def _process_discount_code(message):
         return
 
     discount = result["discount_amount"]
-    use_discount(result["code_id"])
+    use_discount(result["code_id"], user_id=uid)
     state["applied_discount"] = discount
     user_states[uid] = state
 
@@ -2740,6 +3027,32 @@ def send_admin_feed_panel_view(chat_id: int, feed_id: int, page: int = 0, mode: 
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
 
+@bot.message_handler(commands=["backup"])
+def handle_backup_cmd(message):
+    """بکاپ فوری PostgreSQL — فایل برای ادمین در چت ارسال می‌شود."""
+    if not ensure_admin(message.from_user.id):
+        return
+    bot.send_message(message.chat.id, "⏳ در حال تهیه بکاپ دیتابیس...")
+    try:
+        from pg_backup import create_backup
+        import os
+        fpath = create_backup()
+        size_mb = os.path.getsize(fpath) / (1024 * 1024)
+        with open(fpath, "rb") as f:
+            bot.send_document(
+                message.chat.id, f,
+                caption=f"💾 بکاپ دیتابیس\n📦 {size_mb:.2f} MB",
+                visible_file_name=os.path.basename(fpath))
+        # آپلود به مقاصد ابری هم (کانال + گوگل)
+        try:
+            from backup_uploader import upload_backup
+            upload_backup(fpath)
+        except Exception:
+            pass
+    except Exception as ex:
+        bot.send_message(message.chat.id, f"❌ خطا در بکاپ:\n{str(ex)[:200]}")
+
+
 @bot.message_handler(commands=["myid"])
 def handle_myid(message):
     bot.send_message(
@@ -3044,8 +3357,8 @@ def _show_partner_dashboard(chat_id, uid):
         f"💰 مجموع خرید: <b>{partner_total:,}</b> تومان"
         f"{next_line}\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"👥 <b>زیرمجموعه‌ها</b>\n"
-        f"معرفی‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
+        f"👥 <b>دعوت‌شده‌ها</b>\n"
+        f"دعوت‌شده‌ها: {ref_stats['total']} | پاداش دریافتی: {ref_stats['total_reward']:,} ت"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -3217,39 +3530,41 @@ def _ph_bankname(message):
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_ref_link")
 def cb_partner_ref_link(call):
+    """🔗 نمای ادغام‌شده: لینک معرفی + آمار + متن تبلیغاتی آماده + اشتراک یک‌لمسی."""
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    from db import get_referral_stats_for, get_referral_settings
+    from db import get_referral_stats_for, get_referral_settings, get_promo_settings
     settings = get_referral_settings()
     stats    = get_referral_stats_for(uid)
-    try:
-        bot_username = bot.get_me().username
-    except Exception:
-        bot_username = "your_bot"
+    bot_username = _bot_username() or "your_bot"
     link = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = settings.get("reward_amount", 5000)
+    promo  = str(get_promo_settings().get("text") or "").format(link=link)
 
     text = (
-        f"🔗 <b>لینک معرفی شما</b>\n\n"
-        f"کد معرفی: <code>{uid}</code>\n\n"
-        f"لینک اختصاصی:\n<code>{link}</code>\n\n"
-        f"💰 با هر معرفی موفق <b>{reward:,}</b> تومان پاداش بگیرید!\n\n"
-        f"📊 آمار شما:\n"
-        f"• کل معرفی‌ها: {stats['total']}\n"
-        f"• پاداش دریافتی: {stats['total_reward']:,} تومان"
+        f"🔗 <b>لینک معرفی و ابزار تبلیغ</b>\n\n"
+        f"👤 {call.from_user.first_name or 'همکار'} — <code>{uid}</code>\n\n"
+        f"💰 پاداش هر عضویت: <b>{reward:,}</b> تومان\n"
+        f"💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
+        f"📊 آمار تیم فروش شما:\n"
+        f"• کل دعوت‌شده‌ها: <b>{stats['total']}</b>\n"
+        f"• پاداش دریافتی: <b>{stats['total_reward']:,}</b> تومان\n\n"
+        f"📣 <b>متن آماده تبلیغ</b> (کپی یا فوروارد کنید):\n"
+        f"➖➖➖➖➖➖➖➖\n"
+        f"{promo}\n"
+        f"➖➖➖➖➖➖➖➖"
     )
+    import urllib.parse as _up
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton(
-        "📤 ارسال لینک به دوستان",
-        switch_inline_query=f"با این لینک ثبت‌نام کن!\n{link}"
-    ))
+    kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
     _partner_edit(call, text, kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "partner_sub_stats")
 def cb_partner_sub_stats(call):
-    """نمای شبکه‌ای — کاربر بالا، زیرمجموعه‌ها با آمار خرید زیرش (سبک نتورک)"""
+    """نمای تیم فروش — کاربر بالا، دعوت‌شده‌ها با آمار خرید زیرش"""
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     import sqlite3 as _sq
@@ -3293,7 +3608,7 @@ def cb_partner_sub_stats(call):
         f"👤 <b>{my_name}</b>  (شما)",
     ]
     if not subs:
-        lines.append("\n└ هنوز زیرمجموعه‌ای ندارید.\n\n🔗 لینک معرفی خود را به اشتراک بگذارید تا شبکه‌تان رشد کند!")
+        lines.append("\n└ هنوز فروشنده‌ای ندارید.\n\n🔗 لینک معرفی خود را به اشتراک بگذارید تا تیم فروش شما رشد کند!")
     else:
         for i, s in enumerate(subs):
             is_last = (i == len(subs) - 1)
@@ -3306,7 +3621,7 @@ def cb_partner_sub_stats(call):
                 lines.append(f"{branch} {medal} {s['name']} — بدون خرید{own}")
         lines.append(
             f"\n━━━━━━━━━━━━━━━\n"
-            f"📊 جمع شبکه: <b>{len(subs)}</b> نفر | "
+            f"📊 جمع تیم: <b>{len(subs)}</b> نفر | "
             f"🛒 <b>{total_orders}</b> خرید | 💰 <b>{total_purchase:,}</b> ت"
         )
 
@@ -3331,9 +3646,10 @@ def cb_partner_wallet(call):
         "payout_request": "📤 درخواست تسویه",
         "payout_rejected": "↩️ برگشت تسویه",
     }
+    from db import fa_date
     txn_lines = "\n".join(
         f"{'+'if tx['type'] in ('credit','payout_rejected') else '-'}"
-        f"{int(tx['amount']):,} ت — {type_map.get(tx['type'],tx['type'])} ({(tx['created_at'] or '')[:10]})"
+        f"{int(tx['amount']):,} ت — {type_map.get(tx['type'],tx['type'])} ({fa_date(tx['created_at']) if tx.get('created_at') else '—'})"
         for tx in txns
     ) if txns else "تراکنشی ثبت نشده"
 
@@ -3350,6 +3666,9 @@ def cb_partner_wallet(call):
         types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"),
     )
     _partner_edit(call, text, kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "partner_transfer")
 def cb_partner_transfer(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
@@ -3395,8 +3714,11 @@ def handle_partner_transfer(message):
 @bot.callback_query_handler(func=lambda c: c.data == "partner_payout")
 def cb_partner_payout(call):
     uid = call.from_user.id
-    from db import get_partner_wallet_balance, get_partner_payout_settings, ensure_partner_wallet_schema
+    from db import (get_partner_wallet_balance, get_partner_payout_settings,
+                    ensure_partner_wallet_schema, get_partner_bank_info,
+                    ensure_partner_bank_schema, ensure_partner_bank_address)
     ensure_partner_wallet_schema()
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
     settings = get_partner_payout_settings()
     if not settings.get("is_active"):
         bot.answer_callback_query(call.id, "تسویه در حال حاضر غیرفعال است", show_alert=True)
@@ -3409,18 +3731,109 @@ def cb_partner_payout(call):
             show_alert=True)
         return
     bot.answer_callback_query(call.id)
-    max_a = int(settings.get("max_amount") or 0)
+
+    # مورد ۴: بررسی اطلاعات بانکی — اگر ناقص است ابتدا جمع‌آوری کن
+    bank = get_partner_bank_info(uid)
+    if not bank or not (bank.get("iban") or "").strip() or not (bank.get("owner_name") or "").strip():
+        user_states[uid] = {"mode": "payout_collect_bank", "step": "owner_name", "bal": bal}
+        bot.send_message(call.message.chat.id,
+            "🏦 <b>برای ثبت درخواست تسویه، اطلاعات حساب بانکی لازم است.</b>\n\n"
+            "لطفاً <b>نام صاحب حساب</b> را وارد کنید:",
+            parse_mode="HTML")
+        return
+
+    max_a  = int(settings.get("max_amount") or 0)
     max_pm = int(settings.get("max_per_month") or 0)
     user_states[uid] = {"mode": "partner_payout", "bal": bal}
+    _iban  = (bank.get("iban") or "").strip()
+    _owner = (bank.get("owner_name") or bank.get("iban") or "—").strip()
     text = (
         f"📤 <b>درخواست تسویه</b>\n\n"
         f"موجودی: <b>{bal:,}</b> تومان\n"
-        f"{'حداقل: '+format(min_a,',')+'تومان' if min_a else ''}\n"
-        f"{'حداکثر: '+format(max_a,',')+'تومان' if max_a else ''}\n"
+        f"{'حداقل: '+format(min_a,',')+' تومان' if min_a else ''}\n"
+        f"{'حداکثر: '+format(max_a,',')+' تومان' if max_a else ''}\n"
         f"{'سقف ماهانه: '+str(max_pm)+' درخواست' if max_pm else ''}\n\n"
+        f"🏦 پرداخت به: <b>{_owner}</b> — <code>{_iban}</code>\n\n"
         "مبلغ درخواستی را وارد کنید:"
     )
     bot.send_message(call.message.chat.id, text, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "payout_collect_bank")
+def handle_payout_collect_bank(message):
+    """جمع‌آوری اطلاعات بانکی قبل از تسویه — مرحله‌ای."""
+    uid = message.from_user.id
+    state = user_states.get(uid, {})
+    step  = state.get("step")
+    text  = (message.text or "").strip()
+    if not text:
+        bot.reply_to(message, "❌ لطفاً متن وارد کنید.")
+        return
+
+    from db import ensure_partner_bank_schema, ensure_partner_bank_address
+    import sqlite3 as _sq
+    from config import DB_PATH as _DBP
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+
+    if step == "owner_name":
+        state["owner_name"] = text
+        state["step"] = "card_number"
+        user_states[uid] = state
+        bot.reply_to(message,
+            "✅ نام صاحب حساب ذخیره شد.\n\n"
+            "حالا <b>شماره کارت بانکی</b> (۱۶ رقم) را وارد کنید:",
+            parse_mode="HTML")
+    elif step == "card_number":
+        card = text.replace(" ", "").replace("-", "")
+        if len(card) != 16 or not card.isdigit():
+            bot.reply_to(message,
+                "❌ شماره کارت نامعتبر (باید ۱۶ رقم باشد).\nدوباره وارد کنید:")
+            return
+        state["card_number"] = card
+        state["step"] = "iban"
+        user_states[uid] = state
+        bot.reply_to(message,
+            "✅ شماره کارت ذخیره شد.\n\n"
+            "حالا <b>شماره شبا</b> را وارد کنید (با یا بدون IR):",
+            parse_mode="HTML")
+    elif step == "iban":
+        iban = text.upper().replace(" ", "").replace("-", "")
+        if not iban.startswith("IR"):
+            iban = "IR" + iban
+        if len(iban) != 26 or not iban[2:].isdigit():
+            bot.reply_to(message,
+                "❌ شماره شبا نامعتبر (IR + ۲۴ رقم).\nدوباره وارد کنید:")
+            return
+        owner = state.get("owner_name", "")
+        card = state.get("card_number", "")
+        try:
+            from db import _get_connection
+            conn = _get_connection()
+            existing = conn.execute(
+                "SELECT 1 FROM partner_bank_info WHERE user_id=?;", (uid,)).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE partner_bank_info SET owner_name=?,card_number=?,iban=?,updated_at=datetime('now') WHERE user_id=?;",
+                    (owner, card, iban, uid))
+            else:
+                conn.execute(
+                    "INSERT INTO partner_bank_info (user_id,owner_name,card_number,iban) VALUES (?,?,?,?);",
+                    (uid, owner, card, iban))
+            conn.commit(); conn.close()
+        except Exception as ex:
+            bot.reply_to(message, f"❌ خطا در ذخیره: {ex}")
+            user_states.pop(uid, None)
+            return
+
+        # ادامه به تسویه
+        bal = state.get("bal", 0)
+        user_states[uid] = {"mode": "partner_payout", "bal": bal}
+        bot.reply_to(message,
+            f"✅ اطلاعات بانکی ذخیره شد.\n\n"
+            f"🏦 <b>{owner}</b> — <code>{iban}</code>\n\n"
+            f"موجودی شما: <b>{bal:,}</b> تومان\n"
+            "مبلغ درخواستی را وارد کنید:",
+            parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "partner_payout")
@@ -3459,9 +3872,23 @@ def cb_partner_guide(call):
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
     guide_text = t("PARTNER_GUIDE_TEXT",
-        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
-        "متن راهنما توسط مدیر تنظیم نشده است.\n"
-        "لطفاً با پشتیبانی تماس بگیرید.")
+        "📖 <b>راهنما و قوانین همکاری</b>\n\n"
+        "🎯 <b>چطور درآمد کسب کنم؟</b>\n"
+        "لینک اختصاصی خود را از بخش «🔗 لینک معرفی من» دریافت کنید "
+        "و آن را با دوستان و مخاطبانتان به اشتراک بگذارید.\n\n"
+        "💰 <b>پورسانت فروش:</b>\n"
+        "به‌ازای هر خریدی که از طریق شما انجام شود، پورسانت مستقیم به "
+        "کیف‌پول همکاری شما واریز می‌شود.\n\n"
+        "🏆 <b>ارتقاء سطح:</b>\n"
+        "با افزایش تعداد فروش به سطوح بالاتر می‌رسید و پورسانت بیشتری دریافت می‌کنید.\n\n"
+        "📤 <b>درخواست تسویه:</b>\n"
+        "پس از رسیدن موجودی به حداقل لازم، از بخش «تسویه حساب» "
+        "درخواست ارسال کنید. پرداخت ظرف ۴۸ ساعت کاری انجام می‌شود.\n\n"
+        "⚠️ <b>قوانین:</b>\n"
+        "• تبلیغات گمراه‌کننده ممنوع است\n"
+        "• فروش باید واقعی باشد\n"
+        "• اطلاعات بانکی معتبر ثبت شده باشد\n\n"
+        "📞 سوال دارید؟ از بخش پشتیبانی با ما در تماس باشید.")
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
     _partner_edit(call, guide_text, kb)
@@ -3658,12 +4085,72 @@ def handle_partner_guide_reply(message):
     """همکار دکمه «راهنما و قوانین» را در Reply Keyboard فشرد"""
     guide_text = t(
         "PARTNER_GUIDE_TEXT",
-        "📖 <b>راهنمای همکاری در فروش</b>\n\n"
-        "متن راهنما توسط مدیر تنظیم نشده است.\n"
-        "برای اطلاعات بیشتر با پشتیبانی در تماس باشید."
+        "📖 <b>راهنما و قوانین همکاری</b>\n\n"
+        "🎯 <b>چطور درآمد کسب کنم؟</b>\n"
+        "لینک اختصاصی خود را دریافت کنید و با دوستان به اشتراک بگذارید. "
+        "از هر خریدی که از طریق شما انجام شود پورسانت می‌گیرید.\n\n"
+        "🏆 <b>سطوح همکاری:</b>\n"
+        "با افزایش فروش به سطوح بالاتر می‌رسید و پورسانت بیشتری دریافت می‌کنید.\n\n"
+        "📤 <b>تسویه حساب:</b>\n"
+        "پس از رسیدن موجودی به حداقل لازم، درخواست تسویه ارسال کنید. "
+        "پرداخت ظرف ۴۸ ساعت کاری انجام می‌شود.\n\n"
+        "⚠️ <b>قوانین مهم:</b>\n"
+        "• تبلیغات گمراه‌کننده ممنوع است\n"
+        "• فروش باید واقعی باشد\n"
+        "• اطلاعات بانکی معتبر ثبت شده باشد\n\n"
+        "📞 سوال دارید؟ از بخش پشتیبانی با ما در تماس باشید."
     )
     kb = types.InlineKeyboardMarkup()
     bot.send_message(message.chat.id, guide_text, reply_markup=kb, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "payout_collect_bank")
+def _pre_handle_payout_bank(message):
+    return handle_payout_collect_bank(message)
+
+
+# ── ثبتِ زودهنگام — این‌ها باید قبل از catch-all ادمین (پایین) ثبت شوند
+# وگرنه پیام‌های متنیِ ادمین‌ها هرگز به آن‌ها نمی‌رسد.
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_INVITE"))
+def _pre_handle_user_invite(message):
+    return handle_user_invite(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_amount")
+def _pre_handle_crypto_amount(message):
+    return handle_crypto_amount(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_txid")
+def _pre_handle_crypto_txid(message):
+    return handle_crypto_txid(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_amount")
+def _pre_handle_card2card_amount(message):
+    """ثبت زودهنگام — قبل از catch-all ادمین."""
+    return handle_card2card_amount(message)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt")
+def _pre_handle_card2card_receipt_text(message):
+    """متن در مرحله‌ی رسید — قبل از catch-all ادمین: راهنمایی یا اصلاح مبلغ."""
+    uid = message.from_user.id
+    txt = (message.text or "").strip().replace(",", "").replace("٬", "")
+    if txt.isdigit() and int(txt) >= 1000:
+        user_states[uid] = {"mode": "card2card_receipt", "amount": int(txt)}
+        bot.reply_to(message,
+            f"✅ مبلغ به <b>{int(txt):,}</b> تومان تغییر کرد.\n"
+            "حالا عکس رسید را بفرستید:", parse_mode="HTML")
+        return
+    bot.reply_to(message,
+        "📷 لطفاً <b>عکس رسید</b> را ارسال کنید (نه متن).\n"
+        "برای تغییر مبلغ، فقط عدد جدید را بفرستید.", parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "payout_collect_bank")
+def _pre_handle_payout_bank_early(message):
+    return handle_payout_collect_bank(message)
 
 
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id))
@@ -4171,6 +4658,12 @@ def _send_rating_request(chat_id: int, uid: int, order_id: int, pid: int, title:
     import threading as _th
     def _delayed():
         import time as _t; _t.sleep(30)
+        try:
+            from db import get_social_settings
+            if not int(get_social_settings().get("rating") or 0):
+                return
+        except Exception:
+            pass
         from db import has_rated_order
         if has_rated_order(order_id):
             return
@@ -4285,6 +4778,17 @@ def _build_guarantee_text() -> str:
 def handle_callbacks(call: types.CallbackQuery):
     data = call.data
     uid = call.from_user.id
+
+    # 🚀 دیسپچ کالبک‌های رشد — هندلرهایشان بعد از این catch-all تعریف شده‌اند
+    if data == "partner_promo" or data == "partner_ref_link":
+        return cb_partner_ref_link(call)          # نمای ادغام‌شده لینک + ابزار تبلیغ
+    if data == "wallet_crypto":
+        return cb_wallet_crypto(call)
+    if data.startswith("crypto_net_"):
+        return cb_crypto_network(call)
+    if data == "user_invite":
+        return cb_user_invite(call)
+
     # --- toggle active/inactive for other_services ---
     if data.startswith("toggle_other_"):
         if not ensure_admin(uid):
@@ -4564,6 +5068,14 @@ def handle_callbacks(call: types.CallbackQuery):
                 _t("BTN_WALLET_GATEWAY", _D.get("BTN_WALLET_GATEWAY", "🌐 درگاه پرداخت")), callback_data="wallet_gateway"
             ),
         )
+        try:
+            from db import get_crypto_settings
+            if int(get_crypto_settings().get("enabled") or 0):
+                kb.add(types.InlineKeyboardButton(
+                    _t("BTN_WALLET_CRYPTO", _D.get("BTN_WALLET_CRYPTO", "₿ پرداخت رمزارز")),
+                    callback_data="wallet_crypto"))
+        except Exception:
+            pass
         bot.answer_callback_query(call.id)
         bot.send_message(
             call.message.chat.id,
@@ -4579,22 +5091,15 @@ def handle_callbacks(call: types.CallbackQuery):
 
     if data == "wallet_card2card":
         bot.answer_callback_query(call.id)
-        user_states[uid] = {"mode": "card2card_receipt"}
+        user_states[uid] = {"mode": "card2card_amount"}
         text_msg = (
-            "برای افزایش موجودی کیف پول، مبلغ مورد نظر را به حساب زیر واریز کرده و سپس عکس رسید را در همین چت ارسال کنید:\n\n"
-            "💳 شماره کارت:\n"
-            "<code>6037701608004393</code>\n"
-            "به نام: <b>سید فیروز ایازی</b>\n\n"
-            "📍 پس از بررسی، موجودی کیف پول شما شارژ خواهد شد.\n\n"
-            "⚠️ فقط عکس واضح از رسید را ارسال کنید.\n"
+            "💳 <b>شارژ کیف پول — کارت‌به‌کارت</b>\n\n"
+            "لطفاً مبلغ مورد نظر خود را <b>به تومان</b> جهت شارژ کیف پول وارد کنید:\n\n"
+            "(حداقل ۱,۰۰۰ تومان — فقط عدد، مثلاً: 500000)"
         )
         kb = types.InlineKeyboardMarkup()
-        kb.add(
-            types.InlineKeyboardButton(
-                "❌ انصراف", callback_data="wallet_cancel_card2card"
-            )
-        )
-        bot.send_message(call.message.chat.id, text_msg, reply_markup=kb)
+        kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
+        bot.send_message(call.message.chat.id, text_msg, reply_markup=kb, parse_mode="HTML")
         return
 
     if data == "wallet_cancel_card2card":
@@ -5606,6 +6111,8 @@ def handle_callbacks(call: types.CallbackQuery):
 
         partner_price = product[6] if len(product) > 6 else None
         eff_price = partner_price if (is_partner_approved(uid) and partner_price) else product[3]
+        from db import apply_flash_price as _afp
+        eff_price, _ = _afp(int(product[0]), int(eff_price))
 
         wallet_balance = get_wallet_balance(uid)
 
@@ -5633,19 +6140,65 @@ def handle_callbacks(call: types.CallbackQuery):
 
 
 @bot.message_handler(
-    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_receipt",
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "card2card_amount",
+    content_types=["text"]
+)
+def handle_card2card_amount(message):
+    uid = message.from_user.id
+    txt = (message.text or "").strip().replace(",", "").replace("٬", "")
+    if not txt.isdigit() or int(txt) < 1000:
+        bot.reply_to(message, "❌ مبلغ نامعتبر — حداقل ۱,۰۰۰ تومان.\nدوباره وارد کنید:")
+        return
+    amount = int(txt)
+    user_states[uid] = {"mode": "card2card_receipt", "amount": amount}
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
+    bot.reply_to(message,
+        f"✅ مبلغ شارژ: <b>{amount:,}</b> تومان\n\n"
+        "لطفاً این مبلغ را به کارت زیر واریز کنید:\n\n"
+        "💳 شماره کارت:\n"
+        "<code>6037701608004393</code>\n"
+        "به نام: <b>سید فیروز ایازی</b>\n\n"
+        "سپس <b>عکس رسید واریز</b> را همین‌جا ارسال کنید.\n"
+        "(برای تغییر مبلغ، فقط عدد جدید را بفرستید)",
+        parse_mode="HTML", reply_markup=kb)
+
+
+@bot.message_handler(
+    func=lambda m: user_states.get(m.from_user.id, {}).get("mode") in ("card2card_receipt", "card2card_amount"),
     content_types=["photo"]
 )
 def handle_card2card_photo(message):
     uid = message.from_user.id
-    st  = user_states.pop(uid, {})
+    st  = user_states.get(uid) or {}
+
+    # عکس قبل از وارد کردن مبلغ — راهنمایی به‌جای سکوت
+    if st.get("mode") == "card2card_amount":
+        bot.reply_to(message,
+            "❗️ اول <b>مبلغ واریزی (به تومان)</b> را به صورت عدد بفرستید،\n"
+            "بعد عکس رسید را ارسال کنید.",
+            parse_mode="HTML")
+        return
+
     amount  = int(st.get("amount", 0))
     file_id = message.photo[-1].file_id
 
-    from db import save_card_receipt, ensure_card_receipts_schema
-    ensure_card_receipts_schema()
-    rid = save_card_receipt(uid, amount, file_id)
+    try:
+        from db import save_card_receipt, ensure_card_receipts_schema
+        ensure_card_receipts_schema()
+        rid = save_card_receipt(uid, amount, file_id)
+    except Exception as ex:
+        bot.reply_to(message,
+            "⚠️ خطا در ثبت رسید. لطفاً چند لحظه بعد دوباره عکس را بفرستید.")
+        try:
+            bot.send_message(ADMIN_ID,
+                f"🐞 خطای ثبت رسید کارت‌به‌کارت (user {uid}):\n"
+                f"<code>{type(ex).__name__}: {ex}</code>", parse_mode="HTML")
+        except Exception:
+            pass
+        return
 
+    user_states.pop(uid, None)
     bot.reply_to(message,
         f"رسید شما ثبت شد ✅\n"
         f"شناسه پیگیری: <code>#{rid}</code>\n\n"
@@ -5659,10 +6212,10 @@ def handle_card2card_photo(message):
         bot.send_photo(ADMIN_ID, file_id,
             caption=(f"💳 <b>رسید کارت‌به‌کارت جدید</b>\n"
                      f"شناسه: #{rid}\n"
-                     f"کاربر: {name} (<code>{uid}</code>)\n\n"
-                     f"⚠️ مبلغ هنگام تأیید در پنل وارد شود.\n"
-                     f"پنل: /admin/receipts/{rid}/view\n"
-                     f"تأیید: /approve_receipt_{rid}\n"
+                     f"کاربر: {name} (<code>{uid}</code>)\n"
+                     f"مبلغ اعلامی: <b>{amount:,}</b> تومان\n\n"
+                     f"پنل (مبلغ قابل ویرایش): /admin/receipts/{rid}/view\n"
+                     f"تأیید با همین مبلغ: /approve_receipt_{rid}\n"
                      f"رد: /reject_receipt_{rid}"),
             parse_mode="HTML")
     except Exception:
@@ -5672,20 +6225,24 @@ def handle_card2card_photo(message):
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
                      (m.text or "").startswith("/approve_receipt_"))
 def handle_approve_receipt(message):
-    rid = int((message.text or "").replace("/approve_receipt_", "").strip())
+    try:
+        rid = int((message.text or "").replace("/approve_receipt_", "").strip())
+    except ValueError:
+        bot.reply_to(message, "❌ شناسه رسید نامعتبر است."); return
     from db import update_card_receipt, get_card_receipts
     from db import get_wallet_balance, add_wallet_balance
     receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
     if not receipts:
         bot.reply_to(message, "رسید یافت نشد یا قبلاً بررسی شده."); return
     r = receipts[0]
+    amount = int(r["amount"] or 0)
     update_card_receipt(rid, "approved", "تأیید توسط ادمین")
-    add_wallet_balance(r["user_id"], r["amount"])
-    bot.reply_to(message, f"✅ رسید #{rid} تأیید شد. {r['amount']:,} تومان به کیف پول افزوده شد.")
+    add_wallet_balance(r["user_id"], amount)
+    bot.reply_to(message, f"✅ رسید #{rid} تأیید شد. {amount:,} تومان به کیف پول افزوده شد.")
     try:
         bot.send_message(r["user_id"],
             f"✅ پرداخت شما تأیید شد!\n"
-            f"مبلغ <b>{r['amount']:,}</b> تومان به کیف پول شما اضافه شد.",
+            f"مبلغ <b>{amount:,}</b> تومان به کیف پول شما اضافه شد.",
             parse_mode="HTML")
     except Exception: pass
 
@@ -5693,7 +6250,10 @@ def handle_approve_receipt(message):
 @bot.message_handler(func=lambda m: ensure_admin(m.from_user.id) and
                      (m.text or "").startswith("/reject_receipt_"))
 def handle_reject_receipt(message):
-    rid = int((message.text or "").replace("/reject_receipt_", "").strip())
+    try:
+        rid = int((message.text or "").replace("/reject_receipt_", "").strip())
+    except ValueError:
+        bot.reply_to(message, "❌ شناسه رسید نامعتبر است."); return
     from db import update_card_receipt, get_card_receipts
     receipts = [r for r in get_card_receipts("pending") if r["id"] == rid]
     if not receipts:
@@ -5757,16 +6317,311 @@ def handle_admin_backup_restore_document(message):
         bot.send_message(message.chat.id, f"خطا در بازیابی بکاپ: {e}")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── ₿ شارژ رمزارز + 📣 کیت تبلیغاتی همکار ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _send_invite_view(chat_id, uid):
+    """🎁 دعوت دوستان — برای همه کاربران: لینک + پاداش + متن آماده + اشتراک."""
+    from db import get_referral_settings, get_referral_stats_for, get_promo_settings
+    settings = get_referral_settings()
+    try:
+        stats = get_referral_stats_for(uid)
+    except Exception:
+        stats = {"total": 0, "total_reward": 0}
+    bot_username = _bot_username() or "your_bot"
+    reward = int(settings.get("reward_amount") or 0)
+
+    # اگه همکار تأییدشده‌ست: لینک اختصاصی + پورسانت + آمار
+    # اگه کاربر عادیه: فقط دعوت ساده با نام ربات
+    is_partner = is_partner_approved(uid)
+
+    if is_partner:
+        link = f"https://t.me/{bot_username}?start=ref_{uid}"
+        promo = str(get_promo_settings().get("text") or "").format(link=link)
+        text = (
+            "🔗 <b>لینک معرفی شما</b>\n\n"
+            f"👤 {stats.get('name', 'همکار')} — <code>{uid}</code>\n\n"
+        )
+        if settings.get("is_active") and reward > 0:
+            text += f"💰 پاداش هر عضویت: <b>{reward:,}</b> تومان\n"
+        text += (
+            "💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
+            f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
+            + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
+            + "\n\n📣 متن آماده تبلیغ:\n➖➖➖➖➖➖➖➖\n"
+            + promo + "\n➖➖➖➖➖➖➖➖"
+        )
+        import urllib.parse as _up
+        share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
+    else:
+        # کاربر عادی: فقط معرفی ربات بدون لینک شخصی
+        bot_link = f"https://t.me/{bot_username}"
+        text = (
+            "🎁 <b>معرفی ربات به دوستان</b>\n\n"
+            f"با ارسال لینک زیر، دوستانتان را به ربات دعوت کنید:\n"
+            f"<code>{bot_link}</code>\n\n"
+            "💡 برای دریافت لینک اختصاصی + پاداش و پورسانت،\n"
+            "درخواست همکاری ثبت کنید."
+        )
+        import urllib.parse as _up
+        share_url = "https://t.me/share/url?url=" + _up.quote(bot_link)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
+    bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+
+def handle_user_invite(message):
+    if not is_main_button_enabled("MAIN_BTN_INVITE"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+    _send_invite_view(message.chat.id, message.from_user.id)
+
+
+def cb_user_invite(call):
+    bot.answer_callback_query(call.id)
+    _send_invite_view(call.message.chat.id, call.from_user.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "wallet_crypto")
+def cb_wallet_crypto(call):
+    from db import get_crypto_settings
+    cs = get_crypto_settings()
+    if not int(cs.get("enabled") or 0):
+        bot.answer_callback_query(call.id, "پرداخت رمزارز فعال نیست", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    if (cs.get("usdt_trc20") or "").strip():
+        kb.add(types.InlineKeyboardButton("💵 USDT (TRC20)", callback_data="crypto_net_usdt"))
+    if (cs.get("trx") or "").strip():
+        kb.add(types.InlineKeyboardButton("🔺 TRX (Tron)", callback_data="crypto_net_trx"))
+    bot.send_message(call.message.chat.id,
+        "₿ <b>شارژ با رمزارز</b>\n\nشبکه مورد نظر را انتخاب کنید:",
+        reply_markup=kb, parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("crypto_net_"))
+def cb_crypto_network(call):
+    from db import get_crypto_settings
+    cs = get_crypto_settings()
+    net = call.data.replace("crypto_net_", "")
+    addr = (cs.get("usdt_trc20") if net == "usdt" else cs.get("trx") or "").strip()
+    if not addr:
+        bot.answer_callback_query(call.id, "آدرس این شبکه تنظیم نشده", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)
+    net_label = "USDT (TRC20)" if net == "usdt" else "TRX"
+    user_states[call.from_user.id] = {"mode": "crypto_amount", "net": net}
+    bot.send_message(call.message.chat.id,
+        f"₿ <b>پرداخت {net_label}</b>\n\n"
+        f"آدرس واریز:\n<code>{addr}</code>\n\n"
+        f"📌 {cs.get('note','')}\n\n"
+        "حالا <b>مبلغ به تومان</b> که می‌خواهید شارژ شود را وارد کنید:",
+        parse_mode="HTML")
+
+
+def handle_crypto_amount(message):
+    uid = message.from_user.id
+    st = user_states.get(uid, {})
+    raw = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "")
+    if not raw.isdigit() or int(raw) <= 0:
+        bot.reply_to(message, "❌ مبلغ نامعتبر است. یک عدد به تومان وارد کنید:")
+        return
+    st["amount"] = int(raw)
+    st["mode"] = "crypto_txid"
+    user_states[uid] = st
+    bot.reply_to(message,
+        f"مبلغ: <b>{int(raw):,}</b> تومان ✅\n\n"
+        "حالا <b>TXID</b> (هش تراکنش) را ارسال کنید:", parse_mode="HTML")
+
+
+def handle_crypto_txid(message):
+    uid = message.from_user.id
+    st = user_states.pop(uid, {})
+    txid = (message.text or "").strip()
+    if len(txid) < 10:
+        user_states[uid] = st
+        bot.reply_to(message, "❌ TXID معتبر نیست. دوباره ارسال کنید:")
+        return
+    from db import save_crypto_receipt
+    rid = save_crypto_receipt(uid, int(st.get("amount", 0)), st.get("net", "usdt"), txid)
+    bot.reply_to(message,
+        f"✅ درخواست شارژ رمزارز ثبت شد.\n"
+        f"شناسه پیگیری: <code>#{rid}</code>\n\n"
+        "پس از تأیید تراکنش، کیف‌پول شما شارژ می‌شود.", parse_mode="HTML")
+    try:
+        import html as _h
+        from db import get_user as _gu
+        user = _gu(uid)
+        name = _h.escape((user["full_name"] if user else None) or str(uid))
+        net_label = "USDT-TRC20" if st.get("net") == "usdt" else "TRX"
+        bot.send_message(ADMIN_ID,
+            f"₿ <b>رسید رمزارز جدید</b>\n"
+            f"شناسه: #{rid}\n"
+            f"کاربر: {name} (<code>{uid}</code>)\n"
+            f"مبلغ اعلامی: {int(st.get('amount',0)):,} تومان\n"
+            f"شبکه: {net_label}\n"
+            f"TXID: <code>{_h.escape(txid)}</code>\n\n"
+            f"تأیید: /approve_receipt_{rid}\n"
+            f"رد: /reject_receipt_{rid}",
+            parse_mode="HTML")
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🚀 موتور رشد: هوک بعد از خرید + زمان‌بند بازگردانی و لیدربرد ────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _after_purchase_extras(uid, chat_id, order_id, pid, cat_id, title):
+    """پست کانال + درخواست امتیاز + پیشنهاد Upsell — با تأخیر ۲ ثانیه بعد از تحویل."""
+    def _run():
+        try:
+            from db import get_social_settings, get_upsell_products, apply_flash_price
+            soc = get_social_settings()
+
+            # ۶ب) پست خودکار فروش در کانال (ناشناس)
+            try:
+                ch = str(soc.get("channel_id") or "").strip()
+                if ch and int(soc.get("sale_post") or 0):
+                    bot.send_message(ch, str(soc.get("sale_post_text") or "").format(title=title),
+                                     parse_mode="HTML")
+            except Exception:
+                pass
+
+            # ۲) پیشنهاد خرید بعدی (Upsell)
+            try:
+                if int(soc.get("upsell") or 0):
+                    ups = get_upsell_products(pid, cat_id, limit=2)
+                    if ups:
+                        kb = types.InlineKeyboardMarkup(row_width=1)
+                        for p in ups:
+                            fp, fl = apply_flash_price(p["id"], int(p["price"]))
+                            lbl = f"🔥 {p['title']} | {fp:,} تومان" if fl else f"{p['title']} | {fp:,} تومان"
+                            kb.add(types.InlineKeyboardButton(
+                                lbl, callback_data=f"cat_{p['category_id']}_p_{p['id']}"))
+                        bot.send_message(chat_id,
+                            "🛍 <b>خریداران این محصول، این‌ها را هم پسندیدند:</b>",
+                            reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
+        except Exception:
+            pass
+    try:
+        threading.Timer(2.0, _run).start()
+    except Exception:
+        pass
+
+
+def _growth_scheduler():
+    """هر ۱۰ دقیقه: بازگردانی روزانه + لیدربرد هفتگی (ضدتکرار با bot_config)."""
+    import datetime as _dt
+    from db import (get_cfg, set_cfg, get_winback_settings, get_leaderboard_settings,
+                    find_winback_candidates, create_winback_code,
+                    weekly_top_partners, credit_partner_wallet, ensure_growth_schema)
+    ensure_growth_schema()
+    while True:
+        try:
+            now = _dt.datetime.now()
+            today = now.strftime("%Y-%m-%d")
+
+            # ── ۱) کمپین بازگردانی — روزی یک‌بار بعد از ساعت تنظیم‌شده ──
+            wb = get_winback_settings()
+            force_wb = get_cfg("winback_force", "0") == "1"
+            if (int(wb.get("enabled") or 0) and now.hour >= int(wb.get("hour") or 11)
+                    and get_cfg("winback_last", "") != today) or force_wb:
+                if force_wb:
+                    set_cfg("winback_force", "0")
+                set_cfg("winback_last", today)
+                cands = find_winback_candidates(
+                    int(wb.get("days_inactive") or 14),
+                    int(wb.get("cooldown_days") or 30),
+                    int(wb.get("batch") or 30))
+                sent = 0
+                for c in cands:
+                    try:
+                        code = create_winback_code(int(c["uid"]),
+                                                   int(wb.get("percent") or 15),
+                                                   int(wb.get("expire_days") or 3))
+                        if not code:
+                            continue
+                        msg = str(wb.get("message") or "").format(
+                            name=(c["name"] or "دوست عزیز"), code=code,
+                            percent=wb.get("percent"), days=wb.get("expire_days"))
+                        bot.send_message(int(c["uid"]), msg, parse_mode="HTML")
+                        sent += 1
+                    except Exception:
+                        continue
+                if sent:
+                    logger.info("winback: %s پیام بازگردانی ارسال شد", sent)
+
+            # ── ۴) لیدربرد هفتگی — روز تنظیم‌شده، هفته‌ای یک‌بار ──
+            lb = get_leaderboard_settings()
+            week_key = now.strftime("%G-W%V")
+            force_lb = get_cfg("leaderboard_force", "0") == "1"
+            if (int(lb.get("enabled") or 0) and now.weekday() == int(lb.get("weekday") or 4)
+                    and get_cfg("leaderboard_last", "") != week_key) or force_lb:
+                if force_lb:
+                    set_cfg("leaderboard_force", "0")
+                set_cfg("leaderboard_last", week_key)
+                rewards = []
+                for x in str(lb.get("rewards") or "").split(","):
+                    try: rewards.append(int(x.strip()))
+                    except Exception: pass
+                tops = weekly_top_partners(limit=max(1, len(rewards) or 3))
+                medals = ["🥇", "🥈", "🥉", "🏅", "🏅"]
+                for i, t in enumerate(tops):
+                    try:
+                        reward = rewards[i] if i < len(rewards) else 0
+                        if reward > 0:
+                            credit_partner_wallet(int(t["uid"]), reward,
+                                                  note=f"جایزه لیدربرد هفته {week_key} — رتبه {i+1}")
+                        msg = str(lb.get("message") or "").format(
+                            rank=f"{medals[i]} {i+1}", count=t["cnt"], reward=f"{reward:,}")
+                        bot.send_message(int(t["uid"]), msg, parse_mode="HTML")
+                    except Exception:
+                        continue
+                if tops:
+                    logger.info("leaderboard: جوایز هفته %s پرداخت شد (%s نفر)", week_key, len(tops))
+        except Exception as ex:
+            logger.exception("growth scheduler error: %s", ex)
+        time.sleep(600)
+
+
 if __name__ == "__main__":
     init_db(DB_PATH)
     ticket_ensure_schema()
     _ensure_delivery_table()
+    try:
+        from db import ensure_growth_schema as _egs
+        _egs()
+        threading.Thread(target=_growth_scheduler, daemon=True).start()
+        logger.info("🚀 Growth scheduler started")
+    except Exception as _gex:
+        logger.exception("growth scheduler failed to start: %s", _gex)
     logger.info("Bot started (ticket system v2)...")
 
-    import time
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
         except Exception as e:
             logger.exception("Polling crashed, restarting in 5s: %s", e)
             time.sleep(5)
+
+
+# ── دکمه منوی اپ (کنار باکس پیام) — سراسری، یک‌بار در استارتاپ ──────────────
+def _setup_app_menu_button():
+    try:
+        url = _app_pwa_url()
+        bot.set_chat_menu_button(
+            menu_button=types.MenuButtonWebApp(type="web_app", text="📱 اپ",
+                                               web_app=types.WebAppInfo(url)))
+        logger.info("✅ Menu button → %s", url)
+    except Exception as _e:
+        try:
+            logger.warning("Menu button not set: %s", _e)
+        except Exception:
+            pass
+
+_setup_app_menu_button()

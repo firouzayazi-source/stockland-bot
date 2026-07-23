@@ -8,6 +8,13 @@ admin_panel.py — پنل مدیریت وب استوک لند (نسخه کامل
   - مدیریت ادمین‌ها از پنل وب
 """
 
+# تقویم شمسی — در دسترس همه توابع پنل
+try:
+    from db import fa_date, fa_now  # noqa: F401
+except Exception:
+    def fa_date(d, with_time=False): return str(d or "—")[:16 if with_time else 10]
+    def fa_now(with_time=True): import datetime; return datetime.datetime.now().strftime("%Y/%m/%d  %H:%M" if with_time else "%Y/%m/%d")
+
 import hashlib
 import hmac as _hmac
 import html
@@ -54,24 +61,44 @@ def _db() -> sqlite3.Connection:
 
 # ─────────────────────────── Permissions ───────────────────────────────────
 
+# ─── رجیستری مرکزی دسترسی‌ها ─────────────────────────────────────────────
+# قانون: هر قابلیت جدید = یک کلید اینجا؛ منو، صفحه ادمین‌ها و گاردها همه از همین می‌خوانند.
 ALL_PERMISSIONS = {
     "dashboard":  "مشاهده داشبورد",
     "categories": "مدیریت دسته‌بندی‌ها",
     "products":   "مدیریت محصولات",
     "feed":       "مدیریت موجودی",
     "orders":     "مشاهده سفارش‌ها",
+    "discounts":  "کدهای تخفیف",
+    "growth":     "رشد و فروش",
     "tickets":    "مدیریت تیکت‌ها",
     "wallets":    "مدیریت کیف‌پول",
+    "users":      "کاربران",
     "partners":   "مدیریت همکاران",
+    "accounting": "حسابداری",
+    "notes":      "یادداشت مدیران",
     "settings":   "تنظیمات ربات",
     "database":   "بکاپ و دیتابیس",
     "admins":     "مدیریت ادمین‌ها",
+    "logs":       "گزارش فعالیت",
     "broadcast":  "پیام همگانی",
+}
+
+# سازگاری با ادمین‌های قدیمی: کلید جدید ← والد قدیمی
+PERM_LEGACY = {
+    "discounts": "orders", "growth": "orders",
+    "users": "wallets", "accounting": "wallets", "notes": "wallets",
+    "logs": "admins",
 }
 
 # ─────────────────────────── DB Schema for Admins ──────────────────────────
 
+_ADMINS_TABLE_READY = False
+
 def ensure_admins_table() -> None:
+    global _ADMINS_TABLE_READY
+    if _ADMINS_TABLE_READY:
+        return
     try:
         conn = _db()
         conn.execute("""
@@ -89,6 +116,7 @@ def ensure_admins_table() -> None:
         """)
         conn.commit()
         conn.close()
+        _ADMINS_TABLE_READY = True
     except Exception:
         pass
 
@@ -184,7 +212,14 @@ def _has(admin_info, perm: str) -> bool:
     if not admin_info:
         return False
     _, is_super, perms = admin_info
-    return is_super or perm in perms
+    if is_super:
+        return True
+    if perm not in ALL_PERMISSIONS:
+        return False             # کلید ناشناخته = رد (امنیت پیش‌فرض)
+    if perm in (perms or []):
+        return True
+    legacy = PERM_LEGACY.get(perm)
+    return bool(legacy and legacy in (perms or []))
 
 def _require(admin_info, perm: str):
     """Returns 403 redirect if admin lacks permission."""
@@ -452,14 +487,18 @@ def _layout(title: str, body: str, admin_info=None,
     if admin_info:
         sidebar = f"""
         <aside id="sidebar" class="sidebar">
-          <div class="sidebar-header" style="justify-content:center">
-            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" style="margin:0 auto">
+          <div class="sidebar-header" style="justify-content:center;position:relative">
+            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" style="margin:0 auto" id="sb-brand">
               <div class="brand-text-only" style="direction:ltr;text-align:center">
                 <span style="color:#E8EDF2;font-weight:900;letter-spacing:1.5px">STOCK</span>
                 <span style="color:#2EC4B6;font-weight:900;letter-spacing:1.5px"> LAND</span>
                 <small style="display:block;font-size:9.5px;color:#536075;letter-spacing:.8px;font-weight:400;margin-top:3px;direction:rtl">مدیریت فروشگاه</small>
               </div>
             </a>
+            <button onclick="sbCollapse()" id="sb-col-btn" title="جمع/باز"
+              style="position:absolute;left:-11px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;background:#2EC4B6;border:none;cursor:pointer;color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;z-index:60;box-shadow:0 2px 8px rgba(0,0,0,.3)">
+              <span id="sb-toggle-icon" style="transition:transform .2s;display:inline-block">›</span>
+            </button>
           </div>
           <div class="nav-caption">منو اصلی</div>
           <nav class="sidebar-nav">
@@ -471,19 +510,21 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>فروش</span></div>
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
-            {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "orders")}
+            {nav_item("/admin/app-content", "smartphone", "محتوای اپ", "settings")}
+            {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
+            {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
             <div class="nav-divider"><span>کاربران</span></div>
-            {nav_item("/admin/users", "users", "کاربران", "wallets")}
+            {nav_item("/admin/users", "users", "کاربران", "users")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
-            {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "wallets")}
-            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "wallets")}
+            {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "accounting")}
+            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "notes")}
             {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
-            {nav_item("/admin/logs", "activity", "گزارش فعالیت", "admins")}
+            {nav_item("/admin/logs", "activity", "گزارش فعالیت", "logs")}
           </nav>
           <div class="sidebar-footer">
             <div class="sidebar-status"><span class="status-dot"></span><div><strong>سامانه فعال</strong><small>همه سرویس‌ها پایدارند</small></div></div>
@@ -642,8 +683,23 @@ def _layout(title: str, body: str, admin_info=None,
       background:linear-gradient(180deg,#0B1320 0%,#05070A 100%);
       border-left:1px solid rgba(255,255,255,.06);
       box-shadow:-4px 0 24px rgba(2,6,23,.14);
-      transition:transform .25s cubic-bezier(.4,0,.2,1);
+      transition:transform .25s cubic-bezier(.4,0,.2,1), width .22s ease;
       color:#8896A8;
+    }}
+    @media (min-width:769px) {{
+      .sidebar.sb-collapsed {{ width:54px !important; overflow:visible; }}
+      .sidebar.sb-collapsed .nav-label {{ display:none !important; }}
+      .sidebar.sb-collapsed .brand-text-only {{ display:none !important; }}
+      .sidebar.sb-collapsed .nav-badge {{ display:none !important; }}
+      .sidebar.sb-collapsed .sidebar-nav a {{
+        justify-content:center; padding:11px 0; border-radius:10px; margin:1px 4px;
+      }}
+      .sidebar.sb-collapsed .sidebar-nav a .nav-icon {{ margin:0 !important; }}
+      .sidebar.sb-collapsed .sidebar-header {{ justify-content:center !important; padding:10px 4px !important; }}
+      .sidebar.sb-collapsed #sb-brand {{ display:none; }}
+      .sidebar.sb-collapsed #sb-toggle-icon {{ transform:rotate(180deg); }}
+      body.sb-collapsed-body .main-wrap.with-sidebar {{ margin-right:54px !important; }}
+      body.sb-collapsed-body .topbar {{ right:54px !important; }}
     }}
     .sidebar-header {{
       padding:18px 18px 16px; border-bottom:1px solid rgba(255,255,255,.06);
@@ -932,16 +988,107 @@ def _layout(title: str, body: str, admin_info=None,
     body.sl-classic .sidebar-logout {{ color:#6B7280 !important; }}
     body.sl-classic .sidebar-logout:hover {{ background:#FEF2F2 !important; color:#DC2626 !important; }}
 
+    /* فاز ۵: اعداد جدول‌ها چپ‌چین (خوانایی مالی) */
+    table td.no-fa, table td[style*="direction:ltr"] {{ text-align:left; direction:ltr; font-variant-numeric:tabular-nums; }}
+
     /* ── Dark Mode ────────────────────────────────────────────── */
     body.sl-dark, body.dark-mode {{
-      --bg-page:#0D1117; --bg-card:#161B22; --bg-input:#161B22; --bg-subtle:#1C2130;
-      --txt-primary:#E5E7EB; --txt-secondary:#C5CDD8; --txt-muted:#8896A8;
-      --bdr:#30363D; --bdr-input:#30363D;
-      --shadow-card:0 1px 4px rgba(0,0,0,.3);
-      background:#0D1117; color:#E5E7EB;
+      --bg-page:#0E1621; --bg-card:#17212B; --bg-input:#1B2530; --bg-subtle:#232E3C;
+      --txt-primary:#F5F5F5; --txt-secondary:#D9E1EA; --txt-muted:#8A99AC;
+      --bdr:#2B3A4C; --bdr-input:#2B3A4C;
+      --shadow-card:0 1px 4px rgba(0,0,0,.35);
+      background:#0E1621; color:#F5F5F5;
     }}
-    body.sl-dark .topbar, body.dark-mode .topbar {{ background:rgba(13,17,23,.9) !important; border-color:#30363D !important; }}
-    body.sl-dark .global-search, body.dark-mode .global-search {{ background:#161B22 !important; border-color:#30363D !important; color:#E5E7EB !important; }}
+    body.sl-dark .topbar, body.dark-mode .topbar {{ background:rgba(14,22,33,.92) !important; border-color:#2B3A4C !important; }}
+    body.sl-dark .global-search, body.dark-mode .global-search {{ background:#17212B !important; border-color:#2B3A4C !important; color:#F5F5F5 !important; }}
+    /* ── کنتراست حالت شب — کیفیت تلگرام ── */
+    body.sl-dark .card, body.dark-mode .card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
+    body.sl-dark .bg-white, body.dark-mode .bg-white {{ background:#17212B !important; }}
+    body.sl-dark .bg-gray-50, body.dark-mode .bg-gray-50 {{ background:#1B2530 !important; }}
+    body.sl-dark .bg-gray-100, body.dark-mode .bg-gray-100 {{ background:#232E3C !important; }}
+    body.sl-dark .text-gray-800, body.sl-dark .text-gray-900,
+    body.dark-mode .text-gray-800, body.dark-mode .text-gray-900 {{ color:#F5F5F5 !important; }}
+    body.sl-dark .text-gray-700, body.dark-mode .text-gray-700 {{ color:#E4EAF1 !important; }}
+    body.sl-dark .text-gray-600, body.sl-dark .text-gray-500,
+    body.dark-mode .text-gray-600, body.dark-mode .text-gray-500 {{ color:#A9B6C6 !important; }}
+    body.sl-dark .text-gray-400, body.dark-mode .text-gray-400 {{ color:#8A99AC !important; }}
+    body.sl-dark .border, body.sl-dark .border-b, body.sl-dark .border-t,
+    body.sl-dark .border-gray-200, body.sl-dark .border-gray-300, body.sl-dark [class*="border-gray-1"],
+    body.dark-mode .border, body.dark-mode .border-b, body.dark-mode .border-t,
+    body.dark-mode .border-gray-200, body.dark-mode .border-gray-300 {{ border-color:#2B3A4C !important; }}
+    body.sl-dark input, body.sl-dark select, body.sl-dark textarea,
+    body.dark-mode input, body.dark-mode select, body.dark-mode textarea {{
+      background:#1B2530 !important; color:#F0F4F8 !important; border-color:#2B3A4C !important;
+    }}
+    body.sl-dark input::placeholder, body.sl-dark textarea::placeholder,
+    body.dark-mode input::placeholder, body.dark-mode textarea::placeholder {{ color:#6B7B8F !important; }}
+    body.sl-dark tr:hover, body.sl-dark .hover\\:bg-gray-50:hover, body.sl-dark .hover\\:bg-gray-100:hover,
+    body.dark-mode tr:hover, body.dark-mode .hover\\:bg-gray-50:hover, body.dark-mode .hover\\:bg-gray-100:hover {{ background:#1F2A38 !important; }}
+    body.sl-dark thead tr, body.dark-mode thead tr {{ background:#1B2530 !important; }}
+    body.sl-dark code, body.dark-mode code {{ background:#232E3C; color:#8FD3F4; padding:1px 5px; border-radius:5px; }}
+    /* بج‌های رنگی: پس‌زمینه شفاف تیره + متن روشن‌تر */
+    body.sl-dark [class*="bg-green-100"], body.sl-dark [class*="bg-green-50"] {{ background:rgba(34,197,94,.16) !important; }}
+    body.sl-dark [class*="text-green-7"] {{ color:#5DDE8A !important; }}
+    body.sl-dark [class*="bg-red-100"], body.sl-dark [class*="bg-red-50"] {{ background:rgba(239,68,68,.16) !important; }}
+    body.sl-dark [class*="text-red-6"], body.sl-dark [class*="text-red-7"], body.sl-dark [class*="text-red-5"] {{ color:#FF7B7B !important; }}
+    body.sl-dark [class*="bg-amber-100"], body.sl-dark [class*="bg-amber-50"],
+    body.sl-dark [class*="bg-yellow-100"], body.sl-dark [class*="bg-yellow-50"] {{ background:rgba(245,158,11,.16) !important; }}
+    body.sl-dark [class*="text-amber-7"], body.sl-dark [class*="text-amber-8"], body.sl-dark [class*="text-yellow-7"] {{ color:#FFC46B !important; }}
+    body.sl-dark [class*="bg-indigo-100"], body.sl-dark [class*="bg-indigo-50"] {{ background:rgba(99,102,241,.18) !important; }}
+    body.sl-dark [class*="text-indigo-7"], body.sl-dark [class*="text-indigo-6"] {{ color:#A5B4FF !important; }}
+    body.sl-dark [class*="bg-blue-100"], body.sl-dark [class*="bg-blue-50"] {{ background:rgba(59,130,246,.16) !important; }}
+    body.sl-dark [class*="text-blue-7"], body.sl-dark [class*="text-blue-6"] {{ color:#7DB8FF !important; }}
+    body.sl-dark [class*="bg-teal-100"], body.sl-dark [class*="bg-teal-50"] {{ background:rgba(20,184,166,.16) !important; }}
+    body.sl-dark [class*="text-teal-7"] {{ color:#5EEAD4 !important; }}
+    body.sl-dark [class*="bg-purple-100"], body.sl-dark [class*="bg-purple-50"] {{ background:rgba(168,85,247,.16) !important; }}
+    body.sl-dark [class*="text-purple-7"] {{ color:#D0A8FF !important; }}
+    body.sl-dark [class*="bg-orange-100"], body.sl-dark [class*="bg-orange-50"] {{ background:rgba(249,115,22,.16) !important; }}
+    body.sl-dark [class*="text-orange-7"] {{ color:#FFAD70 !important; }}
+    body.sl-dark [class*="border-green-2"], body.sl-dark [class*="border-red-2"],
+    body.sl-dark [class*="border-amber-2"], body.sl-dark [class*="border-indigo-2"],
+    body.sl-dark [class*="border-blue-2"], body.sl-dark [class*="border-teal-2"] {{ border-color:#2B3A4C !important; }}
+    /* فاز ۵: تکمیل Dark Mode — رنگ‌های جامانده + سازگاری dark-mode alias */
+    body.sl-dark [class*="bg-emerald-50"], body.dark-mode [class*="bg-emerald-50"],
+    body.sl-dark [class*="bg-emerald-100"], body.dark-mode [class*="bg-emerald-100"] {{ background:rgba(16,185,129,.14) !important; }}
+    body.sl-dark [class*="text-emerald-6"], body.sl-dark [class*="text-emerald-7"],
+    body.dark-mode [class*="text-emerald-6"], body.dark-mode [class*="text-emerald-7"] {{ color:#4EE0B0 !important; }}
+    body.sl-dark [class*="bg-slate-50"], body.dark-mode [class*="bg-slate-50"],
+    body.sl-dark [class*="bg-slate-100"], body.dark-mode [class*="bg-slate-100"] {{ background:#1B2530 !important; }}
+    body.sl-dark [class*="text-slate-7"], body.dark-mode [class*="text-slate-7"],
+    body.sl-dark [class*="text-slate-6"], body.dark-mode [class*="text-slate-6"] {{ color:#B5C3D4 !important; }}
+    body.sl-dark [class*="bg-purple-50"], body.dark-mode [class*="bg-purple-50"] {{ background:rgba(168,85,247,.14) !important; }}
+    body.dark-mode [class*="text-purple-7"], body.dark-mode [class*="text-purple-6"] {{ color:#D0A8FF !important; }}
+    body.dark-mode [class*="bg-green-100"], body.dark-mode [class*="bg-green-50"] {{ background:rgba(34,197,94,.16) !important; }}
+    body.dark-mode [class*="text-green-7"], body.dark-mode [class*="text-green-6"] {{ color:#5DDE8A !important; }}
+    body.dark-mode [class*="bg-red-100"], body.dark-mode [class*="bg-red-50"] {{ background:rgba(239,68,68,.16) !important; }}
+    body.dark-mode [class*="text-red-6"], body.dark-mode [class*="text-red-7"] {{ color:#FF7B7B !important; }}
+    body.dark-mode [class*="bg-amber-100"], body.dark-mode [class*="bg-amber-50"] {{ background:rgba(245,158,11,.16) !important; }}
+    body.dark-mode [class*="text-amber-7"] {{ color:#FFC46B !important; }}
+    body.dark-mode [class*="bg-indigo-100"], body.dark-mode [class*="bg-indigo-50"] {{ background:rgba(99,102,241,.18) !important; }}
+    body.dark-mode [class*="text-indigo-7"], body.dark-mode [class*="text-indigo-6"] {{ color:#A5B4FF !important; }}
+    body.dark-mode [class*="bg-blue-100"], body.dark-mode [class*="bg-blue-50"] {{ background:rgba(59,130,246,.16) !important; }}
+    body.dark-mode [class*="text-blue-7"], body.dark-mode [class*="text-blue-6"] {{ color:#7DB8FF !important; }}
+    body.dark-mode [class*="bg-teal-50"] {{ background:rgba(20,184,166,.16) !important; }}
+    body.dark-mode [class*="text-teal-7"] {{ color:#5EEAD4 !important; }}
+    /* گرادیان‌ها در دارک */
+    body.sl-dark [class*="bg-gradient"], body.dark-mode [class*="bg-gradient"] {{ background:#17212B !important; }}
+    /* جداول: اعداد چپ‌چین حفظ خوانایی */
+    body.sl-dark table td, body.dark-mode table td {{ color:#D9E1EA; }}
+    body.sl-dark summary, body.dark-mode summary {{ color:#E4EAF1 !important; }}
+    /* فیکس: اعداد و متون مشکی در dark */
+    body.sl-dark input, body.sl-dark select, body.sl-dark textarea,
+    body.dark-mode input, body.dark-mode select, body.dark-mode textarea {{
+      color:#E4EAF1 !important; background:#1B2530 !important; border-color:#2B3A4C !important;
+    }}
+    body.sl-dark td, body.sl-dark th, body.dark-mode td, body.dark-mode th {{ color:#D9E1EA !important; }}
+    body.sl-dark .text-gray-800, body.sl-dark .text-gray-700, body.sl-dark .text-gray-600,
+    body.dark-mode .text-gray-800, body.dark-mode .text-gray-700, body.dark-mode .text-gray-600 {{ color:#D0DAE6 !important; }}
+    body.sl-dark .text-gray-500, body.sl-dark .text-gray-400,
+    body.dark-mode .text-gray-500, body.dark-mode .text-gray-400 {{ color:#8899AA !important; }}
+    body.sl-dark .command-center::before, body.dark-mode .command-center::before {{ display:none !important; }}
+    body.sl-dark .command-center, body.dark-mode .command-center {{ background:#0F1923 !important; }}
+    body.sl-dark .dashboard, body.dark-mode .dashboard {{ background:#0F1923 !important; }}
+    body.sl-dark details.acc, body.dark-mode details.acc {{ background:#17212B !important; }}
 
     /* ── Misc Helpers ─────────────────────────────────────────── */
     .section-title {{ font-size:14px; font-weight:700; color:var(--txt-primary); margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid var(--bdr); }}
@@ -1060,34 +1207,69 @@ def _layout(title: str, body: str, admin_info=None,
     document.getElementById('overlay')?.classList.toggle('open');
   }};
 
-  // ── Classic / Dark Mode ─────────────────────────────
+  // ── Collapse sidebar (desktop only) ────────────────────────────────────
+  window.sbCollapse = function(){{
+    if(window.innerWidth < 769) return;
+    var sb = document.querySelector('.sidebar');
+    var on = sb.classList.toggle('sb-collapsed');
+    document.body.classList.toggle('sb-collapsed-body', on);
+    localStorage.setItem('sl-sb-collapsed', on ? '1' : '0');
+    var ico = document.getElementById('sb-toggle-icon');
+    if(ico) ico.style.transform = on ? 'rotate(180deg)' : '';
+  }};
+  (function(){{
+    if(window.innerWidth < 769) return;
+    if(localStorage.getItem('sl-sb-collapsed') === '1') {{
+      document.querySelector('.sidebar').classList.add('sb-collapsed');
+      document.body.classList.add('sb-collapsed-body');
+      var ico = document.getElementById('sb-toggle-icon');
+      if(ico) ico.style.transform = 'rotate(180deg)';
+    }}
+  }})();
+
+  // ── Classic / Dark Mode (با پشتیبانی هماهنگی سیستم) ──────────
+  function _prefersDark(){{
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }}
+  function _resolveDark(){{
+    var m = localStorage.getItem('sl-dark');
+    if(m==='auto' || m===null) return _prefersDark();
+    return m==='1';
+  }}
   function applyMode(){{
     var isClassic = localStorage.getItem('sl-classic')==='1';
-    var isDark = localStorage.getItem('sl-dark')==='1';
-    document.body.classList.toggle('sl-classic', isClassic);
-    document.body.classList.toggle('sl-dark', isDark && !isClassic);
-    document.body.classList.toggle('dark-mode', isDark && !isClassic);
+    var isDark = _resolveDark();
+    document.body.classList.toggle('sl-classic', isClassic && !isDark);
+    document.body.classList.toggle('sl-dark', isDark);
+    document.body.classList.toggle('dark-mode', isDark);
+  }}
+  window.applyMode = applyMode;
+  // اگر روی حالت خودکار است، با تغییر تم سیستم همگام شو
+  if(window.matchMedia){{
+    try {{
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(){{
+        if((localStorage.getItem('sl-dark')||'auto')==='auto') applyMode();
+      }});
+    }} catch(e){{}}
   }}
   window.toggleClassic = function(){{
     var on = localStorage.getItem('sl-classic')==='1';
     localStorage.setItem('sl-classic', on?'0':'1');
-    if(!on) localStorage.setItem('sl-dark','0');
     applyMode(); renderIcons();
+    fetch('/admin/settings/save-theme?dark='+encodeURIComponent(localStorage.getItem('sl-dark')||'auto')+'&classic='+(on?'0':'1'),{{method:'POST'}}).catch(function(){{}});
   }};
   window.toggleDark = function(){{
-    var on = localStorage.getItem('sl-dark')==='1';
+    var on = _resolveDark();
     localStorage.setItem('sl-dark', on?'0':'1');
-    if(!on) localStorage.setItem('sl-classic','0');
     applyMode(); renderIcons();
-    fetch('/admin/settings/save-theme?dark='+(on?'0':'1'),{{method:'POST'}}).catch(function(){{}});
+    fetch('/admin/settings/save-theme?dark='+(on?'0':'1')+'&classic='+(localStorage.getItem('sl-classic')==='1'?'1':'0'),{{method:'POST'}}).catch(function(){{}});
   }};
   // بارگذاری تم ذخیره‌شده از سرور
   (function(){{
     var saved = document.documentElement.getAttribute('data-saved-dark');
     var savedC = document.documentElement.getAttribute('data-saved-classic');
-    if(savedC==='1'){{ localStorage.setItem('sl-classic','1'); localStorage.setItem('sl-dark','0'); }}
-    else if(saved==='1'){{ localStorage.setItem('sl-dark','1'); localStorage.setItem('sl-classic','0'); }}
-    else if(saved==='0'){{ localStorage.setItem('sl-dark','0'); localStorage.setItem('sl-classic','0'); }}
+    if(saved==='1'||saved==='0'||saved==='auto') localStorage.setItem('sl-dark', saved);
+    if(savedC==='1'||savedC==='0') localStorage.setItem('sl-classic', savedC);
   }})();
   applyMode();
 
@@ -1134,6 +1316,39 @@ def _layout(title: str, body: str, admin_info=None,
   }, 12000);
   """}
   renderIcons();
+}})();
+</script>
+<script>
+/* ─── اعداد فارسی سراسری پنل ─── */
+(function(){{
+  var FA=['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+  function conv(s){{ return s.replace(/[0-9]/g,function(d){{return FA[+d];}}); }}
+  var SKIP={{SCRIPT:1,STYLE:1,TEXTAREA:1,INPUT:1,SELECT:1,OPTION:1,CODE:1,PRE:1,KBD:1}};
+  function walk(node){{
+    if(node.nodeType===3){{
+      if(/[0-9]/.test(node.nodeValue)) node.nodeValue=conv(node.nodeValue);
+      return;
+    }}
+    if(node.nodeType!==1) return;
+    if(SKIP[node.tagName]) return;
+    if(node.closest && node.closest('code,pre,kbd,.no-fa')) return;
+    for(var i=0;i<node.childNodes.length;i++) walk(node.childNodes[i]);
+  }}
+  function run(){{ walk(document.body); }}
+  run();
+  var mo=new MutationObserver(function(muts){{
+    mo.disconnect();
+    muts.forEach(function(m){{
+      m.addedNodes && m.addedNodes.forEach(function(n){{ walk(n); }});
+      if(m.type==='characterData' && /[0-9]/.test(m.target.nodeValue||'')){{
+        var p=m.target.parentElement;
+        if(p && !SKIP[p.tagName] && !(p.closest&&p.closest('code,pre,kbd,.no-fa')))
+          m.target.nodeValue=conv(m.target.nodeValue);
+      }}
+    }});
+    mo.observe(document.body,{{childList:true,subtree:true,characterData:true}});
+  }});
+  mo.observe(document.body,{{childList:true,subtree:true,characterData:true}});
 }})();
 </script>
 </body>
@@ -1361,7 +1576,7 @@ async def dashboard(request: Request, err: str = ""):
     <tr>
       <td><a class="order-id" href="/admin/orders/{o['id']}/edit">#{o['id']}</a></td>
       <td><div class="table-product"><span><i data-lucide="package"></i></span><strong>{e(o['title'][:34])}</strong></div></td>
-      <td><span class="muted-cell">{o['user_id']}</span></td>
+      <td><code class="no-fa text-xs">{o['user_id']}</code></td>
       <td><strong class="money-cell">{int(o['price']):,}</strong><small class="currency">تومان</small></td>
       <td>{status_badge(o['status'] or 'active')}</td>
       <td><a class="table-action" href="/admin/orders/{o['id']}/edit" aria-label="مشاهده سفارش"><i data-lucide="arrow-up-left"></i></a></td>
@@ -1381,7 +1596,7 @@ async def dashboard(request: Request, err: str = ""):
     """ for index, (name, data) in enumerate(sorted(product_summary.items(), key=lambda item: (item[1]["count"], item[1]["revenue"]), reverse=True)[:5], 1))
 
     activity_rows = "".join(f"""
-      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {e(str(o['created_at'])[:16])}</small></span></div>
+      <div class="activity-row"><span class="activity-icon"><i data-lucide="shopping-bag"></i></span><span><strong>سفارش #{o['id']} ثبت شد</strong><small>{e(o['title'][:28])} · {fa_date(o['created_at'], with_time=True)}</small></span></div>
     """ for o in recent[:5])
 
     def command_item(icon, label, value, meta, tone="cyan", href="#"):
@@ -1463,7 +1678,32 @@ async def dashboard(request: Request, err: str = ""):
       body.dark-mode .kpi-icon,body.dark-mode .table-product>span,body.dark-mode .rank-number {{ background:#172330; }} body.dark-mode .task-row,body.dark-mode .panel-header {{ border-color:#273244; }} body.dark-mode .status-success {{ background:rgba(34,197,94,.1); }} body.dark-mode .status-warning {{ background:rgba(245,158,11,.1); }} body.dark-mode .status-danger {{ background:rgba(239,68,68,.1); }}
       @media(max-width:1200px) {{ .kpi-grid {{ grid-template-columns:repeat(2,1fr); }} .three-column {{ grid-template-columns:1fr 1fr; }} .three-column>*:last-child {{ grid-column:1/-1; }} }}
       @media(max-width:940px) {{ .two-column {{ grid-template-columns:1fr; }} .command-grid {{ grid-template-columns:repeat(7,155px); }} }}
-      @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
+      /* فاز ۵: حالت Classic — مرکز فرمان روشن و ساده */
+      body.sl-classic .command-center {{ background:#FFFFFF !important; box-shadow:0 1px 4px rgba(0,0,0,.06) !important; border:1px solid #E5E7EB !important; }}
+      body.sl-classic .command-center::before {{ display:none !important; }}
+      body.sl-classic .command-title h3 {{ color:#111827 !important; }}
+      body.sl-classic .command-title p {{ color:#6B7280 !important; }}
+      body.sl-classic .command-title>span {{ background:#EFF6FF !important; color:#2563EB !important; border-color:#DBEAFE !important; }}
+      body.sl-classic .command-item {{ background:#F9FAFB !important; border:1px solid #E5E7EB !important; }}
+      body.sl-classic .command-item strong {{ color:#111827 !important; }}
+      body.sl-classic .command-item small {{ color:#6B7280 !important; }}
+      body.sl-classic .command-icon {{ background:#EFF6FF !important; color:#2563EB !important; }}
+      body.sl-classic .live-pill {{ background:#ECFDF5 !important; color:#059669 !important; border-color:#D1FAE5 !important; }}
+      body.sl-classic .kpi-card {{ background:#FFFFFF !important; border:1px solid #E5E7EB !important; box-shadow:0 1px 3px rgba(0,0,0,.05) !important; }}
+      body.sl-classic .kpi-label, body.sl-classic .kpi-unit {{ color:#6B7280 !important; }}
+      body.sl-classic .chart-card {{ background:#FFFFFF !important; border:1px solid #E5E7EB !important; }}
+      /* Dark mode هم برای مرکز فرمان */
+      body.sl-dark .command-item, body.dark-mode .command-item {{ background:#1B2530 !important; border-color:#2B3A4C !important; }}
+      body.sl-dark .kpi-card, body.dark-mode .kpi-card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
+      body.sl-dark .chart-card, body.dark-mode .chart-card {{ background:#17212B !important; border-color:#2B3A4C !important; }}
+      body.sl-dark .activity-icon, body.dark-mode .activity-icon {{ background:#1B2530 !important; }}
+            /* موبایل: دکمه collapse sidebar مخفی + body fixed وقتی sidebar بازه */
+    @media(max-width:768px) {{
+      .sidebar-collapse-btn {{ display:none !important; }}
+      body.sidebar-open {{ overflow:hidden !important; position:fixed !important; width:100% !important; }}
+      .sidebar {{ overflow-y:auto !important; -webkit-overflow-scrolling:touch; }}
+    }}
+    @media(max-width:640px) {{ .dashboard {{ gap:22px; }} .dashboard-head {{ align-items:flex-start; }} .dashboard-head h2 {{ font-size:21px; }} .date-chip {{ display:none; }} .command-center {{ padding:18px 14px; border-radius:22px; }} .command-grid {{ margin-left:-14px; padding-left:14px; }} .kpi-grid,.three-column {{ grid-template-columns:1fr; }} .three-column>*:last-child {{ grid-column:auto; }} .kpi-card {{ min-height:174px; }} .chart-card {{ padding:18px 12px 12px; }} .chart-shell {{ height:320px; }} .panel-header {{ padding:0 14px; }} }}
     </style>
 
     <main class="dashboard">
@@ -1556,14 +1796,14 @@ async def dashboard(request: Request, err: str = ""):
 # ─────────────────────────── Settings ──────────────────────────────────────
 
 DEFAULT_UI_TEXTS = {
-    "MAIN_BTN_OTHER_PRODUCTS": "سایر محصولات فروشگاه 🛍",
-    "MAIN_BTN_BUY_APPLE_ID":  "سرویس اپل آیدی 📱",
-    "MAIN_BTN_MY_ORDERS":     "خرید های من 🧾",
-    "MAIN_BTN_WALLET":        "کیف پول 💰",
-    "MAIN_BTN_PARTNER_REQUEST":"درخواست نمایندگی 📝",
-    "MAIN_BTN_PARTNER_PANEL": "پنل همکار 🤝",
-    "MAIN_BTN_GUIDE":         "راهنما 🔑",
-    "MAIN_BTN_SUPPORT":       "پشتیبانی 👨‍💻",
+    "MAIN_BTN_OTHER_PRODUCTS": "🛍 سایر محصولات فروشگاه",
+    "MAIN_BTN_BUY_APPLE_ID":  "📱 سرویس اپل آیدی",
+    "MAIN_BTN_MY_ORDERS":     "🧾 خریدهای من",
+    "MAIN_BTN_WALLET":        "💰 کیف پول",
+    "MAIN_BTN_PARTNER_REQUEST":"📝 درخواست نمایندگی",
+    "MAIN_BTN_PARTNER_PANEL": "🤝 پنل همکار",
+    "MAIN_BTN_GUIDE":         "🔑 راهنما",
+    "MAIN_BTN_SUPPORT":       "👨‍💻 پشتیبانی",
     "SUPPORT_TEXT":           "متن پشتیبانی...",
     "HELP_TEXT":              "متن راهنما...",
     "TXT_MAIN_MENU_TITLE":    "منوی اصلی",
@@ -1609,7 +1849,7 @@ async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0")
             );
         """)
         conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
-                     (str(adm[0]), "dark_mode", "1" if dark == "1" else "0"))
+                     (str(adm[0]), "dark_mode", dark if dark in ("1", "0", "auto") else "0"))
         conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
                      (str(adm[0]), "classic_mode", "1" if classic == "1" else "0"))
         conn.commit(); conn.close()
@@ -1633,23 +1873,36 @@ async def card_receipts_page(request: Request, status: str = "pending", flash: s
         for s, l in [("pending","⏳ در انتظار"),("approved","✅ تأیید شده"),("rejected","❌ رد شده"),("","همه")]
     )
 
+    def _method_cell(r):
+        try:
+            m = r["method"] if "method" in r.keys() else "card"
+        except Exception:
+            m = "card"
+        if m and str(m).startswith("crypto"):
+            net = "USDT" if "usdt" in str(m) else "TRX"
+            try:
+                tx = (r["txid"] or "")[:14] if "txid" in r.keys() else ""
+            except Exception:
+                tx = ""
+            return (f'<span class="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded text-xs">₿ {net}</span>'
+                    + (f'<div class="text-[10px] text-gray-400 mt-1" dir="ltr"><code>{e(tx)}…</code></div>' if tx else ""))
+        return f'<a href="/admin/receipts/{r["id"]}/view" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">💳 مشاهده رسید</a>'
+
     rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
       <td class="px-3 py-3 text-xs text-gray-400">#{r['id']}</td>
       <td class="px-3 py-3">{e(r['full_name'] or r['username'] or str(r['user_id']))}</td>
       <td class="px-3 py-3 font-bold text-green-600">{int(r['amount'] or 0):,}</td>
-      <td class="px-3 py-3">
-        <a href="/admin/receipts/{r['id']}/view" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده رسید</a>
-      </td>
+      <td class="px-3 py-3">{_method_cell(r)}</td>
       <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs
         {'bg-amber-100 text-amber-700' if r['status']=='pending' else 'bg-green-100 text-green-700' if r['status']=='approved' else 'bg-red-100 text-red-600'}">
         {'⏳' if r['status']=='pending' else '✅' if r['status']=='approved' else '❌'}
       </span></td>
-      <td class="px-3 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:16]}</td>
+      <td class="px-3 py-3 text-xs text-gray-400">{fa_date(r['created_at'] or '', with_time=True)}</td>
       {'<td class="px-3 py-3 flex gap-1"><form method="post" action="/admin/receipts/' + str(r["id"]) + '/approve"><button class="px-2 py-1 bg-green-600 text-white rounded text-xs">✅ تأیید</button></form><form method="post" action="/admin/receipts/' + str(r["id"]) + '/reject"><button class="px-2 py-1 bg-red-50 text-red-600 border border-red-200 rounded text-xs">❌ رد</button></form></td>' if r['status']=='pending' else '<td></td>'}
     </tr>""" for r in receipts) or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>رسیدی یافت نشد</td></tr>"
 
     body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-4">💳 رسیدهای کارت‌به‌کارت</h1>
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">💳 رسیدهای پرداخت (کارت‌به‌کارت و رمزارز)</h1>
     <div class="flex gap-2 mb-4">{tabs}</div>
     <div class="card overflow-hidden"><div class="overflow-x-auto">
       <table class="w-full text-right min-w-max">
@@ -1686,7 +1939,7 @@ async def receipt_view(request: Request, rid: int):
           <div class="flex justify-between"><span class="text-gray-400">کاربر</span><span>{e(r['full_name'] or str(r['user_id']))}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span class="font-bold text-green-600">{int(r['amount']):,} تومان</span></div>
           <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{r['status']}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">تاریخ</span><span>{(r['created_at'] or '')[:16]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">تاریخ</span><span>{fa_date(r['created_at'] or '', with_time=True)}</span></div>
         </div>
         {'''<div class="mt-4 space-y-3">
           <label class="text-sm font-medium text-gray-700 block">مبلغ تأیید شده (تومان)</label>
@@ -1805,6 +2058,26 @@ async def receipt_reject(request: Request, rid: int):
     return _redir(f"/admin/tickets?flash=رسید+{rid}+رد+شد#financial")
 
 
+def _webhook_status_snippet() -> str:
+    """خلاصه وضعیت اتصال ربات برای نمایش در صفحه تنظیمات."""
+    try:
+        from db import get_cfg
+        mode = (get_cfg("bot_run_mode", "") or "").strip().lower()
+    except Exception:
+        mode = ""
+    if mode == "webhook":
+        return ('<div class="mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">'
+                '🚀 Webhook فعال — سریع‌ترین حالت</div>')
+    if mode == "polling":
+        return ('<div class="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">'
+                '🔄 Polling فعال</div>')
+    if mode == "stopped":
+        return ('<div class="mb-3 px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg text-sm text-gray-700">'
+                '⏸ ربات متوقف است</div>')
+    return ('<div class="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">'
+            '❓ حالت اتصال نامشخص — یک بار وارد صفحه مدیریت شوید</div>')
+
+
 @router.get("/settings/panel", response_class=HTMLResponse)
 async def settings_hub(request: Request, flash: str = ""):
     adm = _get_admin(request)
@@ -1812,39 +2085,78 @@ async def settings_hub(request: Request, flash: str = ""):
     if guard: return guard
 
     # تم فعلی
-    saved_dark = ""
+    saved_dark = "auto"; saved_classic = "0"
     try:
         conn = _db()
-        row = conn.execute("SELECT value FROM admin_preferences WHERE admin_id=? AND key='dark_mode';", (str(adm[0]),)).fetchone()
+        for r in conn.execute("SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');", (str(adm[0]),)).fetchall():
+            if r[0] == "dark_mode":    saved_dark = r[1] or "auto"
+            if r[0] == "classic_mode": saved_classic = r[1] or "0"
         conn.close()
-        saved_dark = row[0] if row else "0"
     except Exception:
-        saved_dark = "0"
+        pass
 
-    current_theme = "dark" if saved_dark == "1" else "day"
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-6">⚙️ تنظیمات</h1>
     <div class="grid md:grid-cols-2 gap-4">
       <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-3">🌙 حالت نمایش</h2>
-        <p class="text-sm text-gray-500 mb-4">انتخاب شما ذخیره می‌شود و پس از ورود مجدد هم اعمال می‌شود.</p>
-        <div class="flex gap-2 mb-3">
-          <button onclick="setTheme('day')" class="flex-1 py-2.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-sm font-medium hover:bg-amber-100 transition">☀️ روز</button>
-          <button onclick="setTheme('dark')" class="flex-1 py-2.5 bg-gray-800 text-gray-100 border border-gray-600 rounded-lg text-sm font-medium hover:bg-gray-700 transition">🌙 شب</button>
-          <button onclick="setTheme('classic')" class="flex-1 py-2.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-sm font-medium hover:bg-blue-100 transition">💙 کلاسیک</button>
-        </div>
-        <p class="text-xs text-gray-400">فعلی: <span id="cur-theme">{'🌙 شب' if saved_dark=='1' else '☀️ روز'}</span></p>
+        <h2 class="font-bold text-gray-700 mb-3">🌗 حالت نمایش</h2>
+        <p class="text-sm text-gray-500 mb-4">انتخاب شما ذخیره می‌شود و پس از خروج و ورود مجدد هم باقی می‌ماند.</p>
+
+        <button id="btn-daynight" onclick="hubToggleDark()"
+          class="w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
+
+        <button id="btn-classic" onclick="hubToggleClassic()"
+          class="w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
+
+        <button id="btn-auto" onclick="hubSetAuto()"
+          class="w-full py-3 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2"></button>
+
+        <p class="text-xs text-gray-400 mt-3">🖥 در حالت «هماهنگ با سیستم»، پنل به‌صورت خودکار با تم روز/شب دستگاه شما هماهنگ می‌شود.</p>
+
         <script>
-        function setTheme(m){{
-          var labels={{'day':'☀️ روز','dark':'🌙 شب','classic':'💙 کلاسیک'}};
-          localStorage.setItem('sl-dark', m==='dark'?'1':'0');
-          localStorage.setItem('sl-classic', m==='classic'?'1':'0');
-          document.body.classList.toggle('sl-dark', m==='dark');
-          document.body.classList.toggle('dark-mode', m==='dark');
-          document.body.classList.toggle('sl-classic', m==='classic');
-          document.getElementById('cur-theme').textContent = labels[m];
-          fetch('/admin/settings/save-theme?dark='+(m==='dark'?'1':'0')+'&classic='+(m==='classic'?'1':'0'), {{method:'POST'}});
+        function _hubMode(){{ return localStorage.getItem('sl-dark') || '{saved_dark}' || 'auto'; }}
+        function _hubIsDark(){{
+          var m=_hubMode();
+          if(m==='auto') return window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+          return m==='1';
         }}
+        function _hubSave(){{
+          fetch('/admin/settings/save-theme?dark='+encodeURIComponent(localStorage.getItem('sl-dark')||'auto')
+            +'&classic='+(localStorage.getItem('sl-classic')==='1'?'1':'0'), {{method:'POST'}}).catch(function(){{}});
+        }}
+        function hubRender(){{
+          var m=_hubMode(), dark=_hubIsDark(), classic=localStorage.getItem('sl-classic')==='1';
+          var dn=document.getElementById('btn-daynight');
+          if(dark){{
+            dn.textContent='☀️ رفتن به حالت روز';
+            dn.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100';
+          }} else {{
+            dn.textContent='🌙 رفتن به حالت شب';
+            dn.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 bg-gray-800 text-gray-100 border-gray-600 hover:bg-gray-700';
+          }}
+          var bc=document.getElementById('btn-classic');
+          bc.textContent = classic ? '🎨 حالت کلاسیک: روشن — بازگشت به پیش‌فرض' : '🎨 فعال‌کردن حالت کلاسیک';
+          bc.className='w-full py-3 mb-2 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 '
+            +(classic?'bg-blue-600 text-white border-blue-600 hover:bg-blue-700':'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100');
+          var ba=document.getElementById('btn-auto');
+          ba.textContent = m==='auto' ? '🖥 هماهنگ با سیستم: فعال ✓' : '🖥 هماهنگ با سیستم';
+          ba.className='w-full py-3 rounded-xl text-sm font-semibold border transition flex items-center justify-center gap-2 '
+            +(m==='auto'?'bg-teal-600 text-white border-teal-600':'bg-teal-50 text-teal-700 border-teal-200 hover:bg-teal-100');
+        }}
+        function hubToggleDark(){{
+          localStorage.setItem('sl-dark', _hubIsDark()?'0':'1');
+          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
+        }}
+        function hubToggleClassic(){{
+          var on=localStorage.getItem('sl-classic')==='1';
+          localStorage.setItem('sl-classic', on?'0':'1');
+          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
+        }}
+        function hubSetAuto(){{
+          localStorage.setItem('sl-dark','auto');
+          window.applyMode&&window.applyMode(); _hubSave(); hubRender();
+        }}
+        hubRender();
         </script>
       </div>
       <div class="card p-6">
@@ -1867,6 +2179,14 @@ async def settings_hub(request: Request, flash: str = ""):
             <button class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">✅ بازگشایی ربات</button>
           </form>
         </div>
+      </div>
+      <!-- Webhook -->
+      <div class="card p-6">
+        <h2 class="font-bold text-gray-700 mb-3">🔗 اتصال ربات (Webhook)</h2>
+        <p class="text-sm text-gray-500 mb-4">مدیریت نحوه اتصال ربات به تلگرام — Webhook (سریع‌تر) یا Polling.</p>
+        {_webhook_status_snippet()}
+        <a href="/admin/webhook" class="inline-block px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+          🔧 مدیریت کامل Webhook</a>
       </div>
     </div>"""
     return _layout("تنظیمات", body, adm, flash=flash)
@@ -2501,22 +2821,45 @@ async def database_page(request: Request, flash: str = ""):
     guard = _require(adm, "database")
     if guard: return guard
 
+    # ☁️ داده‌های بکاپ ابری
+    from backup_uploader import get_cloud_settings as _gcs
+    from db import get_cfg as _gk
+    _cb = _gcs()
+    _cb_last_ok = _gk("cloudbk_last_ok", "")
+    _gdrive_env_ok = bool(os.getenv("GDRIVE_CLIENT_ID","").strip() and os.getenv("GDRIVE_FOLDER_ID","").strip())
+    _gdrive_connected = bool(_cb.get("gdrive_refresh_token",""))
+    _cb_report_html = ""
+    try:
+        import json as _j
+        _rep = _j.loads(_gk("cloudbk_last_report", "") or "{}")
+        _errs = [r for r in _rep.get("results", []) if not r.get("ok")]
+        if _errs:
+            _cb_report_html = '<span class="text-red-500">آخرین خطا: ' + e(str(_errs[0].get("driver")) + " — " + str(_errs[0].get("error"))[:100]) + "</span>"
+    except Exception:
+        pass
+
     from stbak_engine import MODULES, SECTION_LABELS
     import glob as _gl, os as _os
 
-    # لیست بکاپ‌های خودکار
-    _auto_dir = "/tmp/stockland_backups"
-    _auto_files = sorted(_gl.glob(f"{_auto_dir}/auto_*.stbak"), reverse=True)[:5]
+    # لیست بکاپ‌های خودکار — از pg_backup (PostgreSQL)
+    try:
+        from pg_backup import list_local_backups
+        _auto_list = list_local_backups()[:3]
+    except Exception:
+        _auto_list = []
+    _auto_files = [b["path"] for b in _auto_list]
     _auto_rows = ""
-    for _f in _auto_files:
-        _fn  = _os.path.basename(_f)
-        _sz  = _os.path.getsize(_f)
+    for _b in _auto_list:
+        _fn  = _b["name"]
+        _sz  = _b["size"]
         _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
-        _ts  = _fn.replace("auto_","").replace(".stbak","")
+        _ts  = _fn.replace("pg_backup_","").replace(".stbak","")
         try:
             from datetime import datetime as _dt
+            from db import fa_date as _fad
             _dto = _dt.strptime(_ts, "%Y%m%d_%H%M%S")
-            _tfa = _dto.strftime("%Y/%m/%d — %H:%M")
+            _iso = _dto.strftime("%Y-%m-%d %H:%M:%S")
+            _tfa = _fad(_iso, with_time=True)  # شمسی + اعداد فارسی
         except Exception:
             _tfa = _ts
         _auto_rows += f"""<tr class="border-b hover:bg-gray-50">
@@ -2552,16 +2895,18 @@ async def database_page(request: Request, flash: str = ""):
 
     # لیست بکاپ‌های خودکار برای dropdown بازیابی
     _restore_options = ""
-    for _f in _auto_files:
-        _fn = _os.path.basename(_f)
-        _ts = _fn.replace("auto_","").replace(".stbak","")
+    for _b in _auto_list:
+        _fn = _b["name"]
+        _ts = _fn.replace("pg_backup_","").replace(".stbak","")
         try:
             from datetime import datetime as _dt2
+            from db import fa_date as _fad2
             _dto = _dt2.strptime(_ts, "%Y%m%d_%H%M%S")
-            _label = _dto.strftime("%Y/%m/%d — %H:%M")
+            _iso = _dto.strftime("%Y-%m-%d %H:%M:%S")
+            _label = _fad2(_iso, with_time=True)  # شمسی + اعداد فارسی
         except Exception:
             _label = _ts
-        _sz = _os.path.getsize(_f)
+        _sz = _b["size"]
         _szs = f"{_sz//1024} KB"
         _restore_options += f'<option value="{e(_fn)}">{_label} ({_szs})</option>'
 
@@ -2640,18 +2985,22 @@ async def database_page(request: Request, flash: str = ""):
       var sel=document.getElementById('auto-restore-select');
       if(!sel||!sel.value){alert('یک بکاپ انتخاب کنید');return;}
       if(!confirm('⚠️ این عملیات داده‌های فعلی را با بکاپ جایگزین می‌کند. ادامه؟'))return;
+      if(_busy)return;_busy=true;
       ovShow('بازیابی بکاپ خودکار','در حال بازیابی...');
-      var fd=new FormData(); fd.append('filename',sel.value);
-      var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
-      var d=await r.json();
-      if(d.ok){ovDone('✅','بازیابی موفق','بکاپ با موفقیت بازیابی شد');}
-      else{ovDone('❌','خطا',d.error||'مشکلی پیش آمد');}
+      try{
+        var fd=new FormData(); fd.append('filename',sel.value);
+        var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
+        var d=await r.json();
+        if(d.ok){ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');}
+        else{ovResult(false,'خطا',d.error||'مشکلی پیش آمد');}
+      }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
+      finally{_busy=false;}
     }
     async function runRestore(){
       if(_busy)return;
       var file=document.getElementById('restore-file').files[0];
       if(!file){alert('فایل انتخاب نشده');return;}
-      if(!file.name.endsWith('.stbak')){alert('فقط .stbak مجاز است');return;}
+      if(!file.name.endsWith('.stbak')){alert('فقط فایل .stbak مجاز است');return;}
       _busy=true;ovShow('در حال بازیابی...','لطفاً صبر کنید');
       try{
         var fd=new FormData();fd.append('backup_file',file);
@@ -2773,7 +3122,148 @@ async def database_page(request: Request, flash: str = ""):
 
     <script>
     {_js}
-    </script>"""
+    </script>
+
+    <!-- 💾 تنظیمات پشتیبان‌گیری -->
+    <div class="card p-5 mt-6 mb-8" id="cloudbk">
+      <h2 class="font-bold text-gray-800 text-lg mb-1">💾 پشتیبان‌گیری</h2>
+      <p class="text-xs text-gray-400 mb-4">مدیریت بکاپ خودکار و مقاصد ابری — هر بخش مستقل فعال/غیرفعال می‌شود.</p>
+
+      <form method="post" action="/admin/database/cloud-save" class="space-y-3">
+
+        <!-- ⏰ زمان‌بندی -->
+        <div class="p-4 bg-gray-50 border border-gray-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">⏰</span>
+              <span class="font-semibold text-gray-700 text-sm">بکاپ خودکار</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="enabled" {('checked' if int(_cb.get('enabled') or 0) else '')}
+                class="w-4 h-4 rounded border-gray-300 text-indigo-600">
+              <span class="text-gray-600">فعال</span>
+            </label>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex-1">
+              <label class="text-[10px] text-gray-400 block mb-1">ساعت اجرا (۰-۲۳)</label>
+              <input type="number" name="hour" value="{int(_cb.get('hour') or 4)}" min="0" max="23"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-center">
+            </div>
+          </div>
+        </div>
+
+        <!-- 💾 محلی -->
+        <div class="p-4 bg-emerald-50/50 border border-emerald-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">💾</span>
+              <span class="font-semibold text-gray-700 text-sm">بکاپ محلی</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="local_enabled" checked disabled
+                class="w-4 h-4 rounded border-gray-300 text-emerald-600">
+              <span class="text-gray-500">همیشه فعال</span>
+            </label>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex-1">
+              <label class="text-[10px] text-gray-400 block mb-1">نگهداری (تعداد بکاپ)</label>
+              <input type="number" name="retention" value="{int(_cb.get('retention') or 3)}" min="1" max="30"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-center">
+            </div>
+          </div>
+          <p class="text-[10px] text-gray-400 mt-2">فایل‌ها در مسیر /opt/stockland/data/backups ذخیره می‌شوند. قدیمی‌ها خودکار حذف می‌شوند.</p>
+        </div>
+
+        <!-- 📢 کانال تلگرام -->
+        <div class="p-4 bg-blue-50/50 border border-blue-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">📢</span>
+              <span class="font-semibold text-gray-700 text-sm">کانال تلگرام</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="tg_enabled" {('checked' if int(_cb.get('tg_enabled') or 0) else '')}
+                class="w-4 h-4 rounded border-gray-300 text-blue-600">
+              <span class="text-gray-600">فعال</span>
+            </label>
+          </div>
+          <div>
+            <label class="text-[10px] text-gray-400 block mb-1">Chat ID کانال</label>
+            <input type="text" name="tg_channel" value="{e(_cb.get('tg_channel',''))}"
+              placeholder="@channel یا -1001234567890"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="ltr">
+          </div>
+          <p class="text-[10px] text-gray-400 mt-2">ربات باید ادمین کانال باشد. بکاپ‌ها در تلگرام بدون محدودیت نگه‌داری می‌شوند.</p>
+        </div>
+
+        <!-- 🗂 Google Drive (OAuth) -->
+        <div class="p-4 bg-amber-50/50 border border-amber-200 rounded-xl">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">🗂</span>
+              <span class="font-semibold text-gray-700 text-sm">Google Drive</span>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" name="gdrive_enabled" {('checked' if int(_cb.get('gdrive_enabled') or 0) else '')}
+                class="w-4 h-4 rounded border-gray-300 text-amber-600">
+              <span class="text-gray-600">فعال</span>
+            </label>
+          </div>
+          <div class="text-[11px] mb-2">
+            {('<span class="text-green-600">✅ متصل به Google Drive</span>' if _gdrive_connected else '<span class="text-amber-600">⚠️ هنوز متصل نشده — از دکمه زیر اتصال بزنید</span>')}
+          </div>
+          {('' if _gdrive_connected else '<button type="button" onclick="startGdriveConnect()" class="mb-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold">🔗 اتصال به Google Drive</button>')}
+          <div id="gdrive_connect_box" class="hidden mb-2 p-3 bg-white border border-blue-200 rounded-lg text-sm"></div>
+          <p class="text-[10px] text-gray-400">فقط ۳۰ بکاپ آخر در Drive نگهداری. اتصال یک‌بار انجام می‌شود و برای همیشه کار می‌کند.</p>
+        </div>
+
+        <!-- دکمه‌ها -->
+        <div class="flex gap-2 pt-1">
+          <button type="submit" class="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold">💾 ذخیره تنظیمات</button>
+        </div>
+      </form>
+      <form method="post" action="/admin/database/cloud-run" class="mt-2">
+        <button class="w-full py-2.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-xl text-sm font-semibold">▶ بکاپ فوری (همه مقاصد فعال)</button>
+      </form>
+
+      <script>
+      async function startGdriveConnect(){{
+        const box=document.getElementById('gdrive_connect_box');
+        box.classList.remove('hidden');
+        box.innerHTML='<span class="text-gray-500">⏳ در حال دریافت کد...</span>';
+        try{{
+          const r=await fetch('/admin/database/gdrive/start',{{method:'POST'}});
+          const d=await r.json();
+          if(!d.ok){{box.innerHTML='<span class="text-red-600">❌ '+d.error+'</span>';return;}}
+          box.innerHTML=`
+            <div class="text-center space-y-3">
+              <p class="text-sm text-gray-700">لینک زیر را باز کنید و کد را وارد کنید:</p>
+              <a href="${{d.url}}" target="_blank" class="block px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">🔗 باز کردن لینک تأیید</a>
+              <div class="text-2xl font-bold tracking-widest text-indigo-700 bg-indigo-50 rounded-lg py-3 no-fa" dir="ltr">${{d.user_code}}</div>
+              <p class="text-xs text-gray-400">پس از تأیید در گوگل، دکمه زیر را بزنید</p>
+              <button onclick="pollGdrive('${{d.device_code}}')" class="px-6 py-2 bg-green-600 text-white rounded-lg text-sm">✅ تأیید کردم</button>
+            </div>`;
+        }}catch(e){{box.innerHTML='<span class="text-red-600">خطا: '+e.message+'</span>';}}
+      }}
+      async function pollGdrive(dc){{
+        const box=document.getElementById('gdrive_connect_box');
+        box.innerHTML='<span class="text-gray-500">⏳ بررسی تأیید...</span>';
+        for(let i=0;i<24;i++){{
+          await new Promise(r=>setTimeout(r,5000));
+          try{{
+            const r=await fetch('/admin/database/gdrive/poll',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{device_code:dc}})}});
+            const d=await r.json();
+            if(d.ok){{box.innerHTML='<span class="text-green-600 font-bold">✅ اتصال موفق! صفحه را رفرش کنید.</span>';return;}}
+            if(!d.pending){{box.innerHTML='<span class="text-red-600">❌ '+(d.error||'خطا')+'</span>';return;}}
+          }}catch(e){{}}
+        }}
+        box.innerHTML='<span class="text-red-600">⏱ زمان منقضی شد. دوباره تلاش کنید.</span>';
+      }}
+      </script>
+    </div>
+    </div>"""
 
     return _layout("پشتیبان‌گیری", body, adm, flash=flash)
 
@@ -2783,17 +3273,35 @@ async def backup_full_sync(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "database")
     if guard: return guard
-    from fastapi.responses import Response as FResponse
-    from stbak_engine import create_stbak, stbak_filename, resolve_sections
-    form = await request.form()
-    is_full = form.get("full") == "1"
-    secs = None if is_full else (form.getlist("sections") or None)
-    if secs: secs = resolve_sections(secs)
-    raw   = create_stbak(_DB_PATH(), modules=secs)
-    fname = stbak_filename("full" if is_full else "custom")
-    _log(request, "بکاپ", "دیتابیس", fname)
-    return FResponse(content=raw, media_type="application/octet-stream",
-                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    from fastapi.responses import FileResponse, PlainTextResponse
+    # بکاپ کامل PostgreSQL با pg_dump
+    try:
+        from pg_backup import create_backup
+        import os
+        fpath = create_backup()
+        _log(request, "بکاپ کامل دستی", "دیتابیس", os.path.basename(fpath), admin_info=adm)
+        return FileResponse(fpath, filename=os.path.basename(fpath),
+                            media_type="application/octet-stream")
+    except Exception as ex:
+        return PlainTextResponse(f"خطا در بکاپ: {str(ex)[:150]}", status_code=500)
+
+
+@router.get("/database/download/{filename}")
+async def database_download_auto(request: Request, filename: str):
+    """دانلود یک بکاپ خودکار (فایل .stbak)."""
+    from fastapi.responses import FileResponse, PlainTextResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    import os
+    if ".." in filename or "/" in filename:
+        return PlainTextResponse("نام فایل نامعتبر", status_code=400)
+    from pg_backup import BACKUP_DIR
+    path = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(path):
+        return PlainTextResponse("فایل یافت نشد", status_code=404)
+    _log(request, "دانلود بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
+    return FileResponse(path, filename=filename, media_type="application/octet-stream")
 
 
 @router.post("/database/restore-auto")
@@ -2807,15 +3315,15 @@ async def restore_auto(request: Request):
     if not filename or ".." in filename or "/" in filename:
         return JSONResponse({"error": "فایل نامعتبر"})
     import os
-    path = f"/tmp/stockland_backups/{filename}"
+    from pg_backup import BACKUP_DIR, restore_backup
+    path = os.path.join(BACKUP_DIR, filename)
     if not os.path.exists(path):
         return JSONResponse({"error": "فایل یافت نشد"})
     try:
-        with open(path, "rb") as f:
-            raw = f.read()
-        from stbak_engine import restore_stbak
-        restore_stbak(raw, _DB_PATH())
-        _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename)
+        res = restore_backup(path)
+        if not res.get("ok"):
+            return JSONResponse({"error": res.get("error","خطا در بازیابی")})
+        _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
         return JSONResponse({"ok": True})
     except Exception as ex:
         return JSONResponse({"error": str(ex)[:100]})
@@ -2830,14 +3338,19 @@ async def restore_sync(request: Request, backup_file: UploadFile = None):
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    from stbak_engine import restore_stbak, validate_stbak, StbakError
+    import os, tempfile
+    from pg_backup import restore_backup
     try:
-        validate_stbak(raw)
-        result = restore_stbak(raw, _DB_PATH())
-        _log(request, "بازیابی", "دیتابیس", f"{result['total']} رکورد")
-        return JSONResponse({"ok": True, "total": result["total"], "errors": result["errors"]})
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
+        # ذخیره موقت و بازیابی با pg_restore
+        tmp = tempfile.NamedTemporaryFile(suffix=".stbak", delete=False)
+        tmp.write(raw); tmp.close()
+        res = restore_backup(tmp.name)
+        try: os.remove(tmp.name)
+        except Exception: pass
+        if not res.get("ok"):
+            return JSONResponse({"error": res.get("error", "خطا در بازیابی")})
+        _log(request, "بازیابی از فایل", "دیتابیس", backup_file.filename, admin_info=adm)
+        return JSONResponse({"ok": True})
     except Exception as ex:
         return JSONResponse({"error": str(ex)[:100]})
 
@@ -2926,15 +3439,20 @@ async def restore_start(request: Request, backup_file: UploadFile = None):
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    db  = _DB_PATH()
-    from stbak_engine import restore_stbak, validate_stbak, StbakError
+    import os, tempfile
+    from pg_backup import restore_backup
     try:
-        validate_stbak(raw)
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
-    job_id = _job_start(restore_stbak, raw, db)
-    _log(request, "شروع بازیابی", "دیتابیس", f"job:{job_id}")
-    return JSONResponse({"job_id": job_id})
+        tmp = tempfile.NamedTemporaryFile(suffix=".stbak", delete=False)
+        tmp.write(raw); tmp.close()
+        res = restore_backup(tmp.name)
+        try: os.remove(tmp.name)
+        except Exception: pass
+        if not res.get("ok"):
+            return JSONResponse({"error": res.get("error", "خطا")})
+        _log(request, "بازیابی از فایل", "دیتابیس", backup_file.filename, admin_info=adm)
+        return JSONResponse({"ok": True})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:100]})
 
 
 @router.post("/database/reset/start")
@@ -3807,7 +4325,7 @@ async def product_faqs_page(request: Request, pid: int, flash: str = ""):
       <td class="px-3 py-2">{"⭐️"*r['rating']}</td>
       <td class="px-3 py-2">{e(r['full_name'] or '—')}</td>
       <td class="px-3 py-2 text-gray-500">{e(r['comment'] or '—')}</td>
-      <td class="px-3 py-2 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
     </tr>""" for r in ratings) or "<tr><td colspan='4' class='text-center py-4 text-gray-400'>نظری ثبت نشده</td></tr>"
 
     body = f"""
@@ -4071,7 +4589,7 @@ async def feed_overview(request: Request):
           <td class="px-4 py-3 text-xs text-gray-400">{e(p["category"])}</td>
           <td class="px-4 py-3">
             <div class="flex items-center gap-2">
-              <div class="flex-1 bg-gray-100 rounded-full h-2">
+              <div class="flex-1 bg-gray-100 rounded-full h-2" style="direction:ltr">
                 <div class="bg-{c}-500 h-2 rounded-full" style="width:{pct}%"></div>
               </div>
               <span class="text-sm font-medium text-{c}-700 w-16">{avail}/{total}</span>
@@ -4151,7 +4669,7 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
           <td class="px-4 py-2 text-gray-400 font-mono">#{item["id"]}</td>
           <td class="px-4 py-2 font-mono text-xs truncate max-w-xs">{e(preview)}{dup_badge}</td>
           <td class="px-4 py-2">{badge}</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(item["created_at"] or "")[:10]}</td>
+          <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(item["created_at"] or "")}</td>
           <td class="px-4 py-2 flex gap-1">
             {_btn("ویرایش", f"/admin/feed/item/{item['id']}/edit", "indigo", small=True)}
             <form method="post" action="/admin/feed/item/{item['id']}/delete" onsubmit="return confirm('حذف شود؟')" class="inline">
@@ -4672,7 +5190,7 @@ async def feed_item_edit_post(request: Request, fid: int):
 @router.get("/discounts", response_class=HTMLResponse)
 async def discounts_list(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     from db import ensure_discount_table
     ensure_discount_table()
@@ -4712,7 +5230,7 @@ async def discounts_list(request: Request, flash: str = ""):
           <td class="px-4 py-3"><code class="text-sm font-bold text-indigo-700">{e(c['code'])}</code></td>
           <td class="px-4 py-3 text-sm text-gray-700">{c['value']} {type_fa}{f" (سقف {max_v:,})" if max_v else ""}</td>
           <td class="px-4 py-3 text-xs text-gray-500">{real_u} / {c['max_uses'] or '∞'}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(c['expires_at'] or '—')[:10]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(c['expires_at']) if c['expires_at'] else '—'}</td>
           <td class="px-4 py-3">{flag_html}</td>
           <td class="px-4 py-3">{status_b}</td>
           <td class="px-4 py-3">
@@ -4773,7 +5291,7 @@ async def discounts_list(request: Request, flash: str = ""):
 @router.post("/discounts/add")
 async def discounts_add(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     from db import ensure_discount_table
     ensure_discount_table()
@@ -4808,7 +5326,7 @@ async def discounts_add(request: Request):
                 (code,dtype,value,max_uses,min_amt,exp))
         conn.commit()
     except Exception as ex:
-        return _redir(f"/admin/discounts?flash=خطا:+{str(ex)[:40]}")
+        return _redir(f"/admin/discounts?flash=خطا:+{str(ex)}")
     finally:
         conn.close()
     _log(request, "ایجاد کد تخفیف", "تخفیف", f"کد: {code} | نوع: {dtype} | مقدار: {value}")
@@ -4818,7 +5336,7 @@ async def discounts_add(request: Request):
 @router.post("/discounts/{cid}/toggle")
 async def discount_toggle(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     conn = _db()
     try:
@@ -4832,7 +5350,7 @@ async def discount_toggle(request: Request, cid: int):
 @router.post("/discounts/{cid}/delete")
 async def discount_delete(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "orders")
+    guard = _require(adm, "discounts")
     if guard: return guard
     conn = _db()
     try:
@@ -4876,7 +5394,7 @@ async def _old_referrals_page_unused(request: Request, flash: str = ""):
       <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
       <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت شد</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">در انتظار خرید</span>'}</td>
       <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
-      <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+      <td class="px-4 py-3 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
     </tr>""" for r in refs)
 
     body = f"""
@@ -4918,22 +5436,31 @@ async def _old_referrals_page_unused(request: Request, flash: str = ""):
 @router.post("/referrals/settings")
 async def referrals_settings(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "partners")
     if guard: return guard
     form = await request.form()
-    amount = int(form.get("reward_amount") or 5000)
+    amount = int(form.get("reward_amount") or 0)
     active = int(form.get("is_active") or 1)
+    max_inv = int(form.get("max_invites") or 0)
     from db import ensure_referral_schema
     ensure_referral_schema()
     conn = _db()
     try:
-        conn.execute("UPDATE referral_settings SET reward_amount=?,is_active=?,updated_at=datetime('now') WHERE id=1;",
-                     (amount, active))
+        conn.execute(
+            "UPDATE referral_settings SET reward_amount=?,is_active=?,max_invites=?,updated_at=datetime('now') WHERE id=1;",
+            (amount, active, max_inv))
         conn.commit()
     finally:
         conn.close()
-    _log(request, "تنظیم معرفی", "معرفی", f"پاداش: {amount:,} | فعال: {active}")
-    return _redir("/admin/referrals?flash=تنظیمات+ذخیره+شد")
+    # به‌روزرسانی bot_config برای check_invite_cap
+    try:
+        from db import set_cfg
+        import json as _j
+        set_cfg("referral_settings_ext", _j.dumps({"max_invites": max_inv, "cap_reset_on_purchase": 1}))
+    except Exception:
+        pass
+    _log(request, "تنظیم هدیه دعوت", "همکاران", f"پاداش: {amount:,} | سقف: {max_inv}", admin_info=adm)
+    return _redir("/admin/partners?tab=settings&flash=تنظیمات+هدیه+دعوت+ذخیره+شد")
 
 
 @router.get("/orders/export.xlsx")
@@ -4987,7 +5514,7 @@ async def orders_export_excel(request: Request, q: str = "", status: str = ""):
             ws.cell(ri, 4, o["title"] or "")
             ws.cell(ri, 5, int(o["price"] or 0))
             ws.cell(ri, 6, status_fa.get(o["status"] or "", o["status"] or ""))
-            ws.cell(ri, 7, (o["created_at"] or "")[:16])
+            ws.cell(ri, 7, fa_date(o["created_at"], with_time=True))
             if ri % 2 == 0:
                 for ci in range(1, 8):
                     ws.cell(ri, ci).fill = PatternFill("solid", fgColor="F8FAFB")
@@ -5013,7 +5540,7 @@ async def orders_export_excel(request: Request, q: str = "", status: str = ""):
             lines.append(f'{o["id"]},{o["user_id"] or ""},{o["category"] or ""},'
                          f'"{(o["title"] or "").replace(chr(34), "")}",'
                          f'{int(o["price"] or 0)},{status_fa.get(o["status"] or "", "")},'
-                         f'{(o["created_at"] or "")[:16]}')
+                         f'{fa_date(o["created_at"] or "", with_time=True)}')
         csv_content = "\ufeff" + "\n".join(lines)  # BOM برای UTF-8 در Excel
         _log(request, "خروجی CSV", "سفارش‌ها", f"{len(orders)} ردیف")
         return Response(
@@ -5032,12 +5559,6 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
     PAGE = 30
     conn = _db()
     try:
-        # migration امن
-        for col, typedef in [("status", "TEXT DEFAULT 'active'"), ("feed_id", "INTEGER"), ("returned_at", "TEXT")]:
-            try:
-                conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {typedef};")
-            except Exception:
-                pass
         where = "WHERE user_id LIKE ?" if q else ""
         params_q = (f"%{q}%",) if q else ()
         total = conn.execute(f"SELECT COUNT(*) FROM orders {where};", params_q).fetchone()[0]
@@ -5074,7 +5595,7 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
           <td class="px-4 py-2">{e(o["title"])}</td>
           <td class="px-4 py-2 text-green-700 font-medium">{int(o["price"]):,} ت</td>
           <td class="px-4 py-2">{order_status_badge(st)}</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(o["created_at"] or "")[:16]}</td>
+          <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(o["created_at"] or "", with_time=True)}</td>
           <td class="px-4 py-2 flex gap-1 items-center">{action_btns}</td>
         </tr>"""
 
@@ -5437,7 +5958,7 @@ async def order_resend_post(request: Request, oid: int):
 @router.get("/users/{uid}", response_class=HTMLResponse)
 async def user_detail(request: Request, uid: int, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     from db import get_user_full, get_user_orders, get_user_tickets, ensure_user_extra_schema
     ensure_user_extra_schema()
@@ -5457,7 +5978,7 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
       <td class="px-4 py-2 text-xs text-gray-400">#{o['id']}</td>
       <td class="px-4 py-2 text-sm">{e(o['title'] or '—')}</td>
       <td class="px-4 py-2 text-sm font-medium text-green-600">{int(o['price'] or 0):,} ت</td>
-      <td class="px-4 py-2 text-xs text-gray-400">{(o['created_at'] or '')[:16]}</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{fa_date(o['created_at'], with_time=True)}</td>
     </tr>""" for o in orders)
 
     # تیکت‌ها
@@ -5465,7 +5986,7 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
       <td class="px-4 py-2 text-xs"><a href="/admin/tickets/{t['id']}" class="text-indigo-600">#{t['id']}</a></td>
       <td class="px-4 py-2 text-xs">{e((t['type'] if 'type' in t.keys() else '') or 'پشتیبانی')}</td>
       <td class="px-4 py-2 text-xs text-gray-400">{e((t['status'] or '')[:20])}</td>
-      <td class="px-4 py-2 text-xs text-gray-400">{(t['updated_at'] or '')[:16]}</td>
+      <td class="px-4 py-2 text-xs text-gray-400">{fa_date(t['updated_at'] or '', with_time=True)}</td>
     </tr>""" for t in tickets)
 
     note_val = e(user.get("admin_note", "") or "")
@@ -5491,8 +6012,8 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
         <div class="space-y-2 text-sm">
           <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-2 rounded">{user['user_id']}</code></div>
           <div class="flex justify-between"><span class="text-gray-400">یوزرنیم</span><span>{"@"+e(user['username']) if user['username'] else "—"}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(user['first_seen'] or '')[:10]}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">آخرین فعالیت</span><span>{(user['last_seen'] or '')[:10]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{fa_date(user['first_seen'] or '')}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">آخرین فعالیت</span><span>{fa_date(user['last_seen'] or '')}</span></div>
         </div>
         <div class="mt-4 pt-4 border-t flex gap-2">
           <a href="/admin/wallets?q={uid}" class="btn-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-3 py-1.5 text-xs">مدیریت کیف‌پول</a>
@@ -5543,7 +6064,7 @@ async def user_detail(request: Request, uid: int, flash: str = ""):
 @router.post("/users/{uid}/note")
 async def user_save_note(request: Request, uid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     form = await request.form()
     note = str(form.get("admin_note", "")).strip()
@@ -5557,7 +6078,7 @@ async def user_save_note(request: Request, uid: int):
 @router.post("/users/{uid}/toggle-block")
 async def user_toggle_block(request: Request, uid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     from db import toggle_user_block
     blocked = toggle_user_block(uid)
@@ -5568,7 +6089,7 @@ async def user_toggle_block(request: Request, uid: int):
 @router.get("/users", response_class=HTMLResponse)
 async def users_list(request: Request, q: str = "", sort: str = "last_seen", flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
 
     conn = _db()
@@ -5583,7 +6104,7 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
                    (SELECT 1 FROM partners p WHERE p.tg_user_id=u.user_id AND p.status='approved' LIMIT 1) AS is_partner
             FROM users u
             LEFT JOIN wallets w ON w.user_id=u.user_id
-            LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id
+            LEFT JOIN orders o ON o.user_id = CAST(u.user_id AS TEXT)
             {where}
             GROUP BY u.user_id
             ORDER BY {sort_col} DESC
@@ -5615,8 +6136,8 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
           <td class="px-4 py-3"><code class="text-xs bg-gray-100 px-1.5 rounded">{u["user_id"]}</code></td>
           <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(u["full_name"] or "—")}{partner_badge}</td>
           <td class="px-4 py-3 text-xs text-gray-400">{"@"+e(u["username"]) if u["username"] else "—"}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(u["first_seen"] or "")[:10]}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(u["last_seen"] or "")[:10]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(u["first_seen"] or "")}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(u["last_seen"] or "")}</td>
           <td class="px-4 py-3 text-sm font-bold text-gray-700">{u["orders"] or 0}</td>
           <td class="px-4 py-3 text-sm font-bold text-green-600">{int(u["balance"] or 0):,}</td>
           <td class="px-4 py-3">{status_badge}</td>
@@ -5659,7 +6180,7 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
 @router.get("/users/export.xlsx")
 async def users_export(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "users")
     if guard: return guard
     conn = _db()
     try:
@@ -5668,7 +6189,7 @@ async def users_export(request: Request):
                    COALESCE(w.balance,0) AS balance, COUNT(DISTINCT o.id) AS orders
             FROM users u
             LEFT JOIN wallets w ON w.user_id=u.user_id
-            LEFT JOIN orders o ON CAST(o.user_id AS INTEGER)=u.user_id
+            LEFT JOIN orders o ON o.user_id = CAST(u.user_id AS TEXT)
             GROUP BY u.user_id ORDER BY u.last_seen DESC LIMIT 10000;
         """).fetchall()
     finally:
@@ -5720,7 +6241,7 @@ async def wallets_list(request: Request, q: str="", flash: str=""):
         <tr class="border-b hover:bg-gray-50 text-sm">
           <td class="px-4 py-2 font-mono text-xs"><code>{w["user_id"]}</code></td>
           <td class="px-4 py-2 font-bold text-{"green" if int(w["balance"])>0 else "gray"}-700">{int(w["balance"]):,} ت</td>
-          <td class="px-4 py-2 text-gray-400 text-xs">{(w["updated_at"] or "")[:16]}</td>
+          <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(w["updated_at"] or "", with_time=True)}</td>
           <td class="px-4 py-2">
             <details class="inline-block">
               <summary class="cursor-pointer px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 list-none">✏️ ویرایش موجودی</summary>
@@ -5825,7 +6346,7 @@ async def wallet_charge_history(request: Request, uid: int):
     total_charged = sum(c["amount"] for c in charges)
 
     rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
-        <td class="px-4 py-2.5 text-xs text-gray-500">{(c['dt'] or '')[:16].replace('T',' ')}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-500">{fa_date(c['dt'], with_time=True)}</td>
         <td class="px-4 py-2.5 font-bold text-green-700">{c['amount']:,} ت</td>
         <td class="px-4 py-2.5">{c['method']}</td>
         <td class="px-4 py-2.5 text-xs text-gray-400"><code>{e(str(c['ref']))}</code></td>
@@ -5990,7 +6511,7 @@ def _ticket_status_badge(status: str) -> str:
 @router.get("/logs", response_class=HTMLResponse)
 async def admin_logs_page(request: Request, q: str = "", section: str = "", admin_name: str = "", page: int = 0, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "admins")
+    guard = _require(adm, "logs")
     if guard: return guard
     _ensure_theme_table()
 
@@ -6038,7 +6559,7 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
       <td class="px-4 py-3 text-xs text-gray-500">{e(l["section"] or "—")}</td>
       <td class="px-4 py-3 text-xs text-gray-500 max-w-xs truncate" title="{e(l['details'] or '')}">{e((l["details"] or "")[:60])}</td>
       <td class="px-4 py-3 text-xs font-mono text-gray-400">{e(l["ip"] or "—")}</td>
-      <td class="px-4 py-3 text-xs text-gray-400">{e((l["created_at"] or "")[:16])}</td>
+      <td class="px-4 py-3 text-xs text-gray-400">{fa_date(l["created_at"] or "", with_time=True)}</td>
     </tr>""" for l in logs)
 
     section_opts = "<option value=''>همه بخش‌ها</option>" + "".join(
@@ -6166,7 +6687,7 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
           <td class="px-3 py-3 text-xs text-gray-400"><code>{r['user_id']}</code></td>
           <td class="px-3 py-3 font-bold text-green-600">{r['amount']:,}</td>
           <td class="px-3 py-3"><span class="px-2 py-0.5 rounded text-xs {sc}">{sl}</span></td>
-          <td class="px-3 py-3 text-xs text-gray-400">{r['created_at'][:16]}</td>
+          <td class="px-3 py-3 text-xs text-gray-400">{fa_date(r['created_at'], with_time=True)}</td>
           <td class="px-3 py-3"><a href="{r['detail_url']}" class="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs">مشاهده و رسیدگی</a></td>
         </tr>""")
 
@@ -6401,7 +6922,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
           <td class="px-4 py-3" data-label="وضعیت">{status_b}</td>
           <td class="px-4 py-3 text-xs text-gray-400" data-label="محصول">{last_col}</td>
           <td class="px-4 py-3 text-xs text-gray-400" data-label="پیام‌ها">{int(t['msg_count'] or 0)} پیام</td>
-          <td class="px-4 py-3 text-xs text-gray-400" data-label="آپدیت">{(t['updated_at'] or '')[:16]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400" data-label="آپدیت">{fa_date(t['updated_at'] or '', with_time=True)}</td>
           <td class="px-4 py-3 whitespace-nowrap" data-label="">{action_btns}</td>
         </tr>"""
         ticket_rows_list.append(row_html)
@@ -6607,7 +7128,7 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
         try: src = msg["source"] or ""
         except: src = ""
         src_icon = "🖥" if src not in ("telegram", "") else "📱"
-        time_str = (msg["created_at"] or "")[:16]
+        time_str = fa_date(msg["created_at"] or "", with_time=True)
         if is_adm:
             return f"""
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px" data-msg-id="{msg['id']}">
@@ -6790,7 +7311,7 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             <dt style="color:var(--text-muted)">User ID</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">{user_id_val}</code></dd>
             <dt style="color:var(--text-muted)">نوع</dt><dd style="font-weight:600">{type_label}</dd>
             <dt style="color:var(--text-muted)">پیام‌ها</dt><dd style="font-weight:700;color:var(--primary)">{len(messages)}</dd>
-            <dt style="color:var(--text-muted)">تاریخ</dt><dd style="color:var(--text-muted)">{(ticket["created_at"] or "")[:16]}</dd>
+            <dt style="color:var(--text-muted)">تاریخ</dt><dd style="color:var(--text-muted)">{fa_date(ticket["created_at"] or "", with_time=True)}</dd>
           </dl>
         </div>
         <div class="card card-p">
@@ -6981,7 +7502,7 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
         conn.commit()
     except Exception as ex:
         _tg_logger.error("ticket_reply DB error: %s", ex)
-        return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)[:50]}")
+        return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)}")
     finally:
         conn.close()
 
@@ -7403,31 +7924,31 @@ _auto_backup_started = False
 
 
 def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه با فرمت .stbak — حداکثر ۵ فایل."""
-    import os, glob
-    db_path = _env("DB_PATH")
-    if not db_path or not os.path.exists(db_path):
-        return
-    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    """بکاپ خودکار روزانه با pg_dump (PostgreSQL) + آپلود به مقاصد فعال."""
     try:
-        from stbak_engine import create_stbak
-        raw   = create_stbak(db_path)
-        ts    = _time.strftime("%Y%m%d_%H%M%S")
-        dst   = f"{_BACKUP_DIR}/auto_{ts}.stbak"
-        with open(dst, "wb") as f:
-            f.write(raw)
+        import pg_backup
+        # retention از تنظیمات پنل
+        try:
+            from backup_uploader import get_cloud_settings
+            _cs = get_cloud_settings()
+            pg_backup.LOCAL_RETENTION = max(1, int(_cs.get("retention") or 3))
+        except Exception:
+            pass
+        dst = pg_backup.create_backup()
     except Exception as ex:
         _tg_logger.error("Auto-backup failed: %s", ex)
         return
+    _tg_logger.info("Auto-backup done: %s", dst)
 
-    # حذف بکاپ‌های قدیمی — فقط ۵ تا نگه دار
-    all_backups = sorted(glob.glob(f"{_BACKUP_DIR}/auto_*.stbak"))
-    while len(all_backups) > 5:
-        try:
-            os.remove(all_backups.pop(0))
-        except Exception:
-            break
-    _tg_logger.info("Auto-backup done: %s (total: %d)", dst, len(all_backups))
+    # ☁️ آپلود ابری (کانال تلگرام + گوگل درایو) — غیرهمزمان
+    try:
+        from backup_uploader import get_cloud_settings, upload_backup
+        cs = get_cloud_settings()
+        if int(cs.get("tg_enabled") or 0) or int(cs.get("gdrive_enabled") or 0):
+            rep = upload_backup(dst)
+            _tg_logger.info("Cloud backup queued: %s", rep)
+    except Exception as ex:
+        _tg_logger.error("Cloud backup failed: %s", ex)
 
 
 def _start_auto_backup_thread() -> None:
@@ -7440,8 +7961,12 @@ def _start_auto_backup_thread() -> None:
         import datetime as _dt
         while True:
             now = _dt.datetime.now()
-            # محاسبه زمان باقی‌مانده تا ۴ صبح
-            target = now.replace(hour=4, minute=0, second=0, microsecond=0)
+            try:
+                from backup_uploader import get_cloud_settings
+                _h = int(get_cloud_settings().get("hour") or 4)
+            except Exception:
+                _h = 4
+            target = now.replace(hour=max(0, min(23, _h)), minute=0, second=0, microsecond=0)
             if now >= target:
                 target += _dt.timedelta(days=1)
             sleep_secs = (target - now).total_seconds()
@@ -7452,6 +7977,25 @@ def _start_auto_backup_thread() -> None:
                 _tg_logger.error("auto-backup error: %s", ex)
 
     _threading.Thread(target=_runner, name="auto-backup", daemon=True).start()
+
+    # ⚠️ نگهبان بکاپ ابری — ساعتی چک، در صورت مشکل هشدار به ادمین
+    def _cloud_watchdog():
+        while True:
+            _time.sleep(3600)
+            try:
+                from backup_uploader import watchdog_check
+                msg = watchdog_check()
+                if msg:
+                    try:
+                        from config import ADMIN_ID as _AID
+                    except Exception:
+                        _AID = int(_env("ADMIN_ID", "0") or 0)
+                    if _AID:
+                        _tg_api_send(_AID, msg)
+            except Exception as ex:
+                _tg_logger.error("cloud watchdog: %s", ex)
+
+    _threading.Thread(target=_cloud_watchdog, name="cloud-watchdog", daemon=True).start()
 
     # thread جداگانه برای بررسی موجودی (هر ۲ ساعت)
     def _stock_runner():
@@ -7555,7 +8099,7 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
     if df_g: df = df_g
     if dt_g: dt = dt_g
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_accounting_kpis, ensure_accounting_schema
     ensure_accounting_schema()
@@ -7613,63 +8157,81 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
     }}
     </script>"""
     body = f"""
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <h1 class="text-2xl font-bold text-gray-800">💰 حسابداری</h1>
-      <div class="flex gap-2 flex-wrap">
-        <a href="/admin/accounting/expenses" class="px-3 py-1.5 text-sm bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">📋 هزینه‌ها</a>
-        <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
-        <a href="/admin/accounting/products" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
-        <a href="/admin/accounting/partners" class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
-
+      <div class="flex gap-1 flex-wrap">
+        <a href="/admin/accounting/expenses" class="px-3 py-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">📋 ثبت هزینه/پرداخت</a>
+        <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
+        <a href="/admin/accounting/products" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
+        <a href="/admin/accounting/partners" class="px-3 py-1.5 text-xs bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
       </div>
     </div>
     {{filter_html}}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {_card("فروش امروز",_m(kpis["today_sales"]),"تومان","blue")}
-      {_card("فروش این ماه",_m(kpis["month_sales"]),"تومان","indigo")}
-      {_card("مجموع فروش",_m(kpis["total_sales"]),"تومان","slate")}
-      {_card("تعداد سفارش",_m(kpis["total_orders"]),"سفارش","gray")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {_card("سود ناخالص",_m(kpis["gross_profit"]),"تومان","green")}
-      {_card("سود خالص",_m(kpis["net_profit"]),"تومان","emerald")}
-      {_card("مجموع هزینه‌ها",_m(kpis["total_expenses"]),"تومان","red")}
-      {_card("پورسانت پرداختی",_m(kpis["total_commission"]),"تومان","amber")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-      {_card("هزینه خرید کالا",_m(kpis["total_cost"]),"تومان","orange")}
-      {_card("موجودی انبار",_m(kpis["stock_count"]),"آیتم","slate")}
-      {_card("تسویه انجام‌شده",str(kpis["payout_count"]),"مورد","purple")}
-      {_card("میانگین سود/سفارش",_m(kpis["avg_profit"]),"تومان","teal")}
-    </div>
-    <div class="card p-6 mb-6">
-      <h2 class="font-bold text-gray-700 mb-4">📊 خلاصه سود و زیان</h2>
-      <div class="space-y-3">
-        {_acbar("فروش کل",kpis["total_sales"],kpis["total_sales"],"bg-blue-400")}
-        {_acbar("هزینه خرید",kpis["total_cost"],kpis["total_sales"],"bg-red-400")}
-        {_acbar("پورسانت",kpis["total_commission"],kpis["total_sales"],"bg-amber-400")}
-        {_acbar("هزینه‌ها",kpis["total_expenses"],kpis["total_sales"],"bg-orange-400")}
-        {_acbar("سود خالص",kpis["net_profit"],kpis["total_sales"],"bg-emerald-500")}
-      </div>
-    </div>
-    <div class="card p-6">
-      <h2 class="font-bold text-gray-700 mb-4">📈 تحلیل سود</h2>
-      <div class="grid md:grid-cols-3 gap-4">
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">حاشیه سود</div>
-          <div class="text-3xl font-bold text-emerald-600">{kpis["margin_pct"]}٪</div>
+
+    <!-- مانده صندوق — برجسته -->
+    <div class="card p-5 mb-4 bg-gradient-to-l from-emerald-50 to-transparent border-r-4 border-emerald-400">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div class="text-xs text-gray-500 mb-1">مانده صندوق</div>
+          <div class="text-3xl font-bold text-emerald-700">{_m(max(0,kpis["net_profit"]-kpis.get("total_payouts",0)))} <span class="text-sm font-normal text-gray-400">تومان</span></div>
         </div>
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">میانگین سود هر سفارش</div>
-          <div class="text-2xl font-bold text-indigo-600">{_m(kpis["avg_profit"])} ت</div>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-4 text-center">
-          <div class="text-xs text-gray-400 mb-1">نسبت هزینه به فروش</div>
-          <div class="text-2xl font-bold text-red-500">
-            {round((kpis["total_expenses"]+kpis["total_cost"])/kpis["total_sales"]*100,1) if kpis["total_sales"] else 0}٪
-          </div>
+        <div class="text-xs text-gray-500 leading-6 text-left">
+          <div>سود خالص: <b class="text-gray-700">{_m(kpis["net_profit"])}</b></div>
+          <div>پرداخت‌شده: <b class="text-gray-700">-{_m(kpis.get("total_payouts",0))}</b></div>
         </div>
       </div>
+    </div>
+
+    <!-- جدول خلاصه سود و زیان — سبک، مثل صورت‌مالی -->
+    <div class="card overflow-hidden mb-4">
+      <div class="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+        <h2 class="font-bold text-gray-700 text-sm">📊 صورت سود و زیان</h2>
+        <span class="text-xs text-gray-400">حاشیه سود: <b class="text-emerald-600">٪{kpis["margin_pct"]}</b></span>
+      </div>
+      <table class="w-full text-sm">
+        <tbody>
+          <tr class="border-b hover:bg-gray-50"><td class="px-4 py-2.5 text-gray-600">فروش کل ({_m(kpis["total_orders"])} سفارش)</td><td class="px-4 py-2.5 text-left font-semibold text-blue-700 no-fa">{_m(kpis["total_sales"])}</td></tr>
+          <tr class="border-b hover:bg-gray-50 bg-red-50/30"><td class="px-4 py-2.5 text-gray-600">− هزینه خرید کالا</td><td class="px-4 py-2.5 text-left text-red-600 no-fa">-{_m(kpis["total_cost"])}</td></tr>
+          <tr class="border-b hover:bg-gray-50 bg-red-50/30"><td class="px-4 py-2.5 text-gray-600">− پورسانت همکاران</td><td class="px-4 py-2.5 text-left text-red-600 no-fa">-{_m(kpis["total_commission"])}</td></tr>
+          <tr class="border-b hover:bg-gray-50 bg-red-50/30"><td class="px-4 py-2.5 text-gray-600">− هزینه‌های عمومی</td><td class="px-4 py-2.5 text-left text-red-600 no-fa">-{_m(kpis["total_expenses"])}</td></tr>
+          <tr class="border-b-2 border-emerald-200 bg-emerald-50"><td class="px-4 py-3 font-bold text-emerald-700">= سود خالص</td><td class="px-4 py-3 text-left font-bold text-emerald-700 text-lg no-fa">{_m(kpis["net_profit"])}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- گزیده‌ی سریع — ۴ ستون کوچک جمع‌وجور -->
+    <div class="card p-3 mb-4">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+        <div class="p-2 border-l border-gray-100">
+          <div class="text-[10px] text-gray-400 mb-1">فروش امروز</div>
+          <div class="font-bold text-blue-700 no-fa">{_m(kpis["today_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+        </div>
+        <div class="p-2 border-l border-gray-100">
+          <div class="text-[10px] text-gray-400 mb-1">فروش این ماه</div>
+          <div class="font-bold text-indigo-700 no-fa">{_m(kpis["month_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+        </div>
+        <div class="p-2 border-l border-gray-100">
+          <div class="text-[10px] text-gray-400 mb-1">میانگین سود/سفارش</div>
+          <div class="font-bold text-teal-700 no-fa">{_m(kpis["avg_profit"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+        </div>
+        <div class="p-2">
+          <div class="text-[10px] text-gray-400 mb-1">موجودی انبار</div>
+          <div class="font-bold text-slate-700">{_m(kpis["stock_count"])} <span class="text-[10px] font-normal text-gray-400">آیتم</span></div>
+          <div class="text-[10px] text-gray-400 mt-0.5">ارزش: {_m(kpis.get("stock_value",0))} ت</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- پرداخت‌های تسویه‌شده -->
+    <div class="card p-3 flex items-center justify-between text-sm bg-purple-50/40">
+      <div class="flex items-center gap-2">
+        <span class="text-lg">💸</span>
+        <div>
+          <div class="text-xs text-gray-500">مجموع تسویه‌های پرداخت‌شده به همکاران</div>
+          <div class="font-bold text-purple-700 no-fa">{_m(kpis.get("total_payouts",0))} تومان</div>
+        </div>
+      </div>
+      <a href="/admin/partners?tab=payouts" class="text-xs text-purple-600 hover:underline">مشاهده تسویه‌ها →</a>
     </div>"""
     return _layout("حسابداری", body.replace("{filter_html}", filter_html), adm, flash=flash)
 
@@ -7678,14 +8240,14 @@ def _acbar(label, value, total, color):
     pct = max(0, min(100, int(value/total*100) if total>0 else 0))
     return f"""<div><div class="flex justify-between text-xs text-gray-500 mb-1">
       <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
-      <div class="h-2 bg-gray-100 rounded-full"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
+      <div class="h-2 bg-gray-100 rounded-full" style="direction:ltr"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
 
 
 
 @router.get("/accounting/expenses", response_class=HTMLResponse)
 async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str="", flash: str=""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_expenses, get_expense_categories, ensure_accounting_schema
     ensure_accounting_schema()
@@ -7693,31 +8255,54 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
     expenses = get_expenses(df, dt, cat)
     total = sum(ex["amount"] for ex in expenses)
     cat_opts = "".join(f'<option value="{c}" {"selected" if cat==c else ""}>{c}</option>' for c in cats)
+    _PT_BADGE = {
+        "salary": '<span class="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px]">👤 حقوق</span>',
+        "partner_payout": '<span class="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px]">🤝 همکار</span>',
+        "other": '<span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-[10px]">📌 سایر</span>',
+    }
+    def _ptb(ex):
+        try: return _PT_BADGE.get(ex["payment_type"] or "expense",
+            '<span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">💳 هزینه</span>')
+        except Exception:
+            return '<span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">💳 هزینه</span>'
+    def _payee(ex):
+        try: return e((ex["payee_name"] or "")[:20])
+        except Exception: return ""
     rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 text-xs text-gray-400">{ex["expense_date"]}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{fa_date(ex["expense_date"])}</td>
+      <td class="px-3 py-2">{_ptb(ex)}</td>
       <td class="px-3 py-2 font-medium">{e(ex["title"])}</td>
-      <td class="px-3 py-2"><span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-xs">{e(ex["category"])}</span></td>
-      <td class="px-3 py-2 font-bold text-red-600">{int(ex["amount"]):,}</td>
+      <td class="px-3 py-2 text-xs text-gray-500">{_payee(ex)}</td>
+      <td class="px-3 py-2"><span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{e(ex["category"])}</span></td>
+      <td class="px-3 py-2 font-bold text-red-600 no-fa" style="direction:ltr;text-align:left">{int(ex["amount"]):,}</td>
       <td class="px-3 py-2 text-xs text-gray-400">{e((ex["description"] or "")[:30])}</td>
       <td class="px-3 py-2"><form method="post" action="/admin/accounting/expenses/{ex["id"]}/delete" onsubmit="return confirm(\'حذف؟\')"><button class="text-xs text-red-400 hover:text-red-600">حذف</button></form></td>
-    </tr>''' for ex in expenses) or "<tr><td colspan='6' class='text-center py-6 text-gray-400'>هزینه‌ای ثبت نشده</td></tr>"
+    </tr>''' for ex in expenses) or "<tr><td colspan='8' class='text-center py-6 text-gray-400'>پرداختی ثبت نشده</td></tr>"
     body = f"""
     <div class="flex items-center gap-3 mb-6">
       {_btn("← حسابداری","/admin/accounting","slate",small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">📋 هزینه‌ها</h1>
+      <h1 class="text-2xl font-bold text-gray-800">📋 ثبت هزینه و پرداخت‌ها</h1>
     </div>
     <div class="grid md:grid-cols-2 gap-4 mb-6">
       <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">+ ثبت هزینه جدید</h2>
+        <h2 class="font-bold text-gray-700 mb-4">+ ثبت پرداخت جدید</h2>
         <form method="post" action="/admin/accounting/expenses/new" class="space-y-3">
+          <div><label class="text-xs block mb-1">نوع پرداخت</label>
+            <select name="payment_type" class="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="expense">💳 هزینه عمومی</option>
+              <option value="salary">👤 حقوق پرسنل</option>
+              <option value="partner_payout">🤝 پرداخت همکار</option>
+              <option value="other">📌 سایر پرداخت‌ها</option>
+            </select></div>
           <div class="grid grid-cols-2 gap-3">
             <div><label class="text-xs block mb-1">عنوان</label><input type="text" name="title" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
             <div><label class="text-xs block mb-1">مبلغ (تومان)</label><input type="number" name="amount" required class="w-full border rounded-lg px-3 py-2 text-sm"></div>
             <div><label class="text-xs block mb-1">دسته</label><select name="category" class="w-full border rounded-lg px-3 py-2 text-sm"><option value="">انتخاب...</option>{cat_opts}</select></div>
             <div><label class="text-xs block mb-1">تاریخ</label><input type="date" name="expense_date" class="w-full border rounded-lg px-3 py-2 text-sm"></div>
           </div>
+          <input type="text" name="payee_name" placeholder="نام گیرنده (پرسنل/همکار — اختیاری)" class="w-full border rounded-lg px-3 py-2 text-sm">
           <input type="text" name="description" placeholder="توضیحات (اختیاری)" class="w-full border rounded-lg px-3 py-2 text-sm">
-          {_btn("ثبت هزینه","",color="red",small=True)}
+          {_btn("💾 ثبت پرداخت","",color="red",small=True)}
         </form>
       </div>
       <div class="card p-6">
@@ -7744,7 +8329,8 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
       </div>
       <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
         <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-          <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">عنوان</th><th class="px-3 py-2">دسته</th>
+          <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">نوع</th><th class="px-3 py-2">عنوان</th>
+          <th class="px-3 py-2">گیرنده</th><th class="px-3 py-2">دسته</th>
           <th class="px-3 py-2">مبلغ</th><th class="px-3 py-2">توضیح</th><th></th>
         </tr></thead><tbody>{rows}</tbody>
       </table></div>
@@ -7754,21 +8340,25 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
 
 @router.post("/accounting/expenses/new")
 async def accounting_expense_new(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import create_expense, ensure_accounting_schema
     ensure_accounting_schema()
     form = await request.form()
+    ptype = str(form.get("payment_type","expense")).strip()
+    if ptype not in ("expense","salary","partner_payout","other"): ptype = "expense"
     eid = create_expense(str(form.get("title","")).strip(), str(form.get("category","سایر")),
                          int(form.get("amount") or 0), str(form.get("expense_date","")),
-                         str(form.get("description","")))
-    _log(request, "ثبت هزینه", "حسابداری", f"id:{eid}")
-    return _redir("/admin/accounting/expenses?flash=هزینه+ثبت+شد")
+                         str(form.get("description","")),
+                         payment_type=ptype,
+                         payee_name=str(form.get("payee_name","")).strip())
+    _log(request, "ثبت پرداخت", "حسابداری", f"id:{eid} نوع:{ptype}", admin_info=adm)
+    return _redir("/admin/accounting/expenses?flash=✅+پرداخت+ثبت+شد")
 
 
 @router.post("/accounting/expenses/{eid}/delete")
 async def accounting_expense_delete(request: Request, eid: int):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import delete_expense; delete_expense(eid)
     _log(request, "حذف هزینه", "حسابداری", f"id:{eid}")
@@ -7777,7 +8367,7 @@ async def accounting_expense_delete(request: Request, eid: int):
 
 @router.post("/accounting/categories/new")
 async def accounting_category_new(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import add_expense_category
     form = await request.form(); name = str(form.get("name","")).strip()
@@ -7787,13 +8377,13 @@ async def accounting_category_new(request: Request):
 
 @router.get("/accounting/cashflow", response_class=HTMLResponse)
 async def accounting_cashflow(request: Request, df: str="", dt: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_cashflow, ensure_accounting_schema; ensure_accounting_schema()
     rows_data = get_cashflow(df, dt, 200)
     tc = {"فروش":"green","شارژ کیف‌پول":"blue","هزینه":"red","پورسانت":"amber"}
     rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
-      <td class="px-3 py-2 text-xs text-gray-400">{r["created_at"][:16]}</td>
+      <td class="px-3 py-2 text-xs text-gray-400">{fa_date(r["created_at"], with_time=True)}</td>
       <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs bg-{tc.get(r["type"],"gray")}-100 text-{tc.get(r["type"],"gray")}-700">{r["type"]}</span></td>
       <td class="px-3 py-2 text-xs">{str(r["description"] or "")[:40]}</td>
       <td class="px-3 py-2 font-bold {"text-green-600" if r["direction"]=="income" else "text-red-500"}">{"+" if r["direction"]=="income" else "-"}{int(r["amount"] or 0):,}</td>
@@ -7818,7 +8408,7 @@ async def accounting_cashflow(request: Request, df: str="", dt: str=""):
 
 @router.get("/accounting/products", response_class=HTMLResponse)
 async def accounting_products(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_product_accounting
     prods = get_product_accounting(50)
@@ -7847,7 +8437,7 @@ async def accounting_products(request: Request):
 
 @router.get("/accounting/partners", response_class=HTMLResponse)
 async def accounting_partners_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_partner_accounting
     partners = get_partner_accounting(50)
@@ -7874,7 +8464,7 @@ async def accounting_partners_report(request: Request):
 
 @router.get("/accounting/expenses/export")
 async def export_expenses(request: Request, df: str="", dt: str="", cat: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_expenses; import io as _io
     data = get_expenses(df, dt, cat, 10000)
@@ -7894,7 +8484,7 @@ async def export_expenses(request: Request, df: str="", dt: str="", cat: str="")
 
 @router.get("/accounting/cashflow/export")
 async def export_cashflow(request: Request, df: str="", dt: str=""):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_cashflow; import io as _io; data = get_cashflow(df, dt, 10000)
     try:
@@ -7912,7 +8502,7 @@ async def export_cashflow(request: Request, df: str="", dt: str=""):
 
 @router.get("/accounting/products/export")
 async def export_products_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_product_accounting; import io as _io; data = get_product_accounting(1000)
     try:
@@ -7930,7 +8520,7 @@ async def export_products_report(request: Request):
 
 @router.get("/accounting/partners/export")
 async def export_partners_report(request: Request):
-    adm = _get_admin(request); guard = _require(adm, "wallets")
+    adm = _get_admin(request); guard = _require(adm, "accounting")
     if guard: return guard
     from db import get_partner_accounting; import io as _io; data = get_partner_accounting(1000)
     try:
@@ -7951,7 +8541,7 @@ async def export_partners_report(request: Request):
 @router.get("/notes", response_class=HTMLResponse)
 async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     from db import get_admin_notes, ensure_admin_notes_schema
     ensure_admin_notes_schema()
@@ -7971,7 +8561,7 @@ async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
           <td class="px-4 py-3 text-sm font-medium">{e(n['author'])}</td>
           <td class="px-4 py-3 text-sm">{e((n['text'] or '')[:60])}{'...' if len(n['text'] or '')>60 else ''}</td>
           <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(n['created_at'] or '')[:16]}</td>
+          <td class="px-4 py-3 text-xs text-gray-400">{fa_date(n['created_at'] or '', with_time=True)}</td>
           <td class="px-4 py-3 text-xs text-indigo-500">{n['reply_count']} پاسخ</td>
           <td class="px-4 py-3 flex gap-1">
             <a href="/admin/notes/{n['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">مشاهده</a>
@@ -8004,7 +8594,7 @@ async def admin_notes_page(request: Request, status: str = "", flash: str = ""):
 @router.get("/notes/new", response_class=HTMLResponse)
 async def admin_note_new_get(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     body = f"""
     <div class="flex items-center gap-3 mb-6">
@@ -8024,7 +8614,7 @@ async def admin_note_new_get(request: Request):
 @router.post("/notes/new")
 async def admin_note_new_post(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     form = await request.form()
     text = str(form.get("text","")).strip()
@@ -8040,7 +8630,7 @@ async def admin_note_new_post(request: Request):
 @router.get("/notes/{nid}", response_class=HTMLResponse)
 async def admin_note_detail(request: Request, nid: int, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     from db import get_admin_note
     data = get_admin_note(nid)
@@ -8052,7 +8642,7 @@ async def admin_note_detail(request: Request, nid: int, flash: str = ""):
     reply_rows = "".join(f"""<div class="p-4 bg-gray-50 rounded-lg mb-2">
       <div class="flex justify-between text-xs text-gray-400 mb-1">
         <span class="font-medium text-gray-700">{e(r['author'])}</span>
-        <span>{(r['created_at'] or '')[:16]}</span>
+        <span>{fa_date(r['created_at'] or '', with_time=True)}</span>
       </div>
       <p class="text-sm text-gray-800">{e(r['text'])}</p>
     </div>""" for r in replies)
@@ -8067,7 +8657,7 @@ async def admin_note_detail(request: Request, nid: int, flash: str = ""):
         <div class="flex justify-between items-start mb-4">
           <div>
             <div class="text-sm font-medium text-gray-700">{e(note['author'])}</div>
-            <div class="text-xs text-gray-400">{(note['created_at'] or '')[:16]}</div>
+            <div class="text-xs text-gray-400">{fa_date(note['created_at'] or '', with_time=True)}</div>
           </div>
           <span class="px-2 py-1 text-xs rounded-full {'bg-green-100 text-green-700' if note['status']=='done' else 'bg-amber-100 text-amber-700'}">
             {'✅ انجام شد' if note['status']=='done' else '🔵 باز'}
@@ -8095,7 +8685,7 @@ async def admin_note_detail(request: Request, nid: int, flash: str = ""):
 @router.post("/notes/{nid}/reply")
 async def admin_note_reply(request: Request, nid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     form = await request.form()
     text = str(form.get("text","")).strip()
@@ -8109,7 +8699,7 @@ async def admin_note_reply(request: Request, nid: int):
 @router.post("/notes/{nid}/toggle")
 async def admin_note_toggle(request: Request, nid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "notes")
     if guard: return guard
     from db import toggle_admin_note_status
     new_status = toggle_admin_note_status(nid)
@@ -8122,14 +8712,15 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
     guard = _require(adm, "partners")
     if guard: return guard
 
+    from db import fa_date, fa_now
     from db import (ensure_partner_system_schema, get_partner_tiers,
                     get_partner_commission, ensure_referral_schema, get_referral_settings)
     ensure_partner_system_schema()
     ensure_referral_schema()
 
     # تب‌های اصلی
-    tab_defs = [("list","👥 لیست همکاران"),("referrals","🔗 معرفی‌ها"),
-                ("tiers","🏆 سطوح"),("payouts","📤 تسویه‌ها"),("settings","⚙️ تنظیمات")]
+    tab_defs = [("list","👥 لیست همکاران"),("tree","🌳 درخت همکاران"),("referrals","🔗 معرفی‌ها"),
+                ("payouts","📤 تسویه‌ها"),("settings","⚙️ تنظیمات")]
     tabs_html = '<div class="flex gap-2 mb-6 overflow-x-auto pb-1">' + "".join(
         f'<a href="/admin/partners?tab={v}" class="px-4 py-2 rounded-lg border text-sm whitespace-nowrap {"bg-indigo-600 text-white" if tab==v else "bg-white text-gray-600"}">{l}</a>'
         for v, l in tab_defs
@@ -8189,6 +8780,22 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
 
     # ─── تب معرفی‌ها (ادغام‌شده) ─────────────────────────────────────────
     elif tab == "referrals":
+        # ─── تب «معرفی‌ها، پاداش‌ها و درآمدها» ───────────────────────────
+        manual_form = """
+        <div class="card p-4 mb-4 border-r-4 border-indigo-400">
+          <h2 class="font-bold text-gray-700 mb-1 text-sm">🔧 ثبت دستی معرفی</h2>
+          <p class="text-xs text-gray-400 mb-3">اگر معرفی‌ای در ربات ثبت نشده، اینجا دستی وصل کنید.</p>
+          <form method="post" action="/admin/partners/manual-referral" class="flex flex-wrap gap-2 items-end">
+            <div><label class="text-[10px] text-gray-400 block mb-1">آیدی معرف</label>
+              <input type="number" name="referrer_id" required placeholder="ID معرف"
+                class="border border-gray-300 rounded-lg px-2.5 py-2 text-xs w-36" dir="ltr"></div>
+            <div><label class="text-[10px] text-gray-400 block mb-1">آیدی دعوت‌شده</label>
+              <input type="number" name="referred_id" required placeholder="ID دعوت‌شده"
+                class="border border-gray-300 rounded-lg px-2.5 py-2 text-xs w-36" dir="ltr"></div>
+            <label class="flex items-center gap-1.5 text-xs pb-1.5"><input type="checkbox" name="pay_reward" checked> پرداخت پاداش</label>
+            <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold">➕ ثبت</button>
+          </form>
+        </div>"""
         ref_settings = get_referral_settings()
         conn = _db()
         try:
@@ -8202,154 +8809,75 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
             total     = conn.execute("SELECT COUNT(*) FROM referrals;").fetchone()[0]
             rewarded  = conn.execute("SELECT COUNT(*) FROM referrals WHERE rewarded=1;").fetchone()[0]
             total_pay = conn.execute("SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;").fetchone()[0]
+            # درآمد کل پورسانت
+            try:
+                total_comm = conn.execute(
+                    "SELECT COALESCE(SUM(amount),0) FROM partner_transactions WHERE type='credit';"
+                ).fetchone()[0]
+            except Exception:
+                total_comm = 0
         except Exception:
-            refs = []; total = rewarded = total_pay = 0
+            refs = []; total = rewarded = total_pay = total_comm = 0
         finally:
             conn.close()
 
         ref_rows = "".join(f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-xs text-gray-400">#{r['id']}</td>
-          <td class="px-4 py-3 text-sm">{e(r['referrer_name'] or str(r['referrer_id']))}</td>
-          <td class="px-4 py-3 text-sm">{e(r['referred_name'] or str(r['referred_id']))}</td>
-          <td class="px-4 py-3">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">منتظر خرید</span>'}</td>
-          <td class="px-4 py-3 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
-          <td class="px-4 py-3 text-xs text-gray-400">{(r['created_at'] or '')[:10]}</td>
+          <td class="px-3 py-2 text-xs text-gray-400">#{r['id']}</td>
+          <td class="px-3 py-2 text-sm font-medium">
+            <a href="/admin/partners/{r['referrer_id']}/profile" class="text-indigo-600 hover:underline">
+              {e(r['referrer_name'] or str(r['referrer_id']))}</a></td>
+          <td class="px-3 py-2 text-sm">
+            <a href="/admin/partners/{r['referred_id']}/profile" class="text-gray-600 hover:underline">
+              {e(r['referred_name'] or str(r['referred_id']))}</a></td>
+          <td class="px-3 py-2">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">✅ پرداخت</span>' if r['rewarded'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-500 rounded-full">منتظر</span>'}</td>
+          <td class="px-3 py-2 text-sm font-medium text-green-600">{int(r['reward_amount'] or 0):,} ت</td>
+          <td class="px-3 py-2 text-xs text-gray-400">{fa_date(r['created_at'])}</td>
         </tr>""" for r in refs)
 
-        content = f"""
-        <div class="grid grid-cols-3 gap-4 mb-6">
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-indigo-600">{total}</div><div class="text-xs text-gray-400 mt-1">کل معرفی‌ها</div></div>
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-green-600">{rewarded}</div><div class="text-xs text-gray-400 mt-1">پرداخت شده</div></div>
-          <div class="card p-5 text-center"><div class="text-2xl font-bold text-amber-600">{int(total_pay):,}</div><div class="text-xs text-gray-400 mt-1">جمع پاداش (ت)</div></div>
-        </div>
-        <div class="card p-6 mb-6">
-          <h2 class="font-bold text-gray-700 mb-4">⚙️ تنظیمات معرفی</h2>
-          <form method="post" action="/admin/referrals/settings" class="flex flex-wrap gap-4 items-end">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">مبلغ پاداش (تومان)</label>
-              {_input("reward_amount","",str(ref_settings.get("reward_amount",5000)),"number",True)}</div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
-              <select name="is_active">
-                <option value="1" {"selected" if ref_settings.get("is_active") else ""}>فعال</option>
-                <option value="0" {"" if ref_settings.get("is_active") else "selected"}>غیرفعال</option>
-              </select></div>
-            {_btn("ذخیره","",color="green")}
-          </form>
-        </div>
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
+        # فاز ۲: نوار آماری سبک به‌جای کارت‌های بزرگ — کاربردی‌تر و کم‌فضاتر
+        conversion_rate = round(rewarded*100/total) if total else 0
+        avg_reward = int(total_pay/rewarded) if rewarded else 0
+        stats_bar = f"""
+        <div class="card p-3 mb-4">
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
+            <div class="p-2 border-l border-gray-100">
+              <div class="text-[10px] text-gray-400 mb-1">کل معرفی‌ها</div>
+              <div class="font-bold text-indigo-700">{total}</div>
+            </div>
+            <div class="p-2 border-l border-gray-100">
+              <div class="text-[10px] text-gray-400 mb-1">پاداش‌شده</div>
+              <div class="font-bold text-green-700">{rewarded} <span class="text-[10px] font-normal text-gray-400">نفر</span></div>
+            </div>
+            <div class="p-2 border-l border-gray-100">
+              <div class="text-[10px] text-gray-400 mb-1">جمع پاداش</div>
+              <div class="font-bold text-green-700">{int(total_pay):,} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+            </div>
+            <div class="p-2 border-l border-gray-100">
+              <div class="text-[10px] text-gray-400 mb-1">میانگین</div>
+              <div class="font-bold text-amber-700">{avg_reward:,} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+            </div>
+            <div class="p-2">
+              <div class="text-[10px] text-gray-400 mb-1">نرخ تبدیل</div>
+              <div class="font-bold text-teal-700">٪{conversion_rate}</div>
+            </div>
+          </div>
+        </div>"""
+        content = manual_form + stats_bar + f"""
+        <div class="card overflow-hidden">
+          <div class="px-4 py-3 border-b flex items-center justify-between">
+            <h2 class="font-bold text-gray-700 text-sm">📋 لیست معرفی‌ها</h2>
+            <span class="text-xs text-gray-400">کلیک روی نام → پروفایل کامل</span>
+          </div>
+          <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
             <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">#</th><th class="px-4 py-3">معرف</th><th class="px-4 py-3">کاربر جدید</th>
-              <th class="px-4 py-3">وضعیت</th><th class="px-4 py-3">پاداش</th><th class="px-4 py-3">تاریخ</th>
+              <th class="px-3 py-2">#</th><th class="px-3 py-2">معرف</th>
+              <th class="px-3 py-2">کاربر جدید</th><th class="px-3 py-2">وضعیت</th>
+              <th class="px-3 py-2">پاداش</th><th class="px-3 py-2">تاریخ</th>
             </tr></thead>
             <tbody>{ref_rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>معرفی‌ای ثبت نشده</td></tr>"}</tbody>
-          </table>
-        </div></div>"""
+          </table></div>
+        </div>"""
 
-    elif tab == "tiers":
-        from db import get_partner_tiers, ensure_partner_tiers_extended
-        ensure_partner_tiers_extended()
-        tiers = get_partner_tiers()
-        tier_rows = ""
-        for tr in tiers:
-            try: commission = tr['commission_percent'] or 0
-            except Exception: commission = 0
-            try: cfixed = int(tr['commission_fixed'] or 0)
-            except Exception: cfixed = 0
-            comm_label = f"{cfixed:,} ت ثابت" if cfixed > 0 else f"{commission}٪"
-            try: color = tr['color'] or '#6B7280'
-            except Exception: color = '#6B7280'
-            try: desc = e(tr['description'] or '')
-            except Exception: desc = ''
-            try: photo_id = tr['photo_file_id'] or ''
-            except Exception: photo_id = ''
-            has_banner = '✅' if photo_id else '—'
-            tier_rows += f"""<tr class="border-b hover:bg-gray-50">
-              <td class="px-4 py-3 text-2xl">{e(tr['icon'])}</td>
-              <td class="px-4 py-3 text-sm font-medium">{e(tr['name'])}</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{tr['min_orders']} خرید</td>
-              <td class="px-4 py-3 text-sm text-gray-600">{comm_label}</td>
-              <td class="px-4 py-3"><span style="background:{color};width:20px;height:20px;display:inline-block;border-radius:4px"></span></td>
-              <td class="px-4 py-3 text-xs text-center">{has_banner}</td>
-              <td class="px-4 py-3 text-xs text-gray-400">{desc[:30]}</td>
-              <td class="px-4 py-3">
-                <div class="flex gap-1 flex-wrap items-center">
-                  <button onclick="editTier({tr['id']},'{e(tr['name'])}','{e(tr['icon'])}',{tr['min_orders']},{commission},{cfixed},'{color}','{desc}')"
-                    class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded">ویرایش</button>
-                  <form method="post" action="/admin/partners/tier/{tr['id']}/upload-banner"
-                        enctype="multipart/form-data" id="bf{tr['id']}" style="display:inline">
-                    <label class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded cursor-pointer border border-amber-200">
-                      {'🖼 تعویض بنر' if photo_id else '📷 آپلود بنر'}
-                      <input type="file" name="banner_file" accept="image/*" style="display:none"
-                             onchange="this.form.submit()">
-                    </label>
-                  </form>
-                  {f'<form method="post" action="/admin/partners/tier/{tr["id"]}/delete-banner" class="inline" onsubmit="return confirm(\'بنر حذف شود؟\')"><button class="px-2 py-1 text-xs bg-red-50 text-red-500 rounded border border-red-200">🗑 بنر</button></form>' if photo_id else ''}
-                  <form method="post" action="/admin/partners/tier/{tr['id']}/delete" class="inline" onsubmit="return confirm('حذف سطح؟')">
-                    <button class="px-2 py-1 text-xs bg-red-50 text-red-600 rounded border border-red-200">حذف سطح</button>
-                  </form>
-                </div>
-              </td>
-            </tr>"""
-
-        content = f"""
-        <div class="card p-6 mb-4">
-          <h2 class="font-bold text-gray-700 mb-2">🏆 سطوح همکاری</h2>
-          <form method="post" action="/admin/partners/tier/save" class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end" id="tier-form">
-            <input type="hidden" name="tier_id" id="tier_id" value="">
-            <div><label class="text-xs text-gray-500 block mb-1">آیکون</label>
-              <input type="text" name="icon" id="tier_icon" value="🥉" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">نام سطح</label>
-              <input type="text" name="name" id="tier_name" placeholder="برنز" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">حداقل خرید</label>
-              <input type="number" name="min_orders" id="tier_min" value="0" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">پورسانت اضافه (٪)</label>
-              <input type="number" step="0.1" name="commission_percent" id="tier_comm" value="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">پورسانت ثابت (تومان — 0=درصدی)</label>
-              <input type="number" name="commission_fixed" id="tier_fixed" value="0" min="0" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">رنگ</label>
-              <input type="color" name="color" id="tier_color" value="#6B7280" class="w-full h-10 border border-gray-200 rounded-lg px-1"></div>
-            <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">توضیح</label>
-              <input type="text" name="description" id="tier_desc" placeholder="توضیح این سطح..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-xs text-gray-500 block mb-1">File ID عکس بنر (اختیاری)</label>
-              <input type="text" name="photo_file_id" id="tier_photo" placeholder="Telegram file_id" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium self-end">ذخیره سطح</button>
-          </form>
-          <button onclick="resetTierForm()" class="mt-2 text-xs text-gray-400 hover:text-gray-600">+ سطح جدید</button>
-        </div>
-        <div class="card overflow-hidden"><div class="overflow-x-auto">
-          <table class="w-full text-right min-w-max">
-            <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-              <th class="px-4 py-3">آیکون</th><th class="px-4 py-3">سطح</th><th class="px-4 py-3">شرط ارتقا</th>
-              <th class="px-4 py-3">پورسانت</th><th class="px-4 py-3">رنگ</th><th class="px-4 py-3">بنر</th><th class="px-4 py-3">توضیح</th><th class="px-4 py-3">عملیات</th>
-            </tr></thead>
-            <tbody>{tier_rows or "<tr><td colspan='8' class='text-center py-8 text-gray-400'>سطحی تعریف نشده</td></tr>"}</tbody>
-          </table>
-        </div></div>
-        <script>
-        function editTier(id,name,icon,min,comm,cfixed,color,desc){{
-          document.getElementById('tier_id').value=id;
-          document.getElementById('tier_name').value=name;
-          document.getElementById('tier_icon').value=icon;
-          document.getElementById('tier_min').value=min;
-          document.getElementById('tier_comm').value=comm;
-          document.getElementById('tier_fixed').value=cfixed||0;
-          document.getElementById('tier_color').value=color;
-          document.getElementById('tier_desc').value=desc;
-          document.getElementById('tier-form').scrollIntoView({{behavior:'smooth'}});
-        }}
-        function resetTierForm(){{
-          document.getElementById('tier_id').value='';
-          document.getElementById('tier_name').value='';
-          document.getElementById('tier_icon').value='🥉';
-          document.getElementById('tier_min').value='0';
-          document.getElementById('tier_comm').value='0';
-          document.getElementById('tier_fixed').value='0';
-          document.getElementById('tier_color').value='#6B7280';
-          document.getElementById('tier_desc').value='';
-        }}
-        </script>"""
-
-    # ─── تب تسویه‌ها ─────────────────────────────────────────────────────
     elif tab == "payouts":
         from db import get_partner_payouts, ensure_partner_wallet_schema, get_partner_payout_settings
         ensure_partner_wallet_schema()
@@ -8374,7 +8902,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
               <td class="px-4 py-3">{e(p['full_name'] or str(p['user_id']))}</td>
               <td class="px-4 py-3 font-bold text-green-600">{int(p['amount']):,} ت</td>
               <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs bg-{sc}-100 text-{sc}-700 rounded-full">{sl}</span></td>
-              <td class="px-4 py-3 text-xs text-gray-400">{(p['created_at'] or '')[:10]}</td>
+              <td class="px-4 py-3 text-xs text-gray-400">{fa_date(p['created_at'] or '')}</td>
               <td class="px-4 py-3">{acts}<a href="/admin/partners/payout/{p['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded mr-1">جزئیات</a></td>
             </tr>"""
 
@@ -8392,65 +8920,537 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
 
     # ─── تب تنظیمات پورسانت ──────────────────────────────────────────────
     elif tab == "settings":
-        comm = get_partner_commission()
-        from db import get_partner_payout_settings, ensure_partner_wallet_schema
+        from db import (get_partner_payout_settings, ensure_partner_wallet_schema,
+                        get_partner_tiers, ensure_partner_tiers_extended,
+                        get_referral_settings)
         ensure_partner_wallet_schema()
-        ps = get_partner_payout_settings()
+        ensure_partner_tiers_extended()
+        comm = get_partner_commission()
+        ps   = get_partner_payout_settings()
+        rs   = get_referral_settings()
+        tiers = get_partner_tiers()
+
+        # ── جدول سطوح ──
+        tier_rows = ""
+        for tr in tiers:
+            try: commission = tr["commission_percent"] or 0
+            except Exception: commission = 0
+            try: cfixed = int(tr["commission_fixed"] or 0)
+            except Exception: cfixed = 0
+            try: ctype = tr["commission_type"] or ("fixed" if cfixed > 0 else "percent")
+            except Exception: ctype = "fixed" if cfixed > 0 else "percent"
+            try: photo_id = tr["photo_file_id"] or ""
+            except Exception: photo_id = ""
+            type_badge = ('<span class="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px]">مبلغ ثابت</span>'
+                          if ctype == "fixed" else
+                          '<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px]">درصدی</span>')
+            amount_label = f"{cfixed:,} ت" if ctype == "fixed" else f"٪{commission}"
+            banner_badge = ('<span class="text-green-600 text-lg" title="بنر ذخیره شده">🖼</span>'
+                            if photo_id else
+                            '<span class="text-gray-300 text-lg" title="بدون بنر">🖼</span>')
+            tier_rows += f"""<tr class="border-b hover:bg-gray-50">
+              <td class="px-3 py-2 text-xl">{e(tr["icon"])}</td>
+              <td class="px-3 py-2 font-medium">{e(tr["name"])}</td>
+              <td class="px-3 py-2 text-gray-500 text-xs">{tr["min_orders"]}+ خرید</td>
+              <td class="px-3 py-2">{type_badge}</td>
+              <td class="px-3 py-2 font-semibold text-indigo-700">{amount_label}</td>
+              <td class="px-3 py-2 text-center">{banner_badge}</td>
+              <td class="px-3 py-2 whitespace-nowrap">
+                <a href="/admin/partners/tier/{tr["id"]}/edit"
+                  class="px-3 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">✏️ ویرایش</a>
+                <button type="button" onclick="document.getElementById(\'bnr_{tr["id"]}\').click()"
+                  class="px-3 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 mr-1">📤 بنر</button>
+                <form method="post" action="/admin/partners/tier/{tr["id"]}/upload-banner"
+                  enctype="multipart/form-data" class="inline" id="bnrform_{tr["id"]}">
+                  <input type="file" name="banner_file" id="bnr_{tr["id"]}" accept="image/*"
+                    style="display:none" onchange="document.getElementById(\'bnrform_{tr["id"]}\').submit()">
+                </form>
+                <form method="post" action="/admin/partners/tier/{tr["id"]}/delete" class="inline"
+                  onsubmit="return confirm(\'حذف سطح؟\')">
+                  <button class="px-3 py-1 text-xs bg-red-50 text-red-600 rounded border border-red-100 mr-1">حذف</button>
+                </form>
+              </td>
+            </tr>"""
+
         content = f"""
-        <div class="card p-6 mb-4">
-          <h2 class="font-bold text-gray-700 mb-2">⚙️ تنظیمات پورسانت معرفی</h2>
-          <form method="post" action="/admin/partners/commission" class="space-y-4 max-w-md">
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">درصد پورسانت (٪)</label>
-              <input type="number" step="0.1" name="percent" value="{comm['percent']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ خرید (تومان)</label>
-              <input type="number" name="min_order" value="{comm['min_order']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = بدون محدودیت</span></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">سقف پورسانت هر خرید (تومان)</label>
-              <input type="number" name="max_payout" value="{comm['max_payout']}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت سیستم پورسانت</label>
-              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option value="1" {"selected" if comm['is_active'] else ""}>فعال</option>
-                <option value="0" {"" if comm['is_active'] else "selected"}>غیرفعال</option>
-              </select></div>
-            {_btn("ذخیره پورسانت","",color="green")}
-          </form>
-        </div>
-        <div class="card p-6">
-          <h2 class="font-bold text-gray-700 mb-2">📤 تنظیمات تسویه</h2>
-          <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-2xl">
-            <div class="grid grid-cols-2 gap-4">
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ تسویه (تومان)</label>
-                <input type="number" name="min_amount" value="{ps.get('min_amount',50000)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ تسویه (تومان)</label>
-                <input type="number" name="max_amount" value="{ps.get('max_amount',0)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
-                <input type="number" name="max_per_month" value="{ps.get('max_per_month',2)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <span class="text-xs text-gray-400">۰ = نامحدود</span></div>
-              <div><label class="text-sm font-medium text-gray-700 block mb-1">مدت بررسی (ساعت)</label>
-                <input type="number" name="review_hours" value="{ps.get('review_hours',48)}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+        <style>
+        details.acc summary{{list-style:none;cursor:pointer;user-select:none}}
+        details.acc summary::-webkit-details-marker{{display:none}}
+        details.acc[open] .acc-arrow{{transform:rotate(90deg)}}
+        .acc-arrow{{transition:transform .18s;display:inline-block;margin-inline-start:4px}}
+        </style>
+
+        <!-- ① هدیه دعوت -->
+        <details class="acc card mb-3">
+          <summary class="flex items-center gap-2 px-5 py-4 font-bold text-gray-700">
+            🎁 هدیه دعوت<span class="acc-arrow">›</span>
+            <span class="mr-auto text-xs font-normal text-gray-400">پاداش یک‌بارِ لحظه عضویت</span>
+          </summary>
+          <div class="px-5 pb-5 border-t pt-4">
+            <form method="post" action="/admin/referrals/settings" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+              <div>
+                <label class="text-sm font-medium text-gray-700 block mb-1">مبلغ هدیه (تومان)</label>
+                <input type="number" name="reward_amount" value="{int(rs.get('reward_amount',5000))}" min="0"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <p class="text-xs text-gray-400 mt-1">۰ = غیرفعال</p>
+              </div>
+              <div>
+                <label class="text-sm font-medium text-gray-700 block mb-1">سقف تعداد دعوت</label>
+                <input type="number" name="max_invites" value="{int(rs.get('max_invites',0))}" min="0"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <p class="text-xs text-gray-400 mt-1">۰ = نامحدود</p>
+              </div>
+              <div>
+                <label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
+                <select name="is_active" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="1" {"selected" if rs.get("is_active") else ""}>فعال</option>
+                  <option value="0" {"" if rs.get("is_active") else "selected"}>غیرفعال</option>
+                </select>
+              </div>
+              <div class="md:col-span-3">
+                {_btn("💾 ذخیره هدیه دعوت","",color="green",small=True)}
+              </div>
+            </form>
+          </div>
+        </details>
+
+        <!-- ② سطوح و پورسانت -->
+        <details class="acc card mb-3">
+          <summary class="flex items-center gap-2 px-5 py-4 font-bold text-gray-700">
+            🏆 سطوح و پورسانت فروش<span class="acc-arrow">›</span>
+            <span class="mr-auto text-xs font-normal text-gray-400">پورسانت هر خرید توسط دعوت‌شده‌ها</span>
+          </summary>
+          <div class="px-5 pb-5 border-t pt-4">
+            <div class="flex items-center justify-between mb-4">
+              <p class="text-xs text-gray-500 leading-6">
+                هر سطح پورسانت اختصاصی خود را دارد. همکاران بر اساس تعداد خرید به سطوح بالاتر ارتقا می‌یابند.
+              </p>
+              <a href="/admin/partners/tier/new"
+                class="shrink-0 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold">
+                ➕ سطح جدید</a>
             </div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت تسویه</label>
-              <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                <option value="1" {"selected" if ps.get('is_active') else ""}>فعال</option>
-                <option value="0" {"" if ps.get('is_active') else "selected"}>غیرفعال</option>
-              </select></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">متن راهنمای تسویه (نمایش به همکار)</label>
-              <textarea name="guide_text" rows="3" placeholder="شرایط و راهنمای تسویه..." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">{e(ps.get('guide_text',''))}</textarea></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام تأیید (به همکار)</label>
-              <input type="text" name="approval_message" value="{e(ps.get('approval_message',''))}" placeholder="درخواست تسویه شما تأیید و پرداخت می‌شود." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            <div><label class="text-sm font-medium text-gray-700 block mb-1">پیام رد (به همکار)</label>
-              <input type="text" name="rejection_message" value="{e(ps.get('rejection_message',''))}" placeholder="درخواست تسویه شما رد شد." class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
-            {_btn("ذخیره تسویه","",color="indigo")}
-          </form>
-        </div>"""
+            <!-- جدول سطوح — کاربردی‌تر و خواناتر -->
+            <div class="overflow-x-auto"><table class="w-full text-right min-w-max text-sm">
+              <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+                <th class="px-3 py-2">آیکون</th>
+                <th class="px-3 py-2">نام</th>
+                <th class="px-3 py-2">شرط ارتقا</th>
+                <th class="px-3 py-2">نوع پورسانت</th>
+                <th class="px-3 py-2">مقدار</th>
+                <th class="px-3 py-2">بنر</th>
+                <th class="px-3 py-2">عملیات</th>
+              </tr></thead>
+              <tbody>{tier_rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>سطحی تعریف نشده — روی «➕ سطح جدید» بزنید</td></tr>"}</tbody>
+            </table></div>
+            <div class="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+              💡 محدودیت‌ها (حداقل خرید و سقف پورسانت) در ویرایش هر سطح تنظیم می‌شود، نه اینجا.
+            </div>
+          </div>
+        </details>
+
+        <!-- ③ تنظیمات تسویه -->
+        <details class="acc card mb-3">
+          <summary class="flex items-center gap-2 px-5 py-4 font-bold text-gray-700">
+            📤 تنظیمات تسویه<span class="acc-arrow">›</span>
+          </summary>
+          <div class="px-5 pb-5 border-t pt-4">
+            <form method="post" action="/admin/partners/payout-settings" class="space-y-4 max-w-2xl">
+              <div class="grid grid-cols-2 gap-4">
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">حداقل مبلغ (ت)</label>
+                  <input type="number" name="min_amount" value="{ps.get("min_amount",50000)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر مبلغ (ت)</label>
+                  <input type="number" name="max_amount" value="{ps.get("max_amount",0)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <p class="text-xs text-gray-400">۰ = نامحدود</p></div>
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">حداکثر درخواست در ماه</label>
+                  <input type="number" name="max_per_month" value="{ps.get("max_per_month",2)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+                <div><label class="text-sm font-medium text-gray-700 block mb-1">مدت بررسی (ساعت)</label>
+                  <input type="number" name="review_hours" value="{ps.get("review_hours",48)}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+              </div>
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">وضعیت</label>
+                <select name="is_active" class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="1" {"selected" if ps.get("is_active") else ""}>فعال</option>
+                  <option value="0" {"" if ps.get("is_active") else "selected"}>غیرفعال</option>
+                </select></div>
+              <div><label class="text-sm font-medium text-gray-700 block mb-1">راهنمای تسویه (به همکار)</label>
+                <textarea name="guide_text" rows="6" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(ps.get("guide_text",""))}</textarea>
+                <p class="text-xs text-gray-400 mt-1">این متن هنگام باز کردن صفحه تسویه به همکار نمایش داده می‌شود.</p></div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label class="text-xs text-gray-500 block mb-1">پیام تأیید تسویه</label>
+                  <textarea name="approval_message" rows="4" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(ps.get("approval_message",""))}</textarea></div>
+                <div><label class="text-xs text-gray-500 block mb-1">پیام رد تسویه</label>
+                  <textarea name="rejection_message" rows="4" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(ps.get("rejection_message",""))}</textarea></div>
+              </div>
+              {_btn("💾 ذخیره تسویه","",color="indigo")}
+            </form>
+          </div>
+        </details>"""
+    elif tab == "tree":
+        # ─── 🌳 درخت همکاران — رندر کامل سمت کلاینت با Lazy DOM ───────────
+        content = """
+        <!-- کارت‌های آماری -->
+        <div id="tree-stats" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5"></div>
+
+        <!-- جستجو -->
+        <div class="card p-4 mb-4">
+          <div class="flex gap-2">
+            <input id="tree-q" type="text" placeholder="جستجو: نام، یوزرنیم یا آیدی تلگرام…"
+              class="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm" dir="rtl"
+              onkeydown="if(event.key==='Enter')treeSearch()">
+            <button onclick="treeSearch()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold transition">🔍 جستجو</button>
+          </div>
+          <div id="tree-results" class="mt-2 text-sm"></div>
+        </div>
+
+        <!-- درخت -->
+        <div class="card p-4 overflow-x-auto" style="min-height:300px">
+          <div id="tree-root" class="min-w-max"><div class="text-center text-gray-400 py-12">در حال بارگذاری درخت…</div></div>
+        </div>
+
+        <!-- پنل اطلاعات (سمت راست) -->
+        <div id="tree-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70" onclick="treeCloseDrawer()"></div>
+        <div id="tree-drawer" class="card"
+          style="position:fixed;top:0;left:0;height:100vh;width:min(92vw,380px);z-index:400;transform:translateX(-105%);transition:transform .25s;overflow-y:auto;border-radius:0;padding:0;box-shadow:4px 0 24px rgba(0,0,0,.2)">
+          <div class="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white" style="z-index:1">
+            <b class="text-gray-800">👤 اطلاعات همکار</b>
+            <button onclick="treeCloseDrawer()" class="text-gray-400 hover:text-red-500 text-lg px-2">✕</button>
+          </div>
+          <div id="tree-drawer-body" class="p-4 text-sm"></div>
+        </div>
+
+        <style>
+        .tn-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;cursor:pointer;transition:background .12s;position:relative}
+        .tn-row:hover{background:#F5F7FB}
+        body.sl-dark .tn-row:hover,body.dark-mode .tn-row:hover{background:#1F2A38}
+        .tn-arrow{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;
+          color:#8A94A6;font-size:11px;transition:transform .18s;user-select:none}
+        .tn-arrow.open{transform:rotate(-90deg)}
+        .tn-arrow.leaf{visibility:hidden}
+        .tn-kids{border-right:2px solid #E7EBF2;margin-right:20px;padding-right:6px}
+        body.sl-dark .tn-kids,body.dark-mode .tn-kids{border-right-color:#2B3A4C}
+        .tn-badge{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+        .tn-hl{outline:2px solid #6366F1;outline-offset:2px;border-radius:10px;animation:tnflash 1.6s ease 2}
+        @keyframes tnflash{0%,100%{background:transparent}50%{background:rgba(99,102,241,.14)}}
+        </style>
+
+        <script>
+        (function(){
+          var T=null, EXP={}, CHUNK=100;
+          var ST_LBL={approved:['فعال','bg-green-100 text-green-700'],
+                      pending:['در انتظار','bg-amber-100 text-amber-700'],
+                      rejected:['غیرفعال','bg-red-100 text-red-600'],
+                      user:['کاربر','bg-gray-100 text-gray-500']};
+          function fmt(n){return (n||0).toLocaleString('en-US');}
+          function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+
+          fetch('/admin/partners/tree-data').then(function(r){return r.json();}).then(function(d){
+            T=d; renderStats(); renderRoots();
+          }).catch(function(){document.getElementById('tree-root').innerHTML='<div class="text-center text-red-500 py-10">خطا در دریافت داده‌ها</div>';});
+
+          function renderStats(){
+            var s=T.stats, box=document.getElementById('tree-stats');
+            var cards=[['🤝','کل همکاران',fmt(s.total_partners)],['✅','همکاران فعال',fmt(s.active)],
+                       ['🕸','عمق شبکه',fmt(s.max_depth)+' لایه'],['👥','بیشترین زیرمجموعه',fmt(s.max_subs)],
+                       ['🛒','فروش شبکه',fmt(s.net_sales)+' ت'],['💰','درآمد شبکه',fmt(s.net_income)+' ت']];
+            box.innerHTML=cards.map(function(c){
+              return '<div class="card p-3"><div class="text-xs text-gray-400 mb-1">'+c[0]+' '+c[1]+'</div>'
+                    +'<div class="font-bold text-gray-800 text-sm">'+c[2]+'</div></div>';
+            }).join('');
+          }
+
+          function nodeRow(id){
+            var n=T.nodes[String(id)], st=ST_LBL[n.status]||ST_LBL.user;
+            var row=document.createElement('div');
+            row.className='tn-row'; row.id='tn-'+id;
+            row.innerHTML=
+              '<span class="tn-arrow'+(n.children.length?'':' leaf')+'" data-a>◀</span>'
+             +'<span style="font-size:15px">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</span>'
+             +'<span class="font-medium text-gray-800">'+esc(n.name)+'</span>'
+             +(n.username?'<span class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</span>':'')
+             +'<code class="text-xs no-fa" dir="ltr">'+n.id+'</code>'
+             +'<span class="tn-badge bg-indigo-50 text-indigo-600">🛒 '+fmt(n.sales)+'</span>'
+             +'<span class="tn-badge bg-teal-50 text-teal-700">💰 '+fmt(n.income)+' ت</span>'
+             +'<span class="tn-badge bg-gray-100 text-gray-500">👥 '+fmt(n.direct)+' / '+fmt(n.total)+'</span>'
+             +'<span class="tn-badge '+st[1]+'">'+st[0]+'</span>';
+            row.querySelector('[data-a]').onclick=function(ev){ev.stopPropagation();toggle(id);};
+            row.onclick=function(){openDrawer(id);};
+            return row;
+          }
+
+          function wrap(id){
+            var w=document.createElement('div'); w.id='tw-'+id;
+            w.appendChild(nodeRow(id));
+            return w;
+          }
+
+          function renderRoots(){
+            var box=document.getElementById('tree-root'); box.innerHTML='';
+            if(!T.roots.length){box.innerHTML='<div class="text-center text-gray-400 py-12">هنوز معرفی‌ای ثبت نشده است</div>';return;}
+            T.roots.forEach(function(r){box.appendChild(wrap(r));});
+          }
+
+          function toggle(id){ EXP[id]?collapse(id):expand(id); }
+
+          function expand(id){
+            var n=T.nodes[String(id)]; if(!n||!n.children.length)return;
+            var w=document.getElementById('tw-'+id); if(!w)return;
+            var kids=w.querySelector(':scope > .tn-kids');
+            if(!kids){
+              kids=document.createElement('div'); kids.className='tn-kids';
+              kids.dataset.next='0'; w.appendChild(kids);
+              fill(id,kids);
+            }
+            kids.style.display='';
+            w.querySelector('[data-a]').classList.add('open');
+            EXP[id]=true;
+          }
+
+          function fill(id,kids){
+            var n=T.nodes[String(id)], from=+kids.dataset.next, to=Math.min(from+CHUNK,n.children.length);
+            var more=kids.querySelector(':scope > .tn-more'); if(more)more.remove();
+            for(var i=from;i<to;i++) kids.appendChild(wrap(n.children[i]));
+            kids.dataset.next=to;
+            if(to<n.children.length){
+              var b=document.createElement('button');
+              b.className='tn-more text-xs text-indigo-500 hover:text-indigo-700 py-2 pr-8 block';
+              b.textContent='⬇ نمایش '+fmt(n.children.length-to)+' مورد دیگر…';
+              b.onclick=function(){fill(id,kids);};
+              kids.appendChild(b);
+            }
+          }
+
+          function collapse(id){
+            var w=document.getElementById('tw-'+id); if(!w)return;
+            var kids=w.querySelector(':scope > .tn-kids');
+            if(kids)kids.style.display='none';
+            w.querySelector('[data-a]').classList.remove('open');
+            EXP[id]=false;
+          }
+
+          function pathOf(id){
+            var p=[],cur=id,g=0;
+            while(cur!=null&&g++<500){p.unshift(cur);cur=T.nodes[String(cur)]?T.nodes[String(cur)].parent:null;}
+            return p;
+          }
+
+          window.treeReveal=function(id){
+            var p=pathOf(id);
+            for(var i=0;i<p.length-1;i++){
+              expand(p[i]);
+              // اگر گره هدف در چانک‌های بعدی است، تا رسیدن به آن fill کن
+              var kids=document.getElementById('tw-'+p[i]).querySelector(':scope > .tn-kids');
+              var guard=0;
+              while(kids&&!document.getElementById('tw-'+p[i+1])&&guard++<200){
+                var mb=kids.querySelector(':scope > .tn-more'); if(!mb)break; mb.click();
+              }
+            }
+            var el=document.getElementById('tn-'+id);
+            if(el){el.scrollIntoView({behavior:'smooth',block:'center'});
+              el.classList.add('tn-hl'); setTimeout(function(){el.classList.remove('tn-hl');},3500);}
+          };
+
+          window.treeSearch=function(){
+            var q=(document.getElementById('tree-q').value||'').trim().toLowerCase();
+            var out=document.getElementById('tree-results');
+            if(!q){out.innerHTML='';return;}
+            var hits=[];
+            for(var k in T.nodes){var n=T.nodes[k];
+              if(String(n.id).indexOf(q)>-1||(n.name||'').toLowerCase().indexOf(q)>-1||(n.username||'').toLowerCase().indexOf(q)>-1)
+                {hits.push(n); if(hits.length>=15)break;}
+            }
+            if(!hits.length){out.innerHTML='<span class="text-gray-400">چیزی یافت نشد</span>';return;}
+            out.innerHTML=hits.map(function(n){
+              return '<button onclick="treeReveal('+n.id+')" class="ml-2 mb-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs hover:bg-indigo-100">'
+                    +esc(n.name)+' <code>'+n.id+'</code></button>';
+            }).join('');
+            treeReveal(hits[0].id);
+          };
+
+          window.openDrawer=function(id){
+            var n=T.nodes[String(id)], st=ST_LBL[n.status]||ST_LBL.user;
+            var path=pathOf(id).map(function(pid){
+              var pn=T.nodes[String(pid)];
+              return '<button onclick="treeReveal('+pid+');treeCloseDrawer()" class="text-indigo-500 hover:underline">'+esc(pn?pn.name:pid)+'</button>';
+            }).join(' <span class="text-gray-300">←</span> ');
+            var ref=n.parent!=null?T.nodes[String(n.parent)]:null;
+            function line(l,v){return '<div class="flex justify-between gap-3 py-2 border-b border-gray-100"><span class="text-gray-400 text-xs">'+l+'</span><span class="font-medium text-gray-700 text-left">'+v+'</span></div>';}
+            document.getElementById('tree-drawer-body').innerHTML=
+              '<div class="text-center mb-4"><div class="text-3xl mb-1">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</div>'
+             +'<div class="font-bold text-gray-800">'+esc(n.name)+'</div>'
+             +(n.username?'<div class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</div>':'')+'</div>'
+             +line('آیدی تلگرام','<code>'+n.id+'</code>')
+             +line('سطح همکاری',esc(n.tier))
+             +line('وضعیت','<span class="tn-badge '+st[1]+'">'+st[0]+'</span>')
+             +line('تاریخ عضویت',esc(n.joined||'—'))
+             +line('معرف مستقیم',ref?esc(ref.name):'— (ریشه)')
+             +line('زیرمجموعه مستقیم',fmt(n.direct))
+             +line('کل زیرمجموعه‌ها',fmt(n.total))
+             +line('تعداد خرید',fmt(n.sales))
+             +line('مجموع خرید',fmt(n.spend)+' ت')
+             +line('درآمد (پورسانت)',fmt(n.income)+' ت')
+             +line('عمق در شبکه','لایه '+fmt(n.depth))
+             +'<div class="mt-4"><div class="text-xs text-gray-400 mb-2">مسیر معرفی</div>'
+             +'<div class="leading-7 text-xs">'+path+'</div></div>'
+             +'<a href="/admin/partners/'+n.id+'/profile" class="block text-center mt-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">👤 پروفایل کامل</a>';
+            document.getElementById('tree-overlay').classList.remove('hidden');
+            document.getElementById('tree-drawer').style.transform='translateX(0)';
+          };
+          window.treeCloseDrawer=function(){
+            document.getElementById('tree-overlay').classList.add('hidden');
+            document.getElementById('tree-drawer').style.transform='translateX(-105%)';
+          };
+        })();
+        </script>"""
 
     body = f"""
     <h1 class="text-2xl font-bold text-gray-800 mb-4">🤝 همکاران</h1>
     {tabs_html}
     {content}"""
     return _layout("همکاران", body, adm, flash=flash)
+
+
+# ─── 🌳 درخت همکاران — موتور داده ─────────────────────────────────────────
+
+def _build_partner_tree(conn) -> dict:
+    """ساخت درخت کامل معرفی‌ها + آمار — O(N+E)، بدون محدودیت عمق، ضد حلقه."""
+    from collections import deque
+
+    edges = conn.execute(
+        "SELECT referrer_id, referred_id, COALESCE(created_at,'') AS ca FROM referrals;"
+    ).fetchall()
+    users = {}
+    for r in conn.execute("SELECT user_id, COALESCE(username,'') u, COALESCE(full_name,'') f, COALESCE(first_seen,'') fs FROM users;").fetchall():
+        try: users[int(r["user_id"])] = r
+        except Exception: pass
+    partners = {}
+    for r in conn.execute("SELECT tg_user_id, COALESCE(full_name,'') fn, COALESCE(status,'') st FROM partners;").fetchall():
+        try: partners[int(r["tg_user_id"])] = r
+        except Exception: pass
+    tiers = conn.execute(
+        "SELECT name, icon, min_orders, COALESCE(color,'#6B7280') color FROM partner_tiers ORDER BY min_orders ASC;"
+    ).fetchall()
+    sales = {}
+    for r in conn.execute("""
+        SELECT CAST(user_id AS INTEGER) u, COUNT(*) c, COALESCE(SUM(price),0) s,
+               SUM(CASE WHEN buyer_type='partner' THEN 1 ELSE 0 END) pc
+        FROM orders WHERE COALESCE(status,'active')!='returned'
+        GROUP BY CAST(user_id AS INTEGER);""").fetchall():
+        try: sales[int(r["u"])] = (int(r["c"]), int(r["s"]), int(r["pc"] or 0))
+        except Exception: pass
+    income = {}
+    try:
+        for r in conn.execute("SELECT user_id u, COALESCE(SUM(amount),0) s FROM partner_transactions WHERE type='credit' GROUP BY user_id;").fetchall():
+            income[int(r["u"])] = int(r["s"])
+    except Exception:
+        pass
+
+    # والد هر گره — اولین معرفی معتبر است؛ خودارجاعی رد می‌شود
+    parent, joined, node_ids = {}, {}, set()
+    for e in edges:
+        try:
+            a, b = int(e["referrer_id"]), int(e["referred_id"])
+        except Exception:
+            continue
+        if a == b:
+            continue
+        node_ids.add(a); node_ids.add(b)
+        if b not in parent:
+            parent[b] = a
+            joined[b] = (e["ca"] or "")[:10]
+
+    # شکستن حلقه‌های احتمالی (داده خراب) — گرهِ حلقه‌ساز ریشه می‌شود
+    for n in list(parent.keys()):
+        seen, cur = set(), n
+        while cur in parent:
+            if cur in seen:
+                parent.pop(n, None)
+                break
+            seen.add(cur)
+            cur = parent[cur]
+
+    children = {}
+    for b, a in parent.items():
+        children.setdefault(a, []).append(b)
+    roots = sorted(n for n in node_ids if n not in parent)
+
+    # عمق (BFS) + ترتیب برای پیمایش
+    depth, order, dq = {}, [], deque((r, 1) for r in roots)
+    while dq:
+        n, d = dq.popleft()
+        depth[n] = d
+        order.append(n)
+        for c in children.get(n, ()):
+            dq.append((c, d + 1))
+
+    # کل زیرمجموعه‌ها — post-order تکراری
+    total_subs = {n: 0 for n in node_ids}
+    for n in reversed(order):
+        t = 0
+        for c in children.get(n, ()):
+            t += 1 + total_subs.get(c, 0)
+        total_subs[n] = t
+
+    def _tier_of(pc):
+        cur = None
+        for t in tiers:
+            if pc >= int(t["min_orders"] or 0):
+                cur = t
+        return cur
+
+    nodes = {}
+    for n in node_ids:
+        u, p = users.get(n), partners.get(n)
+        c, s, pc = sales.get(n, (0, 0, 0))
+        t = _tier_of(pc)
+        name = (p["fn"] if p and p["fn"] else
+                (u["f"] if u and u["f"] else
+                 (u["u"] if u and u["u"] else f"کاربر {n}")))
+        kids = children.get(n, [])
+        kids.sort(key=lambda x: -total_subs.get(x, 0))
+        nodes[str(n)] = {
+            "id": n, "name": name,
+            "username": (u["u"] if u else ""),
+            "parent": parent.get(n),
+            "children": kids,
+            "tier": (f'{t["icon"]} {t["name"]}' if t else "—"),
+            "tcolor": (t["color"] if t else "#6B7280"),
+            "sales": c, "spend": s, "income": income.get(n, 0),
+            "direct": len(kids), "total": total_subs.get(n, 0),
+            "depth": depth.get(n, 1),
+            "status": (p["st"] if p else "user"),
+            "joined": fa_date(joined.get(n, "") or (u["fs"] if u else "")),
+        }
+
+    stats = {
+        "total_partners": len(partners),
+        "active": sum(1 for p in partners.values() if p["st"] == "approved"),
+        "network": len(node_ids),
+        "max_depth": max(depth.values()) if depth else 0,
+        "max_subs": max((len(v) for v in children.values()), default=0),
+        "net_sales": sum(sales.get(n, (0, 0, 0))[1] for n in node_ids),
+        "net_income": sum(income.get(n, 0) for n in node_ids),
+    }
+    return {"stats": stats, "roots": roots, "nodes": nodes}
+
+
+@router.get("/partners/tree-data")
+async def partners_tree_data(request: Request):
+    """JSON درخت همکاران — فقط ادمین"""
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    from db import ensure_referral_schema, ensure_partner_tiers_extended
+    ensure_referral_schema()
+    ensure_partner_tiers_extended()
+    conn = _db()
+    try:
+        data = _build_partner_tree(conn)
+    finally:
+        conn.close()
+    return JSONResponse(data)
 
 
 @router.post("/partners/payout-settings")
@@ -8530,7 +9530,7 @@ async def partner_profile_admin(request: Request, uid: int):
         <td class="px-4 py-2.5">{e(o['title'] or '—')}</td>
         <td class="px-4 py-2.5 font-medium">{int(o['price'] or 0):,} ت</td>
         <td class="px-4 py-2.5">{'<span class="px-2 py-0.5 text-xs bg-red-100 text-red-600 rounded-full">برگشتی</span>' if (o['status'] or 'active')=='returned' else '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>'}</td>
-        <td class="px-4 py-2.5 text-xs text-gray-400">{(o['created_at'] or '')[:10]}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400">{fa_date(o['created_at'] or '')}</td>
       </tr>""" for o in orders)
 
     sub_rows = "".join(f"""<tr class="border-b hover:bg-gray-50 text-sm">
@@ -8538,7 +9538,7 @@ async def partner_profile_admin(request: Request, uid: int):
         <td class="px-4 py-2.5">{e(s['name'])}</td>
         <td class="px-4 py-2.5">{int(s['ocnt'])} خرید</td>
         <td class="px-4 py-2.5 font-medium text-green-600">{int(s['ototal']):,} ت</td>
-        <td class="px-4 py-2.5 text-xs text-gray-400">{(s['created_at'] or '')[:10]}</td>
+        <td class="px-4 py-2.5 text-xs text-gray-400">{fa_date(s['created_at'])}</td>
       </tr>""" for s in subs)
 
     body = f"""
@@ -8700,7 +9700,7 @@ async def partner_payout_detail(request: Request, pid: int, flash: str = ""):
           <div class="flex justify-between"><span class="text-gray-400">فروشگاه</span><span>{e(pay['shop_name'] or '—')}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">شهر</span><span>{e(pay['city'] or '—')}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">موبایل</span><span>{e(pay['phone'] or '—')}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{(pay['first_seen'] or '')[:10]}</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">عضویت</span><span>{fa_date(pay['first_seen'] or '')}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">سطح</span><span>{tier['icon']} {tier['name']}</span></div>
           <div class="flex justify-between"><span class="text-gray-400">User ID</span><code class="text-xs bg-gray-100 px-1.5 rounded">{uid}</code></div>
         </div>
@@ -8735,7 +9735,7 @@ async def partner_payout_detail(request: Request, pid: int, flash: str = ""):
           <div class="text-xs text-gray-400">مجموع تسویه (ت)</div>
         </div>
         <div class="text-center p-3 bg-gray-50 rounded-lg">
-          <div class="font-bold text-gray-700">{(last_payout['created_at'] or '—')[:10] if last_payout else '—'}</div>
+          <div class="font-bold text-gray-700">{fa_date(last_payout['created_at'] or '—') if last_payout else '—'}</div>
           <div class="text-xs text-gray-400">آخرین تسویه</div>
         </div>
         <div class="text-center p-3 bg-gray-50 rounded-lg">
@@ -8803,7 +9803,7 @@ async def partner_tier_delete_banner(request: Request, tid: int):
     finally:
         conn.close()
     _log(request, f"حذف بنر سطح #{tid}", "همکاران")
-    return _redir("/admin/partners?tab=tiers&flash=بنر+حذف+شد")
+    return _redir("/admin/partners?tab=settings&flash=بنر+حذف+شد")
 
 
 @router.post("/partners/tier/{tid}/upload-banner")
@@ -8814,7 +9814,7 @@ async def partner_tier_upload_banner(request: Request, tid: int):
     form = await request.form()
     file = form.get("banner_file")
     if not file or not file.filename:
-        return _redir(f"/admin/partners?tab=tiers&flash=فایلی+انتخاب+نشد")
+        return _redir(f"/admin/partners?tab=settings&flash=فایلی+انتخاب+نشد")
     file_bytes = await file.read()
     # آپلود به تلگرام و دریافت file_id
     try:
@@ -8839,9 +9839,9 @@ async def partner_tier_upload_banner(request: Request, tid: int):
         conn.commit()
         conn.close()
         _log(request, f"آپلود بنر سطح #{tid}", "همکاران", photo_id[:20])
-        return _redir(f"/admin/partners?tab=tiers&flash=بنر+آپلود+شد")
+        return _redir(f"/admin/partners?tab=settings&flash=بنر+آپلود+شد")
     except Exception as ex:
-        return _redir(f"/admin/partners?tab=tiers&flash=خطا:+{str(ex)[:40]}")
+        return _redir(f"/admin/partners?tab=settings&flash=خطا:+{str(ex)[:40]}")
 
 
 @router.post("/partners/tier/save")
@@ -8852,34 +9852,196 @@ async def partner_tier_save(request: Request):
     form = await request.form()
     tid  = form.get("tier_id")
     tid  = int(tid) if tid and str(tid).isdigit() else None
-    from db import save_partner_tier, ensure_partner_tiers_extended
+    from db import ensure_partner_tiers_extended
     ensure_partner_tiers_extended()
-    # ذخیره با فیلدهای جدید
     conn = _db()
     try:
         name   = str(form.get("name","")).strip()
         icon   = str(form.get("icon","🥉")).strip()
         min_o  = int(form.get("min_orders") or 0)
-        comm   = float(form.get("commission_percent") or 0)
-        cfixed = int(form.get("commission_fixed") or 0)
+        # فاز ۲: نوع پورسانت رادیویی — فقط یکی فعال
+        ctype  = str(form.get("commission_type","percent")).strip()
+        if ctype not in ("percent","fixed"): ctype = "percent"
+        comm   = float(form.get("commission_percent") or 0) if ctype == "percent" else 0
+        cfixed = int(form.get("commission_fixed") or 0) if ctype == "fixed" else 0
+        min_amt = int(form.get("min_order_amount") or 0)
+        max_pay = int(form.get("max_payout") or 0)
         color  = str(form.get("color","#6B7280")).strip()
         desc   = str(form.get("description","")).strip()
         photo  = str(form.get("photo_file_id","")).strip()
+        levelup = str(form.get("levelup_message","")).strip()
         if tid:
             conn.execute("""UPDATE partner_tiers SET name=?,icon=?,min_orders=?,
-                commission_percent=?,commission_fixed=?,color=?,description=?,photo_file_id=? WHERE id=?;""",
-                (name, icon, min_o, comm, cfixed, color, desc, photo, tid))
+                commission_percent=?,commission_fixed=?,color=?,description=?,photo_file_id=?,
+                min_order_amount=?,max_payout=?,levelup_message=?,commission_type=? WHERE id=?;""",
+                (name, icon, min_o, comm, cfixed, color, desc, photo,
+                 min_amt, max_pay, levelup, ctype, tid))
         else:
             mx = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM partner_tiers;").fetchone()[0]
             conn.execute("""INSERT INTO partner_tiers
-                (name,icon,min_orders,commission_percent,commission_fixed,color,description,photo_file_id,sort_order)
-                VALUES (?,?,?,?,?,?,?,?,?);""",
-                (name, icon, min_o, comm, cfixed, color, desc, photo, mx))
+                (name,icon,min_orders,commission_percent,commission_fixed,color,description,photo_file_id,
+                 min_order_amount,max_payout,levelup_message,commission_type,sort_order)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);""",
+                (name, icon, min_o, comm, cfixed, color, desc, photo,
+                 min_amt, max_pay, levelup, ctype, mx))
         conn.commit()
     finally:
         conn.close()
-    _log(request, "ذخیره سطح همکاری", "همکاران", name)
-    return _redir("/admin/partners?tab=tiers&flash=سطح+ذخیره+شد")
+    _log(request, "ذخیره سطح همکاری", "همکاران", name, admin_info=adm)
+    return _redir("/admin/partners?tab=settings&flash=✅+سطح+ذخیره+شد")
+
+
+# فاز ۲: صفحه ادیت مستقل سطح (بازتر و کاربردی‌تر از فرم inline)
+@router.get("/partners/tier/{tid}/edit", response_class=HTMLResponse)
+@router.get("/partners/tier/new", response_class=HTMLResponse)
+async def partner_tier_edit_page(request: Request, tid: int = 0, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    from db import ensure_partner_tiers_extended
+    ensure_partner_tiers_extended()
+
+    # اگه tid داشت، بارگذاری از DB
+    tr = None
+    is_new = (tid == 0)
+    if not is_new:
+        conn = _db()
+        try:
+            r = conn.execute("SELECT * FROM partner_tiers WHERE id=?;", (tid,)).fetchone()
+            tr = dict(r) if r else None
+        finally:
+            conn.close()
+        if not tr:
+            return _redir("/admin/partners?tab=settings&flash=❌+سطح+یافت+نشد")
+
+    def _g(k, default=""):
+        return tr.get(k, default) if tr else default
+
+    ctype     = _g("commission_type","percent") or "percent"
+    photo_id  = _g("photo_file_id","") or ""
+    title = "سطح جدید" if is_new else f"ویرایش سطح: {e(_g('name',''))}"
+
+    body = f"""
+    <div class="max-w-3xl mx-auto p-4">
+      <div class="mb-4 flex items-center gap-3">
+        <a href="/admin/partners?tab=settings" class="text-gray-400 hover:text-gray-600 text-2xl">←</a>
+        <h1 class="text-xl font-bold text-gray-800">🏆 {title}</h1>
+      </div>
+
+      <form method="post" action="/admin/partners/tier/save" class="space-y-4">
+        <input type="hidden" name="tier_id" value="{tid or ''}">
+
+        <!-- بخش ۱: هویت سطح -->
+        <div class="card p-5">
+          <h2 class="font-bold text-gray-700 text-sm mb-4">👑 هویت سطح</h2>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div><label class="text-xs text-gray-500 block mb-1">آیکون</label>
+              <input type="text" name="icon" value="{e(_g('icon','🥉'))}" required
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-lg text-center"></div>
+            <div class="col-span-2"><label class="text-xs text-gray-500 block mb-1">نام سطح</label>
+              <input type="text" name="name" value="{e(_g('name',''))}" required placeholder="مثلاً: طلا"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"></div>
+            <div><label class="text-xs text-gray-500 block mb-1">رنگ</label>
+              <input type="color" name="color" value="{_g('color','#6B7280')}"
+                class="w-full h-10 border border-gray-200 rounded-lg"></div>
+          </div>
+          <div class="mt-3">
+            <label class="text-xs text-gray-500 block mb-1">توضیح (نمایش در پنل همکار)</label>
+            <input type="text" name="description" value="{e(_g('description',''))}" placeholder="مثلاً: دسترسی به تخفیف ویژه"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          </div>
+        </div>
+
+        <!-- بخش ۲: بنر اختصاصی -->
+        <div class="card p-5">
+          <h2 class="font-bold text-gray-700 text-sm mb-3">🖼 بنر اختصاصی سطح</h2>
+          <p class="text-xs text-gray-400 mb-3">در پیام تبریک ارتقا به همکار نمایش داده می‌شود.</p>
+          {f'<div class="mb-3 p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700">✅ بنر ذخیره شده — file_id: <code class="no-fa" dir="ltr">{photo_id[:40]}...</code></div>' if photo_id else '<div class="mb-3 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-500">هنوز بنری آپلود نشده</div>'}
+          <input type="hidden" name="photo_file_id" value="{e(photo_id)}">
+          <p class="text-[10px] text-gray-400">💡 برای آپلود بنر جدید، ابتدا فرم را ذخیره کنید، سپس در جدول سطوح از دکمه «📤 آپلود بنر» استفاده کنید.</p>
+        </div>
+
+        <!-- بخش ۳: شرط ارتقا -->
+        <div class="card p-5">
+          <h2 class="font-bold text-gray-700 text-sm mb-4">📈 شرط ارتقا به این سطح</h2>
+          <div><label class="text-xs text-gray-500 block mb-1">حداقل تعداد خرید موفق</label>
+            <input type="number" name="min_orders" value="{_g('min_orders',0)}" min="0" required
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+            <p class="text-[10px] text-gray-400 mt-1">همکاری که این تعداد خرید موفق داشته باشد، خودکار به این سطح ارتقا می‌یابد.</p></div>
+        </div>
+
+        <!-- بخش ۴: نوع پورسانت -->
+        <div class="card p-5">
+          <h2 class="font-bold text-gray-700 text-sm mb-4">💰 نوع پورسانت</h2>
+          <div class="grid grid-cols-2 gap-3 mb-4">
+            <label class="p-3 border-2 border-gray-200 rounded-xl cursor-pointer hover:border-indigo-400 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50">
+              <input type="radio" name="commission_type" value="percent" {"checked" if ctype=="percent" else ""} class="ml-2" onchange="toggleCommission()">
+              <span class="font-semibold text-sm">درصدی</span>
+              <p class="text-[10px] text-gray-400 mt-1">درصدی از مبلغ خرید</p>
+            </label>
+            <label class="p-3 border-2 border-gray-200 rounded-xl cursor-pointer hover:border-indigo-400 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50">
+              <input type="radio" name="commission_type" value="fixed" {"checked" if ctype=="fixed" else ""} class="ml-2" onchange="toggleCommission()">
+              <span class="font-semibold text-sm">مبلغ ثابت</span>
+              <p class="text-[10px] text-gray-400 mt-1">مبلغ ثابت هر خرید</p>
+            </label>
+          </div>
+          <div id="pct_wrap" class="grid grid-cols-1 gap-3">
+            <label class="text-xs text-gray-500 block">درصد پورسانت (٪)</label>
+            <input type="number" name="commission_percent" step="0.1" min="0" value="{_g('commission_percent',0)}"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div id="fixed_wrap" class="grid grid-cols-1 gap-3" style="display:none">
+            <label class="text-xs text-gray-500 block">مبلغ ثابت پورسانت (تومان)</label>
+            <input type="number" name="commission_fixed" min="0" value="{_g('commission_fixed',0)}"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+            <div><label class="text-xs text-gray-500 block mb-1">حداقل مبلغ خرید (تومان)</label>
+              <input type="number" name="min_order_amount" value="{_g('min_order_amount',0)}" min="0"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              <p class="text-[10px] text-gray-400 mt-1">۰ = بدون محدودیت</p></div>
+            <div><label class="text-xs text-gray-500 block mb-1">سقف پورسانت هر خرید (تومان)</label>
+              <input type="number" name="max_payout" value="{_g('max_payout',0)}" min="0"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              <p class="text-[10px] text-gray-400 mt-1">۰ = نامحدود</p></div>
+          </div>
+        </div>
+
+        <!-- بخش ۵: پیام تبریک ارتقا -->
+        <div class="card p-5">
+          <h2 class="font-bold text-gray-700 text-sm mb-3">🎉 پیام تبریک ارتقا</h2>
+          <p class="text-xs text-gray-400 mb-3">این پیام به صورت خودکار پس از ارتقای همکار به این سطح ارسال می‌شود.</p>
+          <textarea name="levelup_message" rows="8" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" dir="rtl">{e(_g('levelup_message',''))}</textarea>
+          <div class="mt-2 p-3 bg-blue-50 rounded-lg text-[11px] text-blue-700 leading-6">
+            💡 <b>متغیرهای قابل استفاده در متن:</b><br>
+            <code class="no-fa" dir="ltr">{{name}}</code> — نام همکار &nbsp;
+            <code class="no-fa" dir="ltr">{{tier}}</code> — نام سطح جدید &nbsp;
+            <code class="no-fa" dir="ltr">{{icon}}</code> — آیکون سطح<br>
+            <code class="no-fa" dir="ltr">{{percent}}</code> — درصد پورسانت &nbsp;
+            <code class="no-fa" dir="ltr">{{fixed}}</code> — مبلغ ثابت پورسانت<br>
+            <code class="no-fa" dir="ltr">{{orders}}</code> — تعداد خرید &nbsp;
+            <code class="no-fa" dir="ltr">{{min_amount}}</code> — حداقل خرید &nbsp;
+            <code class="no-fa" dir="ltr">{{max_payout}}</code> — سقف
+          </div>
+        </div>
+
+        <div class="flex gap-3">
+          <button type="submit" class="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-semibold">
+            💾 ذخیره سطح</button>
+          <a href="/admin/partners?tab=settings" class="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-semibold text-center">انصراف</a>
+        </div>
+      </form>
+    </div>
+
+    <script>
+    function toggleCommission() {{
+      const t = document.querySelector('input[name="commission_type"]:checked').value;
+      document.getElementById('pct_wrap').style.display = (t === 'percent') ? 'grid' : 'none';
+      document.getElementById('fixed_wrap').style.display = (t === 'fixed') ? 'grid' : 'none';
+    }}
+    toggleCommission();
+    </script>"""
+    return _layout(title, body, adm, flash=flash)
 
 
 @router.post("/partners/tier/{tid}/delete")
@@ -8890,7 +10052,7 @@ async def partner_tier_delete(request: Request, tid: int):
     from db import delete_partner_tier
     delete_partner_tier(tid)
     _log(request, "حذف سطح همکاری", "همکاران", f"tier:{tid}")
-    return _redir("/admin/partners?tab=tiers&flash=سطح+حذف+شد")
+    return _redir("/admin/partners?tab=settings&flash=سطح+حذف+شد")
 
 
 @router.post("/partners/commission")
@@ -8925,22 +10087,25 @@ async def partner_approve(request: Request, uid: int):
         import json as _json, requests as _rq
         token = _env("BOT_TOKEN","")
         if token:
-            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage", json={
+            # منوی واقعی و کامل همکار — از همان سازنده ربات (نه هاردکد)
+            markup = None
+            try:
+                from keyboards import main_menu as _mm
+                markup = _mm(user_id=int(uid)).to_json()
+            except Exception:
+                markup = None
+            payload = {
                 "chat_id": int(uid),
                 "text": "✅ <b>درخواست نمایندگی شما تایید شد!</b>\n\n"
                         "از این پس قیمت‌های ویژه همکار برای شما فعال است.\n"
-                        "منوی پنل همکار در منوی زیر در دسترس شماست 🤝",
+                        "منوی کامل همکاری برای شما به‌روزرسانی شد 🤝",
                 "parse_mode": "HTML",
-                "reply_markup": _json.dumps({
-                    "keyboard": [
-                        [{"text":"پنل همکار 🤝"}],
-                        [{"text":"خریدهای من 🧾"},{"text":"کیف پول 💰"}]
-                    ],
-                    "resize_keyboard": True
-                })
-            }, timeout=8)
+            }
+            if markup:
+                payload["reply_markup"] = markup
+            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
         else:
-            _tg_send(int(uid), "✅ درخواست نمایندگی تایید شد! منوی همکار فعال است.")
+            _tg_send(int(uid), "✅ درخواست نمایندگی تایید شد! برای فعال‌سازی منو /start بزنید.")
     except Exception:
         pass
     return _redir("/admin/partners?flash=همکار+تایید+شد")
@@ -8964,3 +10129,970 @@ async def partner_reject(request: Request, uid: int):
     except Exception:
         pass
     return _redir("/admin/partners?flash=درخواست+رد+شد")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🚀 صفحه رشد و فروش ─────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/growth", response_class=HTMLResponse)
+async def growth_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "growth")
+    if guard: return guard
+
+    from db import (ensure_growth_schema, list_flash_sales, get_winback_settings,
+                    get_leaderboard_settings, get_social_settings, get_crypto_settings,
+                    get_promo_settings, get_cfg)
+    ensure_growth_schema()
+    wb, lb = get_winback_settings(), get_leaderboard_settings()
+    soc, cr, pr = get_social_settings(), get_crypto_settings(), get_promo_settings()
+    webapp_url = get_cfg("webapp_url", "")
+
+    conn = _db()
+    try:
+        products = conn.execute(
+            "SELECT id, title FROM products WHERE COALESCE(is_active,1)=1 ORDER BY id DESC LIMIT 200;"
+        ).fetchall()
+    finally:
+        conn.close()
+    prod_opts = "".join(f'<option value="{p["id"]}">{e(p["title"])}</option>' for p in products)
+
+    sales = list_flash_sales(20)
+    sale_rows = "".join(f"""<tr class="border-b text-sm hover:bg-gray-50">
+        <td class="px-3 py-2">{e(s['title'])}</td>
+        <td class="px-3 py-2 font-bold text-red-600">{s['percent']}٪</td>
+        <td class="px-3 py-2 text-xs text-gray-400">{fa_date(s['ends_at'], with_time=True)}</td>
+        <td class="px-3 py-2">{'<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">🔴 زنده</span>' if s['live'] else '<span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-400 rounded-full">پایان‌یافته</span>'}</td>
+        <td class="px-3 py-2 whitespace-nowrap">
+          {f'<form method="post" action="/admin/growth/flash/{s["id"]}/off" class="inline"><button class="text-xs text-amber-600 hover:underline ml-2">⏸ توقف</button></form>' if s['live'] else ''}
+          <button type="button" class="text-xs text-indigo-500 hover:underline ml-2"
+            onclick="flashEdit({s['product_id']},{s['percent']})">✏️ ویرایش</button>
+          <form method="post" action="/admin/growth/flash/{s['id']}/delete" class="inline"
+            onsubmit="return confirm('این فروش فوری حذف شود؟')">
+            <button class="text-xs text-red-500 hover:underline">🗑 حذف</button></form>
+        </td>
+      </tr>""" for s in sales)
+
+    def _chk(v): return "checked" if int(v or 0) else ""
+    weekdays = ["دوشنبه","سه‌شنبه","چهارشنبه","پنجشنبه","جمعه","شنبه","یکشنبه"]
+    wd_opts = "".join(f'<option value="{i}" {"selected" if int(lb.get("weekday") or 4)==i else ""}>{w}</option>'
+                      for i, w in enumerate(weekdays))
+
+    body = f"""
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">🚀 رشد و فروش</h1>
+
+    <!-- ۳) فروش فوری -->
+    <div class="card p-5 mb-5">
+      <h2 class="font-bold text-gray-700 mb-1">🔥 فروش فوری (Flash Sale)</h2>
+      <p class="text-xs text-gray-400 mb-4">تخفیف زمان‌دار با شمارش معکوس و بج «فقط N عدد مانده» روی صفحه محصول.</p>
+      <form method="post" action="/admin/growth/flash/new" class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+        <select name="product_id" required class="border border-gray-300 rounded-lg px-3 py-2 text-sm md:col-span-2">
+          <option value="">— انتخاب محصول —</option>{prod_opts}
+        </select>
+        <input type="number" name="percent" min="1" max="90" required placeholder="درصد تخفیف"
+          class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        <div class="flex gap-2">
+          <input type="number" name="hours" min="1" max="720" value="24" required placeholder="مدت (ساعت)"
+            class="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1">
+          <button class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold">🔥 شروع</button>
+        </div>
+      </form>
+      <div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+        <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+          <th class="px-3 py-2">محصول</th><th class="px-3 py-2">تخفیف</th>
+          <th class="px-3 py-2">پایان</th><th class="px-3 py-2">وضعیت</th><th class="px-3 py-2"></th></tr></thead>
+        <tbody>{sale_rows or '<tr><td colspan="5" class="text-center py-6 text-gray-400">فروش فوری‌ای ثبت نشده</td></tr>'}</tbody>
+      </table></div>
+    </div>
+
+    <form method="post" action="/admin/growth/save">
+
+    <!-- ۱) بازگردانی -->
+    <div class="card p-5 mb-5">
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="font-bold text-gray-700">🎯 کمپین بازگردانی خودکار</h2>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="wb_enabled" {_chk(wb.get('enabled'))}> فعال</label>
+      </div>
+      <p class="text-xs text-gray-400 mb-4">به کاربرانی که مدتی خرید نکرده‌اند، خودکار کد تخفیف شخصی یک‌بارمصرف ارسال می‌شود.</p>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+        <div><label class="text-xs text-gray-500 block mb-1">روزهای عدم خرید</label>
+          <input type="number" name="wb_days" value="{int(wb.get('days_inactive') or 14)}" min="3" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">درصد تخفیف</label>
+          <input type="number" name="wb_percent" value="{int(wb.get('percent') or 15)}" min="1" max="90" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">اعتبار کد (روز)</label>
+          <input type="number" name="wb_expire" value="{int(wb.get('expire_days') or 3)}" min="1" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">فاصله تکرار (روز)</label>
+          <input type="number" name="wb_cooldown" value="{int(wb.get('cooldown_days') or 30)}" min="7" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">ساعت ارسال</label>
+          <input type="number" name="wb_hour" value="{int(wb.get('hour') or 11)}" min="0" max="23" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></div>
+      </div>
+      <label class="text-xs text-gray-500 block mb-1">متن پیام — متغیرها: {{name}} {{code}} {{percent}} {{days}}</label>
+      <textarea name="wb_message" rows="4" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(wb.get('message',''))}</textarea>
+      <button type="submit" formaction="/admin/growth/run/winback"
+        class="mt-2 text-xs text-indigo-500 hover:underline">▶ اجرای دستی همین حالا (حداکثر ۱۰ دقیقه دیگر)</button>
+    </div>
+
+    <!-- ۴) لیدربرد -->
+    <div class="card p-5 mb-5">
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="font-bold text-gray-700">🏆 لیدربرد هفتگی همکاران</h2>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="lb_enabled" {_chk(lb.get('enabled'))}> فعال</label>
+      </div>
+      <p class="text-xs text-gray-400 mb-4">هر هفته برترین همکاران بر اساس تعداد فروش، جایزه خودکار به کیف‌پول همکاری دریافت می‌کنند.</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div><label class="text-xs text-gray-500 block mb-1">روز اعلام نتایج</label>
+          <select name="lb_weekday" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">{wd_opts}</select></div>
+        <div class="md:col-span-2"><label class="text-xs text-gray-500 block mb-1">جوایز رتبه‌ها (تومان، با کاما — رتبه ۱ اول)</label>
+          <input type="text" name="lb_rewards" value="{e(lb.get('rewards',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+      </div>
+      <label class="text-xs text-gray-500 block mb-1">پیام برنده — متغیرها: {{rank}} {{count}} {{reward}}</label>
+      <textarea name="lb_message" rows="4" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(lb.get('message',''))}</textarea>
+      <button type="submit" formaction="/admin/growth/run/leaderboard"
+        class="mt-2 text-xs text-indigo-500 hover:underline">▶ اجرای دستی همین حالا (حداکثر ۱۰ دقیقه دیگر)</button>
+    </div>
+
+    <!-- ۶) کانال و نظرات + ۲) Upsell -->
+    <div class="card p-5 mb-5">
+      <h2 class="font-bold text-gray-700 mb-4">⭐ اعتمادسازی و پیشنهاد هوشمند</h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="soc_rating" {_chk(soc.get('rating'))}> درخواست امتیاز بعد از تحویل</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="soc_upsell" {_chk(soc.get('upsell'))}> پیشنهاد خرید بعدی (Upsell)</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="soc_salepost" {_chk(soc.get('sale_post'))}> پست خودکار فروش در کانال</label>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="text-xs text-gray-500 block mb-1">آیدی کانال (مثلاً @mychannel یا -100xxxx)</label>
+          <input type="text" name="soc_channel" value="{e(soc.get('channel_id',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">متن پست کانال — متغیر: {{title}}</label>
+          <input type="text" name="soc_saletext" value="{e(soc.get('sale_post_text',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl"></div>
+      </div>
+      <p class="text-xs text-amber-500 mt-2">⚠️ ربات باید ادمین کانال باشد تا بتواند پست بگذارد.</p>
+    </div>
+
+    <!-- ۷) رمزارز -->
+    <div class="card p-5 mb-5">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-bold text-gray-700">₿ پرداخت رمزارز</h2>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="cr_enabled" {_chk(cr.get('enabled'))}> فعال</label>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div><label class="text-xs text-gray-500 block mb-1">آدرس USDT (TRC20)</label>
+          <input type="text" name="cr_usdt" value="{e(cr.get('usdt_trc20',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">آدرس TRX</label>
+          <input type="text" name="cr_trx" value="{e(cr.get('trx',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+      </div>
+      <label class="text-xs text-gray-500 block mb-1">راهنمای نمایش به کاربر</label>
+      <input type="text" name="cr_note" value="{e(cr.get('note',''))}" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl">
+      <p class="text-xs text-gray-400 mt-2">کاربر TXID را می‌فرستد؛ رسید در همان بخش رسیدهای مالی با برچسب ₿ ظاهر می‌شود و با همان دستور تأیید، کیف‌پول شارژ می‌شود.</p>
+    </div>
+
+    <!-- ۵) کیت تبلیغ + ۸) وب‌اپ -->
+    <div class="grid md:grid-cols-2 gap-5 mb-5">
+      <div class="card p-5">
+        <h2 class="font-bold text-gray-700 mb-3">📣 کیت تبلیغاتی همکار</h2>
+        <label class="text-xs text-gray-500 block mb-1">متن آماده — متغیر: {{link}}</label>
+        <textarea name="pr_text" rows="6" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(pr.get('text',''))}</textarea>
+      </div>
+      <div class="card p-5">
+        <h2 class="font-bold text-gray-700 mb-3">🛍 فروشگاه Mini App</h2>
+        <label class="text-xs text-gray-500 block mb-1">آدرس عمومی وب‌اپ (HTTPS)</label>
+        <input type="text" name="webapp_url" value="{e(webapp_url)}" placeholder="https://your-domain.com/admin/shop"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr">
+        <p class="text-xs text-gray-400 mt-2">این پروژه صفحه فروشگاه را روی مسیر <code>/admin/shop</code> سرو می‌کند. دامنه HTTPS خودتان + این مسیر را اینجا وارد کنید تا دکمه «🛍 فروشگاه آنلاین» در منوی ربات ظاهر شود.</p>
+      </div>
+    </div>
+
+    <div class="pb-10">
+      <button type="submit" class="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold transition">💾 ذخیره همه تنظیمات رشد</button>
+    </div>
+    </form>
+    <script>
+    function flashEdit(pid, pct){{
+      var s=document.querySelector('select[name=product_id]');
+      var p=document.querySelector('input[name=percent]');
+      if(s) s.value=String(pid);
+      if(p) p.value=pct;
+      window.scrollTo({{top:0,behavior:'smooth'}});
+      if(s) s.focus();
+    }}
+    </script>"""
+    return _layout("رشد و فروش", body, adm, flash=flash)
+
+
+@router.post("/growth/save")
+async def growth_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "growth")
+    if guard: return guard
+    form = await request.form()
+    from db import set_cfg
+    import json as _j
+
+    def g(k, d=""): return str(form.get(k, d) or d).strip()
+    def onoff(k): return 1 if form.get(k) is not None else 0
+
+    set_cfg("winback", _j.dumps({
+        "enabled": onoff("wb_enabled"), "days_inactive": int(g("wb_days", "14") or 14),
+        "percent": int(g("wb_percent", "15") or 15), "expire_days": int(g("wb_expire", "3") or 3),
+        "cooldown_days": int(g("wb_cooldown", "30") or 30), "hour": int(g("wb_hour", "11") or 11),
+        "batch": 30, "message": g("wb_message"),
+    }, ensure_ascii=False))
+    set_cfg("leaderboard", _j.dumps({
+        "enabled": onoff("lb_enabled"), "weekday": int(g("lb_weekday", "4") or 4),
+        "rewards": g("lb_rewards"), "message": g("lb_message"),
+    }, ensure_ascii=False))
+    set_cfg("social", _j.dumps({
+        "channel_id": g("soc_channel"), "sale_post": onoff("soc_salepost"),
+        "rating": onoff("soc_rating"), "upsell": onoff("soc_upsell"),
+        "sale_post_text": g("soc_saletext"),
+    }, ensure_ascii=False))
+    set_cfg("crypto", _j.dumps({
+        "enabled": onoff("cr_enabled"), "usdt_trc20": g("cr_usdt"),
+        "trx": g("cr_trx"), "note": g("cr_note"),
+    }, ensure_ascii=False))
+    set_cfg("promo", _j.dumps({"text": g("pr_text")}, ensure_ascii=False))
+    set_cfg("webapp_url", g("webapp_url"))
+    _log(request, "ذخیره تنظیمات رشد", "رشد", "growth settings", admin_info=adm)
+    return _redir("/admin/growth?flash=✅+تنظیمات+رشد+ذخیره+شد")
+
+
+@router.post("/growth/flash/new")
+async def growth_flash_new(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "growth")
+    if guard: return guard
+    form = await request.form()
+    from db import create_flash_sale
+    pid = int(form.get("product_id") or 0)
+    if pid:
+        create_flash_sale(pid, int(form.get("percent") or 10), int(form.get("hours") or 24))
+        _log(request, "فروش فوری", "رشد", f"محصول #{pid}", admin_info=adm)
+    return _redir("/admin/growth?flash=🔥+فروش+فوری+شروع+شد")
+
+
+@router.post("/growth/flash/{sid}/delete")
+async def growth_flash_delete(request: Request, sid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "growth")
+    if guard: return guard
+    conn = _db()
+    try:
+        conn.execute("DELETE FROM flash_sales WHERE id=?;", (sid,))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        from db import flash_map_invalidate
+        flash_map_invalidate()
+    except Exception:
+        pass
+    _log(request, "حذف فروش فوری", "رشد", f"#{sid}", admin_info=adm)
+    return _redir("/admin/growth?flash=🗑+فروش+فوری+حذف+شد")
+
+
+@router.post("/growth/flash/{sid}/off")
+async def growth_flash_off(request: Request, sid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "growth")
+    if guard: return guard
+    from db import deactivate_flash_sale
+    deactivate_flash_sale(sid)
+    return _redir("/admin/growth?flash=⏹+فروش+فوری+متوقف+شد")
+
+
+@router.post("/growth/run/winback")
+async def growth_run_winback(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "growth")
+    if guard: return guard
+    from db import set_cfg
+    set_cfg("winback_force", "1")
+    return _redir("/admin/growth?flash=▶+بازگردانی+تا+۱۰+دقیقه+دیگر+اجرا+می‌شود")
+
+
+@router.post("/growth/run/leaderboard")
+async def growth_run_leaderboard(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "growth")
+    if guard: return guard
+    from db import set_cfg
+    set_cfg("leaderboard_force", "1")
+    return _redir("/admin/growth?flash=▶+لیدربرد+تا+۱۰+دقیقه+دیگر+اجرا+می‌شود")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🛍 فروشگاه Mini App تلگرام (عمومی — احراز با initData) ─────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _tg_validate_init_data(init_data: str):
+    """اعتبارسنجی رسمی Telegram WebApp initData — برمی‌گرداند user_id یا None."""
+    import hmac as _hmac, hashlib as _hl, urllib.parse as _up, json as _j, time as _t
+    try:
+        from config import BOT_TOKEN
+        pairs = dict(_up.parse_qsl(init_data, keep_blank_values=True))
+        their_hash = pairs.pop("hash", "")
+        if not their_hash:
+            return None
+        dcs = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+        secret = _hmac.new(b"WebAppData", BOT_TOKEN.encode(), _hl.sha256).digest()
+        calc = _hmac.new(secret, dcs.encode(), _hl.sha256).hexdigest()
+        if not _hmac.compare_digest(calc, their_hash):
+            return None
+        if _t.time() - int(pairs.get("auth_date", "0")) > 86400:
+            return None
+        return int(_j.loads(pairs.get("user", "{}")).get("id"))
+    except Exception:
+        return None
+
+
+def _tg_api_send(chat_id, text):
+    """ارسال پیام تلگرام از سمت پنل (بدون نیاز به نمونه ربات)."""
+    try:
+        import requests as _rq
+        from config import BOT_TOKEN
+        _rq.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                 json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=8)
+    except Exception:
+        pass
+
+
+@router.get("/shop", response_class=HTMLResponse)
+async def shop_webapp(request: Request):
+    """صفحه Mini App — عمومی؛ احراز داخل خودش با initData انجام می‌شود."""
+    html_page = """<!DOCTYPE html>
+<html lang="fa" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>فروشگاه</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:#F6F7FB;--card:#fff;--txt:#1F2937;--mut:#8A94A6;--pri:#6366F1;--bdr:#E7EBF2}
+@media(prefers-color-scheme:dark){:root{--bg:#0E1621;--card:#17212B;--txt:#F5F5F5;--mut:#8A99AC;--bdr:#2B3A4C}}
+*{box-sizing:border-box;font-family:Vazirmatn,Tahoma,sans-serif}
+body{margin:0;background:var(--bg);color:var(--txt)}
+.top{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--bdr);padding:12px 16px;display:flex;justify-content:space-between;align-items:center;z-index:5}
+.bal{font-size:13px;color:var(--mut)}
+.grid{padding:14px;display:grid;gap:12px}
+.p{background:var(--card);border:1px solid var(--bdr);border-radius:16px;padding:14px}
+.pt{font-weight:700;margin-bottom:4px}
+.pd{font-size:12px;color:var(--mut);margin-bottom:10px;line-height:1.8}
+.row{display:flex;justify-content:space-between;align-items:center}
+.pr{font-weight:800;color:var(--pri)}
+.old{color:var(--mut);text-decoration:line-through;font-size:12px;margin-inline-start:6px}
+.fl{font-size:11px;color:#EF4444;font-weight:700}
+.st{font-size:11px;color:var(--mut)}
+.btn{background:var(--pri);color:#fff;border:none;border-radius:12px;padding:9px 18px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+.btn:disabled{opacity:.4}
+.msg{text-align:center;color:var(--mut);padding:48px 20px;font-size:14px}
+.stars{font-size:11px;color:#F59E0B}
+</style></head><body>
+<div class="top"><b>🛍 فروشگاه</b><span class="bal" id="bal"></span></div>
+<div id="list" class="grid"><div class="msg">در حال بارگذاری…</div></div>
+<script>
+var tg=window.Telegram&&Telegram.WebApp; if(tg){tg.ready();tg.expand();}
+var initData=tg?tg.initData:'';
+function fa(s){var F=['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];return String(s).replace(/[0-9]/g,function(d){return F[+d];});}
+function money(n){return fa((n||0).toLocaleString('en-US'))+' تومان';}
+function api(path,body){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(Object.assign({init_data:initData},body||{}))}).then(function(r){return r.json();});}
+function load(){
+  api('/admin/shop/api/catalog').then(function(d){
+    if(!d.ok){document.getElementById('list').innerHTML='<div class="msg">'+(d.error||'خطای دسترسی — از داخل تلگرام باز کنید')+'</div>';return;}
+    document.getElementById('bal').textContent='💰 '+money(d.balance);
+    var h='';
+    d.products.forEach(function(p){
+      h+='<div class="p"><div class="pt">'+p.title+(p.rating?' <span class="stars">⭐ '+fa(p.rating)+' ('+fa(p.rcount)+')</span>':'')+'</div>'
+        +(p.flash?'<div class="fl">🔥 فروش فوری '+fa(p.flash)+'٪ — تا '+p.flash_left+' دیگر</div>':'')
+        +'<div class="pd">'+(p.description||'')+'</div>'
+        +'<div class="row"><div><span class="pr">'+money(p.price)+'</span>'
+        +(p.flash?'<span class="old">'+money(p.base)+'</span>':'')
+        +'<div class="st">'+(p.stock>0?('موجودی: '+fa(p.stock)):'ناموجود')+'</div></div>'
+        +'<button class="btn" '+(p.stock>0?'':'disabled')+' onclick="buy('+p.id+',this)">خرید</button></div></div>';
+    });
+    document.getElementById('list').innerHTML=h||'<div class="msg">محصولی موجود نیست</div>';
+  }).catch(function(){document.getElementById('list').innerHTML='<div class="msg">خطا در ارتباط</div>';});
+}
+function buy(pid,btn){
+  btn.disabled=true;btn.textContent='…';
+  api('/admin/shop/api/buy',{product_id:pid}).then(function(d){
+    if(d.ok){ if(tg)tg.showAlert('✅ خرید انجام شد!\\nمحصول به چت ربات ارسال شد.'); load(); }
+    else { if(tg)tg.showAlert('❌ '+(d.error||'خطا')); btn.disabled=false;btn.textContent='خرید'; }
+  }).catch(function(){btn.disabled=false;btn.textContent='خرید';});
+}
+load();
+</script></body></html>"""
+    return HTMLResponse(html_page)
+
+
+@router.post("/shop/api/catalog")
+async def shop_api_catalog(request: Request):
+    import json as _j
+    try:
+        body = _j.loads((await request.body()) or b"{}")
+    except Exception:
+        body = {}
+    uid = _tg_validate_init_data(str(body.get("init_data") or ""))
+    if not uid:
+        return JSONResponse({"ok": False, "error": "احراز هویت تلگرام ناموفق"})
+    from db import get_wallet_balance, apply_flash_price, get_product_rating, get_feed_stats
+    conn = _db()
+    try:
+        prods = conn.execute("""
+            SELECT id, title, price, COALESCE(description,'') d
+            FROM products WHERE COALESCE(is_active,1)=1 ORDER BY id DESC LIMIT 60;
+        """).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for p in prods:
+        base = int(p["price"] or 0)
+        price, fl = apply_flash_price(int(p["id"]), base)
+        try:
+            _t, rem, _d = get_feed_stats(int(p["id"]))
+        except Exception:
+            rem = 0
+        try:
+            r = get_product_rating(int(p["id"]))
+        except Exception:
+            r = {"avg": 0, "count": 0}
+        out.append({"id": p["id"], "title": p["title"], "description": p["d"][:140],
+                    "base": base, "price": price, "stock": int(rem or 0),
+                    "flash": (fl["percent"] if fl else 0),
+                    "flash_left": (fl["left_str"] if fl else ""),
+                    "rating": (r["avg"] if r["count"] else 0), "rcount": r["count"]})
+    return JSONResponse({"ok": True, "balance": get_wallet_balance(uid), "products": out})
+
+
+@router.post("/shop/api/buy")
+async def shop_api_buy(request: Request):
+    """خرید از وب‌اپ — فقط با موجودی کیف‌پول؛ تحویل به چت ربات ارسال می‌شود."""
+    import json as _j
+    try:
+        body = _j.loads((await request.body()) or b"{}")
+    except Exception:
+        body = {}
+    uid = _tg_validate_init_data(str(body.get("init_data") or ""))
+    if not uid:
+        return JSONResponse({"ok": False, "error": "احراز هویت ناموفق"})
+    pid = int(body.get("product_id") or 0)
+
+    from db import (get_wallet_balance, subtract_wallet_balance, apply_flash_price,
+                    create_order, claim_next_feed_item,
+                    process_referral_commission)
+    conn = _db()
+    try:
+        p = conn.execute(
+            "SELECT id,title,price,category_id FROM products WHERE id=? AND COALESCE(is_active,1)=1;",
+            (pid,)).fetchone()
+    finally:
+        conn.close()
+    if not p:
+        return JSONResponse({"ok": False, "error": "محصول یافت نشد"})
+
+    price, _fl = apply_flash_price(pid, int(p["price"] or 0))
+    if get_wallet_balance(uid) < price:
+        return JSONResponse({"ok": False, "error": "موجودی کیف‌پول کافی نیست — از ربات شارژ کنید"})
+
+    # ترتیب امن: اول کسر، بعد claim؛ اگر موجودی نبود → بازگشت وجه
+    if not subtract_wallet_balance(uid, price):
+        return JSONResponse({"ok": False, "error": "خطا در برداشت از کیف‌پول"})
+
+    item = claim_next_feed_item(pid)
+    if not item:
+        from db import add_wallet_balance
+        add_wallet_balance(uid, price)
+        return JSONResponse({"ok": False, "error": "موجودی محصول تمام شده — مبلغ بازگشت داده شد"})
+
+    order_id = create_order(uid, "webapp", p["title"], price, product_id=pid, buyer_type="customer")
+
+    # تحویل در چت ربات
+    _tg_api_send(uid,
+        f"✅ <b>خرید از فروشگاه آنلاین</b>\n\n"
+        f"🧾 سفارش #{order_id} — {p['title']}\n"
+        f"💰 مبلغ: {price:,} تومان\n\n"
+        f"📦 اطلاعات محصول:\n<code>{item[1]}</code>")
+
+    # هوک پورسانت (پاداش عضویت جدا و در لحظه /start پرداخت می‌شود)
+    try:
+        cm = process_referral_commission(uid, order_id, price)
+        if cm.get("paid"):
+            _wl = "کیف‌پول همکاری" if cm.get("wallet") == "partner" else "کیف‌پول"
+            _tg_api_send(cm["referrer_id"],
+                f"💸 <b>پورسانت جدید!</b>\nیکی از دعوت‌شده‌های شما خرید کرد و "
+                f"<b>{cm['amount']:,}</b> تومان (سطح {cm['tier_name']}) به {_wl} شما اضافه شد.")
+    except Exception:
+        pass
+    # پست کانال
+    try:
+        from db import get_social_settings
+        soc = get_social_settings()
+        ch = str(soc.get("channel_id") or "").strip()
+        if ch and int(soc.get("sale_post") or 0):
+            _tg_api_send(ch, str(soc.get("sale_post_text") or "").format(title=p["title"]))
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "order_id": order_id})
+
+
+@router.post("/partners/manual-referral")
+async def partners_manual_referral(request: Request):
+    """🔧 ثبت دستی معرفی + پاداش عضویت اختیاری + اطلاع‌رسانی به معرف."""
+    adm = _get_admin(request)
+    guard = _require(adm, "partners")
+    if guard: return guard
+    form = await request.form()
+    try:
+        referrer_id = int(form.get("referrer_id") or 0)
+        referred_id = int(form.get("referred_id") or 0)
+    except Exception:
+        return _redir("/admin/partners?tab=referrals&flash=❌+آیدی+نامعتبر")
+    if not referrer_id or not referred_id or referrer_id == referred_id:
+        return _redir("/admin/partners?tab=referrals&flash=❌+آیدی+نامعتبر")
+
+    from db import register_referral, pay_signup_referral_reward, ensure_referral_schema
+    ensure_referral_schema()
+    ok = register_referral(referrer_id, referred_id)
+    if not ok:
+        return _redir("/admin/partners?tab=referrals&flash=⛔+این+کاربر+قبلاً+معرف+دارد")
+
+    paid_txt = ""
+    if form.get("pay_reward") is not None:
+        pr = pay_signup_referral_reward(referrer_id, referred_id)
+        if pr.get("paid"):
+            paid_txt = f"+و+{pr['amount']:,}+تومان+پاداش+پرداخت+شد"
+            try:
+                _wl = "کیف‌پول همکاری" if pr.get("wallet") == "partner" else "کیف‌پول"
+                _tg_api_send(referrer_id,
+                    f"🎉 یک دعوت‌شده جدید برای شما ثبت شد!\n"
+                    f"💰 پاداش عضویت: <b>{pr['amount']:,}</b> تومان به {_wl} شما اضافه شد.")
+            except Exception:
+                pass
+    _log(request, "ثبت دستی معرفی", "همکاران", f"{referrer_id} → {referred_id}", admin_info=adm)
+    return _redir(f"/admin/partners?tab=referrals&flash=✅+معرفی+ثبت+شد{paid_txt}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── ☁️ روت‌های بکاپ ابری ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/database/gdrive/start")
+async def gdrive_oauth_start(request: Request):
+    """شروع OAuth Device Flow برای Google Drive."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    if not adm:
+        return JSONResponse({"ok": False, "error": "unauthorized"})
+    client_id = os.getenv("GDRIVE_CLIENT_ID", "").strip()
+    if not client_id:
+        return JSONResponse({"ok": False, "error": "GDRIVE_CLIENT_ID در env تنظیم نشده"})
+    try:
+        from backup_uploader import gdrive_device_start
+        res = gdrive_device_start(client_id)
+        if not res.get("ok"):
+            return JSONResponse(res)
+        return JSONResponse({
+            "ok": True,
+            "user_code": res["user_code"],
+            "url": res["verification_url"],
+            "device_code": res["device_code"],
+        })
+    except Exception as ex:
+        return JSONResponse({"ok": False, "error": str(ex)[:120]})
+
+
+@router.post("/database/gdrive/poll")
+async def gdrive_oauth_poll(request: Request):
+    """چک وضعیت تأیید OAuth — ذخیره refresh_token."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    if not adm:
+        return JSONResponse({"ok": False, "error": "unauthorized"})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dc = str(body.get("device_code", "")).strip()
+    if not dc:
+        return JSONResponse({"ok": False, "error": "device_code خالی"})
+    client_id = os.getenv("GDRIVE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GDRIVE_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return JSONResponse({"ok": False, "error": "GDRIVE_CLIENT_ID/SECRET تنظیم نشده"})
+    try:
+        from backup_uploader import gdrive_device_poll
+        res = gdrive_device_poll(client_id, client_secret, dc)
+        if res.get("ok"):
+            _log(request, "اتصال Google Drive", "دیتابیس", "OAuth refresh token ذخیره شد", admin_info=adm)
+        return JSONResponse(res)
+    except Exception as ex:
+        return JSONResponse({"ok": False, "error": str(ex)[:120]})
+
+
+@router.post("/database/cloud-save")
+async def database_cloud_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    form = await request.form()
+    from backup_uploader import get_cloud_settings, save_cloud_settings
+
+    cfg = get_cloud_settings()  # حفظ od_refresh و مقادیر قبلی
+    def g(k, d=""): return str(form.get(k, d) or d).strip()
+    def onoff(k): return 1 if form.get(k) is not None else 0
+
+    cfg.update({
+        "enabled":        onoff("enabled"),
+        "hour":           max(0, min(23, int(g("hour", "4") or 4))),
+        "retention":      max(1, min(30, int(g("retention", "3") or 3))),
+        "tg_enabled":     onoff("tg_enabled"),
+        "tg_channel":     g("tg_channel"),
+        "gdrive_enabled": onoff("gdrive_enabled"),
+    })
+    # retention محلی را در pg_backup هم اعمال کن
+    try:
+        import pg_backup
+        pg_backup.LOCAL_RETENTION = int(cfg.get("retention") or 3)
+    except Exception: pass
+    save_cloud_settings(cfg)
+    _log(request, "تنظیمات بکاپ ابری", "دیتابیس", "cloud settings saved", admin_info=adm)
+    return _redir("/admin/database?flash=✅+تنظیمات+بکاپ+ابری+ذخیره+شد#cloudbk")
+
+
+@router.post("/database/cloud-run")
+async def database_cloud_run(request: Request):
+    """▶ بکاپ + آپلود فوری — در پس‌زمینه تا صفحه معطل نماند."""
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return guard
+    try:
+        import threading as _th
+        _th.Thread(target=_do_auto_backup, name="cloud-run-now", daemon=True).start()
+    except Exception as ex:
+        return _redir(f"/admin/database?flash=❌+خطا:+{ex}#cloudbk")
+    _log(request, "بکاپ ابری دستی", "دیتابیس", "run-now", admin_info=adm)
+    return _redir("/admin/database?flash=▶+بکاپ+و+آپلود+شروع+شد+—+نتیجه+چند+لحظه+دیگر+در+وضعیت+همین+کارت#cloudbk")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── 🔗 مدیریت اتصال ربات (Webhook / Polling) ───────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/webhook", response_class=HTMLResponse)
+async def webhook_management(request: Request, flash: str = ""):
+    """صفحه مدیریت حالت اتصال ربات — Webhook / Polling / Stopped."""
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+
+    from config import BOT_TOKEN, WEBHOOK_BASE_URL
+    # حالت جاری از bot_config
+    try:
+        from db import get_cfg
+        current_mode = (get_cfg("bot_run_mode", "") or "").strip().lower() or "unknown"
+    except Exception:
+        current_mode = "unknown"
+
+    # وضعیت واقعی از تلگرام
+    info = {}
+    try:
+        import requests as _req
+        r = _req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo", timeout=10)
+        j = r.json()
+        info = j.get("result", {}) if j.get("ok") else {}
+    except Exception as ex:
+        info = {"error": str(ex)[:120]}
+
+    tg_url     = info.get("url") or ""
+    tg_pending = info.get("pending_update_count", 0)
+    tg_err     = info.get("last_error_message", "") or ""
+
+    def _badge(mode, label, color):
+        active = (current_mode == mode)
+        return (f'<span class="px-3 py-1 rounded-full text-xs font-semibold '
+                f'{"bg-"+color+"-100 text-"+color+"-700" if active else "bg-gray-100 text-gray-400"}">'
+                f'{"● " if active else ""}{label}</span>')
+
+    def _btn_mode(mode, label, icon, color, desc):
+        is_current = (current_mode == mode)
+        disabled = 'disabled style="opacity:.5;pointer-events:none"' if is_current else ''
+        return f"""
+        <form method="post" action="/admin/webhook/switch" class="flex-1">
+          <input type="hidden" name="mode" value="{mode}">
+          <button {disabled} class="w-full p-4 bg-{color}-50 border-2 border-{color}-200 hover:bg-{color}-100 rounded-xl text-right">
+            <div class="text-2xl mb-1">{icon}</div>
+            <div class="font-bold text-{color}-800 text-sm">{label}</div>
+            <div class="text-[10px] text-{color}-600 mt-1">{desc}</div>
+            {'<div class="text-[10px] text-'+color+'-500 mt-1">✓ حالت فعلی</div>' if is_current else ''}
+          </button>
+        </form>"""
+
+    expected_url = f"{WEBHOOK_BASE_URL}/telegram/webhook/{BOT_TOKEN}"
+
+    body = f"""
+    <div class="max-w-3xl mx-auto p-4">
+      <div class="mb-4">
+        <h1 class="text-xl font-bold text-gray-800">🔗 اتصال ربات</h1>
+        <p class="text-xs text-gray-400 mt-1">نحوه دریافت پیام‌های تلگرام — سوییچ نرم بدون restart</p>
+      </div>
+
+      <div class="card p-5 mb-4">
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
+          <span class="text-sm font-semibold text-gray-600">حالت فعلی:</span>
+          {_badge("webhook", "Webhook", "green")}
+          {_badge("polling", "Polling", "blue")}
+          {_badge("stopped", "متوقف", "gray")}
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {_btn_mode("webhook", "Webhook", "🚀", "green", "سریع، توصیه‌شده — تلگرام مستقیم پیام می‌فرستد")}
+          {_btn_mode("polling", "Polling", "🔄", "blue", "پایدارتر — ربات هر چند ثانیه از تلگرام می‌پرسد")}
+          {_btn_mode("stopped", "متوقف", "⏸", "gray", "ربات خاموش — برای تعمیر یا مواقع خاص")}
+        </div>
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h2 class="font-bold text-gray-700 text-sm mb-3">📊 وضعیت واقعی از تلگرام</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div class="p-3 bg-gray-50 rounded">
+            <div class="text-gray-500 mb-1">Webhook ثبت‌شده:</div>
+            <div class="font-mono break-all" dir="ltr">{e(tg_url) if tg_url else "— (بدون webhook)"}</div>
+          </div>
+          <div class="p-3 bg-gray-50 rounded">
+            <div class="text-gray-500 mb-1">آپدیت‌های پندینگ:</div>
+            <div class="font-bold {'text-red-600' if tg_pending>0 else 'text-green-600'}">{tg_pending}</div>
+          </div>
+          <div class="p-3 bg-gray-50 rounded">
+            <div class="text-gray-500 mb-1">آخرین خطا:</div>
+            <div class="text-red-600">{e(tg_err[:60]) if tg_err else "—"}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card p-4">
+        <h2 class="font-bold text-gray-700 text-sm mb-2">ℹ️ راهنما</h2>
+        <ul class="text-xs text-gray-600 space-y-1 leading-6 list-disc pr-4">
+          <li><b>Webhook</b> — تلگرام مستقیم به سرور شما پیام می‌فرستد. سریع‌ترین حالت. نیاز به دامنه با HTTPS دارد.</li>
+          <li><b>Polling</b> — ربات هر چند ثانیه از تلگرام می‌پرسد. کندتر ولی روی هر سروری کار می‌کند.</li>
+          <li><b>متوقف</b> — ربات هیچ پیامی دریافت نمی‌کند. مناسب مواقع تعمیر یا مهاجرت.</li>
+          <li>تغییر حالت <b>بدون restart سرویس</b> انجام می‌شود و بلافاصله اعمال می‌گردد.</li>
+        </ul>
+        <div class="mt-3 p-2 bg-gray-50 rounded text-[10px] text-gray-500 font-mono" dir="ltr">
+          آدرس Webhook: {e(expected_url)}
+        </div>
+      </div>
+    </div>"""
+    return _layout("اتصال ربات", body, adm, flash=flash)
+
+
+@router.post("/webhook/switch")
+async def webhook_switch(request: Request):
+    """سوییچ نرم بین Webhook / Polling / Stopped بدون restart."""
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    form = await request.form()
+    mode = (form.get("mode") or "").strip().lower()
+    if mode not in ("webhook", "polling", "stopped"):
+        return _redir("/admin/webhook?flash=❌+حالت+نامعتبر")
+    try:
+        from payment_service import switch_bot_mode
+        ok, msg = switch_bot_mode(mode)
+    except Exception as ex:
+        ok, msg = False, f"خطا: {str(ex)[:80]}"
+    _log(request, f"سوییچ حالت ربات → {mode}", "تنظیمات", msg, admin_info=adm)
+    flag = "✅" if ok else "❌"
+    return _redir(f"/admin/webhook?flash={flag}+{e(msg)}")
+
+
+# نگه‌داشتن روت‌های قدیمی برای سازگاری — صرفاً redirect به نسخه جدید
+@router.post("/webhook/set")
+async def webhook_set(request: Request):
+    return await webhook_switch_impl(request, "webhook")
+
+@router.post("/webhook/remove")
+async def webhook_remove(request: Request):
+    return await webhook_switch_impl(request, "polling")
+
+async def webhook_switch_impl(request: Request, mode: str):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    try:
+        from payment_service import switch_bot_mode
+        ok, msg = switch_bot_mode(mode)
+    except Exception as ex:
+        ok, msg = False, f"خطا: {str(ex)[:80]}"
+    _log(request, f"سوییچ حالت (سازگاری) → {mode}", "تنظیمات", msg, admin_info=adm)
+    return _redir(f"/admin/webhook?flash={'✅' if ok else '❌'}+{e(msg)}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── محتوای اپ PWA (آموزش / اخبار / امکانات) ──────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+APP_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_media")
+
+_KIND_LABELS = {"tutorial": "📚 آموزش", "news": "📰 خبر", "feature": "✨ امکانات", "daily": "📋 لیست روزانه"}
+
+
+@router.get("/app-content", response_class=HTMLResponse)
+async def app_content_page(request: Request, kind: str = "", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_app_content
+    k = kind if kind in _KIND_LABELS else None
+    items = get_app_content(kind=k, active_only=False, limit=100)
+
+    tabs = ''.join(
+        f'<a href="/admin/app-content?kind={s}" class="px-3 py-1.5 rounded-lg text-xs border '
+        f'{"bg-indigo-600 text-white" if kind==s else "bg-white text-gray-500"}">{l}</a>'
+        for s, l in [("", "همه"), ("tutorial", "📚 آموزش"), ("news", "📰 اخبار"), ("feature", "✨ امکانات")]
+    )
+
+    rows = ""
+    for it in items:
+        badge = _KIND_LABELS.get(it.get("kind"), it.get("kind"))
+        active = '<span class="text-green-600 text-xs">فعال</span>' if int(it.get("is_active") or 0) \
+                 else '<span class="text-gray-400 text-xs">غیرفعال</span>'
+        img = f'<img src="{html.escape(it.get("image_url") or "")}" class="w-10 h-10 rounded-lg object-cover">' \
+              if it.get("image_url") else '<div class="w-10 h-10 rounded-lg bg-gray-100"></div>'
+        rows += f"""
+        <tr class="border-b">
+          <td class="p-2">{img}</td>
+          <td class="p-2 text-sm font-medium">{html.escape(it.get('title') or '')}</td>
+          <td class="p-2 text-xs">{badge}</td>
+          <td class="p-2">{active}</td>
+          <td class="p-2 text-xs text-gray-400">{html.escape(str(it.get('created_at') or '')[:16])}</td>
+          <td class="p-2 whitespace-nowrap">
+            <a href="/admin/app-content/{it['id']}/edit" class="text-indigo-600 text-xs ml-2">✏️ ویرایش</a>
+            <form method="post" action="/admin/app-content/{it['id']}/delete" class="inline"
+                  onsubmit="return confirm('حذف شود؟')">
+              <button class="text-red-500 text-xs">🗑 حذف</button>
+            </form>
+          </td>
+        </tr>"""
+    if not rows:
+        rows = '<tr><td colspan="6" class="p-6 text-center text-gray-400 text-sm">هنوز محتوایی ثبت نشده.</td></tr>'
+
+    body = f"""
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex gap-2">{tabs}</div>
+      <a href="/admin/app-content/new" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">＋ افزودن محتوا</a>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b">
+          <th class="p-2">تصویر</th><th class="p-2">عنوان</th><th class="p-2">نوع</th>
+          <th class="p-2">وضعیت</th><th class="p-2">تاریخ</th><th class="p-2">عملیات</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _layout("محتوای اپ", body, adm, flash=flash)
+
+
+def _app_content_form(it=None):
+    it = it or {}
+    kind_opts = ''.join(
+        f'<option value="{k}" {"selected" if it.get("kind")==k else ""}>{l}</option>'
+        for k, l in _KIND_LABELS.items()
+    )
+    checked = "checked" if (it.get("is_active", 1) in (1, "1", True, None) and int(it.get("is_active", 1) or 0) == 1) or not it else ""
+    return f"""
+    <form method="post" action="/admin/app-content/save" enctype="multipart/form-data"
+          class="bg-white rounded-xl shadow-sm p-5 max-w-2xl space-y-4">
+      <input type="hidden" name="cid" value="{it.get('id','')}">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">نوع محتوا</label>
+        <select name="kind" class="w-full border rounded-lg p-2 text-sm">{kind_opts}</select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">عنوان</label>
+        <input name="title" required value="{html.escape(str(it.get('title') or ''))}"
+               class="w-full border rounded-lg p-2 text-sm">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">متن</label>
+        <textarea name="body" rows="8" class="w-full border rounded-lg p-2 text-sm">{html.escape(str(it.get('body') or ''))}</textarea>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">تصویر (اختیاری — آپلود)</label>
+        <input type="file" name="image" accept="image/*" class="w-full text-sm">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">یا آدرس تصویر</label>
+        <input name="image_url" value="{html.escape(str(it.get('image_url') or ''))}"
+               class="w-full border rounded-lg p-2 text-sm" placeholder="https://…">
+      </div>
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="is_active" value="1" {checked}> فعال (نمایش در اپ)
+      </label>
+      <div class="flex gap-2">
+        <button class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm">ذخیره</button>
+        <a href="/admin/app-content" class="px-5 py-2 rounded-lg text-sm border">انصراف</a>
+      </div>
+    </form>"""
+
+
+@router.get("/app-content/new", response_class=HTMLResponse)
+async def app_content_new(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    return _layout("افزودن محتوا", _app_content_form(), adm)
+
+
+@router.get("/app-content/{cid}/edit", response_class=HTMLResponse)
+async def app_content_edit(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_app_content_item
+    it = get_app_content_item(cid)
+    if not it:
+        return _redir("/admin/app-content")
+    return _layout("ویرایش محتوا", _app_content_form(it), adm)
+
+
+@router.post("/app-content/save")
+async def app_content_save(request: Request, cid: str = Form(""), kind: str = Form("news"),
+                           title: str = Form(...), body: str = Form(""),
+                           image_url: str = Form(""), is_active: str = Form(""),
+                           image: UploadFile = None):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+
+    # آپلود تصویر (در صورت انتخاب فایل)
+    final_image = (image_url or "").strip()
+    try:
+        if image is not None and getattr(image, "filename", ""):
+            os.makedirs(APP_MEDIA_DIR, exist_ok=True)
+            ext = os.path.splitext(image.filename)[1].lower() or ".jpg"
+            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                ext = ".jpg"
+            fname = f"c{int(time.time())}{ext}"
+            data = await image.read()
+            if data:
+                with open(os.path.join(APP_MEDIA_DIR, fname), "wb") as f:
+                    f.write(data)
+                final_image = f"/app-media/{fname}"
+    except Exception:
+        pass
+
+    kind = kind if kind in _KIND_LABELS else "news"
+    from db import add_app_content, update_app_content
+    if cid.strip().isdigit():
+        update_app_content(int(cid), kind, title.strip(), body, final_image,
+                           1 if is_active == "1" else 0)
+    else:
+        add_app_content(kind, title.strip(), body, final_image)
+    return _redir("/admin/app-content")
+
+
+@router.post("/app-content/{cid}/delete")
+async def app_content_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import delete_app_content
+    delete_app_content(cid)
+    return _redir("/admin/app-content")

@@ -33,6 +33,17 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     if sys_row1:
         kb.row(*sys_row1)
 
+    # 🛍 دکمه فروشگاه آنلاین (Mini App) — فقط اگر آدرس تنظیم شده باشد
+    try:
+        from db import get_cfg
+        _wurl = (get_cfg("webapp_url", "") or "").strip()
+        if _wurl.startswith("https://"):
+            kb.row(types.KeyboardButton(
+                t("MAIN_BTN_WEBAPP", DEFAULT_UI_TEXTS.get("MAIN_BTN_WEBAPP", "🛍 فروشگاه آنلاین")),
+                web_app=types.WebAppInfo(url=_wurl)))
+    except Exception:
+        pass
+
     if is_partner:
         # همکار: پنل همکار (یه ردیف کامل)
         if is_main_button_enabled("MAIN_BTN_PARTNER_PANEL"):
@@ -45,6 +56,9 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
             kb.row(types.KeyboardButton(t("MAIN_BTN_PARTNER_REQUEST", DEFAULT_UI_TEXTS.get("MAIN_BTN_PARTNER_REQUEST", "📝 درخواست نمایندگی"))))
         if is_main_button_enabled("MAIN_BTN_SUPPORT"):
             kb.row(types.KeyboardButton(t("MAIN_BTN_SUPPORT", DEFAULT_UI_TEXTS.get("MAIN_BTN_SUPPORT", "👨‍💻 پشتیبانی"))))
+        # 🎁 دعوت دوستان — معرفی ربات برای کاربر عادی
+        if is_main_button_enabled("MAIN_BTN_INVITE"):
+            kb.row(types.KeyboardButton(t("MAIN_BTN_INVITE", DEFAULT_UI_TEXTS.get("MAIN_BTN_INVITE", "🎁 دعوت دوستان"))))
 
     return kb
 
@@ -73,10 +87,21 @@ def category_inline_keyboard(cat_id: int, user_id: int = None) -> types.InlineKe
             kb.add(types.InlineKeyboardButton("محصولی موجود نیست", callback_data="noop"))
         else:
             partner_ok = user_id and is_partner_approved(int(user_id))
+            _FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+            try:
+                from db import get_active_flash_map
+                _fmap = get_active_flash_map()
+            except Exception:
+                _fmap = {}
             for p in products:
                 pp = p["partner_price"]
                 eff = pp if (partner_ok and pp) else p["price"]
-                label = f"{p['title']} | {int(eff):,} تومان"
+                _pct = _fmap.get(int(p["id"]), 0)
+                if _pct:
+                    eff = max(0, int(eff) - int(eff) * _pct // 100)
+                    label = f"🔥 {p['title']} | {int(eff):,} تومان (-{_pct}٪)".translate(_FA)
+                else:
+                    label = f"{p['title']} | {int(eff):,} تومان".translate(_FA)
                 kb.add(types.InlineKeyboardButton(label, callback_data=f"cat_{cat_id}_p_{p['id']}"))
 
     # دکمه بازگشت — فقط برای زیردسته‌ها (دسته‌های ریشه بازگشت ندارند)
