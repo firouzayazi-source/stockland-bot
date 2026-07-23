@@ -5,6 +5,7 @@ var inTG=!!(tg&&tg.initData);
 if(inTG){document.documentElement.classList.add('in-telegram');try{tg.ready();tg.expand()}catch(e){}}
 var initData=(tg&&tg.initData)||'',tgUser=(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user)||null;
 var app=new Framework7({el:'#app',name:'استوک‌لند',theme:'ios',darkMode:'auto',popup:{closeByBackdropClick:true}});
+window._slApp=app;window._slApi=function(){return api.apply(null,arguments)};window._slEsc=function(){return esc.apply(null,arguments)};window._slFmt=function(){return fmt.apply(null,arguments)};window._slInitData=initData;window._slTg=tg;
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function nl2br(s){return esc(s).replace(/\r?\n/g,'<br>')}
@@ -414,22 +415,21 @@ if(!inTG&&!sa&&!di){
 })();
 
 /* ═══ پاپ‌آپ خرید ═══ */
-var _checkoutPid=0,_checkoutProd=null,_checkoutWalBal=0,_checkoutBasePrice=0,
-    _checkoutDiscountCode='',_checkoutDiscountAmount=0;
+window._slCk={pid:0,prod:null,walBal:0,basePrice:0,discountCode:'',discountAmount:0};
 
 function openCheckout(pid){
-  _checkoutPid=pid;_checkoutDiscountCode='';_checkoutDiscountAmount=0;
+  window._slCk.pid=pid;window._slCk.discountCode='';window._slCk.discountAmount=0;
   var b=document.getElementById('checkout-body');
   b.innerHTML='<div class="sl-skel" style="margin:20px"><div class="b w60"></div><div class="b w90"></div><div class="b w40"></div></div>';
-  app.popup.open('#checkout-popup');
+  window._slApp.popup.open('#checkout-popup');
 
   Promise.all([
-    api('/products/'+pid),
-    api('/me/wallet',true)
+    window._slApi('/products/'+pid),
+    window._slApi('/me/wallet',true)
   ]).then(function(res){
-    _checkoutProd=res[0].product||{};
-    _checkoutWalBal=res[1].balance||0;
-    _checkoutBasePrice=_checkoutProd.effective_price||_checkoutProd.price||0;
+    window._slCk.prod=res[0].product||{};
+    window._slCk.walBal=res[1].balance||0;
+    window._slCk.basePrice=window._slCk.prod.effective_price||window._slCk.prod.price||0;
     _renderCheckoutBody();
   }).catch(function(){
     b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📡</span>خطا در دریافت اطلاعات</div>';
@@ -440,8 +440,8 @@ window.openCheckout=openCheckout;
 
 function _renderCheckoutBody(){
   var b=document.getElementById('checkout-body');
-  var p=_checkoutProd,walBal=_checkoutWalBal;
-  var price=Math.max(0,_checkoutBasePrice-_checkoutDiscountAmount);
+  var p=window._slCk.prod,walBal=window._slCk.walBal;
+  var price=Math.max(0,window._slCk.basePrice-window._slCk.discountAmount);
   var canWallet=walBal>=price;
   var canCombined=walBal>0&&walBal<price;
   var emoji=p._e||'📦';
@@ -451,35 +451,35 @@ function _renderCheckoutBody(){
     btns='<button class="sl-checkout-btn sl-checkout-btn-wallet" onclick="_doPay(\'wallet\')">✅ دریافت رایگان</button>';
   }else{
     if(canWallet){
-      btns+='<button class="sl-checkout-btn sl-checkout-btn-wallet" onclick="_doPay(\'wallet\')">👛 پرداخت از کیف‌پول ('+fmt(price)+' تومان)</button>';
+      btns+='<button class="sl-checkout-btn sl-checkout-btn-wallet" onclick="_doPay(\'wallet\')">👛 پرداخت از کیف‌پول ('+window._slFmt(price)+' تومان)</button>';
     }
     if(canCombined){
       var gw=price-walBal;
       btns+='<button class="sl-checkout-btn sl-checkout-btn-combined" onclick="_doPay(\'combined\')">'+
-        '💳 پرداخت ترکیبی (کیف‌پول '+fmt(walBal)+' + درگاه '+fmt(gw)+' تومان)</button>';
+        '💳 پرداخت ترکیبی (کیف‌پول '+window._slFmt(walBal)+' + درگاه '+window._slFmt(gw)+' تومان)</button>';
     }
-    btns+='<button class="sl-checkout-btn sl-checkout-btn-gateway" onclick="_doPay(\'gateway\')">🌐 پرداخت کامل از درگاه ('+fmt(price)+' تومان)</button>';
+    btns+='<button class="sl-checkout-btn sl-checkout-btn-gateway" onclick="_doPay(\'gateway\')">🌐 پرداخت کامل از درگاه ('+window._slFmt(price)+' تومان)</button>';
   }
 
-  var priceLine=_checkoutDiscountAmount>0?
-    '<div class="sl-checkout-price"><s style="color:var(--mu)">'+fmt(_checkoutBasePrice)+'</s> <b>'+fmt(price)+' تومان</b></div>':
-    '<div class="sl-checkout-price">قیمت: <b>'+fmt(price)+' تومان</b></div>';
+  var priceLine=window._slCk.discountAmount>0?
+    '<div class="sl-checkout-price"><s style="color:var(--mu)">'+window._slFmt(window._slCk.basePrice)+'</s> <b>'+window._slFmt(price)+' تومان</b></div>':
+    '<div class="sl-checkout-price">قیمت: <b>'+window._slFmt(price)+' تومان</b></div>';
 
-  var discRow=_checkoutDiscountCode?
-    '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">🎟 کد «'+esc(_checkoutDiscountCode)+'» اعمال شد <span style="color:var(--mu)">(−'+fmt(_checkoutDiscountAmount)+' تومان)</span></div>'+
+  var discRow=window._slCk.discountCode?
+    '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">🎟 کد «'+window._slEsc(window._slCk.discountCode)+'» اعمال شد <span style="color:var(--mu)">(−'+window._slFmt(window._slCk.discountAmount)+' تومان)</span></div>'+
     '<a href="#" id="discount-remove" style="color:var(--br);font-size:13px;font-weight:700">حذف</a></div>':
     '<a href="#" id="discount-apply" class="sl-checkout-wallet" style="display:flex;justify-content:space-between;align-items:center;text-decoration:none">'+
     '<span style="color:var(--mu)">🎟 کد تخفیف دارید؟</span><span style="color:var(--br);font-weight:700">وارد کنید ›</span></a>';
 
   b.innerHTML=
     '<div class="sl-checkout-prod">'+
-      '<div class="sl-checkout-emoji">'+esc(emoji)+'</div>'+
-      '<div><div class="sl-checkout-title">'+esc(p.title)+'</div>'+priceLine+'</div>'+
+      '<div class="sl-checkout-emoji">'+window._slEsc(emoji)+'</div>'+
+      '<div><div class="sl-checkout-title">'+window._slEsc(p.title)+'</div>'+priceLine+'</div>'+
     '</div>'+
     '<div class="sl-checkout-sec">موجودی کیف‌پول شما</div>'+
     '<div class="sl-checkout-wallet">'+
       '<div class="sl-checkout-wallet-info">کیف پول</div>'+
-      '<div class="sl-checkout-wallet-bal">'+fmt(walBal)+' تومان</div>'+
+      '<div class="sl-checkout-wallet-bal">'+window._slFmt(walBal)+' تومان</div>'+
     '</div>'+
     '<div class="sl-checkout-sec">کد تخفیف</div>'+discRow+
     '<div class="sl-checkout-sec">روش پرداخت</div>'+
@@ -489,21 +489,21 @@ function _renderCheckoutBody(){
   var da=document.getElementById('discount-apply');
   if(da)da.addEventListener('click',function(e){e.preventDefault();_applyDiscount()});
   var dr=document.getElementById('discount-remove');
-  if(dr)dr.addEventListener('click',function(e){e.preventDefault();_checkoutDiscountCode='';_checkoutDiscountAmount=0;_renderCheckoutBody()});
+  if(dr)dr.addEventListener('click',function(e){e.preventDefault();window._slCk.discountCode='';window._slCk.discountAmount=0;_renderCheckoutBody()});
 }
 
 window._applyDiscount=function(){
-  app.dialog.prompt('کد تخفیف را وارد کنید','کد تخفیف',function(code){
+  window._slApp.dialog.prompt('کد تخفیف را وارد کنید','کد تخفیف',function(code){
     code=(code||'').trim();if(!code)return;
     fetch('https://panel.stland.ir/api/v1/discount/validate',{
       method:'POST',
-      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
-      body:JSON.stringify({product_id:_checkoutPid,code:code})
+      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+      body:JSON.stringify({product_id:window._slCk.pid,code:code})
     }).then(function(r){return r.json()}).then(function(d){
-      if(!d.ok){app.dialog.alert(d.error||'کد تخفیف نامعتبر است.','خطا');return}
-      _checkoutDiscountCode=code;_checkoutDiscountAmount=d.discount_amount||0;
+      if(!d.ok){window._slApp.dialog.alert(d.error||'کد تخفیف نامعتبر است.','خطا');return}
+      window._slCk.discountCode=code;window._slCk.discountAmount=d.discount_amount||0;
       _renderCheckoutBody();
-    }).catch(function(){app.dialog.alert('خطا در بررسی کد تخفیف.','خطا')});
+    }).catch(function(){window._slApp.dialog.alert('خطا در بررسی کد تخفیف.','خطا')});
   });
 };
 
@@ -513,31 +513,31 @@ window._doPay=function(method){
 
   fetch('https://panel.stland.ir/api/v1/checkout',{
     method:'POST',
-    headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
-    body:JSON.stringify({product_id:_checkoutPid,payment_type:method,discount_code:_checkoutDiscountCode||undefined})
+    headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+    body:JSON.stringify({product_id:window._slCk.pid,payment_type:method,discount_code:window._slCk.discountCode||undefined})
   }).then(function(r){return r.json()}).then(function(d){
     var b=document.getElementById('checkout-body');
     if(!d.ok){
       b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">❌</div>'+
         '<div class="sl-checkout-result-t">خطا</div>'+
-        '<div class="sl-checkout-result-s">'+esc(d.detail||d.message||'خطا در پردازش')+'</div>'+
-        '<button class="sl-checkout-close-btn" onclick="app.popup.close(\'#checkout-popup\')">بستن</button></div>';
+        '<div class="sl-checkout-result-s">'+window._slEsc(d.detail||d.message||'خطا در پردازش')+'</div>'+
+        '<button class="sl-checkout-close-btn" onclick="window._slApp.popup.close(\'#checkout-popup\')">بستن</button></div>';
       return;
     }
     if(d.method==='wallet'){
       _m=0;// ری‌فرش موجودی در تب حساب
       b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
         '<div class="sl-checkout-result-t">خرید موفق!</div>'+
-        '<div class="sl-checkout-result-s">'+esc(d.message||'سفارش شما ثبت شد.')+'<br>تحویل از طریق ربات ارسال می‌شود.</div>'+
-        '<button class="sl-checkout-close-btn" onclick="app.popup.close(\'#checkout-popup\')">بستن</button></div>';
+        '<div class="sl-checkout-result-s">'+window._slEsc(d.message||'سفارش شما ثبت شد.')+'<br>تحویل از طریق ربات ارسال می‌شود.</div>'+
+        '<button class="sl-checkout-close-btn" onclick="window._slApp.popup.close(\'#checkout-popup\')">بستن</button></div>';
     } else if(d.redirect_url){
       // درگاه: در تلگرام با openLink باز کن
-      if(tg&&tg.openLink){
-        tg.openLink(d.redirect_url);
+      if(window._slTg&&window._slTg.openLink){
+        window._slTg.openLink(d.redirect_url);
         b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">🌐</div>'+
           '<div class="sl-checkout-result-t">انتقال به درگاه...</div>'+
           '<div class="sl-checkout-result-s">صفحه پرداخت باز شد.<br>بعد از پرداخت به ربات برگردید.</div>'+
-          '<button class="sl-checkout-close-btn" onclick="app.popup.close(\'#checkout-popup\')">بستن</button></div>';
+          '<button class="sl-checkout-close-btn" onclick="window._slApp.popup.close(\'#checkout-popup\')">بستن</button></div>';
       } else {
         window.location.href=d.redirect_url;
       }
@@ -547,7 +547,7 @@ window._doPay=function(method){
     b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">❌</div>'+
       '<div class="sl-checkout-result-t">خطای شبکه</div>'+
       '<div class="sl-checkout-result-s">لطفاً دوباره امتحان کنید.</div>'+
-      '<button class="sl-checkout-close-btn" onclick="app.popup.close(\'#checkout-popup\')">بستن</button></div>';
+      '<button class="sl-checkout-close-btn" onclick="window._slApp.popup.close(\'#checkout-popup\')">بستن</button></div>';
   });
 };
 
@@ -555,7 +555,7 @@ window._doPay=function(method){
 (function(){
   var u=new URL(window.location.href);
   if(u.searchParams.get('payment')==='canceled'){
-    app.dialog.alert('پرداخت لغو شد یا ناموفق بود.','نتیجه پرداخت');
+    window._slApp.dialog.alert('پرداخت لغو شد یا ناموفق بود.','نتیجه پرداخت');
     history.replaceState({},'',u.pathname);
   }
 })();
