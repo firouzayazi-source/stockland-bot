@@ -1,4 +1,4 @@
-var CACHE='sl-app-v1784464820';
+var CACHE='sl-app-v1784814502';
 var SHELL=['./', 'index.html', 'app.css', 'app.js', 'manifest.json',
   'vendor/framework7-bundle.min.js','vendor/framework7-bundle-rtl.min.css',
   'vendor/fonts/Vazirmatn-Regular.woff2','vendor/fonts/Vazirmatn-Medium.woff2',

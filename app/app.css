@@ -200,3 +200,50 @@ html.dark .sl-checkout-emoji{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-checkout-result-s{font-size:14px;color:var(--mu);line-height:1.9}
 .sl-checkout-close-btn{margin-top:20px;background:var(--br);color:#fff;border:none;
  border-radius:14px;padding:14px 32px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer}
+
+/* === صفحات حساب === */
+.sl-acc-page{padding:20px 20px 40px}
+.sl-acc-title{font-size:20px;font-weight:800;margin-bottom:16px}
+.sl-acc-empty{text-align:center;padding:40px 0;color:var(--mu)}
+.sl-acc-empty span{font-size:48px;display:block;margin-bottom:12px}
+/* کیف پول */
+.sl-wal-big{font-size:32px;font-weight:800;text-align:center;padding:24px 0 8px;color:var(--br)}
+.sl-wal-big small{font-size:14px;color:var(--mu);font-weight:500}
+.sl-wal-acts{display:flex;gap:10px;margin:16px 0}
+.sl-wal-acts button{flex:1;padding:13px;border:none;border-radius:14px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer}
+.sl-wal-charge{background:var(--br);color:#fff}
+.sl-wal-c2c{background:var(--card);color:var(--ink);border:2px solid var(--ln)}
+.sl-wal-txs{margin-top:20px}
+.sl-wal-tx{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:.5px solid var(--ln)}
+.sl-wal-tx-t{font-size:13px;font-weight:600}
+.sl-wal-tx-d{font-size:11px;color:var(--mu);margin-top:2px}
+.sl-wal-tx-a{font-size:14px;font-weight:800}
+.sl-wal-tx-a.plus{color:#22C55E}
+.sl-wal-tx-a.minus{color:#EF4444}
+/* سفارش‌ها */
+.sl-ord{background:var(--card);border-radius:var(--rd);padding:14px 16px;margin-bottom:10px;box-shadow:var(--sh)}
+.sl-ord-top{display:flex;justify-content:space-between;align-items:center}
+.sl-ord-id{font-size:12px;color:var(--mu)}
+.sl-ord-st{font-size:11px;font-weight:700;border-radius:999px;padding:3px 10px}
+.sl-ord-st.done{background:#DCFCE7;color:#16A34A}
+.sl-ord-st.pending{background:#FEF3C7;color:#D97706}
+.sl-ord-st.cancel{background:#FEE2E2;color:#DC2626}
+.sl-ord-name{font-size:14px;font-weight:700;margin-top:8px}
+.sl-ord-price{font-size:13px;color:var(--mu);margin-top:4px}
+.sl-ord-date{font-size:11px;color:var(--mu);margin-top:6px}
+/* همکاری */
+.sl-prt-card{background:var(--card);border-radius:var(--rd);padding:16px;box-shadow:var(--sh);margin-bottom:12px}
+.sl-prt-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:.5px solid var(--ln)}
+.sl-prt-row:last-child{border:none}
+.sl-prt-k{font-size:13px;color:var(--mu)}
+.sl-prt-v{font-size:14px;font-weight:700}
+/* دعوت */
+.sl-inv-code{background:var(--card);border-radius:var(--rd);padding:16px;text-align:center;box-shadow:var(--sh);margin:12px 0}
+.sl-inv-code b{font-size:18px;color:var(--br);display:block;margin:8px 0}
+.sl-inv-btn{display:block;width:100%;padding:14px;border:none;border-radius:14px;background:var(--br);color:#fff;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-top:12px}
+/* پشتیبانی */
+.sl-sup-item{background:var(--card);border-radius:var(--rd);padding:14px 16px;margin-bottom:10px;box-shadow:var(--sh);display:flex;align-items:center;gap:12px;cursor:pointer}
+.sl-sup-item:active{opacity:.85}
+.sl-sup-ic{font-size:24px}
+.sl-sup-t{font-size:14px;font-weight:700}
+.sl-sup-s{font-size:12px;color:var(--mu);margin-top:2px}
