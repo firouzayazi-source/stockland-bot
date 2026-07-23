@@ -274,16 +274,53 @@ async def api_daily_post():
 # ─── خرید از اپ ───────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
 
+@router.post("/discount/validate")
+async def api_discount_validate(request: Request):
+    """
+    پیش‌نمایش کد تخفیف قبل از خرید — فقط اعتبارسنجی، مصرف نمی‌کند.
+    body: { product_id, code }
+    """
+    uid = _auth(request)
+    if not uid:
+        raise HTTPException(401, "احراز هویت لازم است")
+
+    body = await request.json()
+    pid = int(body.get("product_id", 0))
+    code = str(body.get("code", "")).strip()
+    if not pid or not code:
+        raise HTTPException(400, "product_id و code الزامی هستند")
+
+    from core.products import get_product
+    from db import validate_discount, is_partner_approved
+
+    prod = get_product(pid)
+    if not prod or not prod.get("is_active"):
+        raise HTTPException(404, "محصول یافت نشد")
+
+    is_partner = is_partner_approved(uid)
+    partner_price = int(prod.get("partner_price") or 0)
+    base_price = int(prod["effective_price"])
+    price = (partner_price if is_partner and partner_price > 0 and partner_price < base_price
+             else base_price)
+
+    result = validate_discount(code, product_id=pid, amount=price, user_id=uid)
+    if not result["valid"]:
+        return {"ok": False, "error": result["error"]}
+    final_price = max(0, price - int(result["discount_amount"]))
+    return {"ok": True, "discount_amount": int(result["discount_amount"]),
+            "price": price, "final_price": final_price}
+
+
 @router.post("/checkout")
 async def api_checkout(request: Request):
     """
     شروع خرید از PWA.
     body: { product_id, payment_type: "wallet"|"gateway"|"combined",
-            wallet_amount?, initData }
+            discount_code?, wallet_amount?, initData }
     برای wallet: کسر از کیف‌پول و ثبت سفارش.
     برای gateway/combined: درخواست Zarinpal و بازگشت redirect_url.
     """
-    uid = _get_uid(request)
+    uid = _auth(request)
     if not uid:
         raise HTTPException(401, "احراز هویت لازم است")
 
@@ -298,7 +335,8 @@ async def api_checkout(request: Request):
 
     from core.products import get_product
     from db import (get_wallet_balance, subtract_wallet_balance,
-                    create_order, is_partner_approved)
+                    create_order, is_partner_approved,
+                    validate_discount, use_discount)
 
     prod = get_product(pid)
     if not prod or not prod.get("is_active"):
@@ -310,6 +348,15 @@ async def api_checkout(request: Request):
     base_price = int(prod["effective_price"])
     final_price = (partner_price if is_partner and partner_price > 0 and partner_price < base_price
                    else base_price)
+
+    # کد تخفیف — اعتبارسنجی مجدد سمت سرور (هرگز به مبلغ کلاینت اعتماد نکن)
+    discount_code = str(body.get("discount_code", "")).strip()
+    if discount_code:
+        d = validate_discount(discount_code, product_id=pid, amount=final_price, user_id=uid)
+        if not d["valid"]:
+            raise HTTPException(400, d["error"])
+        final_price = max(0, final_price - int(d["discount_amount"]))
+        use_discount(d["code_id"], user_id=uid)
 
     wallet_bal = get_wallet_balance(uid)
 
@@ -361,11 +408,11 @@ async def api_checkout(request: Request):
     except Exception as e:
         raise HTTPException(502, f"خطا در اتصال به درگاه: {e}")
 
-    if r.status_code != 200 or not data.get("redirect_url"):
+    if r.status_code != 200 or not data.get("payment_url"):
         raise HTTPException(502, data.get("detail") or "درگاه پاسخ نداد")
 
     return {"ok": True, "method": "gateway",
-            "redirect_url": data["redirect_url"],
+            "redirect_url": data["payment_url"],
             "wallet_used": wallet_used,
             "gateway_amount": gateway_amount}
 
