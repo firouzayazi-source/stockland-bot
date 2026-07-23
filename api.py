@@ -283,7 +283,7 @@ async def api_checkout(request: Request):
     برای wallet: کسر از کیف‌پول و ثبت سفارش.
     برای gateway/combined: درخواست Zarinpal و بازگشت redirect_url.
     """
-    uid = _get_uid(request)
+    uid = _auth(request)
     if not uid:
         raise HTTPException(401, "احراز هویت لازم است")
 
