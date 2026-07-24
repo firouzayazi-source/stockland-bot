@@ -77,11 +77,9 @@ html.dark .sl-hero{
  position:relative;z-index:2;
  display:flex;flex-direction:column;align-items:flex-start;width:100%;
 }
-.sl-hero-brand{color:#fff;font-size:22px;font-weight:800;letter-spacing:-.3px;
+.sl-hero-brand{color:#fff;font-size:20px;font-weight:800;letter-spacing:-.3px;
  text-shadow:0 2px 10px rgba(8,8,80,.28);width:100%}
-.sl-hero-sub{color:rgba(255,255,255,.76);font-size:12px;margin-top:2px}
-.sl-hero-tagline{color:rgba(255,255,255,.80);font-size:13px;font-weight:500;margin-top:8px;line-height:1.7}
-.sl-search-wrap{position:relative;margin-top:14px;width:100%}
+.sl-search-wrap{position:relative;margin-top:10px;width:100%}
 .sl-search{
  background:rgba(255,255,255,.94);border-radius:14px;padding:12px 14px;
  color:#8E8E93;font-size:14px;display:flex;gap:8px;align-items:center;
@@ -158,6 +156,15 @@ html.dark .sl-search-input::placeholder{color:#98989E}
 .sl-chip{flex:none;padding:8px 15px;border-radius:999px;background:var(--card);
  font-size:13px;font-weight:600;color:var(--mu);border:1px solid var(--ln);cursor:pointer;transition:.15s}
 .sl-chip.on{background:var(--ink);color:var(--bg);border-color:transparent}
+/* دسته‌بندی دایره‌ای — آیکون در کادر گرد + نام زیرش، داخل همون نوار افقی .sl-chips */
+.sl-cat-c{flex:none;width:66px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer}
+.sl-cat-c-icon{width:54px;height:54px;border-radius:17px;background:var(--card);
+ display:grid;place-items:center;font-size:24px;border:1px solid var(--ln);
+ box-shadow:var(--sh);transition:.15s}
+.sl-cat-c.on .sl-cat-c-icon{background:var(--br);border-color:transparent}
+.sl-cat-c-name{font-size:11.5px;font-weight:600;color:var(--mu);text-align:center;
+ max-width:66px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-cat-c.on .sl-cat-c-name{color:var(--ink);font-weight:700}
 .sl-hrow{display:flex;gap:10px;overflow-x:auto;padding:12px 20px 6px;scrollbar-width:none}
 .sl-hrow::-webkit-scrollbar{display:none}
 .sl-mini{flex:none;width:220px;background:var(--card);border-radius:16px;overflow:hidden;
