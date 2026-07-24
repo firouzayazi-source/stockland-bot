@@ -60,15 +60,82 @@ def _verify_telegram_init_data(init_data: str) -> int | None:
     return None
 
 
+def _verify_telegram_login_widget(data: dict) -> int | None:
+    """
+    اعتبارسنجی داده‌های Telegram Login Widget (برای وب‌سایت/PWA خارج از تلگرام).
+    الگوریتم رسمی تلگرام — با initData مینی‌اپ فرق داره:
+    secret_key = SHA256(BOT_TOKEN) [نه HMAC با "WebAppData"]، بعد hash = HMAC-SHA256(data_check_string, secret_key).
+    https://core.telegram.org/widgets/login#checking-authorization
+    """
+    from config import BOT_TOKEN
+    if not BOT_TOKEN:
+        return None
+    try:
+        data = dict(data)
+        recv_hash = str(data.pop("hash", "") or "")
+        if not recv_hash:
+            return None
+        pairs = sorted(f"{k}={v}" for k, v in data.items() if v is not None and v != "")
+        data_check = "\n".join(pairs)
+        secret_key = hashlib.sha256(BOT_TOKEN.encode()).digest()
+        calc = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calc, recv_hash):
+            return None
+        auth_date = int(data.get("auth_date", 0) or 0)
+        if auth_date <= 0 or (time.time() - auth_date) > 86400:  # قدیمی‌تر از یک روز رد می‌شه
+            return None
+        return int(data["id"])
+    except Exception:
+        return None
+
+
+_WEB_SESSION_COOKIE = "sl_sess"
+_WEB_SESSION_MAX_AGE = 30 * 86400  # ۳۰ روز
+
+
+def _web_session_key() -> bytes:
+    from config import BOT_TOKEN
+    return hashlib.sha256((BOT_TOKEN + "|stockland-website-session").encode()).digest()
+
+
+def _make_web_session(uid: int) -> str:
+    """سشن کوکی وب‌سایت — امضاشده با HMAC (کلید مشتق‌شده از BOT_TOKEN، بدون نیاز به env جدید)."""
+    payload = f"{int(uid)}|{int(time.time())}"
+    token = hmac.new(_web_session_key(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{token}:{payload}"
+
+
+def _verify_web_session(cookie: str) -> int | None:
+    if not cookie or ":" not in cookie:
+        return None
+    try:
+        token, payload = cookie.rsplit(":", 1)
+        uid_str, ts_str = payload.rsplit("|", 1)
+        expected = hmac.new(_web_session_key(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(token, expected):
+            return None
+        if (time.time() - int(ts_str)) > _WEB_SESSION_MAX_AGE:
+            return None
+        return int(uid_str)
+    except Exception:
+        return None
+
+
 def _auth(request: Request) -> int:
     """احراز هویت درخواست — user_id یا خطای 401."""
-    # روش ۱: initData تلگرام از هدر
+    # روش ۱: initData تلگرام از هدر (مینی‌اپ داخل تلگرام)
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     if init_data:
         uid = _verify_telegram_init_data(init_data)
         if uid:
             return uid
-    # روش ۲: API key (برای تست/کلاینت‌های داخلی)
+    # روش ۲: کوکی سشن وب‌سایت (لاگین با Telegram Login Widget، خارج از تلگرام)
+    web_cookie = request.cookies.get(_WEB_SESSION_COOKIE, "")
+    if web_cookie:
+        uid = _verify_web_session(web_cookie)
+        if uid:
+            return uid
+    # روش ۳: API key (برای تست/کلاینت‌های داخلی)
     api_key = request.headers.get("X-API-Key", "")
     valid_keys = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()]
     if api_key and api_key in valid_keys:
@@ -76,6 +143,59 @@ def _auth(request: Request) -> int:
         uid = request.headers.get("X-User-Id", "")
         return int(uid) if uid.isdigit() else 0
     raise HTTPException(status_code=401, detail="احراز هویت ناموفق")
+
+
+@router.post("/auth/telegram-login")
+async def api_auth_telegram_login(request: Request):
+    """لاگین وب‌سایت (PWA خارج از تلگرام) با Telegram Login Widget.
+    ورودی: همون فیلدهایی که ویجت برمی‌گردونه (id, first_name, last_name, username, photo_url, auth_date, hash)."""
+    body = await request.json()
+    uid = _verify_telegram_login_widget(body)
+    if not uid:
+        raise HTTPException(401, "احراز هویت تلگرام نامعتبر است")
+
+    from db import upsert_user
+    try:
+        full_name = f"{body.get('first_name') or ''} {body.get('last_name') or ''}".strip()
+        upsert_user(uid, body.get("username") or None, full_name or None)
+    except Exception:
+        pass
+
+    resp = JSONResponse({"ok": True, "user_id": uid})
+    resp.set_cookie(
+        _WEB_SESSION_COOKIE, _make_web_session(uid),
+        max_age=_WEB_SESSION_MAX_AGE, httponly=True, samesite="lax", secure=True, path="/",
+    )
+    return resp
+
+
+@router.get("/auth/whoami")
+async def api_auth_whoami(request: Request):
+    """چک سریع وضعیت لاگین وب‌سایت — برای بارگذاری اولیهٔ صفحه (بدون initData مینی‌اپ)."""
+    web_cookie = request.cookies.get(_WEB_SESSION_COOKIE, "")
+    uid = _verify_web_session(web_cookie) if web_cookie else None
+    if not uid:
+        raise HTTPException(401, "لاگین نشده")
+    from db import _get_connection
+    full_name = ""
+    try:
+        conn = _get_connection()
+        try:
+            row = conn.execute("SELECT full_name FROM users WHERE user_id=? LIMIT 1;", (uid,)).fetchone()
+            if row:
+                full_name = row["full_name"] if hasattr(row, "keys") else row[0]
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return {"ok": True, "user_id": uid, "full_name": full_name or ""}
+
+
+@router.post("/auth/logout")
+async def api_auth_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(_WEB_SESSION_COOKIE, path="/")
+    return resp
 
 
 # ══════════════════════════════════════════════════════════════════════════
