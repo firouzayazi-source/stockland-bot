@@ -1251,6 +1251,14 @@ def handle_start(message):
                                 pass
             except Exception:
                 pass
+        elif arg == "partner":
+            # دیپ‌لینک از مینی‌اپ (دکمهٔ «همکاری با ما») — مستقیم بره تو ویزارد
+            # ثبت‌نام همکاری، بدون نیاز کاربر به پیدا کردن دکمه تو منو
+            try:
+                handle_reseller_request(message)
+            except Exception:
+                pass
+            return
 
 
     text = tf("MSG_WELCOME", name=full_name or "دوست عزیز")
