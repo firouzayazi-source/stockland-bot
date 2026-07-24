@@ -684,11 +684,19 @@ async def api_content_list(kind: str = "", limit: int = 50):
 
 
 @router.get("/news/feed")
-async def api_news_feed():
-    """اخبار تکنولوژی — فید RSS زندهٔ وبلاگ (بدون محتوای دستی/پنل)، کش‌شده."""
+async def api_news_feed(limit: int = 20, offset: int = 0):
+    """اخبار تکنولوژی — همهٔ پست‌های وبلاگ (بدون محدودیت تعداد)، صفحه‌بندی با limit/offset."""
     from core.news import get_feed
     d = get_feed(force=False)
-    return {"ok": True, **d}
+    all_items = d.get("items") or []
+    limit = min(max(int(limit or 20), 1), 100)
+    offset = max(int(offset or 0), 0)
+    page_items = all_items[offset:offset + limit]
+    out = dict(d)
+    out["items"] = page_items
+    out["total"] = len(all_items)
+    out["has_more"] = (offset + limit) < len(all_items)
+    return {"ok": True, **out}
 
 
 # ══════════════════════════════════════════════════════════════════════════
