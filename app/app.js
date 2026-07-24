@@ -596,16 +596,22 @@ function renderPartnerApplyForm(b){
 }
 
 /* ─── پشتیبانی — همون منطق ticket_v2 ربات (سقف ۳ پیام تا پاسخ ادمین) ─── */
-var _spPoll=null;
+var _spPoll=null,_spLastCount=-1,_spPendingFile=null;
 function openSupport(){
   _accPopup('پشتیبانی',skel(2));
+  _spLastCount=-1;_spPendingFile=null;
   loadSupportTicket();
   if(_spPoll)clearInterval(_spPoll);
   _spPoll=setInterval(function(){
     var pop=document.getElementById('post-popup');
     if(!pop||!pop.classList.contains('modal-in')){clearInterval(_spPoll);_spPoll=null;return}
     var chat=document.getElementById('sp-chat');
-    if(chat)loadSupportTicket(true); // فقط وقتی داخل صفحهٔ چت هستیم poll کن
+    if(!chat)return; // فقط وقتی داخل صفحهٔ چت هستیم poll کن
+    var inp=document.getElementById('sp-input');
+    // وقتی کاربر داره تایپ می‌کنه، رندر نکن — وگرنه input عوض می‌شه، متن تایپ‌شده و
+    // فوکوس/کیبورد از دست می‌ره (این دقیقاً همون باگی بود که گزارش شد)
+    if(inp&&document.activeElement===inp)return;
+    loadSupportTicket(true);
   },5000);
 }
 window.openSupport=openSupport;
@@ -616,8 +622,13 @@ function loadSupportTicket(silent){
     headers:{'X-Telegram-Init-Data':window._slInitData}
   }).then(function(r){return r.json()}).then(function(d){
     if(!d||!d.ok)throw 0;
-    if(d.ticket)renderSupportChat(d.ticket,d.messages||[]);
-    else if(!silent)renderSupportStart();
+    if(d.ticket){
+      var msgs=d.messages||[];
+      // در حالت poll ساکت، فقط وقتی واقعاً چیزی عوض شده رندر کن (نه هر ۵ ثانیه بی‌دلیل)
+      if(silent&&msgs.length===_spLastCount)return;
+      _spLastCount=msgs.length;
+      renderSupportChat(d.ticket,msgs);
+    }else if(!silent)renderSupportStart();
   }).catch(function(){if(!silent&&b)b.innerHTML=err('خطا در اتصال به پشتیبانی')});
 }
 
@@ -633,6 +644,7 @@ function renderSupportStart(){
       method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData}
     }).then(function(r){return r.json()}).then(function(d){
       if(!d||!d.ok)throw 0;
+      _spLastCount=0;
       renderSupportChat(d.ticket,[]);
     }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='شروع گفتگو'});
   });
@@ -645,7 +657,9 @@ function renderSupportChat(ticket,messages){
   b.innerHTML='<div class="sl-sp-chat" id="sp-chat">'+
     (messages.length?messages.map(function(m){
       var mine=m.sender==='user';
-      return '<div class="sl-sp-msg '+(mine?'sl-sp-mine':'sl-sp-theirs')+'">'+esc(m.text)+'</div>';
+      var img=m.image_url?'<img src="'+esc(m.image_url)+'" class="sl-sp-img" alt="">':'';
+      var txt=m.text?'<div>'+esc(m.text)+'</div>':'';
+      return '<div class="sl-sp-msg '+(mine?'sl-sp-mine':'sl-sp-theirs')+'">'+img+txt+'</div>';
     }).join(''):'<div class="sl-sp-hint">پیام خودتون رو بنویسید</div>')+
     '</div>'+
     (closed?
@@ -655,7 +669,10 @@ function renderSupportChat(ticket,messages){
       (remaining<=0?
         '<div class="sl-checkout-note">⏳ در انتظار پاسخ پشتیبانی — بعد از پاسخ می‌تونید ادامه بدید.</div>'
         :
-        '<div class="sl-sp-input-row"><input type="text" id="sp-input" class="sl-sp-input" placeholder="پیام خود را بنویسید…" autocomplete="off">'+
+        '<div class="sl-sp-attach" id="sp-attach-preview" hidden></div>'+
+        '<div class="sl-sp-input-row">'+
+        '<label class="sl-sp-attach-btn" id="sp-attach-label">📎<input type="file" accept="image/*" id="sp-photo" hidden></label>'+
+        '<input type="text" id="sp-input" class="sl-sp-input" placeholder="پیام خود را بنویسید…" autocomplete="off">'+
         '<button class="sl-sp-send" id="sp-send-btn">ارسال</button></div>'+
         '<div class="sl-checkout-note" style="margin-top:6px">'+remaining+' پیام دیگر می‌تونید بفرستید</div>'
       )
@@ -664,21 +681,40 @@ function renderSupportChat(ticket,messages){
   if(chatBox)chatBox.scrollTop=chatBox.scrollHeight;
   var nb=document.getElementById('sp-new-btn');
   if(nb)nb.addEventListener('click',renderSupportStart);
+
   var sendBtn=document.getElementById('sp-send-btn'),inp=document.getElementById('sp-input');
+  var photoInp=document.getElementById('sp-photo'),preview=document.getElementById('sp-attach-preview');
+  if(photoInp)photoInp.addEventListener('change',function(){
+    _spPendingFile=photoInp.files[0]||null;
+    if(preview){
+      preview.hidden=!_spPendingFile;
+      preview.textContent=_spPendingFile?'📷 '+_spPendingFile.name+'  ':'';
+      if(_spPendingFile){
+        var xBtn=document.createElement('span');xBtn.textContent='✕';xBtn.className='sl-sp-attach-x';
+        xBtn.addEventListener('click',function(){_spPendingFile=null;photoInp.value='';preview.hidden=true});
+        preview.appendChild(xBtn);
+      }
+    }
+  });
+
   function send(){
     var text=(inp.value||'').trim();
-    if(!text)return;
+    if(!text&&!_spPendingFile)return;
     sendBtn.disabled=true;inp.disabled=true;
+    var fd=new FormData();
+    fd.append('text',text);
+    if(_spPendingFile)fd.append('photo',_spPendingFile);
     fetch('https://panel.stland.ir/api/v1/support/message',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
-      body:JSON.stringify({text:text})
+      method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData},body:fd
     }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
       if(res.status!==200||!res.d.ok){
         window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ارسال پیام','خطا');
         sendBtn.disabled=false;inp.disabled=false;return;
       }
-      messages.push({sender:'user',text:text});
+      var newMsg={sender:'user',text:text};
+      if(_spPendingFile)newMsg.image_url=URL.createObjectURL(_spPendingFile);
+      messages.push(newMsg);
+      _spPendingFile=null;_spLastCount=messages.length;
       renderSupportChat(res.d.ticket,messages);
     }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sendBtn.disabled=false;inp.disabled=false});
   }
