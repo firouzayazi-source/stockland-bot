@@ -4116,6 +4116,12 @@ async def products_list(request: Request, flash: str = ""):
     guard = _require(adm, "products")
     if guard: return guard
 
+    try:
+        from db import ensure_product_support_schema
+        ensure_product_support_schema()
+    except Exception:
+        pass
+
     conn = _db()
     try:
         products = conn.execute("""
@@ -4132,8 +4138,11 @@ async def products_list(request: Request, flash: str = ""):
         avail = int(p["feed_avail"] or 0)
         ac = "red" if avail==0 else ("yellow" if avail<5 else "green")
         status_badge = '<span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">فعال</span>' if p["is_active"] else '<span class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">غیرفعال</span>'
+        img_url = p["image_url"] if "image_url" in p.keys() else ""
+        thumb = f'<img src="{e(img_url)}" class="w-8 h-8 rounded object-cover">' if img_url else '<div class="w-8 h-8 rounded bg-gray-100 flex items-center justify-center text-xs text-gray-300">—</div>'
         rows += f"""
         <tr class="border-b hover:bg-gray-50">
+          <td class="px-4 py-3">{thumb}</td>
           <td class="px-4 py-3 text-sm font-medium text-gray-800">{e(p["title"])}</td>
           <td class="px-4 py-3 text-xs text-gray-400">{e(p["category"])}</td>
           <td class="px-4 py-3 text-sm font-medium text-indigo-700">{int(p["price"]):,}</td>
@@ -4167,11 +4176,11 @@ async def products_list(request: Request, flash: str = ""):
       <div class="overflow-x-auto">
         <table class="w-full text-right min-w-max">
           <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-4 py-3">عنوان</th><th class="px-4 py-3">دسته</th>
+            <th class="px-4 py-3">عکس</th><th class="px-4 py-3">عنوان</th><th class="px-4 py-3">دسته</th>
             <th class="px-4 py-3">قیمت</th><th class="px-4 py-3">وضعیت</th>
             <th class="px-4 py-3">موجودی</th><th class="px-4 py-3">عملیات</th>
           </tr></thead>
-          <tbody>{rows or "<tr><td colspan='6' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
+          <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
         </table>
       </div>
     </div>"""
@@ -4209,7 +4218,7 @@ async def product_new_get(request: Request):
       {_btn("← بازگشت", "/admin/products", "slate", small=True)}
       <h1 class="text-2xl font-bold text-gray-800">➕ محصول جدید</h1>
     </div>
-    <form method="post" action="/admin/products/new" class="card p-6 max-w-2xl space-y-4">
+    <form method="post" action="/admin/products/new" enctype="multipart/form-data" class="card p-6 max-w-2xl space-y-4">
       <div>
         <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی *</label>
         <select name="category_id" required class="w-full border border-gray-300 rounded-lg px-3 py-2">
@@ -4233,6 +4242,11 @@ async def product_new_get(request: Request):
       </div>
       <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>
         {_textarea("description", "توضیحات محصول...", rows=3)}</div>
+      <div>
+        <label class="text-sm font-medium text-gray-700 block mb-1">تصویر محصول (اختیاری)</label>
+        <input type="file" name="image" accept="image/*" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        <div class="text-xs text-gray-400 mt-1">اگه عکسی انتخاب نشه، آیکون پیش‌فرض دسته‌بندی نمایش داده می‌شه.</div>
+      </div>
       <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
         <label class="perm-label" style="font-size:13px">
           <input type="checkbox" name="support_after_purchase" value="1"
@@ -4280,17 +4294,22 @@ async def product_new_post(request: Request,
     pp = int(partner_price or 0)
     slug = "".join(c if c.isalnum() else "_" for c in title).lower()[:40] or "product"
 
+    image_file = form.get("image")
+    image_url = ""
+    if image_file is not None and getattr(image_file, "filename", ""):
+        image_url = await _save_tutorial_file(image_file, "products", (".jpg", ".jpeg", ".png", ".webp", ".gif"), "pr")
+
     conn = _db()
     try:
         cat = conn.execute("SELECT slug, name FROM categories WHERE id=?;", (cat_id,)).fetchone()
         cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
             INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message)
-            VALUES (?,?,?,?,?,?,?,?,?,1,?,?);""",
+                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?);""",
             (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
              int(limit_c or 0), int(limit_p or 0), description.strip(), support_after,
-             str(form.get("setup_message","")).strip()))
+             str(form.get("setup_message","")).strip(), image_url))
         conn.commit()
     finally:
         conn.close()
@@ -4404,6 +4423,12 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
     guard = _require(adm, "products")
     if guard: return guard
 
+    try:
+        from db import ensure_product_support_schema
+        ensure_product_support_schema()
+    except Exception:
+        pass
+
     conn = _db()
     try:
         p = conn.execute("SELECT * FROM products WHERE id=?;", (pid,)).fetchone()
@@ -4427,7 +4452,7 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
     </div>
     <div class="grid md:grid-cols-3 gap-6">
       <div class="md:col-span-2">
-        <form method="post" action="/admin/products/{pid}/edit" class="bg-white rounded-xl shadow p-6 space-y-4">
+        <form method="post" action="/admin/products/{pid}/edit" enctype="multipart/form-data" class="bg-white rounded-xl shadow p-6 space-y-4">
           <div><label class="text-sm font-medium text-gray-700 block mb-1">دسته</label>
             <select name="category" class="w-full border border-gray-300 rounded-lg px-3 py-2">{cats}</select></div>
           <div><label class="text-sm font-medium text-gray-700 block mb-1">عنوان</label>
@@ -4446,6 +4471,11 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
           </div>
           <div><label class="text-sm font-medium text-gray-700 block mb-1">توضیحات</label>
             {_textarea("description","",str(p["description"] or ""),rows=3)}</div>
+          <div>
+            <label class="text-sm font-medium text-gray-700 block mb-1">تصویر محصول {f'<img src="{e(p["image_url"])}" class="inline w-8 h-8 rounded object-cover align-middle mr-1">' if (p["image_url"] if "image_url" in p.keys() else "") else ""}</label>
+            <input type="file" name="image" accept="image/*" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            {f'<label class="flex items-center gap-1 text-xs text-red-500 mt-1"><input type="checkbox" name="image_remove" value="1"> 🗑 حذف تصویر فعلی (برگشت به آیکون پیش‌فرض)</label>' if (p["image_url"] if "image_url" in p.keys() else "") else ""}
+          </div>
           <div class="p-4 bg-gray-50 rounded-lg">
             <label class="flex items-center gap-3 cursor-pointer mb-3">
               <input type="checkbox" name="support_after_purchase" value="1"
@@ -4508,13 +4538,29 @@ async def product_edit_post(request: Request, pid: int,
         ensure_product_support_schema()
     except Exception:
         pass
+
+    image_file = form.get("image")
+    if image_file is not None and getattr(image_file, "filename", ""):
+        image_url = await _save_tutorial_file(image_file, "products", (".jpg", ".jpeg", ".png", ".webp", ".gif"), "pr")
+    elif form.get("image_remove") == "1":
+        image_url = ""
+    else:
+        image_url = None  # یعنی دست نخوره — همون مقدار قبلی بمونه
+
     conn = _db()
     try:
-        conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-            daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=? WHERE id=?;""",
-            (category,title.strip(),int(price or 0),pp if pp>0 else None,
-             int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-             str(form.get("setup_message","")).strip(),pid))
+        if image_url is None:
+            conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=? WHERE id=?;""",
+                (category,title.strip(),int(price or 0),pp if pp>0 else None,
+                 int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
+                 str(form.get("setup_message","")).strip(),pid))
+        else:
+            conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,image_url=? WHERE id=?;""",
+                (category,title.strip(),int(price or 0),pp if pp>0 else None,
+                 int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
+                 str(form.get("setup_message","")).strip(),image_url,pid))
         conn.commit()
     finally:
         conn.close()
@@ -4968,7 +5014,7 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
 
     # اطلاع‌رسانی به علاقه‌مندی‌کننده‌های محصول (مینی‌اپ) — فقط وقتی واقعاً از ناموجود به موجود برگشته
     try:
-        from db import get_product_favoriters, get_product_by_id as _gpbi2
+        from db import get_product_favoriters, get_product_by_id as _gpbi2, add_notification
         favoriters = get_product_favoriters(pid) if was_out_of_stock else []
         if favoriters:
             _prod2 = _gpbi2(pid)
@@ -4983,6 +5029,10 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
                               "parse_mode": "HTML"},
                         timeout=5
                     )
+                except Exception:
+                    pass
+                try:
+                    add_notification(fav_uid, "موجود شد", f"«{_title2}» که به علاقه‌مندی‌هاتون اضافه کرده بودید موجود شد.", icon="💚")
                 except Exception:
                     pass
     except Exception:
@@ -10381,7 +10431,7 @@ async def growth_flash_new(request: Request):
         _log(request, "فروش فوری", "رشد", f"محصول #{pid}", admin_info=adm)
         # اطلاع‌رسانی به علاقه‌مندی‌کننده‌های محصول (مینی‌اپ)
         try:
-            from db import get_product_favoriters, get_product_by_id as _gpbi3
+            from db import get_product_favoriters, get_product_by_id as _gpbi3, add_notification
             favoriters = get_product_favoriters(pid)
             if favoriters:
                 _prod3 = _gpbi3(pid)
@@ -10396,6 +10446,10 @@ async def growth_flash_new(request: Request):
                                   "parse_mode": "HTML"},
                             timeout=5
                         )
+                    except Exception:
+                        pass
+                    try:
+                        add_notification(fav_uid, "تخفیف ویژه", f"«{_title3}» که به علاقه‌مندی‌هاتون اضافه کرده بودید {percent}٪ تخفیف خورد.", icon="⚡️")
                     except Exception:
                         pass
         except Exception:
@@ -11037,6 +11091,11 @@ def _app_content_form(it=None):
       <div>
         <label class="block text-xs text-gray-500 mb-1">نوع محتوا</label>
         <select name="kind" class="w-full border rounded-lg p-2 text-sm">{kind_opts}</select>
+        <div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">
+          ⚠️ «📚 آموزش» اینجا سیستم قدیمیه و دیگه هیچ‌جای مینی‌اپ نشون داده نمی‌شه — برای آموزش واقعی از
+          <a href="/admin/tutorials" class="underline font-medium">صفحهٔ «آموزش»</a> زیر «مدیریت اپ» استفاده کن.
+          «✨ امکانات» هم فقط با لینک مستقیم باز می‌شه، جایی توی اپ لیست/مرور نمی‌شه.
+        </div>
       </div>
       <div>
         <label class="block text-xs text-gray-500 mb-1">عنوان</label>

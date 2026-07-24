@@ -52,6 +52,10 @@ function starsHtml(avg,count,size){
   return '<span class="sl-stars'+(size==='sm'?' sl-stars-sm':'')+'"><span class="sl-stars-ico">'+stars+'</span> '+
     '<b>'+(avg||0).toFixed(1)+'</b> <small>('+fmt(count)+')</small></span>';
 }
+/* عکس واقعی محصول اگه ادمین آپلود کرده باشه، وگرنه همون آیکون ایموجی پیش‌فرض دسته‌بندی */
+function prodImgHtml(p){
+  return p.image_url?'<img src="'+esc(p.image_url)+'" alt="" loading="lazy">':(p._e||'📦');
+}
 function skel(n){var o='';for(var i=0;i<(n||3);i++)o+='<div class="sl-skel"><div class="b w60"></div><div class="b w90"></div><div class="b w40"></div></div>';return o}
 function api(p,a){var h={'Accept':'application/json'};if(a&&initData)h['X-Telegram-Init-Data']=initData;return fetch('/api/v1'+p,{headers:h}).then(function(r){if(!r.ok)throw r;return r.json()})}
 function err(m){return '<div class="sl-empty"><span class="sl-empty-e">📡</span>'+esc(m||'خطا')+'</div>'}
@@ -213,7 +217,7 @@ function loadFeatured(allProds){
   fr.innerHTML=featured.slice(0,6).map(function(p){
     var f=p.flash_active,e=p.effective_price,b=p.price;
     return '<div class="sl-feat" data-pid="'+p.id+'">'+
-      '<div class="sl-feat-img">'+(p._e||'📦')+
+      '<div class="sl-feat-img">'+prodImgHtml(p)+
         (f?'<span class="sl-feat-badge">⚡️ فروش فوری</span>':'')+
       '</div>'+
       '<div class="sl-feat-body">'+
@@ -274,7 +278,7 @@ function renderP(name){
   if(!it.length){pl.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📦</span>محصولی نیست</div>';return}
   pl.innerHTML=it.map(function(p){
     var f=p.flash_active;
-    return '<div class="sl-prod" data-pid="'+p.id+'"><div class="sl-pic">'+(p._e||'📦')+'</div>'+
+    return '<div class="sl-prod" data-pid="'+p.id+'"><div class="sl-pic">'+prodImgHtml(p)+'</div>'+
       '<div class="sl-pinfo"><div class="sl-pt">'+esc(p.title)+'</div>'+
       '<div class="sl-pg">'+esc(p._c||'')+(p._s?' · '+esc(p._s):'')+(p.rating_count?' · '+starsHtml(p.rating_avg,p.rating_count,'sm'):'')+'</div>'+
       '<div class="sl-pprice-row">'+(f?'<span class="sl-old">'+fmt(p.price)+'</span>':'')+
@@ -315,7 +319,7 @@ function openP(pid){
     b.innerHTML='<div class="sl-pp-hero">'+
       (loggedIn?'<button class="sl-pp-fav'+(p.is_favorite?' on':'')+'" id="sl-fav-'+p.id+'" data-fav="'+(p.is_favorite?1:0)+'">'+(p.is_favorite?'♥':'♡')+'</button>':'')+
       '<button class="sl-pp-share" id="sl-share-'+p.id+'">↗</button>'+
-      '<div class="sl-pp-emoji">'+(p._e||'📦')+'</div>'+
+      '<div class="sl-pp-emoji">'+prodImgHtml(p)+'</div>'+
       '<div class="sl-pp-title">'+esc(p.title)+'</div>'+
       (f?'<div class="sl-pp-flash"><span class="old">'+fmt(bs)+' تومان</span> <span class="tag">⚡️ فروش فوری</span></div>':'')+
       '<div class="sl-pp-price">'+fmt(e)+' <small>تومان</small></div>'+
@@ -557,7 +561,8 @@ function loadMe(){if(_m)return;_m=1;
     '<div class="sl-wallet"><div class="sl-wallet-glow"></div><div class="sl-wallet-l">موجودی کیف پول</div>'+
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
     '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge" style="width:100%">＋ شارژ کیف‌پول</a></div></div>'+
-    '<div class="sl-group"><a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:#0A63FF">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
+    '<div class="sl-group"><a class="sl-row" href="#" id="me-notif-row"><span class="sl-ric" style="background:#7C3AED">🔔</span><span class="sl-row-grow">اعلان‌ها</span><span class="sl-badge" id="me-notif-badge" style="display:none">جدید</span><span class="sl-chev">‹</span></a>'+
+    '<a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:#0A63FF">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-favs-row"><span class="sl-ric" style="background:#EF4444">♥</span><span class="sl-row-grow">علاقه‌مندی‌ها</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-invite-row"><span class="sl-ric" style="background:#22C55E">🎁</span><span class="sl-row-grow">دعوت دوستان</span><span class="sl-chev">‹</span></a>'+
@@ -572,6 +577,13 @@ function loadMe(){if(_m)return;_m=1;
   if(lo_)lo_.addEventListener('click',function(e){e.preventDefault();
     fetch('/api/v1/auth/logout',{method:'POST'}).then(function(){loggedIn=false;tgUser=null;_m=0;loadMe()});
   });
+  var nt_=document.getElementById('me-notif-row');
+  if(nt_)nt_.addEventListener('click',function(e){e.preventDefault();openNotifications()});
+  api('/me/notifications',true).then(function(d){
+    var items=(d&&d.items)||[];
+    var b=document.getElementById('me-notif-badge');
+    if(b)b.style.display=items.some(function(n){return !n.is_read})?'':'none';
+  }).catch(function(){});
   var or_=document.getElementById('me-orders-row');
   if(or_)or_.addEventListener('click',function(e){e.preventDefault();openOrders()});
   var fr_=document.getElementById('me-favs-row');
@@ -636,9 +648,33 @@ function _checkMeBadge(){
       var seenCount=parseInt(localStorage.getItem(seenKey)||'0',10);
       if(last.sender!=='user'&&msgs.length>seenCount)_applyMeBadge(true);
     }).catch(function(){});
+  api('/me/notifications',true).then(function(d){
+    var items=(d&&d.items)||[];
+    if(items.some(function(n){return !n.is_read}))_applyMeBadge(true);
+  }).catch(function(){});
 }
 function _applyMeBadge(v){var b=document.getElementById('me-tab-badge');if(b)b.hidden=!v}
 window._slCheckMeBadge=_checkMeBadge;
+
+/* ─── تاریخچهٔ اعلان‌ها ─── */
+function openNotifications(){
+  _accPopup('اعلان‌ها',skel(3));
+  var nb=document.getElementById('me-notif-badge');if(nb)nb.style.display='none';
+  api('/me/notifications',true).then(function(d){
+    var items=(d&&d.items)||[];
+    var b=_accBody();if(!b)return;
+    if(!items.length){b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🔔</span>هنوز اعلانی ندارید.</div>';return}
+    b.innerHTML='<div class="sl-group" style="margin:12px">'+items.map(function(n){
+      return '<div class="sl-row" style="cursor:default'+(n.is_read?'':';background:var(--accent-soft,rgba(10,99,255,.05))')+'">'+
+        '<span class="sl-ric" style="background:#7C3AED">'+esc(n.icon||'🔔')+'</span>'+
+        '<span class="sl-row-grow"><div style="font-weight:'+(n.is_read?'500':'800')+'">'+esc(n.title)+'</div>'+
+        (n.body?'<div style="font-size:12px;color:var(--mu);margin-top:2px">'+esc(n.body)+'</div>':'')+
+        '<div style="font-size:11px;color:var(--mu);margin-top:2px">'+esc(String(n.created_at||'').slice(0,16))+'</div></span></div>';
+    }).join('')+'</div>';
+    fetch('/api/v1/me/notifications/read',{method:'POST',headers:{'X-Telegram-Init-Data':initData}}).then(function(){_clearMeBadge()});
+  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اعلان‌ها')});
+}
+window.openNotifications=openNotifications;
 
 /* ═══ سفارش‌های من ═══ */
 function openOrders(){
@@ -978,9 +1014,20 @@ function openPartner(){
     }
     var tierName=(d.tier&&d.tier.name)||'—';
     var tierIcon=(d.tier&&d.tier.icon)||'🏅';
+    var progressHtml='';
+    if(d.next_tier){
+      var cur=(d.tier&&d.tier.order_count)||0;
+      var pct=Math.max(0,Math.min(100,Math.round(cur/d.next_tier.min_orders*100)));
+      progressHtml='<div class="sl-tier-progress">'+
+        '<div class="sl-tier-progress-top"><span>تا سطح '+window._slEsc(d.next_tier.icon||'')+' '+window._slEsc(d.next_tier.name)+'</span>'+
+        '<b>'+window._slFmt(d.next_tier.orders_needed)+' سفارش دیگه</b></div>'+
+        '<div class="sl-tier-progress-bar"><div class="sl-tier-progress-fill" style="width:'+pct+'%"></div></div>'+
+      '</div>';
+    }
     b.innerHTML='<div style="text-align:center;padding:8px 0">'+
       '<span style="font-size:44px">'+window._slEsc(tierIcon)+'</span>'+
       '<p style="margin:8px 0 0;font-size:16px;font-weight:800">سطح '+window._slEsc(tierName)+'</p></div>'+
+      progressHtml+
       '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">موجودی کیف‌پول همکاری</div>'+
       '<div class="sl-checkout-wallet-bal">'+window._slFmt(d.balance||0)+' تومان</div></div>'+
       '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">تعداد سفارش‌های شما</div>'+
@@ -1235,7 +1282,7 @@ function renderSupportChat(ticket,messages){
 
   function renderProd(p){
     var f=p.flash_active;
-    return '<div class="sl-prod" data-pid="'+p.id+'"><div class="sl-pic">'+(p._e||'📦')+'</div>'+
+    return '<div class="sl-prod" data-pid="'+p.id+'"><div class="sl-pic">'+prodImgHtml(p)+'</div>'+
       '<div class="sl-pinfo"><div class="sl-pt">'+esc(p.title)+'</div></div>'+
       '<div class="sl-price">'+fmt(p.effective_price)+' <small>تومان</small></div></div>';
   }
