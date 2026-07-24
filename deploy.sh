@@ -45,8 +45,14 @@ V=$(date +%s)
 echo ""
 echo "🔄 پاک‌سازی کش PWA — نسخه: v${V}"
 if [ -f app/sw.js ]; then
-    sed -i "s/var CACHE = 'sl-app-v[^']*'/var CACHE = 'sl-app-v${V}'/" app/sw.js
-    echo "   ✅ sw.js → sl-app-v${V}"
+    OLD_CACHE=$(grep -o "sl-app-v[^']*" app/sw.js | head -1)
+    sed -i -E "s/var CACHE[[:space:]]*=[[:space:]]*'sl-app-v[^']*'/var CACHE='sl-app-v${V}'/" app/sw.js
+    NEW_CACHE=$(grep -o "sl-app-v[^']*" app/sw.js | head -1)
+    if [ "$OLD_CACHE" != "$NEW_CACHE" ]; then
+        echo "   ✅ sw.js → sl-app-v${V}"
+    else
+        echo "   ⚠️  sw.js CACHE عوض نشد — الگوی sed مطابقت نداشت! دستی چک کن: grep CACHE app/sw.js"
+    fi
 fi
 if [ -f app/index.html ]; then
     sed -i "s/app\.css?v=[^\"']*/app.css?v=${V}/g" app/index.html
