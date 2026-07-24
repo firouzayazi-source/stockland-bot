@@ -264,27 +264,42 @@ async def _upload_photo_to_telegram(photo_bytes: bytes, content_type: str | None
 
     خطای کامل رو لاگ می‌کنه (برای journalctl) و پیام قابل‌فهم برمی‌گردونه —
     چون بعضی خطاهای httpx مثل تایم‌اوت شبکه با str() خالی چاپ می‌شن و بدون
-    گفتن نوع/کلاس خطا اصلاً قابل تشخیص نیستن (دقیقاً همین چیزی که این بار پیش اومد)."""
+    گفتن نوع/کلاس خطا اصلاً قابل تشخیص نیستن.
+
+    timeout اتصال با apihelper.CONNECT_TIMEOUT=15 در bot.py هماهنگ شده (همون
+    مقداری که خود ربات برای همین سرور به کار می‌بره و کار می‌کنه) — قبلاً ۱۰
+    ثانیه بود که برای این سرور به تلگرام کم بود (ConnectTimeout واقعی می‌داد).
+    یک retry هم روی خطاهای سطح اتصال (نه خطاهای منطقی) انجام می‌شه، چون این
+    نوع قطعی‌ها معمولاً موقتی‌ان و تلاش دوم معمولاً جواب می‌ده."""
     from config import BOT_TOKEN, ADMIN_ID
+    import asyncio
     import httpx
-    # آپلود عکس از موبایل می‌تونه کند باشه؛ timeout اتصال سخت‌گیرانه (خطای واقعی شبکه
-    # زود مشخص بشه) ولی مهلت خوندن/نوشتن بازتر (آپلود واقعی فایل فرصت داشته باشه)
-    timeout = httpx.Timeout(10.0, connect=10.0, read=45.0, write=45.0)
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                data={"chat_id": ADMIN_ID, "caption": caption},
-                files={"photo": ("photo.jpg", photo_bytes, content_type or "image/jpeg")},
-            )
-        tg_data = r.json()
-        if not tg_data.get("ok"):
-            raise RuntimeError(tg_data.get("description") or f"HTTP {r.status_code} از تلگرام")
-        return tg_data["result"]["photo"][-1]["file_id"]
-    except Exception as e:
-        logger.exception("خطا در آپلود عکس به تلگرام (caption=%r)", caption)
-        why = str(e) or f"{type(e).__name__} — احتمالاً تایم‌اوت/قطعی اتصال سرور به تلگرام"
-        raise HTTPException(502, f"خطا در آپلود عکس — دوباره تلاش کنید ({why})")
+    timeout = httpx.Timeout(20.0, connect=20.0, read=60.0, write=60.0)
+    last_err = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                r = await client.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                    data={"chat_id": ADMIN_ID, "caption": caption},
+                    files={"photo": ("photo.jpg", photo_bytes, content_type or "image/jpeg")},
+                )
+            tg_data = r.json()
+            if not tg_data.get("ok"):
+                raise RuntimeError(tg_data.get("description") or f"HTTP {r.status_code} از تلگرام")
+            return tg_data["result"]["photo"][-1]["file_id"]
+        except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+            last_err = e
+            logger.warning("تلاش %d/2 آپلود عکس به تلگرام با خطای اتصال شکست خورد: %r", attempt + 1, e)
+            if attempt == 0:
+                await asyncio.sleep(1.5)
+                continue
+        except Exception as e:
+            last_err = e
+            break
+    logger.error("خطا در آپلود عکس به تلگرام (caption=%r)", caption, exc_info=last_err)
+    why = str(last_err) or f"{type(last_err).__name__} — احتمالاً تایم‌اوت/قطعی اتصال سرور به تلگرام"
+    raise HTTPException(502, f"خطا در آپلود عکس — دوباره تلاش کنید ({why})")
 
 
 @router.get("/payment/methods")
