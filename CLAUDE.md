@@ -388,9 +388,12 @@ except Exception:
 
 ## ۱۷. تست قبل از تحویل
 
+⚠️ **`admin_panel.py` نیازمند Python 3.12+ است، نه پیش‌فرض محیط.** این فایل از یک f-string با نقل‌قول تودرتوی هم‌نوع داخل `{}` استفاده می‌کنه (الگوی `f"""...{"" if x else """...جاوااسکریپت...""" }..."""`) — این نحو فقط با PEP 701 (پایتون ۳.۱۲+) قانونیه. اگه `python3` پیش‌فرض سندباکس/سرور ۳.۱۱ یا قدیمی‌تر باشه، `ast.parse`/`py_compile` روی این فایل با `SyntaxError: invalid decimal literal` (معمولاً حوالی خط ۱۳۰۰، در بلوک `// Idle logout`/`// Badge polling`) شکست می‌خوره — **این یک باگ واقعی در کد نیست**، فقط یعنی مفسر پایتون اشتباه رو داری. قبل از نتیجه‌گیری «admin_panel.py سینتکس‌اش خرابه»، حتماً با `python3.12 -m py_compile admin_panel.py` (اگه نصبه) دوباره چک کن.
+
 ```bash
-# سینتکس
-python3 -c "import ast; [ast.parse(open(f).read()) for f in ['bot.py','admin_panel.py','db.py','api.py','payment_service.py','keyboards.py','ui_texts.py','stbak_engine.py']]"
+# سینتکس — admin_panel.py را جدا و با پایتون ۳.۱۲+ چک کن
+python3 -c "import ast; [ast.parse(open(f).read()) for f in ['bot.py','db.py','api.py','payment_service.py','keyboards.py','ui_texts.py','stbak_engine.py']]"
+python3.12 -m py_compile admin_panel.py 2>/dev/null || python3 -m py_compile admin_panel.py
 
 # اسموک‌تست ایمپورت با دیتابیس موقت
 DB_PATH=/tmp/test.db BOT_TOKEN=123:TEST ADMIN_ID=1 python3 -c "import db, ui_texts, keyboards"

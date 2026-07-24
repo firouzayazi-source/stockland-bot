@@ -5644,29 +5644,34 @@ def ensure_app_content_schema():
                 created_at TEXT DEFAULT (datetime('now'))
             );
         """)
+        try:
+            conn.execute("ALTER TABLE app_content ADD COLUMN link_url TEXT DEFAULT '';")
+            conn.commit()
+        except Exception:
+            pass
         conn.commit()
         _ENSURE_APP_CONTENT_DONE = True
     finally:
         conn.close()
 
 
-def add_app_content(kind: str, title: str, body: str = "", image_url: str = "") -> int:
+def add_app_content(kind: str, title: str, body: str = "", image_url: str = "", link_url: str = "") -> int:
     ensure_app_content_schema()
     conn = _get_connection()
     try:
         from db_conn import is_postgres as _is_pg
         if _is_pg():
             cur = conn.execute(
-                "INSERT INTO app_content (kind,title,body,image_url) VALUES (?,?,?,?) RETURNING id;",
-                (kind, title, body, image_url))
+                "INSERT INTO app_content (kind,title,body,image_url,link_url) VALUES (?,?,?,?,?) RETURNING id;",
+                (kind, title, body, image_url, link_url))
             row = cur.fetchone()
             conn.commit()
             if row is None:
                 return 0
             return int(row["id"] if hasattr(row, "keys") else row[0])
         cur = conn.execute(
-            "INSERT INTO app_content (kind,title,body,image_url) VALUES (?,?,?,?);",
-            (kind, title, body, image_url))
+            "INSERT INTO app_content (kind,title,body,image_url,link_url) VALUES (?,?,?,?,?);",
+            (kind, title, body, image_url, link_url))
         conn.commit()
         return cur.lastrowid
     finally:
@@ -5674,13 +5679,13 @@ def add_app_content(kind: str, title: str, body: str = "", image_url: str = "") 
 
 
 def update_app_content(cid: int, kind: str, title: str, body: str,
-                       image_url: str, is_active: int) -> None:
+                       image_url: str, is_active: int, link_url: str = "") -> None:
     ensure_app_content_schema()
     conn = _get_connection()
     try:
         conn.execute(
-            "UPDATE app_content SET kind=?, title=?, body=?, image_url=?, is_active=? WHERE id=?;",
-            (kind, title, body, image_url, int(is_active), int(cid)))
+            "UPDATE app_content SET kind=?, title=?, body=?, image_url=?, is_active=?, link_url=? WHERE id=?;",
+            (kind, title, body, image_url, int(is_active), link_url, int(cid)))
         conn.commit()
     finally:
         conn.close()

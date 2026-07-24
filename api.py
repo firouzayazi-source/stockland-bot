@@ -567,8 +567,12 @@ async def api_health():
 
 @router.get("/content")
 async def api_content_list(kind: str = "", limit: int = 50):
-    """فهرست محتوا برای PWA — kind: tutorial | news | feature (خالی = همه)."""
-    from db import get_app_content
+    """فهرست محتوا برای PWA — kind: tutorial | news | feature (خالی = همه).
+
+    برای kind=news، به‌جای فهرست پست، لینک آرشیو کامل وبلاگ (blog_url) هم
+    برگردونده می‌شه — تصمیم مالک پروژه: تب «خبر» اپ فقط به وبلاگ خارجی
+    ارجاع بده، محتوای خبر داخل اپ تکرار/مدیریت نشه."""
+    from db import get_app_content, get_cfg
     kind = kind if kind in ("tutorial", "news", "feature", "daily") else None
     items = get_app_content(kind=kind, active_only=True, limit=min(int(limit or 50), 100))
     out = []
@@ -580,9 +584,10 @@ async def api_content_list(kind: str = "", limit: int = 50):
             "title": it.get("title"),
             "excerpt": (body[:160] + "…") if len(body) > 160 else body,
             "image_url": it.get("image_url") or "",
+            "link_url": it.get("link_url") or "",
             "created_at": str(it.get("created_at") or "")[:16],
         })
-    return {"ok": True, "items": out}
+    return {"ok": True, "items": out, "blog_url": get_cfg("NEWS_BLOG_URL", "")}
 
 
 @router.get("/content/{cid}")
@@ -598,6 +603,7 @@ async def api_content_item(cid: int):
         "title": it.get("title"),
         "body": it.get("body") or "",
         "image_url": it.get("image_url") or "",
+        "link_url": it.get("link_url") or "",
         "created_at": str(it.get("created_at") or "")[:16],
     }}
 

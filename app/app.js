@@ -9,6 +9,14 @@ window._slApp=app;window._slApi=function(){return api.apply(null,arguments)};win
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function nl2br(s){return esc(s).replace(/\r?\n/g,'<br>')}
+/* قالب‌بندی سبک مقاله: **بولد**، خط‌های شروع‌شده با «- » به‌صورت بولت، لینک خودکار، شکست خط */
+function formatBody(s){
+  var t=esc(s);
+  t=t.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+  t=t.replace(/(^|\n)-\s+(.*)/g,'$1• $2');
+  t=t.replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return t.replace(/\r?\n/g,'<br>');
+}
 function fmt(n){return Number(n).toLocaleString('fa-IR')}
 function skel(n){var o='';for(var i=0;i<(n||3);i++)o+='<div class="sl-skel"><div class="b w60"></div><div class="b w90"></div><div class="b w40"></div></div>';return o}
 function api(p,a){var h={'Accept':'application/json'};if(a&&initData)h['X-Telegram-Init-Data']=initData;return fetch('/api/v1'+p,{headers:h}).then(function(r){if(!r.ok)throw r;return r.json()})}
@@ -241,6 +249,17 @@ function loadL(kind){_lc=kind;if(_lk[kind])return;_lk[kind]=1;
   var LB={tutorial:'📚 آموزش',news:'📰 خبر',feature:'✨ امکانات'};
   var EM={tutorial:['📚','هنوز آموزشی منتشر نشده'],news:['📰','هنوز خبری نیست'],feature:['✨','به‌زودی…']};
   api('/content?kind='+encodeURIComponent(kind)+'&limit=50').then(function(d){
+    // بخش خبر: به‌جای فهرست پست داخل اپ، فقط یک کارت ارجاع به آرشیو کامل وبلاگ
+    if(kind==='news'){
+      var url=(d&&d.blog_url)||'';
+      if(!url){box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📰</span>هنوز خبری نیست</div>';return}
+      box.innerHTML='<a class="sl-post" href="'+esc(url)+'" target="_blank" style="text-decoration:none;color:inherit">'+
+        '<div class="sl-post-cv" style="background:linear-gradient(120deg,#101826,#F59E0B)">'+
+        '<span class="sl-post-tag">📰 وبلاگ</span>📰</div>'+
+        '<div class="sl-post-bd"><div class="sl-post-t">مشاهده کامل اخبار و مقالات</div>'+
+        '<div class="sl-post-x">همهٔ مطالب و به‌روزرسانی‌های تازه در وبلاگ استوک‌لند</div></div></a>';
+      return;
+    }
     var it=(d&&d.items)||[];
     if(!it.length){var m=EM[kind]||EM.news;box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">'+m[0]+'</span><b>'+m[1]+'</b></div>';return}
     box.innerHTML=it.map(function(p,i){
@@ -265,7 +284,8 @@ function openC(cid){
     var it=d.item||{};t.textContent=it.title||'';
     b.innerHTML=(it.image_url?'<img src="'+esc(it.image_url)+'" alt="">':'')+
       '<div class="sl-postf-title">'+esc(it.title)+'</div><div class="sl-postf-date">'+esc(it.created_at)+'</div>'+
-      '<div class="sl-postf-text">'+nl2br(it.body)+'</div>';
+      '<div class="sl-postf-text">'+formatBody(it.body)+'</div>'+
+      (it.link_url?'<a class="sl-pp-btn" href="'+esc(it.link_url)+'" target="_blank" rel="noopener" style="margin:20px 0 4px;width:100%;box-sizing:border-box">🔗 مشاهده در تلگرام / اینستاگرام</a>':'');
   }).catch(function(){b.innerHTML=err('خطا')});
 }
 
