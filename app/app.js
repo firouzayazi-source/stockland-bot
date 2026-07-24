@@ -414,7 +414,8 @@ window.openPartner=openPartner;
   var clearBtn=document.getElementById('search-clear');
   var panel=document.getElementById('search-results');
   var bar=document.getElementById('search-bar');
-  if(!input||!panel||!bar)return;
+  var homeTab=document.getElementById('tab-home');
+  if(!input||!panel||!bar||!homeTab)return;
   var timer=null,seq=0;
 
   function renderProd(p){
@@ -425,10 +426,13 @@ window.openPartner=openPartner;
   }
 
   function positionPanel(){
-    var r=bar.getBoundingClientRect();
-    panel.style.top=(r.bottom+8)+'px';
-    panel.style.left=r.left+'px';
-    panel.style.right=(window.innerWidth-r.right)+'px';
+    // مختصات نسبت به کل محتوای قابل‌اسکرول #tab-home حساب می‌شه (نه viewport)
+    // تا پنل مثل بقیهٔ محتوا طبیعی با اسکرول بالا/پایین بره
+    var barRect=bar.getBoundingClientRect();
+    var containerRect=homeTab.getBoundingClientRect();
+    panel.style.top=(barRect.bottom-containerRect.top+homeTab.scrollTop+8)+'px';
+    panel.style.left=(barRect.left-containerRect.left)+'px';
+    panel.style.right=(containerRect.right-barRect.right)+'px';
   }
   function showPanel(html){positionPanel();panel.innerHTML=html;panel.hidden=false}
   function hidePanel(){panel.hidden=true;panel.innerHTML=''}

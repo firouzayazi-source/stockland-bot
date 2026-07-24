@@ -57,10 +57,12 @@
         <input type="text" id="search-input" class="sl-search-input" placeholder="جستجو در محصولات" autocomplete="off" enterkeyhint="search">
         <span class="sl-search-clear" id="search-clear" hidden>✕</span>
        </div>
-       <div class="sl-search-results" id="search-results" hidden></div>
       </div>
      </div>
     </div>
+    <!-- نتایج جستجو: خارج از .sl-hero (که overflow:hidden داره) تا بریده نشه؛
+         و به‌جای position:fixed در یک ظرف position:absolute که با اسکرول صفحه حرکت می‌کنه -->
+    <div class="sl-search-results" id="search-results" hidden></div>
 
     <div class="sl-sec"><b>🔥 ویژه امروز</b><a class="sl-link" data-tab="tab-shop">همه محصولات</a></div>
     <div class="sl-feat-row" id="featured-row"></div>
