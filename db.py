@@ -4867,6 +4867,34 @@ def has_rated_order(order_id: int) -> bool:
         conn.close()
 
 
+def get_all_ratings(limit: int = 200) -> list:
+    """همهٔ نظرات/امتیازها برای مدیریت پنل ادمین — جدیدترین اول."""
+    ensure_ratings_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("""
+            SELECT pr.id, pr.rating, pr.comment, pr.created_at, pr.user_id, pr.product_id,
+                   p.title AS product_title, u.full_name
+            FROM product_ratings pr
+            LEFT JOIN products p ON p.id = pr.product_id
+            LEFT JOIN users u ON u.user_id = pr.user_id
+            ORDER BY pr.id DESC LIMIT ?;
+        """, (limit,)).fetchall()]
+    finally:
+        conn.close()
+
+
+def delete_rating(rating_id: int) -> None:
+    ensure_ratings_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM product_ratings WHERE id=?;", (rating_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ─── سرزدن روزانه (پاداش کوچک برای باز کردن اپ هر روز) ────────────────────────
 
 _ENSURE_CHECKIN_SCHEMA_DONE = False
@@ -5011,6 +5039,17 @@ def is_favorite(user_id: int, product_id: int) -> bool:
         return conn.execute(
             "SELECT 1 FROM favorites WHERE user_id=? AND product_id=?;", (user_id, product_id)
         ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def get_product_favoriters(product_id: int) -> list:
+    """کاربرانی که این محصول رو به علاقه‌مندی اضافه کردن — برای اطلاع‌رسانی موجود شدن/فروش فوری."""
+    ensure_favorites_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute("SELECT user_id FROM favorites WHERE product_id=?;", (product_id,)).fetchall()
+        return [int(r[0]) for r in rows]
     finally:
         conn.close()
 
