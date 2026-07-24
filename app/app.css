@@ -120,12 +120,9 @@ html.dark .sl-search{background:rgba(255,255,255,.12);color:#98989E}
 }
 .sl-nav.sl-nav--solid{
  pointer-events:auto;
- background:rgba(255,255,255,.94);
- backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);
- box-shadow:0 .5px 0 rgba(0,0,0,.12);
+ background:var(--bg);
 }
 .sl-nav.sl-nav--solid .sl-nav-title{opacity:1;color:var(--ink)}
-html.dark .sl-nav.sl-nav--solid{background:rgba(28,28,30,.94)}
 .sl-search span{flex:1}
 .sl-head{padding:18px 20px 6px}
 .sl-eyebrow{font-size:12px;color:var(--mu);font-weight:500}
