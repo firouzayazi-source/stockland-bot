@@ -282,22 +282,24 @@ function loadMe(){if(_m)return;_m=1;
   body.innerHTML='<div class="sl-me"><div class="sl-ava">'+esc(un.charAt(0))+'</div><div><div class="sl-me-n">'+esc(un)+'</div><div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div></div></div>'+
     '<div class="sl-wallet"><div class="sl-wallet-glow"></div><div class="sl-wallet-l">موجودی کیف پول</div>'+
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
-    '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge">＋ شارژ</a>'+
-    '<a class="sl-wallet-a" href="https://t.me/'+botUser+'?start=card2card" target="_blank">💳 کارت‌به‌کارت</a></div></div>'+
+    '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge" style="width:100%">＋ شارژ کیف‌پول</a></div></div>'+
     '<div class="sl-group"><a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:#0A63FF">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-invite-row"><span class="sl-ric" style="background:#22C55E">🎁</span><span class="sl-row-grow">دعوت دوستان</span><span class="sl-chev">‹</span></a>'+
-    row('#6B7280','💬','پشتیبانی','support','')+'</div>'+foot;
+    '<a class="sl-row" href="#" id="me-support-row"><span class="sl-ric" style="background:#6B7280">💬</span><span class="sl-row-grow">پشتیبانی</span><span class="sl-chev">‹</span></a>'+
+    '</div>'+foot;
   api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
   api('/me/partner',true).then(function(d){if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}}).catch(function(){});
   var or_=document.getElementById('me-orders-row');
   if(or_)or_.addEventListener('click',function(e){e.preventDefault();openOrders()});
   var wc_=document.getElementById('me-wallet-charge');
-  if(wc_)wc_.addEventListener('click',function(e){e.preventDefault();openWallet()});
+  if(wc_)wc_.addEventListener('click',function(e){e.preventDefault();startCharge()});
   var pr_=document.getElementById('me-partner-row');
   if(pr_)pr_.addEventListener('click',function(e){e.preventDefault();openPartner()});
   var iv_=document.getElementById('me-invite-row');
   if(iv_)iv_.addEventListener('click',function(e){e.preventDefault();openInvite()});
+  var sp_=document.getElementById('me-support-row');
+  if(sp_)sp_.addEventListener('click',function(e){e.preventDefault();openSupport()});
 }
 window.loadMe=loadMe;
 
@@ -344,26 +346,155 @@ function openWallet(){
 window.openWallet=openWallet;
 
 function startCharge(){
-  window._slApp.dialog.prompt('مبلغ شارژ به تومان (حداقل ۱۰٬۰۰۰)','شارژ کیف‌پول',function(val){
-    var amount=parseInt(String(val||'').replace(/[^0-9]/g,''),10);
-    if(!amount){return}
-    var b=_accBody();
-    if(b)b.innerHTML+='<div class="sl-checkout-note">⏳ در حال اتصال به درگاه...</div>';
-    fetch('https://panel.stland.ir/api/v1/wallet/topup',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
-      body:JSON.stringify({amount:amount})
-    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
-      if(res.status!==200||!res.d.ok){
-        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در شارژ کیف‌پول','خطا');
-        openWallet();return;
-      }
-      if(window._slTg&&window._slTg.openLink)window._slTg.openLink(res.d.redirect_url);
-      else window.open(res.d.redirect_url,'_blank');
-    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');openWallet()});
-  });
+  // همیشه popup.open صدا زده می‌شه (نه فقط وقتی _accBody() چیزی برنمی‌گردونه) — چون
+  // محتوای پاپ‌آپ قبلی حتی بعد از close() در DOM باقی می‌مونه (فقط مخفی می‌شه)، پس
+  // چک «آیا _accBody() چیزی داره؟» نمی‌تونه تشخیص بده پاپ‌آپ واقعاً بازه یا بسته
+  _accPopup('شارژ کیف‌پول','');
+  var b=_accBody();if(!b)return;
+  b.innerHTML='<div class="sl-checkout-sec">مبلغ شارژ (تومان)</div>'+
+    '<div class="sl-pay-box"><input type="tel" inputmode="numeric" id="charge-amount" '+
+    'class="sl-amount-input" placeholder="حداقل ۱۰٬۰۰۰ تومان" autocomplete="off"></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="charge-next-btn">ادامه</button></div>';
+  var inp=document.getElementById('charge-amount');
+  var nb=document.getElementById('charge-next-btn');
+  function goNext(){
+    var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
+    if(!amount||amount<10000){window._slApp.dialog.alert('حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است','خطا');return}
+    showPaymentMethods(amount);
+  }
+  if(nb)nb.addEventListener('click',goNext);
+  if(inp){inp.addEventListener('keydown',function(e){if(e.key==='Enter')goNext()});setTimeout(function(){inp.focus()},200)}
 }
 window.startCharge=startCharge;
+
+/* ─── انتخاب روش پرداخت — گیت‌وی / کارت‌به‌کارت / رمزارز ─── */
+function showPaymentMethods(amount){
+  var b=_accBody();if(!b)return;
+  b.innerHTML='<div class="sl-checkout-sec">روش پرداخت — '+fmt(amount)+' <small>تومان</small></div>'+
+    '<div class="sl-checkout-btns" id="pm-list">'+skel(2)+'</div>';
+  api('/payment/methods').then(function(d){
+    var list=document.getElementById('pm-list');if(!list)return;
+    var html='<button class="sl-checkout-btn sl-checkout-btn-gateway" data-pm="gateway">🏦 درگاه پرداخت (زرین‌پال)</button>'+
+      '<button class="sl-checkout-btn sl-checkout-btn-gateway" data-pm="card2card">💳 کارت‌به‌کارت</button>';
+    if(d.crypto&&d.crypto.enabled&&(d.crypto.usdt_trc20||d.crypto.trx)){
+      html+='<button class="sl-checkout-btn sl-checkout-btn-gateway" data-pm="crypto">₿ پرداخت رمزارز</button>';
+    }
+    list.innerHTML=html;
+    list.querySelectorAll('[data-pm]').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        var pm=btn.dataset.pm;
+        if(pm==='gateway')payGateway(amount);
+        else if(pm==='card2card')payCard2card(amount,d.card2card);
+        else if(pm==='crypto')payCryptoPickNetwork(amount,d.crypto);
+      });
+    });
+  }).catch(function(){var list=document.getElementById('pm-list');if(list)list.innerHTML=err('خطا در دریافت روش‌های پرداخت')});
+}
+
+function payGateway(amount){
+  var b=_accBody();
+  if(b)b.innerHTML='<div class="sl-checkout-note">⏳ در حال اتصال به درگاه...</div>';
+  fetch('https://panel.stland.ir/api/v1/wallet/topup',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+    body:JSON.stringify({amount:amount})
+  }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+    if(res.status!==200||!res.d.ok){
+      window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در شارژ کیف‌پول','خطا');
+      openWallet();return;
+    }
+    if(window._slTg&&window._slTg.openLink)window._slTg.openLink(res.d.redirect_url);
+    else window.open(res.d.redirect_url,'_blank');
+  }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');openWallet()});
+}
+
+function showChargeDone(msg){
+  var b=_accBody();if(!b)return;
+  b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
+    '<div class="sl-checkout-result-t">ثبت شد</div><div class="sl-checkout-result-s">'+esc(msg)+'</div>'+
+    '<button class="sl-checkout-close-btn" id="charge-done-btn">باشه</button></div>';
+  var db_=document.getElementById('charge-done-btn');
+  if(db_)db_.addEventListener('click',openWallet);
+}
+
+function payCard2card(amount,info){
+  var b=_accBody();if(!b)return;
+  info=info||{};
+  b.innerHTML='<div class="sl-checkout-sec">کارت‌به‌کارت — '+fmt(amount)+' <small>تومان</small></div>'+
+    '<div class="sl-pay-box"><div class="sl-checkout-wallet-info">این مبلغ رو به کارت زیر واریز کنید:</div>'+
+    '<div class="sl-cc-num">'+esc(info.card_number||'')+'</div>'+
+    '<div class="sl-checkout-wallet-info">به نام '+esc(info.card_name||'')+'</div></div>'+
+    '<div class="sl-checkout-sec">عکس رسید واریز</div>'+
+    '<div class="sl-pay-box"><label class="sl-file-btn" id="cc-photo-label">📎 انتخاب عکس رسید<input type="file" accept="image/*" id="cc-photo" hidden></label></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="cc-submit-btn">ثبت رسید</button></div>'+
+    '<div class="sl-checkout-note">بعد از تأیید ادمین، کیف‌پول شارژ می‌شود.</div>';
+  var fileInp=document.getElementById('cc-photo'),lbl=document.getElementById('cc-photo-label');
+  if(fileInp)fileInp.addEventListener('change',function(){
+    if(fileInp.files[0]&&lbl)lbl.textContent='✅ '+fileInp.files[0].name;
+  });
+  var sb=document.getElementById('cc-submit-btn');
+  if(sb)sb.addEventListener('click',function(){
+    var f=fileInp&&fileInp.files[0];
+    if(!f){window._slApp.dialog.alert('عکس رسید رو انتخاب کنید','خطا');return}
+    sb.disabled=true;sb.textContent='در حال ارسال…';
+    var fd=new FormData();fd.append('amount',amount);fd.append('photo',f);
+    fetch('https://panel.stland.ir/api/v1/wallet/card2card',{
+      method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData},body:fd
+    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+      if(res.status!==200||!res.d.ok){
+        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ثبت رسید','خطا');
+        sb.disabled=false;sb.textContent='ثبت رسید';return;
+      }
+      showChargeDone('رسید شما ثبت شد و در انتظار بررسی ادمینه.');
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='ثبت رسید'});
+  });
+}
+
+function payCryptoPickNetwork(amount,info){
+  var b=_accBody();if(!b)return;
+  info=info||{};
+  var nets=[];
+  if(info.usdt_trc20)nets.push({k:'usdt',label:'💵 USDT (TRC20)',addr:info.usdt_trc20});
+  if(info.trx)nets.push({k:'trx',label:'🔺 TRX (Tron)',addr:info.trx});
+  b.innerHTML='<div class="sl-checkout-sec">شبکهٔ پرداخت رو انتخاب کنید</div>'+
+    '<div class="sl-checkout-btns" id="net-list">'+nets.map(function(n){
+      return '<button class="sl-checkout-btn sl-checkout-btn-gateway" data-net="'+n.k+'">'+n.label+'</button>';
+    }).join('')+'</div>';
+  document.getElementById('net-list').querySelectorAll('[data-net]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var n=nets.filter(function(x){return x.k===btn.dataset.net})[0];
+      payCryptoForm(amount,n,info.note);
+    });
+  });
+}
+
+function payCryptoForm(amount,net,note){
+  var b=_accBody();if(!b)return;
+  b.innerHTML='<div class="sl-checkout-sec">'+esc(net.label)+' — '+fmt(amount)+' <small>تومان</small></div>'+
+    '<div class="sl-pay-box"><div class="sl-checkout-wallet-info">آدرس واریز:</div>'+
+    '<div class="sl-cc-num">'+esc(net.addr)+'</div></div>'+
+    (note?'<div class="sl-checkout-note">'+note+'</div>':'')+
+    '<div class="sl-checkout-sec">TXID (هش تراکنش)</div>'+
+    '<div class="sl-pay-box"><input type="text" id="crypto-txid" class="sl-amount-input" placeholder="TXID را اینجا وارد کنید" autocomplete="off"></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="crypto-submit-btn">ثبت تراکنش</button></div>';
+  var sb=document.getElementById('crypto-submit-btn'),tx=document.getElementById('crypto-txid');
+  if(sb)sb.addEventListener('click',function(){
+    var txid=(tx.value||'').trim();
+    if(!txid){window._slApp.dialog.alert('TXID رو وارد کنید','خطا');return}
+    sb.disabled=true;sb.textContent='در حال ثبت…';
+    fetch('https://panel.stland.ir/api/v1/wallet/crypto',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+      body:JSON.stringify({amount:amount,network:net.k,txid:txid})
+    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+      if(res.status!==200||!res.d.ok){
+        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ثبت تراکنش','خطا');
+        sb.disabled=false;sb.textContent='ثبت تراکنش';return;
+      }
+      showChargeDone('تراکنش ثبت شد. پس از تأیید (۱۵-۳۰ دقیقه)، کیف‌پول شارژ می‌شود.');
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='ثبت تراکنش'});
+  });
+}
 
 /* ─── دعوت دوستان ─── */
 function openInvite(){
@@ -398,7 +529,15 @@ function openPartner(){
   window._slApi('/me/partner',true).then(function(d){
     var b=_accBody();if(!b)return;
     if(!d.is_partner){
-      b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🤝</span>شما هنوز همکار نیستید.<br><span style="font-size:12px">برای ثبت‌نام همکاری با پشتیبانی در تماس باشید.</span></div>';
+      if(d.pending_status==='pending'){
+        b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">⏳</span>درخواست همکاری شما ثبت شده و در انتظار بررسی ادمینه.<br><span style="font-size:12px">معمولاً کمتر از ۲۴ ساعت طول می‌کشه.</span></div>';
+        return;
+      }
+      if(d.pending_status==='rejected'){
+        b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">❌</span>درخواست قبلی شما رد شده.<br><span style="font-size:12px">برای بررسی مجدد با پشتیبانی در تماس باشید.</span></div>';
+        return;
+      }
+      renderPartnerApplyForm(b);
       return;
     }
     var tierName=(d.tier&&d.tier.name)||'—';
@@ -416,6 +555,136 @@ function openPartner(){
   }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات همکاری')});
 }
 window.openPartner=openPartner;
+
+/* ─── فرم درخواست همکاری — هم‌ارز ویزارد ربات (شهر → نام فروشگاه) ─── */
+function renderPartnerApplyForm(b){
+  b.innerHTML='<div class="sl-empty" style="padding:16px 8px 4px"><span class="sl-empty-e">🤝</span>'+
+    'برای شروع همکاری، فرم زیر رو پر کنید.</div>'+
+    '<div class="sl-checkout-sec">شماره تماس</div>'+
+    '<div class="sl-pay-box"><input type="tel" id="pa-phone" class="sl-amount-input" placeholder="۰۹xxxxxxxxx" autocomplete="off"></div>'+
+    '<div class="sl-checkout-sec">شهر فعالیت</div>'+
+    '<div class="sl-pay-box"><input type="text" id="pa-city" class="sl-amount-input" placeholder="مثلاً تهران" autocomplete="off"></div>'+
+    '<div class="sl-checkout-sec">نام فروشگاه / پیج / مجموعه</div>'+
+    '<div class="sl-pay-box"><input type="text" id="pa-shop" class="sl-amount-input" placeholder="نام کسب‌وکار شما" autocomplete="off"></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="pa-submit-btn">ثبت درخواست</button></div>'+
+    '<div class="sl-checkout-note">پس از بررسی ادمین (معمولاً کمتر از ۲۴ ساعت)، نتیجه اعلام می‌شود.</div>';
+  var sb=document.getElementById('pa-submit-btn');
+  if(sb)sb.addEventListener('click',function(){
+    var phone=(document.getElementById('pa-phone').value||'').trim();
+    var city=(document.getElementById('pa-city').value||'').trim();
+    var shop=(document.getElementById('pa-shop').value||'').trim();
+    if(!phone||phone.length<8){window._slApp.dialog.alert('شماره تماس معتبر وارد کنید','خطا');return}
+    if(!city||city.length<2){window._slApp.dialog.alert('نام شهر رو وارد کنید','خطا');return}
+    if(!shop||shop.length<2){window._slApp.dialog.alert('نام فروشگاه/پیج رو وارد کنید','خطا');return}
+    sb.disabled=true;sb.textContent='در حال ثبت…';
+    var un=(tgUser&&tgUser.first_name)||'',ln=(tgUser&&tgUser.last_name)||'';
+    fetch('https://panel.stland.ir/api/v1/partner/apply',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+      body:JSON.stringify({phone:phone,city:city,shop_name:shop,
+        full_name:(un+' '+ln).trim(),username:(tgUser&&tgUser.username)||''})
+    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+      if(res.status!==200||!res.d.ok){
+        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ثبت درخواست','خطا');
+        sb.disabled=false;sb.textContent='ثبت درخواست';return;
+      }
+      b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
+        '<div class="sl-checkout-result-t">درخواست ثبت شد</div>'+
+        '<div class="sl-checkout-result-s">پس از بررسی ادمین نتیجه اعلام می‌شود.</div></div>';
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='ثبت درخواست'});
+  });
+}
+
+/* ─── پشتیبانی — همون منطق ticket_v2 ربات (سقف ۳ پیام تا پاسخ ادمین) ─── */
+var _spPoll=null;
+function openSupport(){
+  _accPopup('پشتیبانی',skel(2));
+  loadSupportTicket();
+  if(_spPoll)clearInterval(_spPoll);
+  _spPoll=setInterval(function(){
+    var pop=document.getElementById('post-popup');
+    if(!pop||!pop.classList.contains('modal-in')){clearInterval(_spPoll);_spPoll=null;return}
+    var chat=document.getElementById('sp-chat');
+    if(chat)loadSupportTicket(true); // فقط وقتی داخل صفحهٔ چت هستیم poll کن
+  },5000);
+}
+window.openSupport=openSupport;
+
+function loadSupportTicket(silent){
+  var b=_accBody();
+  fetch('https://panel.stland.ir/api/v1/support/ticket',{
+    headers:{'X-Telegram-Init-Data':window._slInitData}
+  }).then(function(r){return r.json()}).then(function(d){
+    if(!d||!d.ok)throw 0;
+    if(d.ticket)renderSupportChat(d.ticket,d.messages||[]);
+    else if(!silent)renderSupportStart();
+  }).catch(function(){if(!silent&&b)b.innerHTML=err('خطا در اتصال به پشتیبانی')});
+}
+
+function renderSupportStart(){
+  var b=_accBody();if(!b)return;
+  b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">💬</span>پشتیبانی آنلاین<br>'+
+    '<span style="font-size:12px">پیام‌تون رو بفرستید، پشتیبانی در اولین فرصت پاسخ می‌ده.</span></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="sp-start-btn">شروع گفتگو</button></div>';
+  var sb=document.getElementById('sp-start-btn');
+  if(sb)sb.addEventListener('click',function(){
+    sb.disabled=true;sb.textContent='در حال شروع…';
+    fetch('https://panel.stland.ir/api/v1/support/ticket',{
+      method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData}
+    }).then(function(r){return r.json()}).then(function(d){
+      if(!d||!d.ok)throw 0;
+      renderSupportChat(d.ticket,[]);
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='شروع گفتگو'});
+  });
+}
+
+function renderSupportChat(ticket,messages){
+  var b=_accBody();if(!b)return;
+  var remaining=Math.max(0,3-(ticket.user_msg_count||0));
+  var closed=ticket.status==='closed';
+  b.innerHTML='<div class="sl-sp-chat" id="sp-chat">'+
+    (messages.length?messages.map(function(m){
+      var mine=m.sender==='user';
+      return '<div class="sl-sp-msg '+(mine?'sl-sp-mine':'sl-sp-theirs')+'">'+esc(m.text)+'</div>';
+    }).join(''):'<div class="sl-sp-hint">پیام خودتون رو بنویسید</div>')+
+    '</div>'+
+    (closed?
+      '<div class="sl-checkout-note">این گفتگو بسته شده. برای گفتگوی جدید دوباره وارد این صفحه بشید.</div>'+
+      '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-gateway" id="sp-new-btn">شروع گفتگوی جدید</button></div>'
+      :
+      (remaining<=0?
+        '<div class="sl-checkout-note">⏳ در انتظار پاسخ پشتیبانی — بعد از پاسخ می‌تونید ادامه بدید.</div>'
+        :
+        '<div class="sl-sp-input-row"><input type="text" id="sp-input" class="sl-sp-input" placeholder="پیام خود را بنویسید…" autocomplete="off">'+
+        '<button class="sl-sp-send" id="sp-send-btn">ارسال</button></div>'+
+        '<div class="sl-checkout-note" style="margin-top:6px">'+remaining+' پیام دیگر می‌تونید بفرستید</div>'
+      )
+    );
+  var chatBox=document.getElementById('sp-chat');
+  if(chatBox)chatBox.scrollTop=chatBox.scrollHeight;
+  var nb=document.getElementById('sp-new-btn');
+  if(nb)nb.addEventListener('click',renderSupportStart);
+  var sendBtn=document.getElementById('sp-send-btn'),inp=document.getElementById('sp-input');
+  function send(){
+    var text=(inp.value||'').trim();
+    if(!text)return;
+    sendBtn.disabled=true;inp.disabled=true;
+    fetch('https://panel.stland.ir/api/v1/support/message',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+      body:JSON.stringify({text:text})
+    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+      if(res.status!==200||!res.d.ok){
+        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ارسال پیام','خطا');
+        sendBtn.disabled=false;inp.disabled=false;return;
+      }
+      messages.push({sender:'user',text:text});
+      renderSupportChat(res.d.ticket,messages);
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sendBtn.disabled=false;inp.disabled=false});
+  }
+  if(sendBtn)sendBtn.addEventListener('click',send);
+  if(inp)inp.addEventListener('keydown',function(e){if(e.key==='Enter')send()});
+}
 
 /* ═══ جستجو — درون همون فرم، بدون دیالوگ/تعویض صفحه ═══ */
 (function(){

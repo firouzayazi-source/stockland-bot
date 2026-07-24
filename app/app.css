@@ -298,6 +298,27 @@ html.dark .sl-checkout-emoji{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-checkout-btn-gateway{background:var(--card);color:var(--ink);border:2px solid var(--ln)}
 .sl-checkout-btn:disabled{opacity:.4;cursor:not-allowed}
 .sl-checkout-note{margin:14px 20px 24px;font-size:12px;color:var(--mu);text-align:center;line-height:1.8}
+/* جعبهٔ عمودی (برخلاف .sl-checkout-wallet که ردیفی/space-between است) — برای فرم‌های پرداخت */
+.sl-pay-box{margin:0 20px;background:var(--card);border-radius:14px;padding:14px 16px;box-shadow:var(--sh)}
+.sl-amount-input{width:100%;border:none;outline:none;background:transparent;box-sizing:border-box;
+ font-family:inherit;font-size:16px;font-weight:700;color:var(--ink);padding:4px 0;direction:ltr;text-align:right}
+.sl-amount-input::placeholder{color:var(--mu);font-weight:500;font-size:13px}
+.sl-cc-num{font-size:18px;font-weight:800;color:var(--br);direction:ltr;text-align:center;
+ letter-spacing:1px;margin:8px 0;word-break:break-all}
+.sl-file-btn{display:block;text-align:center;padding:10px;border-radius:10px;
+ border:1.5px dashed var(--ln);color:var(--mu);font-size:13px;font-weight:600;cursor:pointer}
+/* ═══ چت پشتیبانی ═══ */
+.sl-sp-chat{padding:16px 20px 8px;min-height:180px;max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.sl-sp-hint{color:var(--mu);font-size:13px;text-align:center;padding:24px 0}
+.sl-sp-msg{max-width:78%;padding:10px 14px;border-radius:16px;font-size:13.5px;line-height:1.7;word-break:break-word}
+.sl-sp-mine{align-self:flex-end;background:var(--br);color:#fff;border-bottom-left-radius:5px}
+.sl-sp-theirs{align-self:flex-start;background:var(--card);color:var(--ink);box-shadow:var(--sh);border-bottom-right-radius:5px}
+.sl-sp-input-row{display:flex;gap:8px;padding:8px 20px 0;align-items:center}
+.sl-sp-input{flex:1;min-width:0;box-sizing:border-box;border:1px solid var(--ln);border-radius:12px;padding:10px 14px;
+ font-family:inherit;font-size:13.5px;background:var(--card);color:var(--ink);outline:none}
+/* width:auto صریح چون F7 یه قاعدهٔ پایه button{width:100%} داره که این دکمهٔ کنار input رو کل ردیف می‌کرد */
+.sl-sp-send{flex:none;width:auto;background:var(--br);color:#fff;border:none;border-radius:12px;
+ padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
 .sl-checkout-result{padding:40px 24px;text-align:center}
 .sl-checkout-result-e{font-size:56px;margin-bottom:16px}
 .sl-checkout-result-t{font-size:19px;font-weight:800;margin-bottom:8px}

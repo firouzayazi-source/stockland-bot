@@ -126,15 +126,70 @@ async def api_partner(request: Request):
     """وضعیت همکاری کاربر."""
     uid = _auth(request)
     from core import partners, referrals
-    tier = partners.current_tier(uid) if partners.is_approved(uid) else None
+    is_approved = partners.is_approved(uid)
+    tier = partners.current_tier(uid) if is_approved else None
+    pending_status = None
+    if not is_approved:
+        try:
+            from db import get_partner_by_user_id
+            row = get_partner_by_user_id(uid)
+            if row:
+                pending_status = (row[3] or "").strip().lower() or None
+        except Exception:
+            pending_status = None
     return {
         "ok": True,
-        "is_partner": partners.is_approved(uid),
+        "is_partner": is_approved,
+        "pending_status": pending_status,  # None | 'pending' | 'rejected'
         "balance": partners.partner_balance(uid),
         "tier": {"name": tier["name"], "icon": tier.get("icon"),
                  "order_count": tier.get("order_count", 0)} if tier else None,
         "referrals": referrals.stats(uid),
     }
+
+
+@router.post("/partner/apply")
+async def api_partner_apply(request: Request):
+    """درخواست همکاری از مینی‌اپ — دقیقاً همون تابع/جدولی که ربات (process_reseller_shop)
+    استفاده می‌کنه، پس پنل ادمین بدون هیچ تغییری همین درخواست‌ها رو می‌بینه."""
+    uid = _auth(request)
+    body = await request.json()
+    phone = (body.get("phone") or "").strip()
+    city = (body.get("city") or "").strip()
+    shop_name = (body.get("shop_name") or "").strip()
+    full_name = (body.get("full_name") or "").strip()
+    username = (body.get("username") or "").strip()
+
+    if not phone or len(phone) < 8:
+        raise HTTPException(400, "شماره تماس نامعتبر است")
+    if not city or len(city) < 2:
+        raise HTTPException(400, "نام شهر نامعتبر است")
+    if not shop_name or len(shop_name) < 2:
+        raise HTTPException(400, "نام فروشگاه/پیج نامعتبر است")
+
+    from bot import can_submit_partner_request
+    ok, msg = can_submit_partner_request(uid, phone=phone)
+    if not ok:
+        raise HTTPException(400, msg or "امکان ثبت درخواست نیست")
+
+    from db import upsert_partner_request
+    upsert_partner_request(uid, phone, username=username, full_name=full_name,
+                            note="", city=city, shop_name=shop_name)
+
+    from config import BOT_TOKEN, ADMIN_ID
+    import requests
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": ADMIN_ID,
+                  "text": (f"🔔 درخواست فروشندگی جدید (از مینی‌اپ)\n"
+                           f"کاربر: {uid} — {full_name}\nشهر: {city} | فروشگاه: {shop_name}")},
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+    return {"ok": True}
 
 
 @router.get("/me/invite")
@@ -195,6 +250,201 @@ async def api_wallet_topup(request: Request):
         raise HTTPException(502, data.get("detail") or "درگاه پاسخ نداد")
 
     return {"ok": True, "redirect_url": data["payment_url"]}
+
+
+# کارت مقصد کارت‌به‌کارت — دقیقاً همون مقداری که ربات هم هاردکد داره (bot.py handle_card2card_amount)
+_CARD2CARD_NUMBER = "6037701608004393"
+_CARD2CARD_NAME = "سید فیروز ایازی"
+
+
+@router.get("/payment/methods")
+async def api_payment_methods():
+    """روش‌های فعال شارژ کیف‌پول — دقیقاً همون تنظیماتی که ربات هم می‌خونه."""
+    from db import get_crypto_settings
+    cs = get_crypto_settings()
+    return {
+        "ok": True,
+        "gateway": True,
+        "card2card": {"card_number": _CARD2CARD_NUMBER, "card_name": _CARD2CARD_NAME},
+        "crypto": {
+            "enabled": bool(int(cs.get("enabled") or 0)),
+            "usdt_trc20": cs.get("usdt_trc20") or "",
+            "trx": cs.get("trx") or "",
+            "note": cs.get("note") or "",
+        },
+    }
+
+
+@router.post("/wallet/card2card")
+async def api_wallet_card2card(request: Request):
+    """ثبت رسید کارت‌به‌کارت از مینی‌اپ.
+
+    عکس رسید به همون چتِ ادمین در تلگرام آپلود می‌شه تا یه file_id واقعی بگیریم،
+    دقیقاً هم‌ساختار با چیزی که ربات از کاربر می‌گیره — چون پنل ادمین
+    (admin_panel.py) رسیدها رو با getFile روی همین file_id نمایش می‌ده و
+    قرار نیست پنل ادمین دست بخوره، این تنها راهیه که با اون کاملاً سازگار بمونه.
+    """
+    uid = _auth(request)
+    form = await request.form()
+    try:
+        amount = int(str(form.get("amount", "0")).strip())
+    except (TypeError, ValueError):
+        amount = 0
+    if amount < 1000:
+        raise HTTPException(400, "حداقل مبلغ ۱٬۰۰۰ تومان است")
+    photo = form.get("photo")
+    if not photo or not hasattr(photo, "read"):
+        raise HTTPException(400, "عکس رسید ارسال نشده")
+    photo_bytes = await photo.read()
+    if not photo_bytes:
+        raise HTTPException(400, "عکس رسید خالی است")
+
+    from config import BOT_TOKEN, ADMIN_ID
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data={"chat_id": ADMIN_ID, "caption": f"رسید کارت‌به‌کارت — کاربر {uid} — {amount:,} تومان (از مینی‌اپ)"},
+                files={"photo": ("receipt.jpg", photo_bytes, photo.content_type or "image/jpeg")},
+            )
+        tg_data = r.json()
+        file_id = tg_data["result"]["photo"][-1]["file_id"]
+    except Exception as e:
+        raise HTTPException(502, f"خطا در آپلود رسید: {e}")
+
+    from db import save_card_receipt, ensure_card_receipts_schema
+    ensure_card_receipts_schema()
+    rid = save_card_receipt(uid, amount, file_id)
+    return {"ok": True, "receipt_id": rid}
+
+
+@router.post("/wallet/crypto")
+async def api_wallet_crypto(request: Request):
+    """ثبت رسید رمزارز از مینی‌اپ — دقیقاً همون تابعی که ربات استفاده می‌کنه."""
+    uid = _auth(request)
+    body = await request.json()
+    try:
+        amount = int(body.get("amount", 0))
+    except (TypeError, ValueError):
+        amount = 0
+    network = (body.get("network") or "").strip().lower()
+    txid = (body.get("txid") or "").strip()
+    if amount < 1000:
+        raise HTTPException(400, "حداقل مبلغ ۱٬۰۰۰ تومان است")
+    if network not in ("usdt", "trx"):
+        raise HTTPException(400, "شبکه نامعتبر است")
+    if not txid:
+        raise HTTPException(400, "TXID الزامی است")
+
+    from db import get_crypto_settings, save_crypto_receipt
+    cs = get_crypto_settings()
+    if not int(cs.get("enabled") or 0):
+        raise HTTPException(400, "پرداخت رمزارز غیرفعال است")
+
+    rid = save_crypto_receipt(uid, amount, network, txid)
+    return {"ok": True, "receipt_id": rid}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── پشتیبانی (ticket_v2) — همون جدول/منطق ربات، فقط کلاینت متفاوت ──────────
+# ══════════════════════════════════════════════════════════════════════════
+
+TICKET_MAX_USER_MSGS = 3  # همون سقف bot.py
+
+
+def _ticket_to_dict(t) -> dict:
+    return {
+        "id": int(t["id"]), "status": t["status"],
+        "user_msg_count": int(t["user_msg_count"] or 0),
+        "created_at": str(t["created_at"] or ""),
+    }
+
+
+@router.get("/support/ticket")
+async def api_support_ticket_get(request: Request):
+    """تیکت پشتیبانی باز فعلی کاربر (اگر باشد) + پیام‌ها."""
+    uid = _auth(request)
+    from db import ticket_ensure_schema, ticket_get_open_support, ticket_get_messages
+    ticket_ensure_schema()
+    t = ticket_get_open_support(uid)
+    if not t:
+        return {"ok": True, "ticket": None, "messages": []}
+    msgs = ticket_get_messages(int(t["id"]))
+    return {
+        "ok": True,
+        "ticket": _ticket_to_dict(t),
+        "messages": [
+            {"id": int(m["id"]), "sender": m["sender"], "text": m["text"] or "",
+             "created_at": str(m["created_at"] or "")}
+            for m in msgs
+        ],
+    }
+
+
+@router.post("/support/ticket")
+async def api_support_ticket_create(request: Request):
+    """شروع تیکت پشتیبانی جدید — اگر از قبل باز باشه همونو برمی‌گردونه."""
+    uid = _auth(request)
+    from db import ticket_ensure_schema, ticket_get_open_support, ticket_create
+    ticket_ensure_schema()
+    t = ticket_get_open_support(uid)
+    if not t:
+        tid = ticket_create(uid, type_="support")
+        from db import ticket_get
+        t = ticket_get(tid)
+    return {"ok": True, "ticket": _ticket_to_dict(t)}
+
+
+def _notify_admin_ticket(ticket_id: int, uid: int, text: str) -> None:
+    from config import BOT_TOKEN, ADMIN_ID
+    import requests
+    if not BOT_TOKEN or not ADMIN_ID:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": ADMIN_ID,
+                "text": (f"🔵 پیام پشتیبانی جدید (از مینی‌اپ)\n"
+                         f"تیکت #{ticket_id} — کاربر {uid}\n\n{text[:300]}\n\n"
+                         f"https://panel.stland.ir/admin/tickets/{ticket_id}"),
+            },
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+@router.post("/support/message")
+async def api_support_message(request: Request):
+    """ارسال پیام کاربر به تیکت باز — دقیقاً هم‌منطق با _ticket_v2_handle_user_message ربات
+    (سقف ۳ پیام متوالی تا پاسخ ادمین، نوتیف ادمین فقط روی اولین پیام batch)."""
+    uid = _auth(request)
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "متن پیام خالی است")
+
+    from db import ticket_ensure_schema, ticket_get_open_support, ticket_get, \
+        ticket_add_message, ticket_user_sent
+    ticket_ensure_schema()
+    t = ticket_get_open_support(uid)
+    if not t or t["status"] == "closed":
+        raise HTTPException(400, "تیکت باز یافت نشد — یک تیکت جدید شروع کنید")
+
+    tid = int(t["id"])
+    cur_count = int(t["user_msg_count"] or 0)
+    if cur_count >= TICKET_MAX_USER_MSGS:
+        raise HTTPException(429, "لطفاً منتظر پاسخ پشتیبانی بمانید")
+
+    ticket_add_message(tid, "user", text, source="miniapp")
+    new_count = ticket_user_sent(tid)
+    if new_count == 1:
+        _notify_admin_ticket(tid, uid, text)
+
+    t2 = ticket_get(tid)
+    return {"ok": True, "ticket": _ticket_to_dict(t2), "remaining": max(0, TICKET_MAX_USER_MSGS - new_count)}
 
 
 # ══════════════════════════════════════════════════════════════════════════
