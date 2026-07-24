@@ -376,10 +376,42 @@ async def api_support_ticket_get(request: Request):
         "ticket": _ticket_to_dict(t),
         "messages": [
             {"id": int(m["id"]), "sender": m["sender"], "text": m["text"] or "",
+             "media_type": m["media_type"] if "media_type" in m.keys() else None,
+             "image_url": (f"/api/v1/support/media/{int(m['id'])}"
+                            if ("media_type" in m.keys() and m["media_type"] == "photo"
+                                and "media_file_id" in m.keys() and m["media_file_id"]) else None),
              "created_at": str(m["created_at"] or "")}
             for m in msgs
         ],
     }
+
+
+@router.get("/support/media/{message_id}")
+async def api_support_media(message_id: int):
+    """پراکسی عکس یه پیام تیکت — از همون file_id تلگرام (چه پیام از ربات اومده چه از مینی‌اپ)."""
+    from db import ticket_get_messages, _get_connection
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT media_file_id, media_type FROM ticket_messages WHERE id=? LIMIT 1;",
+            (message_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["media_file_id"] or row["media_type"] != "photo":
+        raise HTTPException(404, "یافت نشد")
+    from config import BOT_TOKEN
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            info = (await client.get(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/getFile",
+                params={"file_id": row["media_file_id"]})).json()
+            file_path = info["result"]["file_path"]
+            img = await client.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}")
+        from fastapi.responses import Response
+        return Response(img.content, media_type="image/jpeg")
+    except Exception:
+        raise HTTPException(502, "خطا در دریافت عکس")
 
 
 @router.post("/support/ticket")
@@ -419,12 +451,18 @@ def _notify_admin_ticket(ticket_id: int, uid: int, text: str) -> None:
 @router.post("/support/message")
 async def api_support_message(request: Request):
     """ارسال پیام کاربر به تیکت باز — دقیقاً هم‌منطق با _ticket_v2_handle_user_message ربات
-    (سقف ۳ پیام متوالی تا پاسخ ادمین، نوتیف ادمین فقط روی اولین پیام batch)."""
+    (سقف ۳ پیام متوالی تا پاسخ ادمین، نوتیف ادمین فقط روی اولین پیام batch).
+
+    multipart/form-data: text (اختیاری) + photo (اختیاری) — حداقل یکی الزامیه.
+    عکس هم مثل کارت‌به‌کارت به تلگرام آپلود می‌شه تا file_id واقعی بگیره، پس پنل ادمین
+    (که رسیدها/تیکت‌ها رو با getFile می‌خونه) بدون هیچ تغییری همینو نشون می‌ده."""
     uid = _auth(request)
-    body = await request.json()
-    text = (body.get("text") or "").strip()
-    if not text:
-        raise HTTPException(400, "متن پیام خالی است")
+    form = await request.form()
+    text = str(form.get("text") or "").strip()
+    photo = form.get("photo")
+    has_photo = photo is not None and hasattr(photo, "read")
+    if not text and not has_photo:
+        raise HTTPException(400, "متن یا عکس ارسال نشده")
 
     from db import ticket_ensure_schema, ticket_get_open_support, ticket_get, \
         ticket_add_message, ticket_user_sent
@@ -438,10 +476,32 @@ async def api_support_message(request: Request):
     if cur_count >= TICKET_MAX_USER_MSGS:
         raise HTTPException(429, "لطفاً منتظر پاسخ پشتیبانی بمانید")
 
-    ticket_add_message(tid, "user", text, source="miniapp")
+    media_type = None
+    media_file_id = None
+    if has_photo:
+        photo_bytes = await photo.read()
+        if photo_bytes:
+            from config import BOT_TOKEN, ADMIN_ID
+            import httpx
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    r = await client.post(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                        data={"chat_id": ADMIN_ID,
+                              "caption": f"عکس تیکت #{tid} — کاربر {uid} (از مینی‌اپ)"},
+                        files={"photo": ("photo.jpg", photo_bytes, photo.content_type or "image/jpeg")},
+                    )
+                tg_data = r.json()
+                media_file_id = tg_data["result"]["photo"][-1]["file_id"]
+                media_type = "photo"
+            except Exception:
+                pass  # اگه آپلود عکس شکست خورد، حداقل متن (اگه بود) ثبت می‌شه
+
+    ticket_add_message(tid, "user", text or None, media_type=media_type,
+                        media_file_id=media_file_id, source="miniapp")
     new_count = ticket_user_sent(tid)
     if new_count == 1:
-        _notify_admin_ticket(tid, uid, text)
+        _notify_admin_ticket(tid, uid, text or "📷 عکس")
 
     t2 = ticket_get(tid)
     return {"ok": True, "ticket": _ticket_to_dict(t2), "remaining": max(0, TICKET_MAX_USER_MSGS - new_count)}
