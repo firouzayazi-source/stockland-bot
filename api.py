@@ -81,11 +81,11 @@ def _auth(request: Request) -> int:
 # ══════════════════════════════════════════════════════════════════════════
 
 @router.get("/products")
-async def api_products(request: Request, category: str = "", limit: int = 60):
-    """لیست محصولات."""
+async def api_products(request: Request, category: str = "", limit: int = 60, q: str = ""):
+    """لیست محصولات — با q می‌شه در عنوان/توضیح جستجو کرد."""
     from core import products
     try:
-        data = products.list_products(category=category, active_only=True, limit=limit)
+        data = products.list_products(category=category, active_only=True, limit=limit, q=q.strip())
         return {"ok": True, "products": data}
     except Exception as ex:
         return JSONResponse({"ok": False, "error": str(ex)[:120]}, status_code=500)

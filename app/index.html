@@ -51,9 +51,13 @@
       <div class="sl-hero-brand">استوک‌لند</div>
       <div class="sl-hero-sub" id="today-date"></div>
       <div class="sl-hero-tagline">فروشگاه دیجیتال — تحویل فوری، گارانتی واقعی</div>
-      <div class="sl-search" id="search-bar">
-       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-       جستجو در محصولات و آموزش‌ها
+      <div class="sl-search-wrap">
+       <div class="sl-search" id="search-bar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="search-input" class="sl-search-input" placeholder="جستجو در محصولات" autocomplete="off" enterkeyhint="search">
+        <span class="sl-search-clear" id="search-clear" hidden>✕</span>
+       </div>
+       <div class="sl-search-results" id="search-results" hidden></div>
       </div>
      </div>
     </div>
