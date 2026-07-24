@@ -7,6 +7,16 @@ var initData=(tg&&tg.initData)||'',tgUser=(tg&&tg.initDataUnsafe&&tg.initDataUns
 var app=new Framework7({el:'#app',name:'استوک‌لند',theme:'ios',darkMode:'auto',popup:{closeByBackdropClick:true}});
 window._slApp=app;window._slApi=function(){return api.apply(null,arguments)};window._slEsc=function(){return esc.apply(null,arguments)};window._slFmt=function(){return fmt.apply(null,arguments)};window._slInitData=initData;window._slTg=tg;
 
+/* هماهنگی تم روشن/تاریک با خود تلگرام — نه فقط با تنظیم سیستم‌عامل (این دو می‌تونن فرق کنن،
+   مثلاً تلگرام تاریک باشه ولی گوشی روشن). tg.colorScheme همیشه اولویت داره وقتی داخل تلگراییم. */
+function _slApplyTheme(){
+  var isDark=(inTG&&tg.colorScheme)?(tg.colorScheme==='dark'):
+    !!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);
+  try{app.setDarkMode(isDark)}catch(e){document.documentElement.classList.toggle('dark',isDark)}
+}
+_slApplyTheme();
+if(inTG&&tg.onEvent){try{tg.onEvent('themeChanged',_slApplyTheme)}catch(e){}}
+
 /* داخل مینی‌اپ تلگرام، navigation طبیعی a[target=_blank] قابل‌اعتماد نیست —
    همهٔ این لینک‌ها (خبر، دانلود، …) رو از طریق پل جاوااسکریپت تلگرام باز می‌کنیم. */
 if(inTG){
@@ -35,6 +45,13 @@ function formatBody(s){
   return t.replace(/\r?\n/g,'<br>');
 }
 function fmt(n){return Number(n).toLocaleString('fa-IR')}
+function starsHtml(avg,count,size){
+  if(!count)return '';
+  var full=Math.round(avg||0);
+  var stars='';for(var i=1;i<=5;i++)stars+=(i<=full?'★':'☆');
+  return '<span class="sl-stars'+(size==='sm'?' sl-stars-sm':'')+'"><span class="sl-stars-ico">'+stars+'</span> '+
+    '<b>'+(avg||0).toFixed(1)+'</b> <small>('+fmt(count)+')</small></span>';
+}
 function skel(n){var o='';for(var i=0;i<(n||3);i++)o+='<div class="sl-skel"><div class="b w60"></div><div class="b w90"></div><div class="b w40"></div></div>';return o}
 function api(p,a){var h={'Accept':'application/json'};if(a&&initData)h['X-Telegram-Init-Data']=initData;return fetch('/api/v1'+p,{headers:h}).then(function(r){if(!r.ok)throw r;return r.json()})}
 function err(m){return '<div class="sl-empty"><span class="sl-empty-e">📡</span>'+esc(m||'خطا')+'</div>'}
@@ -228,6 +245,7 @@ function loadLearnCard(){
 window.loadLearnCard=loadLearnCard;
 
 loadHome();
+if(loggedIn)_checkMeBadge();
 
 /* ═══ فروشگاه ═══ */
 var _s=0;
@@ -258,7 +276,7 @@ function renderP(name){
     var f=p.flash_active;
     return '<div class="sl-prod" data-pid="'+p.id+'"><div class="sl-pic">'+(p._e||'📦')+'</div>'+
       '<div class="sl-pinfo"><div class="sl-pt">'+esc(p.title)+'</div>'+
-      '<div class="sl-pg">'+esc(p._c||'')+(p._s?' · '+esc(p._s):'')+'</div>'+
+      '<div class="sl-pg">'+esc(p._c||'')+(p._s?' · '+esc(p._s):'')+(p.rating_count?' · '+starsHtml(p.rating_avg,p.rating_count,'sm'):'')+'</div>'+
       '<div class="sl-pprice-row">'+(f?'<span class="sl-old">'+fmt(p.price)+'</span>':'')+
       '<span class="sl-price">'+fmt(p.effective_price)+' <small>تومان</small></span></div>'+
       (f?'<div class="sl-flash">⚡️ فروش فوری</div>':'')+
@@ -278,16 +296,35 @@ document.getElementById('shop-cats').addEventListener('click',function(e){
 function openP(pid){
   var t=document.getElementById('pp-title'),b=document.getElementById('pp-body');
   t.textContent='…';b.innerHTML=skel(2);app.popup.open('#prod-popup');
-  api('/products/'+pid).then(function(d){
+  api('/products/'+pid,true).then(function(d){
     var p=d.product||{};t.textContent=p.title||'';
     var f=p.flash_active,e=p.effective_price,bs=p.price,hs=p.stock!=null,ok=p.stock>0;
-    b.innerHTML='<div class="sl-pp-hero"><div class="sl-pp-emoji">'+(p._e||'📦')+'</div>'+
+    b.innerHTML='<div class="sl-pp-hero">'+
+      (loggedIn?'<button class="sl-pp-fav'+(p.is_favorite?' on':'')+'" id="sl-fav-'+p.id+'" data-fav="'+(p.is_favorite?1:0)+'">'+(p.is_favorite?'♥':'♡')+'</button>':'')+
+      '<div class="sl-pp-emoji">'+(p._e||'📦')+'</div>'+
       '<div class="sl-pp-title">'+esc(p.title)+'</div>'+
       (f?'<div class="sl-pp-flash"><span class="old">'+fmt(bs)+' تومان</span> <span class="tag">⚡️ فروش فوری</span></div>':'')+
-      '<div class="sl-pp-price">'+fmt(e)+' <small>تومان</small></div></div>'+
+      '<div class="sl-pp-price">'+fmt(e)+' <small>تومان</small></div>'+
+      (p.rating_count?'<div class="sl-pp-rating">'+starsHtml(p.rating_avg,p.rating_count)+'</div>':'')+
+      '</div>'+
       (hs?'<div class="sl-pp-stock">'+(ok?'✅ موجود — '+p.stock+' عدد':'❌ ناموجود')+'</div>':'')+
       '<div class="sl-pp-divider"></div>'+
       (p.description?'<div class="sl-pp-desc">'+nl2br(p.description)+'</div>':'')+
+      ((p.reviews&&p.reviews.length)?
+        '<div class="sl-pp-reviews-title">نظرات خریداران</div>'+
+        '<div class="sl-pp-reviews">'+p.reviews.map(function(rv){
+          var st='';for(var i=1;i<=5;i++)st+=(i<=rv.rating?'★':'☆');
+          return '<div class="sl-review"><div class="sl-review-top"><b>'+esc(rv.name)+'</b><span class="sl-review-st">'+st+'</span></div>'+
+            (rv.comment?'<div class="sl-review-txt">'+esc(rv.comment)+'</div>':'')+'</div>';
+        }).join('')+'</div>'
+        :'')+
+      ((p.related&&p.related.length)?
+        '<div class="sl-pp-related-title">محصولات مشابه</div>'+
+        '<div class="sl-pp-related">'+p.related.map(function(rp){
+          return '<div class="sl-rp-card" data-pid="'+rp.id+'"><div class="sl-rp-t">'+esc(rp.title)+'</div>'+
+            '<div class="sl-rp-p">'+fmt(rp.effective_price)+' <small>ت</small></div></div>';
+        }).join('')+'</div>'
+        :'')+
       (loggedIn&&ok!==false?
         '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید</button>':
         (hs&&!ok?
@@ -305,6 +342,20 @@ function openP(pid){
       if(lp)lp.addEventListener('click',function(){
         app.popup.close('#prod-popup');
         setTimeout(function(){var l=document.querySelector('.tab-link[href="#tab-me"]');if(l)l.click()},350);
+      });
+      var fv=document.getElementById('sl-fav-'+p.id);
+      if(fv)fv.addEventListener('click',function(){
+        var on=fv.dataset.fav==='1';
+        fetch('/api/v1/favorites/'+p.id,{method:on?'DELETE':'POST',headers:{'X-Telegram-Init-Data':initData}})
+          .then(function(){
+            fv.dataset.fav=on?'0':'1';
+            fv.textContent=on?'♡':'♥';
+            fv.classList.toggle('on',!on);
+            if(window._slTg&&window._slTg.HapticFeedback)try{window._slTg.HapticFeedback.impactOccurred('light')}catch(e){}
+          });
+      });
+      b.querySelectorAll('.sl-rp-card').forEach(function(card){
+        card.addEventListener('click',function(){openP(card.dataset.pid)});
       });
     },150);
   }).catch(function(){b.innerHTML=err('خطا');});
@@ -486,10 +537,12 @@ function loadMe(){if(_m)return;_m=1;
   }
   var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';nm.textContent=un;
   body.innerHTML='<div class="sl-me"><div class="sl-ava">'+esc(un.charAt(0))+'</div><div><div class="sl-me-n">'+esc(un)+'</div><div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div></div></div>'+
+    '<div id="me-checkin-card"></div>'+
     '<div class="sl-wallet"><div class="sl-wallet-glow"></div><div class="sl-wallet-l">موجودی کیف پول</div>'+
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
     '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge" style="width:100%">＋ شارژ کیف‌پول</a></div></div>'+
     '<div class="sl-group"><a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:#0A63FF">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
+    '<a class="sl-row" href="#" id="me-favs-row"><span class="sl-ric" style="background:#EF4444">♥</span><span class="sl-row-grow">علاقه‌مندی‌ها</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-invite-row"><span class="sl-ric" style="background:#22C55E">🎁</span><span class="sl-row-grow">دعوت دوستان</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-support-row"><span class="sl-ric" style="background:#6B7280">💬</span><span class="sl-row-grow">پشتیبانی</span><span class="sl-chev">‹</span></a>'+
@@ -498,12 +551,15 @@ function loadMe(){if(_m)return;_m=1;
     foot;
   api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
   api('/me/partner',true).then(function(d){if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}}).catch(function(){});
+  renderCheckinCard();
   var lo_=document.getElementById('me-logout-row');
   if(lo_)lo_.addEventListener('click',function(e){e.preventDefault();
     fetch('/api/v1/auth/logout',{method:'POST'}).then(function(){loggedIn=false;tgUser=null;_m=0;loadMe()});
   });
   var or_=document.getElementById('me-orders-row');
   if(or_)or_.addEventListener('click',function(e){e.preventDefault();openOrders()});
+  var fr_=document.getElementById('me-favs-row');
+  if(fr_)fr_.addEventListener('click',function(e){e.preventDefault();openFavorites()});
   var wc_=document.getElementById('me-wallet-charge');
   if(wc_)wc_.addEventListener('click',function(e){e.preventDefault();startCharge()});
   var pr_=document.getElementById('me-partner-row');
@@ -515,25 +571,137 @@ function loadMe(){if(_m)return;_m=1;
 }
 window.loadMe=loadMe;
 
+/* ─── پاداش سرزدن روزانه ─── */
+function renderCheckinCard(){
+  var c=document.getElementById('me-checkin-card');if(!c)return;
+  api('/me/checkin',true).then(function(d){
+    if(!d)return;
+    if(d.available){
+      c.innerHTML='<div class="sl-checkin-card"><span class="sl-checkin-e">🎁</span>'+
+        '<div class="sl-checkin-txt"><b>پاداش سرزدن امروز رو بگیر</b>'+
+        '<span>'+fmt(d.reward_amount||0)+' تومان هدیه'+(d.streak>0?' · رکورد '+fmt(d.streak)+' روزه':'')+'</span></div>'+
+        '<button class="sl-checkin-btn" id="me-checkin-btn">دریافت</button></div>';
+      var btn=document.getElementById('me-checkin-btn');
+      if(btn)btn.addEventListener('click',function(){
+        btn.disabled=true;btn.textContent='…';
+        fetch('/api/v1/me/checkin',{method:'POST',headers:{'X-Telegram-Init-Data':initData}})
+          .then(function(r){return r.json()}).then(function(res){
+            if(!res.ok){c.innerHTML='';return}
+            if(window._slTg&&window._slTg.HapticFeedback)try{window._slTg.HapticFeedback.notificationOccurred('success')}catch(e){}
+            c.innerHTML='<div class="sl-checkin-card sl-checkin-done"><span class="sl-checkin-e">✅</span>'+
+              '<div class="sl-checkin-txt"><b>'+fmt(res.reward)+' تومان به کیف‌پولت اضافه شد</b>'+
+              '<span>رکورد سرزدن: '+fmt(res.streak)+' روز پشت‌سرهم</span></div></div>';
+            var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(res.balance||0)+' <small>تومان</small>';
+            _clearMeBadge();
+          }).catch(function(){btn.disabled=false;btn.textContent='دریافت'});
+      });
+    }else if(d.streak>0){
+      c.innerHTML='<div class="sl-checkin-card sl-checkin-mini"><span class="sl-checkin-e">🔥</span>'+
+        '<div class="sl-checkin-txt"><b>رکورد '+fmt(d.streak)+' روزه</b><span>فردا دوباره سر بزن برای ادامهٔ رکورد</span></div></div>';
+    }else{c.innerHTML=''}
+  }).catch(function(){c.innerHTML=''});
+}
+
+/* ─── بج «حساب» — پاداش سرزدن در دسترس، یا پاسخ جدید پشتیبانی ─── */
+function _clearMeBadge(){var b=document.getElementById('me-tab-badge');if(b)b.hidden=true}
+function _checkMeBadge(){
+  if(!loggedIn)return;
+  var show=false;
+  api('/me/checkin',true).then(function(d){
+    if(d&&d.available){show=true;_applyMeBadge(show)}
+  }).catch(function(){});
+  fetch('https://panel.stland.ir/api/v1/support/ticket',{headers:{'X-Telegram-Init-Data':initData}})
+    .then(function(r){return r.json()}).then(function(d){
+      if(!d||!d.ok||!d.ticket)return;
+      var msgs=d.messages||[];
+      if(!msgs.length)return;
+      var last=msgs[msgs.length-1];
+      var seenKey='sl_sp_seen_'+d.ticket.id;
+      var seenCount=parseInt(localStorage.getItem(seenKey)||'0',10);
+      if(last.sender!=='user'&&msgs.length>seenCount)_applyMeBadge(true);
+    }).catch(function(){});
+}
+function _applyMeBadge(v){var b=document.getElementById('me-tab-badge');if(b)b.hidden=!v}
+window._slCheckMeBadge=_checkMeBadge;
+
 /* ═══ سفارش‌های من ═══ */
 function openOrders(){
   var b=document.getElementById('orders-body');
   b.innerHTML=skel(3);
+  document.getElementById('orders-popup').querySelector('.title').textContent='سفارش‌های من';
   app.popup.open('#orders-popup');
   api('/me/orders',true).then(function(d){
     var items=(d&&d.orders)||[];
     if(!items.length){b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📦</span>هنوز سفارشی ثبت نکرده‌اید.</div>';return}
     var ST={active:'تحویل‌شده',returned:'برگشتی'};
     b.innerHTML='<div class="sl-group" style="margin:12px">'+items.map(function(o){
-      return '<div class="sl-row" style="cursor:default"><span class="sl-ric" style="background:#0A63FF">📦</span>'+
+      var hasData=!!o.delivered_data;
+      var row='<a href="#" class="sl-row" data-oid="'+o.id+'" style="cursor:pointer">'+
+        '<span class="sl-ric" style="background:#0A63FF">📦</span>'+
         '<span class="sl-row-grow"><div>'+esc(o.title)+'</div>'+
         '<div style="font-size:12px;color:var(--mu);margin-top:2px">'+esc(String(o.created_at||'').slice(0,16))+'</div></span>'+
         '<span style="text-align:left"><div style="font-weight:800">'+fmt(o.price)+' <small>تومان</small></div>'+
-        '<div style="font-size:11px;color:var(--mu);margin-top:2px">'+esc(ST[o.status]||o.status||'')+'</div></span></div>';
+        '<div style="font-size:11px;color:var(--mu);margin-top:2px">'+esc(ST[o.status]||o.status||'')+'</div></span>'+
+        (hasData?'<span class="sl-chev" style="margin-right:4px">‹</span>':'')+'</a>';
+      var detail='<div class="sl-order-detail" id="od-'+o.id+'" hidden style="padding:0 14px 14px">'+
+        (hasData?
+          '<div class="sl-checkout-wallet" style="direction:ltr;text-align:right;word-break:break-all;font-size:13px;white-space:pre-wrap">'+nl2br(o.delivered_data)+'</div>'+
+          '<div class="sl-wal-acts" style="margin-top:8px"><button class="sl-checkout-btn sl-checkout-btn-wallet" data-copy="'+o.id+'">📋 کپی مشخصات</button></div>'
+          :
+          '<div class="sl-checkout-note">مشخصات این سفارش هنوز ثبت نشده — یا از طریق چت ربات ارسال شده، یا هنوز در صف تحویله.</div>'
+        )+'</div>';
+      return row+detail;
     }).join('')+'</div>';
+    b.querySelectorAll('.sl-row[data-oid]').forEach(function(rowEl){
+      rowEl.addEventListener('click',function(e){
+        e.preventDefault();
+        var det=document.getElementById('od-'+rowEl.dataset.oid);
+        if(det)det.hidden=!det.hidden;
+      });
+    });
+    b.querySelectorAll('[data-copy]').forEach(function(btn){
+      btn.addEventListener('click',function(e){
+        e.preventDefault();e.stopPropagation();
+        var det=document.getElementById('od-'+btn.dataset.copy);
+        var txt=det?det.querySelector('.sl-checkout-wallet').textContent:'';
+        var done=function(){btn.textContent='✅ کپی شد';setTimeout(function(){btn.textContent='📋 کپی مشخصات'},1500)};
+        if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(done)}
+        else{done()}
+      });
+    });
   }).catch(function(){b.innerHTML=err('خطا در دریافت سفارش‌ها')});
 }
 window.openOrders=openOrders;
+
+/* ═══ علاقه‌مندی‌ها ═══ */
+function openFavorites(){
+  var b=document.getElementById('orders-body');
+  b.innerHTML=skel(3);
+  document.getElementById('orders-popup').querySelector('.title').textContent='علاقه‌مندی‌ها';
+  app.popup.open('#orders-popup');
+  api('/favorites',true).then(function(d){
+    var items=(d&&d.products)||[];
+    if(!items.length){b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">♡</span>هنوز چیزی به علاقه‌مندی‌ها اضافه نکرده‌اید.<br><span style="font-size:12px">روی ♡ کنار هر محصول بزنید.</span></div>';return}
+    b.innerHTML='<div class="sl-group" style="margin:12px">'+items.map(function(p){
+      var f=p.flash_active;
+      return '<a href="#" class="sl-row" data-favpid="'+p.id+'">'+
+        '<span class="sl-ric" style="background:#0A63FF">'+(p._e||'📦')+'</span>'+
+        '<span class="sl-row-grow">'+esc(p.title)+
+        (p.rating_count?'<div style="margin-top:2px">'+starsHtml(p.rating_avg,p.rating_count,'sm')+'</div>':'')+'</span>'+
+        '<span style="text-align:left"><div style="font-weight:800">'+fmt(p.effective_price)+' <small>تومان</small></div>'+
+        (f?'<div class="sl-flash" style="font-size:10px;margin-top:2px">⚡️ فروش فوری</div>':'')+'</span>'+
+        '<span class="sl-chev">‹</span></a>';
+    }).join('')+'</div>';
+    b.querySelectorAll('[data-favpid]').forEach(function(rowEl){
+      rowEl.addEventListener('click',function(e){
+        e.preventDefault();
+        app.popup.close('#orders-popup');
+        setTimeout(function(){openP(rowEl.dataset.favpid)},300);
+      });
+    });
+  }).catch(function(){b.innerHTML=err('خطا در دریافت علاقه‌مندی‌ها')});
+}
+window.openFavorites=openFavorites;
 
 /* ═══ صفحات حساب (کیف‌پول/همکاری/دعوت) — از post-popup به‌عنوان ظرف عمومی استفاده می‌کنند ═══ */
 function _accPopup(title,html){
@@ -833,6 +1001,8 @@ function renderSupportStart(){
 
 function renderSupportChat(ticket,messages){
   var b=_accBody();if(!b)return;
+  try{localStorage.setItem('sl_sp_seen_'+ticket.id,String(messages.length))}catch(e){}
+  _clearMeBadge();
   var remaining=Math.max(0,3-(ticket.user_msg_count||0));
   var closed=ticket.status==='closed';
   b.innerHTML='<div class="sl-sp-chat" id="sp-chat">'+

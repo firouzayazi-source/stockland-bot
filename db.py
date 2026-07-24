@@ -4867,6 +4867,154 @@ def has_rated_order(order_id: int) -> bool:
         conn.close()
 
 
+# ─── سرزدن روزانه (پاداش کوچک برای باز کردن اپ هر روز) ────────────────────────
+
+_ENSURE_CHECKIN_SCHEMA_DONE = False
+
+def ensure_checkin_schema():
+    global _ENSURE_CHECKIN_SCHEMA_DONE
+    if _ENSURE_CHECKIN_SCHEMA_DONE:
+        return
+    _ENSURE_CHECKIN_SCHEMA_DONE = True
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_checkins (
+                user_id      INTEGER PRIMARY KEY,
+                last_date    TEXT NOT NULL,
+                streak       INTEGER NOT NULL DEFAULT 0,
+                total_claims INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_checkin_status(user_id: int) -> dict:
+    """وضعیت سرزدن روزانه — available یعنی امروز هنوز پاداش گرفته نشده."""
+    ensure_checkin_schema()
+    from datetime import date as _d
+    today = _d.today().isoformat()
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT last_date, streak FROM daily_checkins WHERE user_id=?;", (user_id,)
+        ).fetchone()
+        if not row:
+            return {"available": True, "streak": 0}
+        return {"available": row["last_date"] != today, "streak": int(row["streak"] or 0)}
+    finally:
+        conn.close()
+
+
+def claim_daily_checkin(user_id: int, reward: int) -> dict:
+    """اتمیک: اگه امروز هنوز پاداش نگرفته، کیف‌پول رو شارژ می‌کنه و streak رو به‌روز می‌کنه.
+    برمی‌گردونه: {claimed, streak, reward}."""
+    ensure_checkin_schema()
+    from datetime import date as _d, timedelta as _td2
+    today = _d.today()
+    today_s = today.isoformat()
+    yesterday_s = (today - _td2(days=1)).isoformat()
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE;")
+        row = cur.execute(
+            "SELECT last_date, streak FROM daily_checkins WHERE user_id=?;", (user_id,)
+        ).fetchone()
+        if row and row["last_date"] == today_s:
+            conn.rollback()
+            return {"claimed": False, "streak": int(row["streak"] or 0), "reward": 0}
+        new_streak = (int(row["streak"] or 0) + 1) if (row and row["last_date"] == yesterday_s) else 1
+        if row:
+            cur.execute(
+                "UPDATE daily_checkins SET last_date=?, streak=?, total_claims=total_claims+1 WHERE user_id=?;",
+                (today_s, new_streak, user_id),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO daily_checkins (user_id, last_date, streak, total_claims) VALUES (?,?,?,1);",
+                (user_id, today_s, new_streak),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    add_wallet_balance(user_id, reward)
+    return {"claimed": True, "streak": new_streak, "reward": reward}
+
+
+# ─── علاقه‌مندی‌ها (Wishlist) ──────────────────────────────────────────────────
+
+_ENSURE_FAVORITES_SCHEMA_DONE = False
+
+def ensure_favorites_schema():
+    global _ENSURE_FAVORITES_SCHEMA_DONE
+    if _ENSURE_FAVORITES_SCHEMA_DONE:
+        return
+    _ENSURE_FAVORITES_SCHEMA_DONE = True
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                user_id    INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, product_id)
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_favorite(user_id: int, product_id: int) -> None:
+    ensure_favorites_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO favorites (user_id, product_id, created_at) VALUES (?,?,datetime('now'));",
+            (user_id, product_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_favorite(user_id: int, product_id: int) -> None:
+    ensure_favorites_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM favorites WHERE user_id=? AND product_id=?;", (user_id, product_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_favorite_ids(user_id: int) -> set:
+    ensure_favorites_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute("SELECT product_id FROM favorites WHERE user_id=?;", (user_id,)).fetchall()
+        return {int(r[0]) for r in rows}
+    finally:
+        conn.close()
+
+
+def is_favorite(user_id: int, product_id: int) -> bool:
+    ensure_favorites_schema()
+    conn = _get_connection()
+    try:
+        return conn.execute(
+            "SELECT 1 FROM favorites WHERE user_id=? AND product_id=?;", (user_id, product_id)
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 # ─── FAQ ─────────────────────────────────────────────────────────────────────
 
 def ensure_faq_schema():

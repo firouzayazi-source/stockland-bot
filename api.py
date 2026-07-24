@@ -116,6 +116,15 @@ def _auth(request: Request) -> int:
     raise HTTPException(status_code=401, detail="احراز هویت ناموفق")
 
 
+def _auth_optional(request: Request) -> int | None:
+    """مثل _auth ولی به‌جای خطای ۴۰۱، None برمی‌گردونه — برای endpointهای عمومی‌ای که
+    اگه کاربر لاگین باشه اطلاعات شخصی‌سازی‌شده (مثل علاقه‌مندی) هم اضافه می‌کنن."""
+    try:
+        return _auth(request)
+    except HTTPException:
+        return None
+
+
 _WEB_LOGIN_TOKEN_TTL = 300  # ۵ دقیقه — بعدش توکن منقضی حساب می‌شه
 
 
@@ -189,13 +198,43 @@ async def api_products(request: Request, category: str = "", limit: int = 60, q:
 
 
 @router.get("/products/{pid}")
-async def api_product(pid: int):
+async def api_product(pid: int, request: Request):
     """جزئیات یک محصول."""
     from core import products
     p = products.get_product(pid)
     if not p:
         return JSONResponse({"ok": False, "error": "محصول یافت نشد"}, status_code=404)
+    uid = _auth_optional(request)
+    if uid:
+        from db import is_favorite
+        try:
+            p["is_favorite"] = is_favorite(uid, pid)
+        except Exception:
+            p["is_favorite"] = False
     return {"ok": True, "product": p}
+
+
+@router.post("/favorites/{pid}")
+async def api_favorite_add(pid: int, request: Request):
+    uid = _auth(request)
+    from db import add_favorite
+    add_favorite(uid, pid)
+    return {"ok": True}
+
+
+@router.delete("/favorites/{pid}")
+async def api_favorite_remove(pid: int, request: Request):
+    uid = _auth(request)
+    from db import remove_favorite
+    remove_favorite(uid, pid)
+    return {"ok": True}
+
+
+@router.get("/favorites")
+async def api_favorites_list(request: Request):
+    uid = _auth(request)
+    from core.products import favorite_products
+    return {"ok": True, "products": favorite_products(uid)}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -216,6 +255,39 @@ async def api_orders(request: Request, limit: int = 50):
     uid = _auth(request)
     from core import orders
     return {"ok": True, "orders": orders.user_orders(uid, limit)}
+
+
+def _checkin_reward() -> int:
+    from db import get_cfg
+    try:
+        return int(get_cfg("DAILY_CHECKIN_REWARD", "500") or 500)
+    except Exception:
+        return 500
+
+
+@router.get("/me/checkin")
+async def api_checkin_status(request: Request):
+    """وضعیت پاداش سرزدن روزانه — برای نشون دادن بج/کارت پاداش."""
+    uid = _auth(request)
+    from db import get_checkin_status
+    st = get_checkin_status(uid)
+    st["reward_amount"] = _checkin_reward()
+    return {"ok": True, **st}
+
+
+@router.post("/me/checkin")
+async def api_checkin_claim(request: Request):
+    """دریافت پاداش سرزدن روزانه — یک‌بار در روز، اتمیک."""
+    uid = _auth(request)
+    from db import claim_daily_checkin
+    reward = _checkin_reward()
+    result = claim_daily_checkin(uid, reward)
+    if not result["claimed"]:
+        return {"ok": False, "error": "پاداش امروز رو قبلاً دریافت کردید — فردا دوباره سر بزنید.",
+                "streak": result["streak"]}
+    from core import wallet
+    return {"ok": True, "claimed": True, "reward": result["reward"], "streak": result["streak"],
+            "balance": wallet.get_balance(uid)}
 
 
 @router.get("/me/partner")
@@ -796,7 +868,15 @@ async def api_categories():
     """درخت دسته‌بندی‌ها برای PWA — فعال‌ها، مرتب‌شده."""
     from db import get_root_categories, get_subcategories, get_category_products
     roots = [dict(r) for r in get_root_categories(active_only=True)]
-    from db import apply_flash_price
+    from db import apply_flash_price, get_product_rating
+    def _with_rating(p):
+        try:
+            r = get_product_rating(int(p["id"]))
+        except Exception:
+            r = {"count": 0, "avg": 0}
+        p["rating_avg"] = r.get("avg", 0)
+        p["rating_count"] = r.get("count", 0)
+        return p
     out = []
     for rc in roots:
         subs = [dict(s) for s in get_subcategories(int(rc["id"]), active_only=True)]
@@ -811,7 +891,7 @@ async def api_categories():
                 p["effective_price"] = int(eff)
                 p["flash_active"] = bool(fl)
                 p["partner_price"] = int(p.get("partner_price") or 0)
-                sub["products"].append(p)
+                sub["products"].append(_with_rating(p))
         cat_out = {
             "id": int(rc["id"]), "name": rc.get("name"), "emoji": rc.get("emoji") or "",
             "slug": rc.get("slug") or "",
@@ -830,7 +910,7 @@ async def api_categories():
             p["partner_price"] = int(p.get("partner_price") or 0)
             if not cat_out.get("products"):
                 cat_out["products"] = []
-            cat_out["products"].append(p)
+            cat_out["products"].append(_with_rating(p))
         out.append(cat_out)
     return {"ok": True, "categories": out}
 
@@ -903,6 +983,53 @@ async def api_discount_validate(request: Request):
             "price": price, "final_price": final_price}
 
 
+def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price: int) -> bool:
+    """بعد از ثبت سفارشی که کامل از کیف‌پول پرداخت شده، محصول رو واقعاً تحویل می‌ده —
+    همون مکانیزمی که مسیر خرید ربات و کال‌بک درگاه استفاده می‌کنن (claim_next_feed_item).
+    اگه موجودی نبود، سفارش رو برای تحویل خودکار موقع شارژ مجدد صف می‌کنه (enqueue_pending_delivery).
+    برمی‌گردونه: True اگه همون لحظه تحویل شد، False اگه صف شد."""
+    from db import claim_next_feed_item, order_set_feed_id
+    from config import BOT_TOKEN
+    import requests
+
+    item = claim_next_feed_item(pid, order_id=order_id)
+    if item:
+        feed_id, feed_data = item
+        order_set_feed_id(order_id, feed_id)
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": uid, "parse_mode": "HTML",
+                      "text": ("✅ <b>سفارش شما ثبت و تحویل شد.</b>\n\n"
+                               f"شماره سفارش: #{order_id}\n"
+                               f"سرویس: {title}\n"
+                               f"مبلغ: {price:,} تومان\n\n"
+                               f"<code>{feed_data}</code>")},
+                timeout=10,
+            )
+        except Exception:
+            logger.exception("Failed to send delivery message for order %s", order_id)
+        return True
+
+    try:
+        from bot import enqueue_pending_delivery
+        enqueue_pending_delivery(order_id, uid, uid, pid, title, price)
+    except Exception:
+        logger.exception("Failed to enqueue pending delivery for order %s", order_id)
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": uid,
+                  "text": ("سفارش شما ثبت شد.\n\n"
+                           f"شماره سفارش: #{order_id}\nسرویس: {title}\nمبلغ: {price:,} تومان\n\n"
+                           "موجودی این محصول فعلاً تکمیل است و به‌محض شارژ، به‌صورت خودکار ارسال می‌شود.")},
+            timeout=10,
+        )
+    except Exception:
+        pass
+    return False
+
+
 @router.post("/checkout")
 async def api_checkout(request: Request):
     """
@@ -961,8 +1088,10 @@ async def api_checkout(request: Request):
         oid = create_order(uid, prod.get("category",""), prod["title"],
                            final_price, product_id=pid,
                            buyer_type="partner" if is_partner else "customer")
-        return {"ok": True, "method": "wallet", "order_id": oid,
-                "message": f"✅ خرید موفق! سفارش #{oid} ثبت شد."}
+        delivered = _deliver_or_queue_order(uid, oid, pid, prod["title"], final_price)
+        msg = f"✅ خرید موفق! سفارش #{oid} ثبت شد." if delivered else \
+              f"✅ سفارش #{oid} ثبت شد. موجودی این محصول فعلاً تکمیل است و به‌محض شارژ ارسال می‌شود."
+        return {"ok": True, "method": "wallet", "order_id": oid, "delivered": delivered, "message": msg}
 
     gateway_amount = final_price
     wallet_used = 0
@@ -977,8 +1106,10 @@ async def api_checkout(request: Request):
             oid = create_order(uid, prod.get("category",""), prod["title"],
                                final_price, product_id=pid,
                                buyer_type="partner" if is_partner else "customer")
-            return {"ok": True, "method": "wallet", "order_id": oid,
-                    "message": f"✅ خرید از کیف‌پول موفق! سفارش #{oid}"}
+            delivered = _deliver_or_queue_order(uid, oid, pid, prod["title"], final_price)
+            msg = f"✅ خرید از کیف‌پول موفق! سفارش #{oid}" if delivered else \
+                  f"✅ سفارش #{oid} ثبت شد. موجودی این محصول فعلاً تکمیل است و به‌محض شارژ ارسال می‌شود."
+            return {"ok": True, "method": "wallet", "order_id": oid, "delivered": delivered, "message": msg}
 
     # درگاه زرین‌پال
     import httpx
