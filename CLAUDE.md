@@ -456,3 +456,16 @@ systemctl restart stockland.service
 # وضعیت سرویس‌ها
 systemctl list-units --type=service --all | grep -i stockland
 ```
+
+### پیکربندی nginx (خارج از این مخزن — فقط روی خود VPS)
+
+فایل: `/etc/nginx/sites-available/stockland` (symlink از `/etc/nginx/sites-enabled/stockland`) — `server_name panel.stland.ir api.stland.ir;`، `proxy_pass http://127.0.0.1:8001;`.
+
+**۲۰۲۶-۰۷-۲۴:** مشخص شد این فایل به‌صورت پیش‌فرض نصب nginx (بدون این خط‌ها) هیچ `client_max_body_size` و مهلت زمانی سفارشی نداشت — یعنی آپلود هر فایلی بزرگ‌تر از ۱ مگابایت (کاور/ویدیو/فایل دانلودی آموزش، رسید کارت‌به‌کارت، پیوست تیکت) با خطای «client intended to send too large body» رد می‌شد، یا برای فایل‌های نزدیک به مرز، بعد از ۶۰ ثانیه (پیش‌فرض `client_body_timeout`) قطع می‌شد. این خط‌ها دستی به بلوک `server { server_name panel.stland.ir ... }` اضافه شدن:
+```nginx
+client_max_body_size 200m;
+proxy_read_timeout 300s;
+proxy_send_timeout 300s;
+client_body_timeout 300s;
+```
+بعد از هر تغییر: `nginx -t && systemctl reload nginx`. **این تنظیمات در گیت ثبت نیستن** — اگه سرور از صفر ساخته بشه یا این فایل جایگزین بشه، باید دستی دوباره اضافه بشن.
