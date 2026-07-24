@@ -2194,6 +2194,20 @@ def ticket_get_open_support(user_id: int):
         conn.close()
 
 
+def ticket_get_open_by_type(user_id: int, type_: str):
+    """آخرین تیکت باز کاربر با نوع مشخص (مثلاً support یا partner_support)."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT * FROM tickets WHERE user_id=? AND type=? AND status!='closed' "
+            "ORDER BY id DESC LIMIT 1;",
+            (user_id, type_)
+        ).fetchone()
+    finally:
+        conn.close()
+
+
 def ticket_get_open_product(user_id: int, order_id: int):
     """تیکت محصول باز برای یک سفارش خاص."""
     conn = _get_connection()

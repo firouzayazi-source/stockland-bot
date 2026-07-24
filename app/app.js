@@ -684,6 +684,7 @@ function renderSupportChat(ticket,messages){
 
   var sendBtn=document.getElementById('sp-send-btn'),inp=document.getElementById('sp-input');
   var photoInp=document.getElementById('sp-photo'),preview=document.getElementById('sp-attach-preview');
+  var attachLbl=document.getElementById('sp-attach-label');
   if(photoInp)photoInp.addEventListener('change',function(){
     _spPendingFile=photoInp.files[0]||null;
     if(preview){
@@ -697,10 +698,21 @@ function renderSupportChat(ticket,messages){
     }
   });
 
+  var sending=false;
+  function setSending(on,label){
+    sending=on;
+    if(sendBtn){sendBtn.disabled=on;sendBtn.textContent=on?(label||'در حال ارسال…'):'ارسال'}
+    if(inp)inp.disabled=on;
+    if(photoInp)photoInp.disabled=on;
+    if(attachLbl)attachLbl.classList.toggle('sl-sp-disabled',on);
+  }
+
   function send(){
+    if(sending)return; // جلوگیری از دبل‌کلیک حین ارسال
     var text=(inp.value||'').trim();
     if(!text&&!_spPendingFile)return;
-    sendBtn.disabled=true;inp.disabled=true;
+    var hadPhoto=!!_spPendingFile;
+    setSending(true,hadPhoto?'در حال آپلود عکس…':'در حال ارسال…');
     var fd=new FormData();
     fd.append('text',text);
     if(_spPendingFile)fd.append('photo',_spPendingFile);
@@ -708,15 +720,18 @@ function renderSupportChat(ticket,messages){
       method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData},body:fd
     }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
       if(res.status!==200||!res.d.ok){
-        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ارسال پیام','خطا');
-        sendBtn.disabled=false;inp.disabled=false;return;
+        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ارسال پیام — دوباره تلاش کنید','خطا');
+        setSending(false);return;
       }
       var newMsg={sender:'user',text:text};
-      if(_spPendingFile)newMsg.image_url=URL.createObjectURL(_spPendingFile);
+      if(hadPhoto)newMsg.image_url=URL.createObjectURL(_spPendingFile);
       messages.push(newMsg);
       _spPendingFile=null;_spLastCount=messages.length;
       renderSupportChat(res.d.ticket,messages);
-    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sendBtn.disabled=false;inp.disabled=false});
+    }).catch(function(){
+      window._slApp.dialog.alert('خطای شبکه — اتصال اینترنت را بررسی و دوباره تلاش کنید','خطا');
+      setSending(false);
+    });
   }
   if(sendBtn)sendBtn.addEventListener('click',send);
   if(inp)inp.addEventListener('keydown',function(e){if(e.key==='Enter')send()});
