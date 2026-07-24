@@ -90,12 +90,22 @@
    <div id="tab-learn" class="page-content tab ptr-content" data-ptr-distance="55">
     <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
     <div class="sl-head"><div class="sl-eyebrow">مرکز یادگیری</div><div class="sl-big">آموزش</div></div>
-    <div class="sl-seg" id="learn-seg">
-     <button class="on" data-k="tutorial">📚 آموزش‌ها</button>
-     <button data-k="feature">✨ امکانات</button>
+    <div class="sl-search-wrap" style="padding:0 20px 4px">
+     <div class="sl-search" id="tut-search-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="text" id="tut-search-input" class="sl-search-input" placeholder="جستجو در آموزش‌ها" autocomplete="off" enterkeyhint="search">
+     </div>
+    </div>
+    <div class="sl-chips" id="tut-cats"></div>
+    <div class="sl-seg" id="tut-sort-seg">
+     <button class="on" data-s="newest">جدیدترین</button>
+     <button data-s="popular">محبوب‌ترین</button>
+     <button data-s="oldest">قدیمی‌ترین</button>
     </div>
     <div id="learn-list"></div>
-    <div style="height:20px"></div>
+    <div style="text-align:center;padding:8px 0 20px" id="tut-more-wrap" hidden>
+     <button class="sl-retry" id="tut-more-btn">نمایش بیشتر</button>
+    </div>
    </div>
 
    <!-- اخبار تکنولوژی -->

@@ -196,25 +196,17 @@ function loadLearnCard(){
   var lc=document.getElementById('learn-card');
   var ls=document.getElementById('learn-sec');
   if(!lc)return;
-  var kinds=['tutorial','feature'];
-  var idx=0;
-  function tryNext(){
-    if(idx>=kinds.length){lc.style.display='none';if(ls)ls.style.display='none';return}
-    var thisKind=kinds[idx];idx++;
-    api('/content?kind='+thisKind+'&limit=1').then(function(d){
-      var it=(d&&d.items&&d.items[0]);
-      if(!it){tryNext();return}
-      var labels={tutorial:'📚 آموزش',feature:'✨ امکانات'};
-      lc.innerHTML='<div class="sl-learn-card" data-cid="'+it.id+'">'+
-        '<div class="sl-learn-img">'+(it.image_url?'<img src="'+esc(it.image_url)+'" alt="">':'📚')+'</div>'+
-        '<div class="sl-learn-body">'+
-          '<div class="sl-learn-tag">'+(labels[thisKind]||'آموزش')+'</div>'+
-          '<div class="sl-learn-title">'+esc(it.title)+'</div>'+
-          '<div class="sl-learn-meta"><span>'+esc(it.created_at||'')+'</span></div>'+
-        '</div></div>';
-    }).catch(function(){tryNext();});
-  }
-  tryNext();
+  api('/tutorials?limit=1&sort=newest').then(function(d){
+    var it=(d&&d.items&&d.items[0]);
+    if(!it){lc.style.display='none';if(ls)ls.style.display='none';return}
+    lc.innerHTML='<div class="sl-learn-card" data-tid="'+it.id+'">'+
+      '<div class="sl-learn-img">'+(it.cover_image?'<img src="'+esc(it.cover_image)+'" alt="">':'📚')+'</div>'+
+      '<div class="sl-learn-body">'+
+        '<div class="sl-learn-tag">'+(it.featured?'⭐️ ویژه':'📚 آموزش')+'</div>'+
+        '<div class="sl-learn-title">'+esc(it.title)+'</div>'+
+        '<div class="sl-learn-meta"><span>'+esc(it.publish_date||'')+'</span></div>'+
+      '</div></div>';
+  }).catch(function(){lc.style.display='none';if(ls)ls.style.display='none'});
 }
 window.loadLearnCard=loadLearnCard;
 
@@ -301,33 +293,101 @@ function openP(pid){
   }).catch(function(){b.innerHTML=err('خطا');});
 }
 
-/* ═══ آموزش — کاملاً داخلی، از پنل ═══ */
-var _lk={},_lc='tutorial';
-function loadL(kind){_lc=kind;if(_lk[kind])return;_lk[kind]=1;
-  var box=document.getElementById('learn-list');box.innerHTML=skel(2);
-  var colors=['linear-gradient(120deg,#101826,#7C3AED)','linear-gradient(120deg,#0F172A,#0A63FF)',
-    'linear-gradient(120deg,#1B2B1B,#22C55E)','linear-gradient(120deg,#2B1B1B,#EF4444)',
-    'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
-  var LB={tutorial:'📚 آموزش',feature:'✨ امکانات'};
-  var EM={tutorial:['📚','هنوز آموزشی منتشر نشده'],feature:['✨','به‌زودی…']};
-  api('/content?kind='+encodeURIComponent(kind)+'&limit=50').then(function(d){
-    var it=(d&&d.items)||[];
-    if(!it.length){var m=EM[kind]||EM.tutorial;box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">'+m[0]+'</span><b>'+m[1]+'</b></div>';return}
-    box.innerHTML=it.map(function(p,i){
-      return '<div class="sl-post" data-cid="'+p.id+'"><div class="sl-post-cv" style="background:'+colors[i%colors.length]+'">'+
-        '<span class="sl-post-tag">'+(LB[kind]||kind)+'</span>'+
-        (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'')+
-        '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
-        '<div class="sl-post-x">'+esc(p.excerpt)+'</div><div class="sl-post-m">'+esc(p.created_at)+'</div></div></div>';
-    }).join('');
-  }).catch(function(){_lk[kind]=0;box.innerHTML=err('خطا')+'<button class="sl-retry" onclick="_lk={};loadL(\''+kind+'\')">تلاش مجدد</button>'});
+/* ═══ آموزش — CMS داخلی کامل: جستجو، فیلتر دسته، مرتب‌سازی، Lazy Loading ═══ */
+var _tutState={cat:'0',tag:'',q:'',sort:'newest',offset:0,limit:12,loading:false};
+var _tutCatsLoaded=false,_tutLoaded=false;
+
+function loadTutCats(){
+  if(_tutCatsLoaded)return;_tutCatsLoaded=true;
+  var box=document.getElementById('tut-cats');if(!box)return;
+  api('/tutorials/categories').then(function(d){
+    var cats=(d&&d.categories)||[];
+    if(!cats.length){box.style.display='none';return}
+    box.innerHTML='<div class="sl-chip on" data-cat="0">همه</div>'+
+      cats.map(function(c){return '<div class="sl-chip" data-cat="'+c.id+'">'+esc(c.name)+'</div>'}).join('');
+  }).catch(function(){});
 }
-window.loadL=loadL;
-document.getElementById('learn-seg').addEventListener('click',function(e){
-  var b=e.target.closest('button');if(!b)return;
-  document.querySelectorAll('#learn-seg button').forEach(function(x){x.classList.remove('on')});b.classList.add('on');
-  _lk={};loadL(b.dataset.k);
+window.loadTutCats=loadTutCats;
+
+function loadTuts(reset){
+  var box=document.getElementById('learn-list');if(!box)return;
+  var moreWrap=document.getElementById('tut-more-wrap');
+  if(reset){_tutState.offset=0;box.innerHTML=skel(3);if(moreWrap)moreWrap.hidden=true}
+  if(_tutState.loading)return;_tutState.loading=true;
+  var moreBtn=document.getElementById('tut-more-btn');
+  if(moreBtn&&!reset)moreBtn.textContent='در حال بارگذاری…';
+  var qs='/tutorials?sort='+_tutState.sort+'&limit='+_tutState.limit+'&offset='+_tutState.offset+
+    (_tutState.cat&&_tutState.cat!=='0'?'&category='+_tutState.cat:'')+
+    (_tutState.q?'&q='+encodeURIComponent(_tutState.q):'');
+  api(qs).then(function(d){
+    _tutState.loading=false;
+    var items=(d&&d.items)||[];
+    if(reset&&!items.length){box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📚</span>آموزشی یافت نشد</div>';if(moreWrap)moreWrap.hidden=true;return}
+    var html=items.map(function(p){
+      return '<div class="sl-post" data-tid="'+p.id+'"><div class="sl-post-cv" style="background:linear-gradient(120deg,#101826,#0A63FF)">'+
+        '<span class="sl-post-tag">'+(p.featured?'⭐️ ویژه':'📚 آموزش')+'</span>'+
+        (p.cover_image?'<img src="'+esc(p.cover_image)+'" alt="">':'')+
+        '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
+        '<div class="sl-post-x">'+esc(p.short_desc||'')+'</div>'+
+        '<div class="sl-post-m">'+(p.category_name?esc(p.category_name)+' · ':'')+esc(p.publish_date||'')+'</div></div></div>';
+    }).join('');
+    if(reset)box.innerHTML=html;else box.insertAdjacentHTML('beforeend',html);
+    _tutState.offset+=items.length;
+    if(moreWrap)moreWrap.hidden=items.length<_tutState.limit;
+    if(moreBtn)moreBtn.textContent='نمایش بیشتر';
+  }).catch(function(){_tutState.loading=false;if(reset)box.innerHTML=err('خطا')+'<button class="sl-retry" onclick="loadTuts(true)">تلاش مجدد</button>'});
+}
+window.loadTuts=loadTuts;
+
+document.getElementById('tut-cats').addEventListener('click',function(e){
+  var c=e.target.closest('[data-cat]');if(!c)return;
+  document.querySelectorAll('#tut-cats [data-cat]').forEach(function(x){x.classList.remove('on')});c.classList.add('on');
+  _tutState.cat=c.dataset.cat;loadTuts(true);
 });
+document.getElementById('tut-sort-seg').addEventListener('click',function(e){
+  var b=e.target.closest('button');if(!b)return;
+  document.querySelectorAll('#tut-sort-seg button').forEach(function(x){x.classList.remove('on')});b.classList.add('on');
+  _tutState.sort=b.dataset.s;loadTuts(true);
+});
+document.getElementById('tut-more-btn').addEventListener('click',function(){loadTuts(false)});
+var _tutSearchTimer=null;
+document.getElementById('tut-search-input').addEventListener('input',function(e){
+  clearTimeout(_tutSearchTimer);
+  var v=e.target.value;
+  _tutSearchTimer=setTimeout(function(){_tutState.q=v.trim();loadTuts(true)},350);
+});
+
+function videoEmbedHtml(link){
+  if(!link)return '';
+  var yt=link.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+  if(yt)return '<div class="sl-video-wrap"><iframe src="https://www.youtube.com/embed/'+yt[1]+'" allowfullscreen frameborder="0"></iframe></div>';
+  var ap=link.match(/aparat\.com\/v\/([\w-]+)/);
+  if(ap)return '<div class="sl-video-wrap"><iframe src="https://www.aparat.com/video/video/embed/videohash/'+ap[1]+'/vt/frame" allowfullscreen frameborder="0"></iframe></div>';
+  return '<video controls class="sl-tut-video" src="'+esc(link)+'"></video>';
+}
+
+function openTutorial(tid){
+  var t=document.getElementById('post-title'),b=document.getElementById('post-body');
+  t.textContent='…';b.innerHTML=skel(2);app.popup.open('#post-popup');
+  api('/tutorials/'+tid).then(function(d){
+    var it=d.item||{};t.textContent=it.title||'';
+    var tags=it.tags||[];
+    var tagsHtml=tags.length?'<div class="sl-tut-tags">'+tags.map(function(tg){return '<span class="sl-tut-tag">'+esc(tg)+'</span>'}).join('')+'</div>':'';
+    var gallery=it.gallery||[];
+    var galleryHtml=gallery.length?'<div class="sl-tut-gallery">'+gallery.map(function(g){return '<img src="'+esc(g)+'" alt="">'}).join('')+'</div>':'';
+    var videoHtml=it.video_upload?'<video controls class="sl-tut-video" src="'+esc(it.video_upload)+'"></video>':videoEmbedHtml(it.video_link);
+    var downloadHtml=it.download_file?'<a class="sl-pp-btn" href="'+esc(it.download_file)+'" target="_blank" style="margin:14px 0 4px;width:100%;box-sizing:border-box">⬇️ '+esc(it.download_label||'دانلود فایل')+'</a>':'';
+    b.innerHTML=(it.cover_image?'<img src="'+esc(it.cover_image)+'" alt="">':'')+
+      '<div class="sl-postf-title">'+esc(it.title)+'</div>'+
+      '<div class="sl-postf-date">'+(it.category_name?esc(it.category_name)+' · ':'')+esc(it.publish_date||'')+' · 👁 '+fmt(it.view_count||0)+'</div>'+
+      tagsHtml+
+      (it.short_desc?'<div class="sl-postf-text" style="color:var(--mu)">'+esc(it.short_desc)+'</div>':'')+
+      videoHtml+
+      '<div class="sl-postf-text">'+(it.body||'')+'</div>'+
+      galleryHtml+downloadHtml;
+  }).catch(function(){b.innerHTML=err('خطا')});
+}
+window.openTutorial=openTutorial;
 
 /* ═══ اخبار تکنولوژی — فقط فید RSS زندهٔ وبلاگ، بدون هیچ محتوای داخلی ═══ */
 var _nw=0;
@@ -367,6 +427,7 @@ function openC(cid){
       (it.link_url?'<a class="sl-pp-btn" href="'+esc(it.link_url)+'" target="_blank" rel="noopener" style="margin:20px 0 4px;width:100%;box-sizing:border-box">🔗 مشاهده در تلگرام / اینستاگرام</a>':'');
   }).catch(function(){b.innerHTML=err('خطا')});
 }
+window.openC=openC;
 
 /* ═══ حساب ═══ */
 var _m=0;
@@ -881,18 +942,19 @@ function renderSupportChat(ticket,messages){
 /* ═══ رویدادها ═══ */
 app.on('tabShow',function(el){var id=el&&el.id;
   if(id==='tab-home')loadHome();if(id==='tab-shop')loadShop();
-  if(id==='tab-learn'){var k=document.querySelector('#learn-seg button.on');loadL(k?k.dataset.k:'tutorial')}
+  if(id==='tab-learn'){loadTutCats();if(!_tutLoaded){_tutLoaded=true;loadTuts(true)}}
   if(id==='tab-news')loadNews();
   if(id==='tab-me')loadMe();
 });
 app.on('ptrRefresh',function(el,done){var t=document.querySelector('.tab.tab-active'),id=t&&t.id;
   if(id==='tab-home'){_h=0;cats=[];prods=[];loadHome()}if(id==='tab-shop'){_s=0;prods=[];loadShop()}
-  if(id==='tab-learn'){_lk={};loadL(_lc)}if(id==='tab-news')loadNews(true);if(id==='tab-me'){_m=0;loadMe()}
+  if(id==='tab-learn')loadTuts(true);if(id==='tab-news')loadNews(true);if(id==='tab-me'){_m=0;loadMe()}
   setTimeout(done,600);
 });
 document.addEventListener('click',function(e){
   var p=e.target.closest('[data-pid]');if(p){openP(p.dataset.pid);return}
   var c=e.target.closest('[data-cid]');if(c){openC(c.dataset.cid);return}
+  var tu=e.target.closest('[data-tid]');if(tu){openTutorial(tu.dataset.tid);return}
   var co=e.target.closest('[data-checkout]');if(co){openCheckout(co.dataset.checkout);return}
   var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click()}
 });
