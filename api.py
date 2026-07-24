@@ -60,35 +60,6 @@ def _verify_telegram_init_data(init_data: str) -> int | None:
     return None
 
 
-def _verify_telegram_login_widget(data: dict) -> int | None:
-    """
-    اعتبارسنجی داده‌های Telegram Login Widget (برای وب‌سایت/PWA خارج از تلگرام).
-    الگوریتم رسمی تلگرام — با initData مینی‌اپ فرق داره:
-    secret_key = SHA256(BOT_TOKEN) [نه HMAC با "WebAppData"]، بعد hash = HMAC-SHA256(data_check_string, secret_key).
-    https://core.telegram.org/widgets/login#checking-authorization
-    """
-    from config import BOT_TOKEN
-    if not BOT_TOKEN:
-        return None
-    try:
-        data = dict(data)
-        recv_hash = str(data.pop("hash", "") or "")
-        if not recv_hash:
-            return None
-        pairs = sorted(f"{k}={v}" for k, v in data.items() if v is not None and v != "")
-        data_check = "\n".join(pairs)
-        secret_key = hashlib.sha256(BOT_TOKEN.encode()).digest()
-        calc = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(calc, recv_hash):
-            return None
-        auth_date = int(data.get("auth_date", 0) or 0)
-        if auth_date <= 0 or (time.time() - auth_date) > 86400:  # قدیمی‌تر از یک روز رد می‌شه
-            return None
-        return int(data["id"])
-    except Exception:
-        return None
-
-
 _WEB_SESSION_COOKIE = "sl_sess"
 _WEB_SESSION_MAX_AGE = 30 * 86400  # ۳۰ روز
 
@@ -145,50 +116,54 @@ def _auth(request: Request) -> int:
     raise HTTPException(status_code=401, detail="احراز هویت ناموفق")
 
 
-@router.post("/auth/telegram-login")
-async def api_auth_telegram_login(request: Request):
-    """لاگین وب‌سایت (PWA خارج از تلگرام) با Telegram Login Widget.
-    ورودی: همون فیلدهایی که ویجت برمی‌گردونه (id, first_name, last_name, username, photo_url, auth_date, hash)."""
-    body = await request.json()
-    uid = _verify_telegram_login_widget(body)
-    if not uid:
-        raise HTTPException(401, "احراز هویت تلگرام نامعتبر است")
+_WEB_LOGIN_TOKEN_TTL = 300  # ۵ دقیقه — بعدش توکن منقضی حساب می‌شه
 
-    from db import upsert_user
-    try:
-        full_name = f"{body.get('first_name') or ''} {body.get('last_name') or ''}".strip()
-        upsert_user(uid, body.get("username") or None, full_name or None)
-    except Exception:
-        pass
 
-    resp = JSONResponse({"ok": True, "user_id": uid})
-    resp.set_cookie(
-        _WEB_SESSION_COOKIE, _make_web_session(uid),
-        max_age=_WEB_SESSION_MAX_AGE, httponly=True, samesite="lax", secure=True, path="/",
-    )
-    return resp
+@router.post("/auth/start-login")
+async def api_auth_start_login():
+    """شروع ورود وب‌سایت (PWA خارج از تلگرام) — یک توکن یک‌بارمصرف می‌سازه و
+    دیپ‌لینک بازکردن اپ واقعی تلگرام رو برمی‌گردونه (نه ویجت/oauth.telegram.org
+    که برای خیلی از کاربرها — به‌خصوص ایران — قابل‌اعتماد نیست).
+    فرانت این لینک رو باز می‌کنه و بعد /auth/poll-login رو poll می‌کنه."""
+    import secrets
+    from db import create_web_login_token
+    from bot import _bot_username
+    token = secrets.token_urlsafe(16)
+    create_web_login_token(token)
+    username = _bot_username() or ""
+    return {"ok": True, "token": token, "deep_link": f"https://t.me/{username}?start=weblogin_{token}"}
+
+
+@router.get("/auth/poll-login")
+async def api_auth_poll_login(token: str = ""):
+    """فرانت هر چند ثانیه صدا می‌زنه تا ببینه کاربر داخل ربات لینک weblogin_TOKEN رو باز کرده یا نه."""
+    from db import get_web_login_token, get_user_full_name
+    row = get_web_login_token(token) if token else None
+    if not row:
+        raise HTTPException(404, "توکن نامعتبر")
+    status = row["status"]
+    if status == "pending" and (time.time() - int(row["created_at"] or 0)) > _WEB_LOGIN_TOKEN_TTL:
+        status = "expired"
+    if status == "confirmed":
+        uid = int(row["user_id"])
+        resp = JSONResponse({"ok": True, "status": "confirmed", "full_name": get_user_full_name(uid)})
+        resp.set_cookie(
+            _WEB_SESSION_COOKIE, _make_web_session(uid),
+            max_age=_WEB_SESSION_MAX_AGE, httponly=True, samesite="lax", secure=True, path="/",
+        )
+        return resp
+    return {"ok": True, "status": status}
 
 
 @router.get("/auth/whoami")
 async def api_auth_whoami(request: Request):
     """چک سریع وضعیت لاگین وب‌سایت — برای بارگذاری اولیهٔ صفحه (بدون initData مینی‌اپ)."""
+    from db import get_user_full_name
     web_cookie = request.cookies.get(_WEB_SESSION_COOKIE, "")
     uid = _verify_web_session(web_cookie) if web_cookie else None
     if not uid:
         raise HTTPException(401, "لاگین نشده")
-    from db import _get_connection
-    full_name = ""
-    try:
-        conn = _get_connection()
-        try:
-            row = conn.execute("SELECT full_name FROM users WHERE user_id=? LIMIT 1;", (uid,)).fetchone()
-            if row:
-                full_name = row["full_name"] if hasattr(row, "keys") else row[0]
-        finally:
-            conn.close()
-    except Exception:
-        pass
-    return {"ok": True, "user_id": uid, "full_name": full_name or ""}
+    return {"ok": True, "user_id": uid, "full_name": get_user_full_name(uid)}
 
 
 @router.post("/auth/logout")
