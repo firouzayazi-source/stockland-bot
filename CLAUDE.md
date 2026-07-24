@@ -3,6 +3,7 @@
 > این فایل حافظهٔ دائمی پروژه برای دستیار هوش‌مصنوعیه. **همیشه قبل از شروع هر کار این فایل رو بخون.** کد فعلی مرجع نهایی حقیقته — اگه جایی این سند با رفتار واقعی کد فرق داشت، کد درسته و این فایل باید آپدیت بشه، نه برعکس.
 >
 > تاریخ آخرین تحلیل کامل: ۲۰۲۶-۰۷-۲۳ — انجام‌شده توسط Claude Code (تحلیل کامل مخزن، بدون تغییر کد، طبق دستور مالک پروژه).
+> تاریخ آخرین بروزرسانی افزایشی: ۲۰۲۶-۰۷-۲۴ — بعد از چند راند توسعهٔ مینی‌اپ (بخش ۲۱ رو ببین برای نقشهٔ کامل فیچرها/APIهای اضافه‌شده، تا نیازی به خوندن دوبارهٔ کد نباشه).
 > هر تغییر بعدی باید در `CHANGELOG_AI.md` ثبت بشه.
 
 ---
@@ -156,7 +157,7 @@ stockland-bot/
 
 ### گروه‌های اصلی جدول
 - **کاربر/کیف‌پول:** `users`, `wallets`, `zarinpal_transactions`, `card_receipts`
-- **محصول/موجودی:** `categories`, `products`, `product_feed`, `feed_batches`, `feed_alert_settings`, `stock_subscriptions`
+- **محصول/موجودی:** `categories`, `products` (⚠️ ستون `image_url TEXT DEFAULT ''` این نشست اضافه شد — عکس اختصاصی محصول، اختیاری؛ اگه خالی باشه UI آیکون پیش‌فرض دسته را نشون می‌ده)، `product_feed`, `feed_batches`, `feed_alert_settings`, `stock_subscriptions`
 - **سفارش:** `orders` (⚠️ `product_id` این جدول `TEXT` است در حالی که `products.id` عدد است — همیشه در JOIN نیاز به `CAST(...AS INTEGER)`)، `delivery_messages`, `other_services`
 - **همکاری/افیلیت:** `partners`, `partner_tiers`, `partner_commission`, `partner_wallets`, `partner_transactions`, `partner_payouts`, `partner_payout_settings`, `partner_bank_info`, `referrals`, `referral_settings`
 - **سیستم موازی/قدیمی:** `sellers`, `seller_levels`, `seller_commissions`, `seller_payouts` — سیستم افیلیت جداگانه‌ای که با `partners` هم‌پوشانی دارد؛ `seller_apply` عملاً در `partners` هم می‌نویسد. نیاز به بررسی/ادغام دارد (با احتیاط).
@@ -165,8 +166,9 @@ stockland-bot/
 - **امتیاز/FAQ:** `product_ratings`, `product_faqs`
 - **حسابداری:** `expenses`, `expense_categories`
 - **تنظیمات/سیستم:** `bot_config` (KV عمومی)، `ui_texts`, `admins`, `admin_preferences`, `admin_notes`, `admin_note_replies`, `admin_logs`, `panel_theme`
-- **محتوای PWA:** `app_content` (tutorial/news/feature/daily) — ⚠️ در هیچ ماژول `stbak_engine.py` پوشش داده نمی‌شود (بخش ۱۴)
+- **محتوای PWA:** `app_content` (tutorial/news/feature/daily — ⚠️ فقط `daily` واقعاً در مینی‌اپ نمایش داده می‌شود؛ `tutorial`/`feature` یتیم‌اند، بخش ۲۱) — ⚠️ در هیچ ماژول `stbak_engine.py` پوشش داده نمی‌شود (بخش ۱۴)
 - **رشد/فروش:** `flash_sales`, `winback_log`
+- **مینی‌اپ (این نشست اضافه شد، بخش ۲۱):** `daily_checkins`, `favorites`, `user_notifications` — ⚠️ هیچ‌کدام هنوز در `stbak_engine.py` MODULES ثبت نشده‌اند (بخش ۱۴)
 
 ### روابط کلیدی
 ```
@@ -327,6 +329,8 @@ except Exception:
 | 2 | مسیر درگاه/ترکیبی `POST /api/v1/checkout` به `http://127.0.0.1:8001/payment/create` هاردکد وصل می‌شود و انتظار کلید `redirect_url` دارد؛ `payment_service.py` واقعاً `{authority, payment_url}` برمی‌گرداند — این mismatch باقی مانده | `api.py:351,364-368` | باز — نیاز به هماهنگی/تصمیم قبل از رفع |
 | 3 | دکمهٔ ادمین «فعال‌سازی چت محصول» همیشه بی‌اثر است — `products.chat_enabled` هیچ‌جا ساخته نمی‌شود | `db.py:2320-2332`, `bot.py:701-725,4630-4637` | باز |
 | 4 | «کد تخفیف» — خطای `IndexError: No item with that key` روی دیتابیس‌های قدیمی | `db.py: ensure_discount_table` | ✅ **رفع‌شده** (PR #1) |
+| 5 | `POST /api/v1/checkout` مسیر کیف‌پولی سفارش ثبت و پول کسر می‌کرد ولی محصول را هیچ‌وقت واقعاً تحویل نمی‌داد (نه `claim_next_feed_item`، نه پیام تحویل) | `api.py` — رفع با `_deliver_or_queue_order()` | ✅ **رفع‌شده** (PR #43) — ⚠️ سفارش‌های کیف‌پولی مینی‌اپ *قبل* این رفع ممکنه هیچ‌وقت تحویل نگرفته باشن؛ اگه هنوز چک نشده، دستی بررسی بشه |
+| 6 | `db.add_product()` متغیر `cols` تعریف می‌شود ولی هیچ‌جا پر نمی‌شود → `product_key` (NOT NULL) هیچ‌وقت درج نمی‌شود → ویزارد افزودن محصول **خود ربات** (`bot.py:4627`) می‌شکند | `db.py: add_product` | باز — قبلاً به مالک پروژه گزارش شده، هنوز درخواست رفع نشده |
 
 ### 🟡 کد مرده / تکراری (بدون تأثیر کاربر فعلی، ریسک برای توسعهٔ آینده)
 - `_process_discount_code` دو تعریف (bot.py:۲۳۴۹ و ۲۴۱۵) — کل مسیر `apply_discount_*` مرده است (هیچ دکمه‌ای صداش نمی‌زند)
@@ -339,6 +343,8 @@ except Exception:
 - ۷۴ از ۱۳۱ کلید `DEFAULT_UI_TEXTS` (~۵۶٪) هیچ‌جا استفاده نمی‌شوند — پیام‌های واقعی معادل، هاردکد فارسی داخل کدند (نقض قانون خود پروژه دربارهٔ عدم هاردکد متن)
 - دو سیستم Rate-Limit موازی در bot.py
 - `app_content` در هیچ ماژول `stbak_engine.py` پوشش داده نمی‌شود — بکاپ/ریست کامل این جدول را نادیده می‌گیرد
+- `daily_checkins`, `favorites`, `user_notifications` (جداول جدید مینی‌اپ، بخش ۲۱) هم مثل `app_content` هنوز به `stbak_engine.py` MODULES اضافه نشده‌اند — همون کلاس مشکل، جدید
+- نوع `app_content.kind='tutorial'`/`'feature'` دیگه هیچ‌جای مینی‌اپ نمایش داده نمی‌شوند (فقط `'daily'` زنده‌ست) — فرم پنل فقط هشدار می‌ده، داده حذف نشده (بخش ۲۱)
 - دو پیاده‌سازی کامل و مستقل Mini App (پنل `/admin/shop` و PWA مستقل `/app`+`api.py`) با کد initData-verification تکراری در دو فایل جدا
 - `db_dialect.py`: ترجمهٔ `INSERT OR REPLACE`→INSERT ساده (معنای upsert را از دست می‌دهد) و `SELECT changes()`→`SELECT 1` (همیشه truthy) — برای Postgres واقعی هنوز درست کار نمی‌کند (فعلاً بی‌خطر چون Postgres در تولید فعال نیست)
 - سیستم افیلیت موازی/قدیمی `sellers`/`seller_*` در کنار `partners`/`partner_*` — همپوشانی نامشخص
@@ -354,7 +360,8 @@ except Exception:
 - افزودن مهاجرت `products.chat_enabled`
 - تصمیم دربارهٔ حذف کامل مسیر مردهٔ `apply_discount_*`/`_process_discount_code` تکراری
 - بررسی و شاید ادغام `sellers`/`seller_*` با `partners`/`partner_*`
-- افزودن `app_content` به یک ماژول `stbak_engine.py`
+- افزودن `app_content`, `daily_checkins`, `favorites`, `user_notifications` به ماژول‌های `stbak_engine.py`
+- رفع باگ `db.add_product()` (متغیر `cols` بلااستفاده، `product_key` هیچ‌وقت درج نمی‌شود)
 - تصمیم دربارهٔ دو Mini App موازی (`/admin/shop` در برابر `/app`)
 - خارج کردن `database/bot.db` از ردگیری گیت
 - هش کردن (نه plaintext) هنگام تغییر رمز سوپرادمین؛ یکسان‌سازی پیش‌فرض `SESSION_SECRET`
@@ -469,3 +476,49 @@ proxy_send_timeout 300s;
 client_body_timeout 300s;
 ```
 بعد از هر تغییر: `nginx -t && systemctl reload nginx`. **این تنظیمات در گیت ثبت نیستن** — اگه سرور از صفر ساخته بشه یا این فایل جایگزین بشه، باید دستی دوباره اضافه بشن.
+
+---
+
+## ۲۱. مینی‌اپ — نقشهٔ کامل قابلیت‌ها و API (تا ۲۰۲۶-۰۷-۲۴)
+
+> این بخش برای این نوشته شده که **دیگه لازم نباشه هر بار `app.js`/`app.css`/`api.py` رو کامل خوند** تا بفهمی مینی‌اپ چی داره. اگه رفتار واقعی کد با این‌جا فرق داشت، کد درسته و این‌جا باید آپدیت بشه.
+
+### معماری
+مینی‌اپ (`app/index.html` + `app/app.js` + `app/app.css`، Framework7، تلگرام WebApp) **هیچ منطق قیمت‌گذاری/کسب‌وکاری نداره** — فقط UI. همهٔ منطق در `core/*.py` است و از طریق `api.py` (`/api/v1/*`) صدا زده می‌شود. Auth با `initData` تلگرام (یا `API_KEYS`/`X-User-Id` به‌عنوان روش جایگزین، بخش ۱۳). الگوی معماری استاندارد پروژه برای هر فیچر جدید API-محور همینه: `core/` (منطق خالص) ← `api.py` (روتر نازک، فقط auth+validation+صدازدن core) ← مصرف‌کننده (مینی‌اپ/ربات/پنل).
+
+### فیچرهای مینی‌اپ و API متناظرشون
+| فیچر | Endpoint(ها) | جدول(ها) | کنترل ادمین |
+|---|---|---|---|
+| تحویل درون‌اپی سفارش (کیف‌پول) | `POST /api/v1/checkout` (از `_deliver_or_queue_order`) | `orders`, `product_feed`, `pending_deliveries` | — (همون تنظیمات فروش عادی) |
+| نمایش کالای تحویلی در «سفارش‌های من» | `core/orders.py` (JOIN با `product_feed`) | — | — |
+| امتیاز/نظر روی کارت و صفحهٔ محصول | `GET /categories`, `GET /products/{id}` (فیلد `rating_avg`/`rating_count`/`reviews`) | `product_ratings` | — |
+| ثبت نظر درون‌اپی روی سفارش تحویل‌شده | `POST /orders/{id}/rate` | `product_ratings` | حذف نظر از `/admin/engagement` |
+| هماهنگی تم روشن/تاریک با تلگرام | (فقط JS، `tg.colorScheme`+`themeChanged`) | — | — |
+| پاداش سرزدن روزانه + بج حساب | `GET/POST /me/checkin` | `daily_checkins` | مبلغ پاداش از `/admin/engagement` (`bot_config.DAILY_CHECKIN_REWARD`) |
+| علاقه‌مندی‌ها + محصولات مشابه | `POST/DELETE /favorites/{pid}`, `GET /favorites` | `favorites` | — |
+| اطلاع‌رسانی موجودی‌مجدد/تخفیف‌ویژهٔ علاقه‌مندی + تاریخچه اعلان‌ها | `GET /me/notifications`, `POST /me/notifications/read` | `user_notifications` | هوک در `admin_panel.feed_bulk_upload`/`growth_flash_new` (فقط وقتی محصول واقعاً از ۰ موجود به موجود برمی‌گرده) |
+| درخواست تسویهٔ همکاری از اپ | `GET /partner/payout-info`, `POST /partner/bank-info`, `POST /partner/payout` | `partner_bank_info`, `partner_payouts` (همون `request_partner_payout()` ربات) | مرکز مالی پنل — بدون تغییر، همون `get_partner_payouts` |
+| نوار پیشرفت سطح بعدی همکار | `GET /me/partner` (فیلد `next_tier`) | `partner_tiers` (`core/partners.next_tier_progress`) | مدیریت سطوح همکاری در پنل (`partner_tiers`) |
+| اشتراک‌گذاری محصول | (فقط JS، `tg.openTelegramLink('t.me/share/url?...')` با دیپ‌لینک `?start=buy_{id}`) | — | — |
+| عکس محصول (با fallback به آیکون دسته) | `GET /categories`, `GET /products/{id}` (فیلد `image_url`) | `products.image_url` | فیلد آپلود در فرم افزودن/ویرایش محصول پنل (`_save_tutorial_file` مسیر `app_media/tutorials/products/...` — نام پوشه ظاهریه، اثر عملکردی نداره) |
+
+### الگوهای JS قابل‌استفادهٔ مجدد در `app.js`
+- `prodImgHtml(p)` — رندر عکس محصول با fallback ایموجی/آیکون؛ همیشه برای هر UI جدید که محصول نشون می‌ده استفاده شود، نه `<img>` مستقیم.
+- `starsHtml(avg, count, size)` — رندر ستارهٔ امتیاز.
+- `_accPopup(title, html)` / `_accBody()` — الگوی عمومی پاپ‌آپ زیرصفحهٔ تب حساب؛ هر زیرصفحهٔ جدید حساب کاربری (اعلان‌ها، تسویه، …) از همین استفاده می‌کنه، نه پاپ‌آپ دستی جدید.
+- `_checkMeBadge()` / `_applyMeBadge()` / `_clearMeBadge()` — بج قرمز آیکون تب «حساب»؛ هر منبع جدید بج (چک‌این، تیکت نخوانده، اعلان نخوانده) باید یک شرط به `_checkMeBadge()` اضافه کنه، نه مکانیزم بج جدا بسازه.
+- کلیک‌گیر سراسری روی `a[target="_blank"]` که به `tg.openLink`/`tg.openTelegramLink` مسیر می‌ده — هر لینک خروجی جدید نیازی به کد اضافه نداره، فقط `target="_blank"` بذار.
+
+### دو باگ لایوت رفع‌شدهٔ این دور (کلاس‌بندی برای آینده)
+1. **سرریز افقی از عدم `overflow-x:hidden`** روی ظرف تب/پاپ‌آپ + عدم `overflow-wrap:break-word` روی محتوای آزاد (Quill) — می‌تونه با یک لینک/کلمهٔ خیلی بلند رخ بده.
+2. **سرریز از `box-sizing:content-box` پیش‌فرض** روی المان `width:100%` دارای padding — در RTL سرریز به چپ می‌ره (نه راست) چون چیدمان از راست شروع می‌شه. هر باکس تازه با `width:100%` + padding باید صریحاً `box-sizing:border-box` بگیره.
+
+هر دو باگ با اندازه‌گیری واقعی `getBoundingClientRect()` در Playwright تشخیص داده شدن، نه با خوندن CSS و حدس زدن — برای باگ لایوت آینده همین روش رو تکرار کن.
+
+### راهنما برای فیچر مینی‌اپ بعدی
+1. منطق خالص در `core/<domain>.py` (تابع، بدون FastAPI/HTTP)
+2. Endpoint نازک در `api.py` زیر `/api/v1` (فقط auth + صدا زدن core)
+3. اگه نیاز به جدول جدید داره: `ensure_*_schema()` با الگوی ALTER+try/except+فلگ گارد (بخش ۷)، و **بلافاصله** به `stbak_engine.py` MODULES هم اضافه کن (فراموش نشه، چون این نشست ۳ بار فراموش شد)
+4. UI در `app.js`/`app.css` با استفاده از الگوهای بالا (نه بازسازی از صفر)
+5. **هر فیچری که نیاز به مدیریت داره، بخش خودش رو زیر «مدیریت اپ» در پنل ادمین بگیره** (قانون ثابت مالک پروژه — بخش ۱۶ رو هم ببین)
+6. تست: سینتکس + FastAPI TestClient با DB موقت واقعی + Playwright با DB موقعیت‌های عادی/لبه (خالی، طولانی، بدون‌مقدار)
