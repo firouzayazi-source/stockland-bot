@@ -190,7 +190,7 @@ function renderP(name){
       '<div class="sl-pprice-row">'+(f?'<span class="sl-old">'+fmt(p.price)+'</span>':'')+
       '<span class="sl-price">'+fmt(p.effective_price)+' <small>تومان</small></span></div>'+
       (f?'<div class="sl-flash">⚡️ فروش فوری</div>':'')+
-      '<span class="sl-buy">مشاهده و خرید</span></div></div>';
+      '<span class="sl-buy">🛒 مشاهده و خرید</span></div></div>';
   }).join('');
 }
 
