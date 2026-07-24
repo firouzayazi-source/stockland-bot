@@ -11386,8 +11386,11 @@ def _tutorial_form(it=None, categories=None):
         </div>
       </div>
       <div class="flex gap-2">
-        <button class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm">ذخیره</button>
+        <button id="tut-save-btn" class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm">ذخیره</button>
         <a href="/admin/tutorials" class="px-5 py-2 rounded-lg text-sm border">انصراف</a>
+      </div>
+      <div id="tut-upload-note" hidden class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-2">
+        ⏳ در حال آپلود… برای فایل‌های بزرگ (ویدیو) ممکنه چند دقیقه طول بکشه، لطفاً این صفحه رو نبند و دوباره روی دکمه نزن.
       </div>
     </form>
     <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
@@ -11397,6 +11400,9 @@ def _tutorial_form(it=None, categories=None):
       quill.root.innerHTML = {body_json};
       document.querySelector('form[action="/admin/tutorials/save"]').addEventListener('submit', function(){{
         document.getElementById('body-input').value = quill.root.innerHTML;
+        var btn=document.getElementById('tut-save-btn');
+        btn.disabled=true;btn.textContent='⏳ در حال آپلود…';btn.classList.add('opacity-60');
+        document.getElementById('tut-upload-note').hidden=false;
       }});
     }})();
     </script>"""
