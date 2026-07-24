@@ -98,6 +98,23 @@ except Exception as _ex:
     logger.warning("PWA mount failed: %s", _ex)
 
 
+_PWA_NO_CACHE_PATHS = {"/app/sw.js", "/app/", "/app", "/app/index.html"}
+
+
+@app.middleware("http")
+async def _no_cache_pwa_shell(request, call_next):
+    """sw.js/index.html نباید HTTP-cache بشن — وگرنه مرورگر/تلگرام هیچ‌وقت
+    متوجه آپدیت سرویس‌ورکر نمی‌شه و کش PWA برای همیشه قدیمی می‌مونه."""
+    response = await call_next(request)
+    try:
+        if request.url.path in _PWA_NO_CACHE_PATHS:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+    except Exception:
+        pass
+    return response
+
+
 @app.middleware("http")
 async def _refresh_admin_session(request, call_next):
     """با هر فعالیت ادمین، تایمر idle (۵ دقیقه) را ریست می‌کند."""
