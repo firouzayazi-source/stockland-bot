@@ -556,43 +556,12 @@ function openPartner(){
 }
 window.openPartner=openPartner;
 
-/* ─── فرم درخواست همکاری — هم‌ارز ویزارد ربات (شهر → نام فروشگاه) ─── */
+/* ─── درخواست همکاری — فعلاً فقط از ربات (ویزارد کامل اونجاست)، اپ فقط ارجاع می‌ده ─── */
 function renderPartnerApplyForm(b){
-  b.innerHTML='<div class="sl-empty" style="padding:16px 8px 4px"><span class="sl-empty-e">🤝</span>'+
-    'برای شروع همکاری، فرم زیر رو پر کنید.</div>'+
-    '<div class="sl-checkout-sec">شماره تماس</div>'+
-    '<div class="sl-pay-box"><input type="tel" id="pa-phone" class="sl-amount-input" placeholder="۰۹xxxxxxxxx" autocomplete="off"></div>'+
-    '<div class="sl-checkout-sec">شهر فعالیت</div>'+
-    '<div class="sl-pay-box"><input type="text" id="pa-city" class="sl-amount-input" placeholder="مثلاً تهران" autocomplete="off"></div>'+
-    '<div class="sl-checkout-sec">نام فروشگاه / پیج / مجموعه</div>'+
-    '<div class="sl-pay-box"><input type="text" id="pa-shop" class="sl-amount-input" placeholder="نام کسب‌وکار شما" autocomplete="off"></div>'+
-    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="pa-submit-btn">ثبت درخواست</button></div>'+
-    '<div class="sl-checkout-note">پس از بررسی ادمین (معمولاً کمتر از ۲۴ ساعت)، نتیجه اعلام می‌شود.</div>';
-  var sb=document.getElementById('pa-submit-btn');
-  if(sb)sb.addEventListener('click',function(){
-    var phone=(document.getElementById('pa-phone').value||'').trim();
-    var city=(document.getElementById('pa-city').value||'').trim();
-    var shop=(document.getElementById('pa-shop').value||'').trim();
-    if(!phone||phone.length<8){window._slApp.dialog.alert('شماره تماس معتبر وارد کنید','خطا');return}
-    if(!city||city.length<2){window._slApp.dialog.alert('نام شهر رو وارد کنید','خطا');return}
-    if(!shop||shop.length<2){window._slApp.dialog.alert('نام فروشگاه/پیج رو وارد کنید','خطا');return}
-    sb.disabled=true;sb.textContent='در حال ثبت…';
-    var un=(tgUser&&tgUser.first_name)||'',ln=(tgUser&&tgUser.last_name)||'';
-    fetch('https://panel.stland.ir/api/v1/partner/apply',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
-      body:JSON.stringify({phone:phone,city:city,shop_name:shop,
-        full_name:(un+' '+ln).trim(),username:(tgUser&&tgUser.username)||''})
-    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
-      if(res.status!==200||!res.d.ok){
-        window._slApp.dialog.alert((res.d&&(res.d.detail||res.d.error))||'خطا در ثبت درخواست','خطا');
-        sb.disabled=false;sb.textContent='ثبت درخواست';return;
-      }
-      b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
-        '<div class="sl-checkout-result-t">درخواست ثبت شد</div>'+
-        '<div class="sl-checkout-result-s">پس از بررسی ادمین نتیجه اعلام می‌شود.</div></div>';
-    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='ثبت درخواست'});
-  });
+  b.innerHTML='<div class="sl-login"><div class="sl-login-e">🤝</div>'+
+    '<div class="sl-login-t">ثبت‌نام همکاری</div>'+
+    '<div class="sl-login-s">برای شروع همکاری، وارد ربات تلگرام بشید<br>و ویزارد ثبت‌نام رو کامل کنید.</div>'+
+    '<a class="sl-login-btn" href="https://t.me/'+botUser+'?start=partner" target="_blank">🤖 ثبت‌نام در ربات</a></div>';
 }
 
 /* ─── پشتیبانی — همون منطق ticket_v2 ربات (سقف ۳ پیام تا پاسخ ادمین) ─── */
