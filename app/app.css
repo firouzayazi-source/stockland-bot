@@ -225,18 +225,18 @@ html.dark .sl-pic{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-wallet-acts{display:flex;gap:9px;margin-top:16px}
 .sl-wallet-a{flex:1;text-align:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);
  border-radius:13px;padding:9px 0;font-size:12.5px;font-weight:700;cursor:pointer;color:#fff;text-decoration:none}
-.sl-checkin-card{margin:12px 20px 0;border-radius:18px;padding:13px 15px;display:flex;align-items:center;gap:11px;
+.sl-checkin-card{margin:10px 20px 0;border-radius:14px;padding:9px 12px;display:flex;align-items:center;gap:8px;
  background:linear-gradient(135deg,#FFF4E5,#FFE8CC);border:1px solid rgba(245,158,11,.25)}
 html.dark .sl-checkin-card{background:linear-gradient(135deg,#3A2A0E,#2E210A);border-color:rgba(245,158,11,.3)}
 .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#E7F6EE,#D6F1E4);border-color:rgba(34,197,94,.25)}
 html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E2A1C,#0A2216);border-color:rgba(34,197,94,.3)}
 .sl-checkin-card.sl-checkin-mini{background:var(--card);border-color:var(--ln)}
-.sl-checkin-e{font-size:24px;flex:none}
-.sl-checkin-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.sl-checkin-txt b{font-size:13.5px;font-weight:800}
-.sl-checkin-txt span{font-size:11.5px;color:var(--mu)}
-.sl-checkin-btn{flex:none;background:#F59E0B;color:#fff;border:none;border-radius:12px;
- padding:9px 16px;font-size:12.5px;font-weight:800;cursor:pointer;font-family:inherit}
+.sl-checkin-e{font-size:18px;flex:none;line-height:1}
+.sl-checkin-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;overflow:hidden}
+.sl-checkin-txt b{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-checkin-txt span{font-size:10.5px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-checkin-btn{flex:none;background:#F59E0B;color:#fff;border:none;border-radius:9px;
+ padding:6px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit}
 .sl-group{margin:16px 20px 0;background:var(--card);border-radius:18px;overflow:hidden;box-shadow:var(--sh)}
 .sl-row{display:flex;align-items:center;gap:12px;padding:13px 15px;border-bottom:.5px solid var(--ln);
  font-size:14.5px;font-weight:600;cursor:pointer;color:var(--ink);text-decoration:none}
@@ -259,6 +259,9 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
  border:none;background:var(--card);box-shadow:var(--sh);font-size:19px;color:var(--mu);
  cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit}
 .sl-pp-fav.on{color:#EF4444}
+.sl-pp-share{position:absolute;top:16px;right:16px;width:38px;height:38px;border-radius:50%;
+ border:none;background:var(--card);box-shadow:var(--sh);font-size:17px;color:var(--mu);
+ cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit}
 .sl-pp-related-title{padding:0 20px 8px;font-size:13px;font-weight:800;color:var(--mu)}
 .sl-pp-related{padding:0 20px 20px;display:flex;gap:10px;overflow-x:auto;scrollbar-width:none}
 .sl-pp-related::-webkit-scrollbar{display:none}
@@ -295,7 +298,9 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
 .sl-post-body img{width:100%;border-radius:16px;margin:12px 0 4px;display:block}
 .sl-postf-title{font-size:20px;font-weight:700;line-height:1.6;margin:14px 0 2px}
 .sl-postf-date{color:var(--mu);font-size:12px;margin-bottom:10px}
-.sl-postf-text{font-size:15.5px;line-height:2;white-space:pre-line}
+.sl-postf-text{font-size:15.5px;line-height:2;white-space:pre-line;overflow-wrap:break-word;word-break:break-word}
+.sl-postf-text img,.sl-postf-text video,.sl-postf-text iframe,.sl-postf-text table{max-width:100%}
+.sl-postf-text pre{white-space:pre-wrap;word-break:break-word;overflow-x:auto;max-width:100%}
 .sl-video-wrap{position:relative;padding-top:56.25%;border-radius:14px;overflow:hidden;margin:14px 0}
 .sl-video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .sl-tut-video{width:100%;border-radius:14px;margin:14px 0;display:block}
@@ -333,6 +338,11 @@ html.dark .sl-checkout-emoji{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-checkout-price{font-size:13px;color:var(--mu);margin-top:3px}
 .sl-checkout-price b{color:var(--br);font-size:16px}
 .sl-checkout-sec{padding:18px 20px 6px;font-size:13px;font-weight:700;color:var(--mu)}
+.sl-rate-box{margin-top:10px;padding-top:10px;border-top:1px solid var(--ln)}
+.sl-rate-label{font-size:12.5px;font-weight:700;color:var(--mu);margin-bottom:6px}
+.sl-rate-stars{display:flex;gap:4px;font-size:24px;color:var(--pt);line-height:1;cursor:pointer;user-select:none}
+.sl-rate-comment{width:100%;box-sizing:border-box;margin-top:8px;border:1px solid var(--ln);border-radius:12px;
+ padding:9px 12px;font-size:13px;font-family:inherit;resize:none;background:var(--card);color:var(--ink)}
 .sl-checkout-wallet{margin:0 20px;background:var(--card);border-radius:14px;padding:14px 16px;
  display:flex;align-items:center;justify-content:space-between;box-shadow:var(--sh)}
 .sl-checkout-wallet-info{font-size:13px;color:var(--mu)}
@@ -447,6 +457,7 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
  position:absolute!important;top:0;left:0;right:0;bottom:0;
  height:auto!important;
  overflow-y:auto!important;
+ overflow-x:hidden!important;
  -webkit-overflow-scrolling:touch;
  overscroll-behavior-y:contain;
 }
@@ -466,6 +477,7 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
 /* اسکرول در پاپ‌آپ‌ها */
 .popup .page-content{
  overflow-y:auto!important;
+ overflow-x:hidden!important;
  -webkit-overflow-scrolling:touch;
 }
 

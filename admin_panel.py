@@ -515,6 +515,7 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>مدیریت اپ</span></div>
             {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
             {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
+            {nav_item("/admin/engagement", "star", "امتیازها و پاداش روزانه", "settings")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "users")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
@@ -4897,6 +4898,16 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
     if not items:
         return _redir(f"/admin/feed/{pid}?flash=فایل+خالی+است")
 
+    # قبل از درج، موجودی فعلی رو چک می‌کنیم — اطلاع‌رسانی علاقه‌مندی‌ها فقط برای گذار
+    # واقعی «ناموجود → موجود» باشه، نه هر بار که ادمین به یه محصول موجود موجودی اضافه می‌کنه.
+    was_out_of_stock = False
+    try:
+        from db import get_feed_stats
+        _t0, _remaining0, _d0 = get_feed_stats(pid)
+        was_out_of_stock = (int(_remaining0 or 0) == 0)
+    except Exception:
+        pass
+
     conn = _db()
     try:
         conn.executemany(
@@ -4952,6 +4963,28 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
                     pass
             mark_subscriptions_notified(pid)
             reset_subscriptions_on_restock(pid)
+    except Exception:
+        pass
+
+    # اطلاع‌رسانی به علاقه‌مندی‌کننده‌های محصول (مینی‌اپ) — فقط وقتی واقعاً از ناموجود به موجود برگشته
+    try:
+        from db import get_product_favoriters, get_product_by_id as _gpbi2
+        favoriters = get_product_favoriters(pid) if was_out_of_stock else []
+        if favoriters:
+            _prod2 = _gpbi2(pid)
+            _title2 = _prod2[2] if _prod2 else f"محصول #{pid}"
+            bot_token2 = _env("BOT_TOKEN")
+            for fav_uid in favoriters:
+                try:
+                    _requests.post(
+                        f"https://api.telegram.org/bot{bot_token2}/sendMessage",
+                        json={"chat_id": fav_uid,
+                              "text": f"💚 محصولی که به علاقه‌مندی‌هاتون اضافه کرده بودید موجود شد!\n<b>{_title2}</b>",
+                              "parse_mode": "HTML"},
+                        timeout=5
+                    )
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -10342,9 +10375,31 @@ async def growth_flash_new(request: Request):
     form = await request.form()
     from db import create_flash_sale
     pid = int(form.get("product_id") or 0)
+    percent = int(form.get("percent") or 10)
     if pid:
-        create_flash_sale(pid, int(form.get("percent") or 10), int(form.get("hours") or 24))
+        create_flash_sale(pid, percent, int(form.get("hours") or 24))
         _log(request, "فروش فوری", "رشد", f"محصول #{pid}", admin_info=adm)
+        # اطلاع‌رسانی به علاقه‌مندی‌کننده‌های محصول (مینی‌اپ)
+        try:
+            from db import get_product_favoriters, get_product_by_id as _gpbi3
+            favoriters = get_product_favoriters(pid)
+            if favoriters:
+                _prod3 = _gpbi3(pid)
+                _title3 = _prod3[2] if _prod3 else f"محصول #{pid}"
+                bot_token3 = _env("BOT_TOKEN")
+                for fav_uid in favoriters:
+                    try:
+                        _requests.post(
+                            f"https://api.telegram.org/bot{bot_token3}/sendMessage",
+                            json={"chat_id": fav_uid,
+                                  "text": f"⚡️ محصولی که به علاقه‌مندی‌هاتون اضافه کرده بودید {percent}٪ تخفیف خورد!\n<b>{_title3}</b>",
+                                  "parse_mode": "HTML"},
+                            timeout=5
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     return _redir("/admin/growth?flash=🔥+فروش+فوری+شروع+شد")
 
 
@@ -11148,6 +11203,85 @@ async def app_content_delete(request: Request, cid: int):
     from db import delete_app_content
     delete_app_content(cid)
     return _redir("/admin/app-content")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── امتیازها و پاداش سرزدن روزانهٔ مینی‌اپ ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/engagement", response_class=HTMLResponse)
+async def engagement_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_cfg, get_all_ratings
+    reward = get_cfg("DAILY_CHECKIN_REWARD", "500")
+    ratings = get_all_ratings(limit=100)
+
+    rows = "".join(f"""
+      <tr class="border-b">
+        <td class="p-2 text-sm">{html.escape(r.get('product_title') or '—')}</td>
+        <td class="p-2 text-sm">{'⭐️'*int(r.get('rating') or 0)}</td>
+        <td class="p-2 text-sm text-gray-600">{html.escape((r.get('comment') or '').strip() or '—')}</td>
+        <td class="p-2 text-xs text-gray-400">{html.escape((r.get('full_name') or '').strip() or ('کاربر '+str(r.get('user_id'))))}</td>
+        <td class="p-2 text-xs text-gray-400">{fa_date(r.get('created_at') or '')}</td>
+        <td class="p-2">
+          <form method="post" action="/admin/engagement/ratings/{r['id']}/delete" onsubmit="return confirm('این نظر حذف بشه؟')">
+            <button class="text-red-500 text-xs">🗑 حذف</button>
+          </form>
+        </td>
+      </tr>""" for r in ratings) or '<tr><td colspan="6" class="p-6 text-center text-gray-400 text-sm">هنوز نظری ثبت نشده.</td></tr>'
+
+    body = f"""
+    <div class="bg-white rounded-xl shadow-sm p-5 max-w-2xl mb-4">
+      <div class="text-sm font-medium mb-2">🎁 پاداش سرزدن روزانهٔ مینی‌اپ</div>
+      <div class="text-xs text-gray-400 mb-3">مبلغی که هر کاربر با اولین بازکردن اپ در هر روز (یک‌بار در روز) به کیف‌پولش اضافه می‌شه.</div>
+      <form method="post" action="/admin/engagement/settings" class="flex gap-2">
+        <input type="number" name="reward" value="{e(reward)}" min="0" step="100"
+               class="flex-1 border rounded-lg p-2 text-sm" placeholder="مثلاً ۵۰۰">
+        <span class="self-center text-sm text-gray-400">تومان</span>
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">ذخیره</button>
+      </form>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+      <div class="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+        <h2 class="font-bold text-gray-700 text-sm">⭐️ نظرات و امتیازهای محصولات ({len(ratings)})</h2>
+      </div>
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b">
+          <th class="p-2">محصول</th><th class="p-2">امتیاز</th><th class="p-2">نظر</th>
+          <th class="p-2">کاربر</th><th class="p-2">تاریخ</th><th class="p-2">عملیات</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _layout("امتیازها و پاداش روزانه", body, adm, flash=flash)
+
+
+@router.post("/engagement/settings")
+async def engagement_settings_save(request: Request, reward: str = Form("0")):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import set_cfg
+    try:
+        val = max(0, int(reward))
+    except Exception:
+        val = 0
+    set_cfg("DAILY_CHECKIN_REWARD", str(val))
+    _log(request, "تنظیم پاداش سرزدن روزانه", "امتیازها و پاداش روزانه", str(val), admin_info=adm)
+    return _redir(f"/admin/engagement?flash={e('✅ ذخیره شد')}")
+
+
+@router.post("/engagement/ratings/{rid}/delete")
+async def engagement_rating_delete(request: Request, rid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import delete_rating
+    delete_rating(rid)
+    _log(request, "حذف نظر محصول", "امتیازها و پاداش روزانه", f"rating #{rid}", admin_info=adm)
+    return _redir(f"/admin/engagement?flash={e('✅ حذف شد')}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
