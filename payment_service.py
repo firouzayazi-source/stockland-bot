@@ -524,7 +524,11 @@ def maybe_start_bot_polling() -> None:
         return
 
     if mode == "webhook":
-        _activate_webhook(bot_module)
+        if not _activate_webhook(bot_module):
+            # اگه webhook شکست بخوره (مثلاً DNS/SSL خراب باشه)، ربات نباید کاملاً
+            # بی‌صدا بمونه — فال‌بک خودکار به polling تا وقتی مشکل webhook حل بشه
+            logger.warning("Webhook activation failed at startup — falling back to polling so the bot doesn't stay silent")
+            _activate_polling(bot_module)
     else:
         _activate_polling(bot_module)
 
@@ -676,7 +680,11 @@ def switch_bot_mode(new_mode: str) -> tuple:
 
     if new_mode == "webhook":
         ok = _activate_webhook(bot_module)
-        return (ok, "Webhook فعال شد" if ok else "خطا در فعال‌سازی Webhook")
+        if ok:
+            return True, "Webhook فعال شد"
+        # فال‌بک خودکار به polling تا ربات به‌خاطر خطای webhook (مثلاً DNS/SSL) بی‌صدا نمونه
+        _activate_polling(bot_module)
+        return False, "خطا در فعال‌سازی Webhook — به‌صورت خودکار روی Polling باقی ماند تا مشکل رفع شود"
     if new_mode == "polling":
         try:
             bot_module.bot.remove_webhook()
