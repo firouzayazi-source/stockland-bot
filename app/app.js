@@ -148,7 +148,7 @@ function loadHome(){
       '<div class="sl-post-m">'+esc(it.created_at)+'</div></div></div>';
   }).catch(function(){dp.innerHTML=''});
 
-  // اخبار
+  // اخبار تکنولوژی — از فید RSS زنده (نه محتوای داخلی)
   nr.innerHTML=skel(1);
   // آخرین آموزش
   loadLearnCard();
@@ -156,15 +156,16 @@ function loadHome(){
   var colors=['linear-gradient(120deg,#123,#0A63FF)','linear-gradient(120deg,#1B2B1B,#22C55E)',
     'linear-gradient(120deg,#2B1B2B,#A855F7)','linear-gradient(120deg,#2B1B1B,#EF4444)',
     'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
-  api('/content?kind=news&limit=6').then(function(d){
-    var it=(d&&d.items)||[];
+  api('/news/feed').then(function(d){
+    var it=((d&&d.items)||[]).slice(0,6);
     var ns=document.getElementById('news-sec');
     if(!it.length){nr.innerHTML='';if(ns)ns.style.display='none';return}
     if(ns)ns.style.display='';
     nr.innerHTML=it.map(function(p,i){
-      return '<div class="sl-mini" data-cid="'+p.id+'"><div class="sl-mini-cv" style="background:'+colors[i%colors.length]+'">'+
+      return '<a class="sl-mini" href="'+esc(p.link)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'+
+        '<div class="sl-mini-cv" style="background:'+colors[i%colors.length]+'">'+
         (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'📰')+'</div>'+
-        '<div class="sl-mini-b"><div class="sl-mini-t">'+esc(p.title)+'</div><div class="sl-mini-m">'+esc(p.created_at)+'</div></div></div>';
+        '<div class="sl-mini-b"><div class="sl-mini-t">'+esc(p.title)+'</div><div class="sl-mini-m">'+esc(p.pub_date)+'</div></div></a>';
     }).join('');
   }).catch(function(){nr.innerHTML=''});
 }
@@ -195,23 +196,23 @@ function loadLearnCard(){
   var lc=document.getElementById('learn-card');
   var ls=document.getElementById('learn-sec');
   if(!lc)return;
-  var kinds=['tutorial','news','feature'];
+  var kinds=['tutorial','feature'];
   var idx=0;
   function tryNext(){
     if(idx>=kinds.length){lc.style.display='none';if(ls)ls.style.display='none';return}
-    api('/content?kind='+kinds[idx]+'&limit=1').then(function(d){
+    var thisKind=kinds[idx];idx++;
+    api('/content?kind='+thisKind+'&limit=1').then(function(d){
       var it=(d&&d.items&&d.items[0]);
-      if(!it){idx++;tryNext();return}
-      var labels={tutorial:'📚 آموزش',news:'📰 خبر',feature:'✨ امکانات'};
+      if(!it){tryNext();return}
+      var labels={tutorial:'📚 آموزش',feature:'✨ امکانات'};
       lc.innerHTML='<div class="sl-learn-card" data-cid="'+it.id+'">'+
         '<div class="sl-learn-img">'+(it.image_url?'<img src="'+esc(it.image_url)+'" alt="">':'📚')+'</div>'+
         '<div class="sl-learn-body">'+
-          '<div class="sl-learn-tag">'+(labels[kinds[idx]]||'آموزش')+'</div>'+
+          '<div class="sl-learn-tag">'+(labels[thisKind]||'آموزش')+'</div>'+
           '<div class="sl-learn-title">'+esc(it.title)+'</div>'+
           '<div class="sl-learn-meta"><span>'+esc(it.created_at||'')+'</span></div>'+
         '</div></div>';
-    }).catch(function(){idx++;tryNext();});
-    idx++;
+    }).catch(function(){tryNext();});
   }
   tryNext();
 }
@@ -300,29 +301,18 @@ function openP(pid){
   }).catch(function(){b.innerHTML=err('خطا');});
 }
 
-/* ═══ آموزش ═══ */
+/* ═══ آموزش — کاملاً داخلی، از پنل ═══ */
 var _lk={},_lc='tutorial';
 function loadL(kind){_lc=kind;if(_lk[kind])return;_lk[kind]=1;
   var box=document.getElementById('learn-list');box.innerHTML=skel(2);
   var colors=['linear-gradient(120deg,#101826,#7C3AED)','linear-gradient(120deg,#0F172A,#0A63FF)',
     'linear-gradient(120deg,#1B2B1B,#22C55E)','linear-gradient(120deg,#2B1B1B,#EF4444)',
     'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
-  var LB={tutorial:'📚 آموزش',news:'📰 خبر',feature:'✨ امکانات'};
-  var EM={tutorial:['📚','هنوز آموزشی منتشر نشده'],news:['📰','هنوز خبری نیست'],feature:['✨','به‌زودی…']};
+  var LB={tutorial:'📚 آموزش',feature:'✨ امکانات'};
+  var EM={tutorial:['📚','هنوز آموزشی منتشر نشده'],feature:['✨','به‌زودی…']};
   api('/content?kind='+encodeURIComponent(kind)+'&limit=50').then(function(d){
-    // بخش خبر: به‌جای فهرست پست داخل اپ، فقط یک کارت ارجاع به آرشیو کامل وبلاگ
-    if(kind==='news'){
-      var url=(d&&d.blog_url)||'';
-      if(!url){box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📰</span>هنوز خبری نیست</div>';return}
-      box.innerHTML='<a class="sl-post" href="'+esc(url)+'" target="_blank" style="text-decoration:none;color:inherit">'+
-        '<div class="sl-post-cv" style="background:linear-gradient(120deg,#101826,#F59E0B)">'+
-        '<span class="sl-post-tag">📰 وبلاگ</span>📰</div>'+
-        '<div class="sl-post-bd"><div class="sl-post-t">مشاهده کامل اخبار و مقالات</div>'+
-        '<div class="sl-post-x">همهٔ مطالب و به‌روزرسانی‌های تازه در وبلاگ استوک‌لند</div></div></a>';
-      return;
-    }
     var it=(d&&d.items)||[];
-    if(!it.length){var m=EM[kind]||EM.news;box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">'+m[0]+'</span><b>'+m[1]+'</b></div>';return}
+    if(!it.length){var m=EM[kind]||EM.tutorial;box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">'+m[0]+'</span><b>'+m[1]+'</b></div>';return}
     box.innerHTML=it.map(function(p,i){
       return '<div class="sl-post" data-cid="'+p.id+'"><div class="sl-post-cv" style="background:'+colors[i%colors.length]+'">'+
         '<span class="sl-post-tag">'+(LB[kind]||kind)+'</span>'+
@@ -338,6 +328,34 @@ document.getElementById('learn-seg').addEventListener('click',function(e){
   document.querySelectorAll('#learn-seg button').forEach(function(x){x.classList.remove('on')});b.classList.add('on');
   _lk={};loadL(b.dataset.k);
 });
+
+/* ═══ اخبار تکنولوژی — فقط فید RSS زندهٔ وبلاگ، بدون هیچ محتوای داخلی ═══ */
+var _nw=0;
+function loadNews(force){
+  if(_nw&&!force)return;_nw=1;
+  var box=document.getElementById('news-list');if(!box)return;
+  box.innerHTML=skel(3);
+  var colors=['linear-gradient(120deg,#101826,#7C3AED)','linear-gradient(120deg,#0F172A,#0A63FF)',
+    'linear-gradient(120deg,#1B2B1B,#22C55E)','linear-gradient(120deg,#2B1B1B,#EF4444)',
+    'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
+  api('/news/feed').then(function(d){
+    var it=(d&&d.items)||[];
+    if(!it.length){
+      var msg=(d&&d.status==='unset')?'فید اخبار هنوز تنظیم نشده':'هنوز خبری نیست';
+      box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📰</span>'+msg+'</div>';
+      return;
+    }
+    box.innerHTML=it.map(function(p,i){
+      return '<a class="sl-post" href="'+esc(p.link)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'+
+        '<div class="sl-post-cv" style="background:'+colors[i%colors.length]+'">'+
+        '<span class="sl-post-tag">📰 اخبار</span>'+
+        (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'')+
+        '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
+        '<div class="sl-post-x">'+esc(p.excerpt)+'</div><div class="sl-post-m">'+esc(p.pub_date)+'</div></div></a>';
+    }).join('');
+  }).catch(function(){_nw=0;box.innerHTML=err('خطا')+'<button class="sl-retry" onclick="loadNews(true)">تلاش مجدد</button>'});
+}
+window.loadNews=loadNews;
 function openC(cid){
   var t=document.getElementById('post-title'),b=document.getElementById('post-body');
   t.textContent='…';b.innerHTML=skel(2);app.popup.open('#post-popup');
@@ -864,11 +882,12 @@ function renderSupportChat(ticket,messages){
 app.on('tabShow',function(el){var id=el&&el.id;
   if(id==='tab-home')loadHome();if(id==='tab-shop')loadShop();
   if(id==='tab-learn'){var k=document.querySelector('#learn-seg button.on');loadL(k?k.dataset.k:'tutorial')}
+  if(id==='tab-news')loadNews();
   if(id==='tab-me')loadMe();
 });
 app.on('ptrRefresh',function(el,done){var t=document.querySelector('.tab.tab-active'),id=t&&t.id;
   if(id==='tab-home'){_h=0;cats=[];prods=[];loadHome()}if(id==='tab-shop'){_s=0;prods=[];loadShop()}
-  if(id==='tab-learn'){_lk={};loadL(_lc)}if(id==='tab-me'){_m=0;loadMe()}
+  if(id==='tab-learn'){_lk={};loadL(_lc)}if(id==='tab-news')loadNews(true);if(id==='tab-me'){_m=0;loadMe()}
   setTimeout(done,600);
 });
 document.addEventListener('click',function(e){

@@ -662,13 +662,11 @@ async def api_health():
 
 @router.get("/content")
 async def api_content_list(kind: str = "", limit: int = 50):
-    """فهرست محتوا برای PWA — kind: tutorial | news | feature (خالی = همه).
-
-    برای kind=news، به‌جای فهرست پست، لینک آرشیو کامل وبلاگ (blog_url) هم
-    برگردونده می‌شه — تصمیم مالک پروژه: تب «خبر» اپ فقط به وبلاگ خارجی
-    ارجاع بده، محتوای خبر داخل اپ تکرار/مدیریت نشه."""
-    from db import get_app_content, get_cfg
-    kind = kind if kind in ("tutorial", "news", "feature", "daily") else None
+    """فهرست محتوا برای PWA — kind: tutorial | feature | daily (خالی = همه).
+    «اخبار تکنولوژی» دیگه اینجا نیست — کاملاً جدا شد به /news/feed (فید RSS
+    زنده از وبلاگ خارجی، نه محتوای دستی داخل پنل)."""
+    from db import get_app_content
+    kind = kind if kind in ("tutorial", "feature", "daily") else None
     items = get_app_content(kind=kind, active_only=True, limit=min(int(limit or 50), 100))
     out = []
     for it in items:
@@ -682,7 +680,15 @@ async def api_content_list(kind: str = "", limit: int = 50):
             "link_url": it.get("link_url") or "",
             "created_at": str(it.get("created_at") or "")[:16],
         })
-    return {"ok": True, "items": out, "blog_url": get_cfg("NEWS_BLOG_URL", "")}
+    return {"ok": True, "items": out}
+
+
+@router.get("/news/feed")
+async def api_news_feed():
+    """اخبار تکنولوژی — فید RSS زندهٔ وبلاگ (بدون محتوای دستی/پنل)، کش‌شده."""
+    from core.news import get_feed
+    d = get_feed(force=False)
+    return {"ok": True, **d}
 
 
 @router.get("/content/{cid}")
