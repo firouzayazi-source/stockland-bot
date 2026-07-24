@@ -292,6 +292,19 @@ document.getElementById('shop-cats').addEventListener('click',function(e){
   var n=c.dataset.name;renderP(n==='همه'?'':n);
 });
 
+/* ═══ اشتراک‌گذاری محصول ═══ */
+function shareProduct(pid,title){
+  var url='https://t.me/'+botUser+'?start=buy_'+pid;
+  if(inTG&&tg.openTelegramLink){
+    tg.openTelegramLink('https://t.me/share/url?url='+encodeURIComponent(url)+'&text='+encodeURIComponent(title||''));
+  }else if(navigator.share){
+    navigator.share({title:title||'',url:url}).catch(function(){});
+  }else if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(url).then(function(){window._slApp.dialog.alert('لینک محصول کپی شد','اشتراک‌گذاری')});
+  }
+}
+window.shareProduct=shareProduct;
+
 /* ═══ پاپ‌آپ محصول ═══ */
 function openP(pid){
   var t=document.getElementById('pp-title'),b=document.getElementById('pp-body');
@@ -301,6 +314,7 @@ function openP(pid){
     var f=p.flash_active,e=p.effective_price,bs=p.price,hs=p.stock!=null,ok=p.stock>0;
     b.innerHTML='<div class="sl-pp-hero">'+
       (loggedIn?'<button class="sl-pp-fav'+(p.is_favorite?' on':'')+'" id="sl-fav-'+p.id+'" data-fav="'+(p.is_favorite?1:0)+'">'+(p.is_favorite?'♥':'♡')+'</button>':'')+
+      '<button class="sl-pp-share" id="sl-share-'+p.id+'">↗</button>'+
       '<div class="sl-pp-emoji">'+(p._e||'📦')+'</div>'+
       '<div class="sl-pp-title">'+esc(p.title)+'</div>'+
       (f?'<div class="sl-pp-flash"><span class="old">'+fmt(bs)+' تومان</span> <span class="tag">⚡️ فروش فوری</span></div>':'')+
@@ -354,6 +368,8 @@ function openP(pid){
             if(window._slTg&&window._slTg.HapticFeedback)try{window._slTg.HapticFeedback.impactOccurred('light')}catch(e){}
           });
       });
+      var shr=document.getElementById('sl-share-'+p.id);
+      if(shr)shr.addEventListener('click',function(){shareProduct(p.id,p.title)});
       b.querySelectorAll('.sl-rp-card').forEach(function(card){
         card.addEventListener('click',function(){openP(card.dataset.pid)});
       });
@@ -636,20 +652,31 @@ function openOrders(){
     var ST={active:'تحویل‌شده',returned:'برگشتی'};
     b.innerHTML='<div class="sl-group" style="margin:12px">'+items.map(function(o){
       var hasData=!!o.delivered_data;
+      var expandable=hasData||o.can_rate||o.has_rated;
       var row='<a href="#" class="sl-row" data-oid="'+o.id+'" style="cursor:pointer">'+
         '<span class="sl-ric" style="background:#0A63FF">📦</span>'+
         '<span class="sl-row-grow"><div>'+esc(o.title)+'</div>'+
         '<div style="font-size:12px;color:var(--mu);margin-top:2px">'+esc(String(o.created_at||'').slice(0,16))+'</div></span>'+
         '<span style="text-align:left"><div style="font-weight:800">'+fmt(o.price)+' <small>تومان</small></div>'+
         '<div style="font-size:11px;color:var(--mu);margin-top:2px">'+esc(ST[o.status]||o.status||'')+'</div></span>'+
-        (hasData?'<span class="sl-chev" style="margin-right:4px">‹</span>':'')+'</a>';
+        (expandable?'<span class="sl-chev" style="margin-right:4px">‹</span>':'')+'</a>';
       var detail='<div class="sl-order-detail" id="od-'+o.id+'" hidden style="padding:0 14px 14px">'+
         (hasData?
           '<div class="sl-checkout-wallet" style="direction:ltr;text-align:right;word-break:break-all;font-size:13px;white-space:pre-wrap">'+nl2br(o.delivered_data)+'</div>'+
           '<div class="sl-wal-acts" style="margin-top:8px"><button class="sl-checkout-btn sl-checkout-btn-wallet" data-copy="'+o.id+'">📋 کپی مشخصات</button></div>'
           :
-          '<div class="sl-checkout-note">مشخصات این سفارش هنوز ثبت نشده — یا از طریق چت ربات ارسال شده، یا هنوز در صف تحویله.</div>'
-        )+'</div>';
+          (o.has_rated?'':'<div class="sl-checkout-note">مشخصات این سفارش هنوز ثبت نشده — یا از طریق چت ربات ارسال شده، یا هنوز در صف تحویله.</div>')
+        )+
+        (o.has_rated?'<div class="sl-checkout-note" style="margin-top:8px">✅ نظرتون برای این محصول ثبت شده — ممنون از وقتی که گذاشتید.</div>':'')+
+        (o.can_rate?
+          '<div class="sl-rate-box" id="rate-box-'+o.id+'">'+
+            '<div class="sl-rate-label">این محصول رو چطور دیدید؟</div>'+
+            '<div class="sl-rate-stars" data-oid="'+o.id+'">'+[1,2,3,4,5].map(function(n){return '<span class="sl-rate-star" data-n="'+n+'">☆</span>'}).join('')+'</div>'+
+            '<textarea class="sl-rate-comment" id="rate-comment-'+o.id+'" rows="2" placeholder="نظرتون (اختیاری)…"></textarea>'+
+            '<button class="sl-checkout-btn sl-checkout-btn-combined" id="rate-submit-'+o.id+'" style="margin-top:8px" disabled>ثبت نظر</button>'+
+          '</div>'
+          :'')+
+        '</div>';
       return row+detail;
     }).join('')+'</div>';
     b.querySelectorAll('.sl-row[data-oid]').forEach(function(rowEl){
@@ -667,6 +694,35 @@ function openOrders(){
         var done=function(){btn.textContent='✅ کپی شد';setTimeout(function(){btn.textContent='📋 کپی مشخصات'},1500)};
         if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(done)}
         else{done()}
+      });
+    });
+    b.querySelectorAll('.sl-rate-stars').forEach(function(starsEl){
+      var oid=starsEl.dataset.oid,selected=0;
+      var stars=starsEl.querySelectorAll('.sl-rate-star');
+      function paint(n){stars.forEach(function(s){s.textContent=(+s.dataset.n<=n)?'★':'☆'})}
+      stars.forEach(function(s){
+        s.addEventListener('click',function(e){
+          e.preventDefault();e.stopPropagation();
+          selected=+s.dataset.n;paint(selected);
+          var btn=document.getElementById('rate-submit-'+oid);if(btn)btn.disabled=false;
+        });
+      });
+      var sb=document.getElementById('rate-submit-'+oid);
+      if(sb)sb.addEventListener('click',function(e){
+        e.preventDefault();e.stopPropagation();
+        if(!selected)return;
+        sb.disabled=true;sb.textContent='در حال ثبت…';
+        var comment=(document.getElementById('rate-comment-'+oid).value||'').trim();
+        fetch('/api/v1/orders/'+oid+'/rate',{method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
+          body:JSON.stringify({rating:selected,comment:comment})
+        }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+          var box=document.getElementById('rate-box-'+oid);
+          if(res.status!==200||!res.d.ok){
+            if(box)box.innerHTML='<div class="sl-checkout-note" style="margin-top:12px">'+esc((res.d&&res.d.detail)||'خطا در ثبت نظر')+'</div>';
+            return;
+          }
+          if(box)box.innerHTML='<div class="sl-checkout-note" style="margin-top:12px">✅ نظرتون ثبت شد — ممنون از وقتی که گذاشتید.</div>';
+        }).catch(function(){sb.disabled=false;sb.textContent='ثبت نظر'});
       });
     });
   }).catch(function(){b.innerHTML=err('خطا در دریافت سفارش‌ها')});
@@ -931,8 +987,87 @@ function openPartner(){
       '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.tier&&d.tier.order_count)||0)+'</div></div>'+
       '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">تعداد دعوت‌های موفق</div>'+
       '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.referrals&&d.referrals.rewarded)||0)+'</div></div>'+
-      '<div class="sl-checkout-note">برای برداشت موجودی همکاری یا مشاهدهٔ لینک دعوت اختصاصی، با پشتیبانی در تماس باشید.</div>';
+      '<div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="pt-payout-btn">💸 درخواست تسویه</button></div>'+
+      '<div class="sl-checkout-note">برای مشاهدهٔ لینک دعوت اختصاصی همکاری، با پشتیبانی در تماس باشید.</div>';
+    var pb=document.getElementById('pt-payout-btn');
+    if(pb)pb.addEventListener('click',function(){openPayoutRequest()});
   }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات همکاری')});
+}
+
+/* ─── درخواست تسویهٔ موجودی همکاری ─── */
+function openPayoutRequest(){
+  _accPopup('درخواست تسویه',skel(2));
+  window._slApi('/partner/payout-info',true).then(function(d){
+    if(!d.is_active){var b=_accBody();if(b)b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">⏸</span>تسویه در حال حاضر غیرفعاله.<br><span style="font-size:12px">بعداً دوباره امتحان کنید.</span></div>';return}
+    if(!d.bank_info){renderPayoutBankForm(d);return}
+    renderPayoutAmountForm(d);
+  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات تسویه')});
+}
+window.openPayoutRequest=openPayoutRequest;
+
+function renderPayoutBankForm(info){
+  var b=_accBody();if(!b)return;
+  b.innerHTML='<div class="sl-checkout-note" style="margin-bottom:10px">برای درخواست تسویه، اول اطلاعات حساب بانکی خودتون رو ثبت کنید.</div>'+
+    '<div class="sl-checkout-sec">نام صاحب حساب</div>'+
+    '<div class="sl-pay-box"><input type="text" id="pb-name" class="sl-amount-input" placeholder="مطابق کارت بانکی" autocomplete="off"></div>'+
+    '<div class="sl-checkout-sec">شمارهٔ کارت</div>'+
+    '<div class="sl-pay-box"><input type="tel" inputmode="numeric" id="pb-card" class="sl-amount-input" dir="ltr" placeholder="۱۶ رقم" autocomplete="off"></div>'+
+    '<div class="sl-checkout-sec">شبا (اختیاری)</div>'+
+    '<div class="sl-pay-box"><input type="text" id="pb-iban" class="sl-amount-input" dir="ltr" placeholder="IR..." autocomplete="off"></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="pb-save-btn">ثبت و ادامه</button></div>';
+  var sb=document.getElementById('pb-save-btn');
+  if(sb)sb.addEventListener('click',function(){
+    var full_name=(document.getElementById('pb-name').value||'').trim();
+    var card_number=(document.getElementById('pb-card').value||'').replace(/[^0-9]/g,'');
+    var iban=(document.getElementById('pb-iban').value||'').trim();
+    if(full_name.length<3){window._slApp.dialog.alert('نام صاحب حساب رو کامل وارد کنید','خطا');return}
+    if(card_number.length<16){window._slApp.dialog.alert('شمارهٔ کارت باید ۱۶ رقم باشه','خطا');return}
+    sb.disabled=true;sb.textContent='در حال ثبت…';
+    fetch('https://panel.stland.ir/api/v1/partner/bank-info',{
+      method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+      body:JSON.stringify({full_name:full_name,card_number:card_number,iban:iban})
+    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+      if(res.status!==200||!res.d.ok){
+        window._slApp.dialog.alert((res.d&&res.d.detail)||'خطا در ثبت اطلاعات','خطا');
+        sb.disabled=false;sb.textContent='ثبت و ادامه';return;
+      }
+      openPayoutRequest();
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='ثبت و ادامه'});
+  });
+}
+
+function renderPayoutAmountForm(info){
+  var b=_accBody();if(!b)return;
+  var bank=info.bank_info||{};
+  var hint='موجودی: '+fmt(info.balance||0)+' تومان';
+  if(info.min_amount)hint+=' · حداقل: '+fmt(info.min_amount)+' تومان';
+  b.innerHTML='<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">حساب مقصد</div>'+
+    '<div style="font-size:13px;font-weight:700;margin-top:2px">'+esc(bank.full_name||'')+'</div>'+
+    '<div style="font-size:12px;color:var(--mu);direction:ltr;text-align:right;margin-top:2px">'+esc(bank.card_number||'')+'</div></div>'+
+    '<div class="sl-checkout-sec">مبلغ درخواست تسویه (تومان)</div>'+
+    '<div class="sl-pay-box"><input type="tel" inputmode="numeric" id="po-amount" class="sl-amount-input" placeholder="'+esc(hint)+'" autocomplete="off"></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="po-submit-btn">ثبت درخواست</button></div>';
+  var inp=document.getElementById('po-amount'),sb=document.getElementById('po-submit-btn');
+  if(sb)sb.addEventListener('click',function(){
+    var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
+    if(!amount||amount<=0){window._slApp.dialog.alert('مبلغ رو وارد کنید','خطا');return}
+    sb.disabled=true;sb.textContent='در حال ثبت…';
+    fetch('https://panel.stland.ir/api/v1/partner/payout',{
+      method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+      body:JSON.stringify({amount:amount})
+    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+      if(res.status!==200||!res.d.ok){
+        window._slApp.dialog.alert((res.d&&res.d.detail)||'خطا در ثبت درخواست','خطا');
+        sb.disabled=false;sb.textContent='ثبت درخواست';return;
+      }
+      b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
+        '<div class="sl-checkout-result-t">ثبت شد</div>'+
+        '<div class="sl-checkout-result-s">درخواست تسویهٔ شما ثبت شد و توسط تیم مالی بررسی می‌شه.</div>'+
+        '<button class="sl-checkout-close-btn" id="po-done-btn">باشه</button></div>';
+      var db_=document.getElementById('po-done-btn');
+      if(db_)db_.addEventListener('click',function(){openPartner()});
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='ثبت درخواست'});
+  });
 }
 window.openPartner=openPartner;
 

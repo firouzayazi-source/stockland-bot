@@ -257,6 +257,42 @@ async def api_orders(request: Request, limit: int = 50):
     return {"ok": True, "orders": orders.user_orders(uid, limit)}
 
 
+@router.post("/orders/{oid}/rate")
+async def api_order_rate(oid: int, request: Request):
+    """ثبت امتیاز/نظر برای یک سفارش تحویل‌شده — همون product_ratings که ربات هم استفاده می‌کنه."""
+    uid = _auth(request)
+    body = await request.json()
+    try:
+        rating = int(body.get("rating", 0))
+    except Exception:
+        rating = 0
+    if rating < 1 or rating > 5:
+        raise HTTPException(400, "امتیاز باید بین ۱ تا ۵ باشه")
+    comment = str(body.get("comment") or "").strip()[:500]
+
+    from db import _get_connection, has_rated_order, save_rating
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT user_id, product_id FROM orders WHERE id=?;", (oid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or str(row["user_id"]) != str(uid):
+        raise HTTPException(404, "سفارش یافت نشد")
+    try:
+        product_id = int(row["product_id"])
+    except Exception:
+        raise HTTPException(400, "این سفارش قابل امتیازدهی نیست")
+    if has_rated_order(oid):
+        raise HTTPException(400, "قبلاً برای این سفارش نظر ثبت کردید")
+
+    ok = save_rating(uid, oid, product_id, rating, comment)
+    if not ok:
+        raise HTTPException(400, "ثبت نظر ناموفق بود")
+    return {"ok": True}
+
+
 def _checkin_reward() -> int:
     from db import get_cfg
     try:
@@ -315,6 +351,70 @@ async def api_partner(request: Request):
                  "order_count": tier.get("order_count", 0)} if tier else None,
         "referrals": referrals.stats(uid),
     }
+
+
+@router.get("/partner/payout-info")
+async def api_partner_payout_info(request: Request):
+    """اطلاعات لازم برای درخواست تسویه — موجودی، اطلاعات بانکی فعلی، حداقل/حداکثر مبلغ."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    from db import get_partner_bank_info, get_partner_payout_settings
+    bank = get_partner_bank_info(uid)
+    settings = get_partner_payout_settings()
+    return {
+        "ok": True,
+        "balance": partners.partner_balance(uid),
+        "bank_info": {"full_name": bank["full_name"], "card_number": bank["card_number"], "iban": bank["iban"]} if bank else None,
+        "min_amount": int(settings.get("min_amount") or 0),
+        "max_amount": int(settings.get("max_amount") or 0),
+        "is_active": bool(settings.get("is_active", 1)),
+    }
+
+
+@router.post("/partner/bank-info")
+async def api_partner_bank_info_save(request: Request):
+    """ثبت/به‌روزرسانی اطلاعات حساب بانکی همکار برای تسویه."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    body = await request.json()
+    full_name = (body.get("full_name") or "").strip()
+    card_number = (body.get("card_number") or "").strip()
+    iban = (body.get("iban") or "").strip()
+    if not full_name or len(full_name) < 3:
+        raise HTTPException(400, "نام صاحب حساب نامعتبر است")
+    if not card_number or len(card_number.replace(" ", "")) < 16:
+        raise HTTPException(400, "شمارهٔ کارت نامعتبر است")
+    from db import save_partner_bank_info
+    save_partner_bank_info(uid, full_name, card_number, iban)
+    return {"ok": True}
+
+
+@router.post("/partner/payout")
+async def api_partner_payout_request(request: Request):
+    """درخواست تسویهٔ موجودی همکاری — دقیقاً همون request_partner_payout که ربات استفاده
+    می‌کنه، پس پنل ادمین (مرکز مالی) بدون هیچ تغییری همین درخواست‌ها رو می‌بینه."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    from db import get_partner_bank_info, request_partner_payout
+    if not get_partner_bank_info(uid):
+        raise HTTPException(400, "اول اطلاعات حساب بانکی رو ثبت کنید")
+    body = await request.json()
+    try:
+        amount = int(body.get("amount", 0))
+    except Exception:
+        amount = 0
+    if amount <= 0:
+        raise HTTPException(400, "مبلغ نامعتبر است")
+    result = request_partner_payout(uid, amount)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "خطا در ثبت درخواست")
+    return {"ok": True, "payout_id": result.get("payout_id")}
 
 
 @router.post("/partner/apply")
