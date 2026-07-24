@@ -482,8 +482,14 @@ document.addEventListener('click',function(e){
       else{nav.classList.remove('sl-nav--solid');setTgHeader(HERO_TOP)}
     });
   }
+  function onTabShow(){
+    // دو-فریمی: صبر می‌کنیم لایوت/اسکرول واقعاً settle بشه، نه یه تایمر ثابت که ممکنه
+    // زودتر یا دیرتر از انیمیشن واقعی سوییچ تب اجرا بشه و رنگ نوار با محتوا هم‌خوان نباشه
+    requestAnimationFrame(function(){requestAnimationFrame(onScroll)});
+    setTimeout(onScroll,350); // safety-net برای انیمیشن‌های کندتر
+  }
   homeTab.addEventListener('scroll',onScroll,{passive:true});
-  app.on('tabShow',function(){setTimeout(onScroll,50)});
+  app.on('tabShow',onTabShow);
   onScroll();
 })();
 
