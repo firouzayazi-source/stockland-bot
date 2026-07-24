@@ -19,6 +19,16 @@ git checkout main 2>/dev/null || git checkout -b main origin/main
 git reset --hard origin/main
 echo "✅ کد به‌روز شد (main)"
 
+# اجرای مجدد از فایل تازهٔ روی دیسک — bash معمولاً محتوای اسکریپت رو یک‌جا در همون
+# لحظهٔ شروع می‌خونه؛ چون خودِ deploy.sh هم داخل گیته و همین بالا ریست شد، بدون این
+# exec ممکنه بقیهٔ این اجرا (نصب وابستگی، پاک‌سازی کش، ری‌استارت) با نسخهٔ قدیمیِ
+# قبل‌از‌ریست اسکریپت ادامه پیدا کنه — این باگ واقعی بود و یک‌بار باعث شد فیکس کش
+# سرویس‌ورکر یک اجرا دیر اعمال بشه. با re-exec این کلاس باگ برای همیشه از بین می‌ره.
+if [ -z "${_SL_DEPLOY_REEXEC:-}" ]; then
+    export _SL_DEPLOY_REEXEC=1
+    exec bash "$APP_DIR/deploy.sh" "$@"
+fi
+
 # ۲. آپدیت وابستگی‌های پایتون (فقط اگر requirements.txt عوض شده باشه — سریع و بی‌خطر در غیر این صورت)
 if [ -f venv/bin/pip ]; then
     PIP=venv/bin/pip
