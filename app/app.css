@@ -236,7 +236,7 @@ html.dark .sl-pic{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-pp-btn{margin:0 20px 24px;display:block;background:var(--br);color:#fff;text-align:center;
  font-size:15px;font-weight:700;border-radius:14px;padding:14px 0;border:none;width:calc(100% - 40px);cursor:pointer;text-decoration:none}
 .sl-pp-btn-off{background:#8E8E93!important}
-.sl-post-body{padding:4px 18px calc(24px + env(safe-area-inset-bottom,0px))}
+.sl-post-body{padding-left:18px;padding-right:18px;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}
 .sl-post-body img{width:100%;border-radius:16px;margin:12px 0 4px;display:block}
 .sl-postf-title{font-size:20px;font-weight:700;line-height:1.6;margin:14px 0 2px}
 .sl-postf-date{color:var(--mu);font-size:12px;margin-bottom:10px}
@@ -339,8 +339,44 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
 .sl-learn-meta{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:var(--mu)}
 .sl-learn-meta span{background:var(--bg);border-radius:999px;padding:3px 9px}
 
+/* ═══ اصلاح اسکرول و لایوت ═══ */
+/* ظرف تب‌ها باید کل view رو پر کنه تا ارتفاع ثابت باشه */
+.view-main>.tabs{
+ position:absolute;top:0;left:0;right:0;bottom:0;overflow:hidden;
+}
+/* هر تب باید ظرف رو پر کنه و مستقل اسکرول کنه */
+.tabs>.page-content.tab{
+ position:absolute!important;top:0;left:0;right:0;bottom:0;
+ height:auto!important;
+ overflow-y:auto!important;
+ -webkit-overflow-scrolling:touch;
+ overscroll-behavior-y:contain;
+}
+/* تب‌های غیرخانه: فضای بالا برای نوار ناوبری شناور + safe area */
+#tab-shop.page-content,
+#tab-learn.page-content,
+#tab-me.page-content{
+ padding-top:calc(env(safe-area-inset-top,0px) + 52px);
+}
+/* فاصله پایین کافی برای تب‌بار */
+#tab-home.page-content,
+#tab-shop.page-content,
+#tab-learn.page-content,
+#tab-me.page-content{
+ padding-bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
+}
+/* اسکرول در پاپ‌آپ‌ها */
+.popup .page-content{
+ overflow-y:auto!important;
+ -webkit-overflow-scrolling:touch;
+}
+
 /* ═══ صفحات حساب (کیف‌پول/همکاری/دعوت) ═══ */
-.sl-acc-page{padding:20px 20px 40px}
+.sl-acc-page{padding:20px 16px calc(24px + env(safe-area-inset-bottom,0px))}
+.sl-acc-page .sl-checkout-wallet{margin:8px 0}
+.sl-acc-page .sl-checkout-sec{padding:16px 0 6px}
+.sl-acc-page .sl-checkout-btns{margin:14px 0 0}
+.sl-acc-page .sl-checkout-note{margin:12px 0 0;padding:0 0 8px}
 .sl-wal-big{font-size:30px;font-weight:800;text-align:center;padding:10px 0 18px;color:var(--br)}
 .sl-wal-big small{font-size:13px;color:var(--mu);font-weight:500}
 .sl-wal-acts{margin:14px 0}
