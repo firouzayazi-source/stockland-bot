@@ -10937,9 +10937,10 @@ async def app_content_page(request: Request, kind: str = "", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
-    from db import get_app_content
+    from db import get_app_content, get_cfg
     k = kind if kind in _KIND_LABELS else None
     items = get_app_content(kind=k, active_only=False, limit=100)
+    news_blog_url = get_cfg("NEWS_BLOG_URL", "")
 
     tabs = ''.join(
         f'<a href="/admin/app-content?kind={s}" class="px-3 py-1.5 rounded-lg text-xs border '
@@ -10973,6 +10974,15 @@ async def app_content_page(request: Request, kind: str = "", flash: str = ""):
         rows = '<tr><td colspan="6" class="p-6 text-center text-gray-400 text-sm">هنوز محتوایی ثبت نشده.</td></tr>'
 
     body = f"""
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+      <div class="text-sm font-medium mb-2">🔗 لینک آرشیو کامل اخبار/مقالات (وبلاگ خارجی)</div>
+      <form method="post" action="/admin/app-content/news-blog-url" class="flex gap-2">
+        <input name="url" value="{html.escape(news_blog_url)}" dir="ltr"
+               class="flex-1 border rounded-lg p-2 text-sm" placeholder="https://stland.ir/آرشیو-بلاگ/">
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">ذخیره</button>
+      </form>
+      <div class="text-xs text-gray-400 mt-1">تب «خبر» اپ به‌جای فهرست پست، یک دکمه به همین آدرس نشون می‌ده — مقاله‌های جدید همونجا (نه اینجا) اضافه می‌شن.</div>
+    </div>
     <div class="flex items-center justify-between mb-4">
       <div class="flex gap-2">{tabs}</div>
       <a href="/admin/app-content/new" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">＋ افزودن محتوا</a>
@@ -11022,6 +11032,12 @@ def _app_content_form(it=None):
         <input name="image_url" value="{html.escape(str(it.get('image_url') or ''))}"
                class="w-full border rounded-lg p-2 text-sm" placeholder="https://…">
       </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">لینک بیرونی (اختیاری — تلگرام/اینستاگرام)</label>
+        <input name="link_url" value="{html.escape(str(it.get('link_url') or ''))}" dir="ltr"
+               class="w-full border rounded-lg p-2 text-sm" placeholder="https://t.me/... یا https://instagram.com/...">
+        <div class="text-xs text-gray-400 mt-1">اگر پر بشه، پایین متن پست در اپ یک دکمهٔ «مشاهده در تلگرام/اینستاگرام» اضافه می‌شود.</div>
+      </div>
       <label class="flex items-center gap-2 text-sm">
         <input type="checkbox" name="is_active" value="1" {checked}> فعال (نمایش در اپ)
       </label>
@@ -11055,7 +11071,7 @@ async def app_content_edit(request: Request, cid: int):
 @router.post("/app-content/save")
 async def app_content_save(request: Request, cid: str = Form(""), kind: str = Form("news"),
                            title: str = Form(...), body: str = Form(""),
-                           image_url: str = Form(""), is_active: str = Form(""),
+                           image_url: str = Form(""), link_url: str = Form(""), is_active: str = Form(""),
                            image: UploadFile = None):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
@@ -11082,10 +11098,21 @@ async def app_content_save(request: Request, cid: str = Form(""), kind: str = Fo
     from db import add_app_content, update_app_content
     if cid.strip().isdigit():
         update_app_content(int(cid), kind, title.strip(), body, final_image,
-                           1 if is_active == "1" else 0)
+                           1 if is_active == "1" else 0, link_url.strip())
     else:
-        add_app_content(kind, title.strip(), body, final_image)
+        add_app_content(kind, title.strip(), body, final_image, link_url.strip())
     return _redir("/admin/app-content")
+
+
+@router.post("/app-content/news-blog-url")
+async def app_content_news_blog_url(request: Request, url: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import set_cfg
+    set_cfg("NEWS_BLOG_URL", url.strip())
+    _log(request, "تنظیم لینک آرشیو اخبار", "محتوای اپ", url.strip(), admin_info=adm)
+    return _redir(f"/admin/app-content?flash={e('✅ ذخیره شد')}")
 
 
 @router.post("/app-content/{cid}/delete")
