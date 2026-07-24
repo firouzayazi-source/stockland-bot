@@ -16,12 +16,21 @@ function err(m){return '<div class="sl-empty"><span class="sl-empty-e">📡</spa
 
 var botUser='stock_land_ir';
 api('/bot-info').then(function(d){if(d&&d.username)botUser=d.username}).catch(function(){});
-try{document.getElementById('today-date').textContent=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{weekday:'long',day:'numeric',month:'long'}).format(new Date())}catch(e){}
 
 /* ── دسته‌بندی دایره‌ای ── */
 var cats=[],prods=[];
+// استاندارد ترتیب: همه ← اپل آیدی ← بقیهٔ دسته‌ها به همون ترتیب قبلی
+// (دسته‌های جدید هم چون این تابع فقط "اپل آیدی" رو جدا می‌کنه، خودکار همین قانون رو می‌گیرن)
+function orderCats(list){
+  var apple=null,rest=[];
+  list.forEach(function(c){
+    var n=(c.name||'')+' '+(c.slug||'');
+    if(!apple&&/اپل\s*آیدی|apple\s*id/i.test(n))apple=c;else rest.push(c);
+  });
+  return apple?[apple].concat(rest):rest;
+}
 function renderCircles(el,withAll){
-  var items=withAll?[{id:0,name:'همه',emoji:'🏪',slug:''}].concat(cats):cats;
+  var items=withAll?[{id:0,name:'همه',emoji:'🏪',slug:''}].concat(orderCats(cats)):orderCats(cats);
   el.innerHTML=items.map(function(c,i){
     return '<div class="sl-cat-c'+(withAll&&i===0?' on':'')+'" data-slug="'+esc(c.slug||c.name)+'" data-name="'+esc(c.name)+'">'+
       '<div class="sl-cat-c-icon">'+esc(c.emoji||'📦')+'</div>'+
