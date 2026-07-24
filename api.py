@@ -691,6 +691,76 @@ async def api_news_feed():
     return {"ok": True, **d}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ─── آموزش — CMS داخلی (فاز ۲) ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+def _tutorial_cat_names() -> dict:
+    from db import get_tutorial_categories
+    return {c["id"]: c["name"] for c in get_tutorial_categories()}
+
+
+def _tutorial_to_list_item(it: dict, cats: dict) -> dict:
+    return {
+        "id": it["id"],
+        "title": it.get("title") or "",
+        "cover_image": it.get("cover_image") or "",
+        "short_desc": it.get("short_desc") or "",
+        "category_id": it.get("category_id") or 0,
+        "category_name": cats.get(it.get("category_id"), ""),
+        "tags": json.loads(it.get("tags") or "[]"),
+        "featured": bool(it.get("featured")),
+        "publish_date": it.get("publish_date") or "",
+        "view_count": it.get("view_count") or 0,
+    }
+
+
+@router.get("/tutorials/categories")
+async def api_tutorial_categories():
+    from db import get_tutorial_categories
+    return {"ok": True, "categories": get_tutorial_categories()}
+
+
+@router.get("/tutorials")
+async def api_tutorials_list(category: int = 0, tag: str = "", q: str = "",
+                              sort: str = "newest", limit: int = 30, offset: int = 0):
+    """لیست آموزش‌های منتشرشده — sort: newest | oldest | popular."""
+    from db import get_tutorials
+    sort = sort if sort in ("newest", "oldest", "popular") else "newest"
+    items = get_tutorials(category_id=category or None, tag=tag or None, status="published",
+                          q=q.strip() or None, sort=sort, limit=min(int(limit or 30), 100), offset=int(offset or 0))
+    cats = _tutorial_cat_names()
+    return {"ok": True, "items": [_tutorial_to_list_item(it, cats) for it in items]}
+
+
+@router.get("/tutorials/{tid}")
+async def api_tutorial_detail(tid: int):
+    from db import get_tutorial, increment_tutorial_views
+    it = get_tutorial(tid)
+    if not it or it.get("status") != "published":
+        raise HTTPException(404, "یافت نشد")
+    increment_tutorial_views(tid)
+    cats = _tutorial_cat_names()
+    return {"ok": True, "item": {
+        "id": it["id"],
+        "title": it.get("title") or "",
+        "cover_image": it.get("cover_image") or "",
+        "short_desc": it.get("short_desc") or "",
+        "body": it.get("body") or "",
+        "gallery": json.loads(it.get("gallery") or "[]"),
+        "video_upload": it.get("video_upload") or "",
+        "video_link": it.get("video_link") or "",
+        "download_file": it.get("download_file") or "",
+        "download_label": it.get("download_label") or "",
+        "category_id": it.get("category_id") or 0,
+        "category_name": cats.get(it.get("category_id"), ""),
+        "tags": json.loads(it.get("tags") or "[]"),
+        "featured": bool(it.get("featured")),
+        "publish_date": it.get("publish_date") or "",
+        "view_count": (it.get("view_count") or 0) + 1,
+    }}
+
+
 @router.get("/content/{cid}")
 async def api_content_item(cid: int):
     """یک آیتم کامل محتوا برای PWA."""
