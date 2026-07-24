@@ -408,28 +408,60 @@ function openPartner(){
 }
 window.openPartner=openPartner;
 
-/* ═══ جستجو ═══ */
-document.getElementById('search-bar').addEventListener('click',function(){
-  app.dialog.prompt('جستجو در محصولات','جستجو',function(q){
-    q=(q||'').trim().toLowerCase();if(!q)return;
-    var res=prods.filter(function(p){return(p.title||'').toLowerCase().indexOf(q)>=0||(p._c||'').toLowerCase().indexOf(q)>=0});
-    if(res.length){
-      var lnk=document.querySelector('.tab-link[href="#tab-shop"]');if(lnk)lnk.click();
-      setTimeout(function(){
-        document.querySelectorAll('#shop-cats .sl-cat-c').forEach(function(x){x.classList.remove('on')});
-        var pl=document.getElementById('prod-list');
-        pl.innerHTML=res.map(function(p){
-          var f=p.flash_active;
-          return '<div class="sl-prod" data-pid="'+p.id+'"><div class="sl-pic">'+(p._e||'📦')+'</div>'+
-            '<div class="sl-pinfo"><div class="sl-pt">'+esc(p.title)+'</div><div class="sl-pg">'+esc(p._c||'')+'</div>'+
-            '<div class="sl-pprice-row">'+(f?'<span class="sl-old">'+fmt(p.price)+'</span>':'')+
-            '<span class="sl-price">'+fmt(p.effective_price)+' <small>تومان</small></span></div>'+
-            '<span class="sl-buy">مشاهده و خرید</span></div></div>';
-        }).join('');
-      },100);
-    }else{app.dialog.alert('نتیجه‌ای یافت نشد.','جستجو')}
+/* ═══ جستجو — درون همون فرم، بدون دیالوگ/تعویض صفحه ═══ */
+(function(){
+  var input=document.getElementById('search-input');
+  var clearBtn=document.getElementById('search-clear');
+  var panel=document.getElementById('search-results');
+  var bar=document.getElementById('search-bar');
+  if(!input||!panel||!bar)return;
+  var timer=null,seq=0;
+
+  function renderProd(p){
+    var f=p.flash_active;
+    return '<div class="sl-prod" data-pid="'+p.id+'"><div class="sl-pic">'+(p._e||'📦')+'</div>'+
+      '<div class="sl-pinfo"><div class="sl-pt">'+esc(p.title)+'</div></div>'+
+      '<div class="sl-price">'+fmt(p.effective_price)+' <small>تومان</small></div></div>';
+  }
+
+  function positionPanel(){
+    var r=bar.getBoundingClientRect();
+    panel.style.top=(r.bottom+8)+'px';
+    panel.style.left=r.left+'px';
+    panel.style.right=(window.innerWidth-r.right)+'px';
+  }
+  function showPanel(html){positionPanel();panel.innerHTML=html;panel.hidden=false}
+  function hidePanel(){panel.hidden=true;panel.innerHTML=''}
+
+  function runSearch(q){
+    var mySeq=++seq;
+    showPanel('<div class="sl-search-loading">در حال جستجو…</div>');
+    api('/products?limit=20&q='+encodeURIComponent(q)).then(function(d){
+      if(mySeq!==seq)return; // پاسخ دیرهنگام مربوط به کوئری قدیمی‌تر — نادیده گرفته می‌شه
+      var items=(d&&d.products)||[];
+      if(!items.length){showPanel('<div class="sl-search-empty">😕 نتیجه‌ای برای «'+esc(q)+'» یافت نشد</div>');return}
+      showPanel(items.map(renderProd).join(''));
+    }).catch(function(){
+      if(mySeq!==seq)return;
+      showPanel('<div class="sl-search-empty">📡 خطا در جستجو — دوباره تلاش کنید</div>');
+    });
+  }
+
+  input.addEventListener('input',function(){
+    var q=input.value.trim();
+    clearBtn.hidden=!q;
+    if(timer)clearTimeout(timer);
+    if(!q){hidePanel();return}
+    timer=setTimeout(function(){runSearch(q)},350);
   });
-});
+  input.addEventListener('focus',function(){if(input.value.trim())panel.hidden=false});
+  input.addEventListener('blur',function(){
+    setTimeout(function(){panel.hidden=true},200); // تأخیر تا تپ روی نتیجه قبلش ثبت بشه
+  });
+  clearBtn.addEventListener('click',function(){
+    input.value='';clearBtn.hidden=true;hidePanel();input.focus();
+  });
+})();
 
 /* ═══ رویدادها ═══ */
 app.on('tabShow',function(el){var id=el&&el.id;
