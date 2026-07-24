@@ -25,49 +25,34 @@ html.dark,:root.dark{
  padding-top:calc(env(safe-area-inset-top,0px) + 44px + 76px + 30px);
  padding-bottom:22px;padding-left:20px;padding-right:20px;
  background:
-  /* ۱. لبه‌ها تیره (edge shading) — رادیال به‌جای نواری، چون گرادیان ۹۰deg هیچ‌وقت به سمت پایین محو نمی‌شد و رنگ سر مرز هیرو می‌پرید */
-  radial-gradient(38% 65% at 0% 28%,rgba(0,0,50,.22) 0%,transparent 72%),
-  radial-gradient(38% 65% at 100% 28%,rgba(0,0,50,.22) 0%,transparent 72%),
-  /* ۲. glow اصلی — دقیقاً پشت لوگو، مرکز افقی، ۲۲٪ از بالا */
-  radial-gradient(58% 50% at 50% 22%,rgba(88,200,255,.52) 0%,rgba(68,155,255,.20) 38%,rgba(55,80,255,0) 66%),
-  /* ۳. ambient ملایم بالای hero */
-  radial-gradient(72% 38% at 50% 4%,rgba(110,145,255,.24) 0%,rgba(66,90,255,0) 58%),
-  /* ۴. vignette کلی — شعاع این بیضی اونقدر بزرگه که لبهٔ پایین هیرو فقط به ~۶۹٪ مقیاسش می‌رسه؛
-     پس نقطهٔ محو باید قبل از اون باشه وگرنه هیچ‌وقت به transparent نمی‌رسه و رنگ سر مرز می‌پره */
-  radial-gradient(112% 96% at 50% 34%,transparent 28%,rgba(0,0,52,.22) 46%,transparent 64%),
-  /* ۵. violet tint پایین — فقط احساس می‌شه */
-  radial-gradient(60% 20% at 50% 96%,rgba(82,44,190,.07) 0%,rgba(60,24,170,0) 60%),
-  /* ۶. base — Royal→Electric، پایین آبی نه خاکستری — بالا صاف (هم‌رنگ نوار)، پایین محو تدریجی بدون خط */
+  /* ۱. لبه‌ها — خیلی ظریف، فقط حس عمق، نه پچ روشن مشخص (طبق نمونهٔ میرا: پس‌زمینه اکثراً صاف است) */
+  radial-gradient(45% 55% at 0% 18%,rgba(0,0,40,.10) 0%,transparent 68%),
+  radial-gradient(45% 55% at 100% 18%,rgba(0,0,40,.10) 0%,transparent 68%),
+  /* ۲. base — طبق اندازه‌گیری پیکسلی از میرا: صاف تا ~۵۲٪ ارتفاع (هدر+لوگو+عنوان)،
+     بعد محو تدریجی که اول به آبی روشن/فیروزه‌ای می‌ره (نه مستقیم خاکستری) درست مثل میرا */
   linear-gradient(180deg,
     #4255FF 0%,
-    #4255FF 9%,
-    #4A5EFF 26%,
-    #5272FF 46%,
-    #6888FA 64%,
-    #96AEFA 80%,
-    #B6C6F9 87%,
-    #CDD7F8 92%,
-    #E4E8F7 97%,
+    #4255FF 52%,
+    #4A66F8 62%,
+    #5C82F8 70%,
+    #7CA2F8 78%,
+    #A6C2F9 86%,
+    #CCDCF8 93%,
+    #E6EDF8 97%,
     var(--bg) 100%);
 }
 html.dark .sl-hero{
  background:
-  radial-gradient(38% 65% at 0% 28%,rgba(0,0,40,.26) 0%,transparent 72%),
-  radial-gradient(38% 65% at 100% 28%,rgba(0,0,40,.26) 0%,transparent 72%),
-  radial-gradient(58% 50% at 50% 22%,rgba(60,160,255,.38) 0%,rgba(48,120,255,.14) 38%,rgba(36,60,220,0) 66%),
-  radial-gradient(72% 38% at 50% 4%,rgba(80,118,255,.18) 0%,rgba(48,72,220,0) 58%),
-  radial-gradient(112% 96% at 50% 34%,transparent 28%,rgba(0,0,40,.26) 46%,transparent 64%),
-  radial-gradient(60% 20% at 50% 96%,rgba(58,30,160,.06) 0%,rgba(42,16,140,0) 60%),
+  radial-gradient(45% 55% at 0% 18%,rgba(0,0,30,.14) 0%,transparent 68%),
+  radial-gradient(45% 55% at 100% 18%,rgba(0,0,30,.14) 0%,transparent 68%),
   linear-gradient(180deg,
     #2838D8 0%,
-    #2838D8 9%,
-    #3248E8 26%,
-    #3A58E0 46%,
-    #4A68CC 64%,
-    #3A4E90 80%,
-    #26335E 87%,
-    #171F3A 92%,
-    #090C16 97%,
+    #2838D8 52%,
+    #2230B8 64%,
+    #182282 74%,
+    #101656 84%,
+    #090C30 92%,
+    #040616 97%,
     var(--bg) 100%);
 }
 /* نویز ظریف */
