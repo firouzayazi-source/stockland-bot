@@ -35,14 +35,17 @@ html.dark,:root.dark{
   radial-gradient(112% 96% at 50% 34%,transparent 40%,rgba(0,0,52,.22) 100%),
   /* ۵. violet tint پایین — فقط احساس می‌شه */
   radial-gradient(60% 20% at 50% 96%,rgba(82,44,190,.07) 0%,rgba(60,24,170,0) 60%),
-  /* ۶. base — Royal→Electric، پایین آبی نه خاکستری */
+  /* ۶. base — Royal→Electric، پایین آبی نه خاکستری — بالا صاف (هم‌رنگ نوار)، پایین محو تدریجی بدون خط */
   linear-gradient(180deg,
     #4255FF 0%,
-    #4255FF 5%,
-    #4A5EFF 24%,
+    #4255FF 9%,
+    #4A5EFF 26%,
     #5272FF 46%,
     #6888FA 64%,
     #96AEFA 80%,
+    #B6C6F9 87%,
+    #CDD7F8 92%,
+    #E4E8F7 97%,
     var(--bg) 100%);
 }
 html.dark .sl-hero{
@@ -54,11 +57,14 @@ html.dark .sl-hero{
   radial-gradient(60% 20% at 50% 96%,rgba(58,30,160,.06) 0%,rgba(42,16,140,0) 60%),
   linear-gradient(180deg,
     #2838D8 0%,
-    #2838D8 5%,
-    #3248E8 24%,
+    #2838D8 9%,
+    #3248E8 26%,
     #3A58E0 46%,
     #4A68CC 64%,
     #3A4E90 80%,
+    #26335E 87%,
+    #171F3A 92%,
+    #090C16 97%,
     var(--bg) 100%);
 }
 /* نویز ظریف */
