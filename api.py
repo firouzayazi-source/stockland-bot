@@ -361,13 +361,20 @@ def _ticket_to_dict(t) -> dict:
     }
 
 
+def _support_ticket_type(uid: int) -> str:
+    """اگه کاربر همکار تأیید‌شده باشه، تیکتش باید نوع partner_support بگیره
+    (دقیقاً مثل دکمهٔ «چت با پشتیبان همکاران» در ربات، cb_partner_support در bot.py)."""
+    from core.partners import is_approved
+    return "partner_support" if is_approved(uid) else "support"
+
+
 @router.get("/support/ticket")
 async def api_support_ticket_get(request: Request):
     """تیکت پشتیبانی باز فعلی کاربر (اگر باشد) + پیام‌ها."""
     uid = _auth(request)
-    from db import ticket_ensure_schema, ticket_get_open_support, ticket_get_messages
+    from db import ticket_ensure_schema, ticket_get_open_by_type, ticket_get_messages
     ticket_ensure_schema()
-    t = ticket_get_open_support(uid)
+    t = ticket_get_open_by_type(uid, _support_ticket_type(uid))
     if not t:
         return {"ok": True, "ticket": None, "messages": []}
     msgs = ticket_get_messages(int(t["id"]))
@@ -416,29 +423,32 @@ async def api_support_media(message_id: int):
 
 @router.post("/support/ticket")
 async def api_support_ticket_create(request: Request):
-    """شروع تیکت پشتیبانی جدید — اگر از قبل باز باشه همونو برمی‌گردونه."""
+    """شروع تیکت پشتیبانی جدید — اگر از قبل باز باشه همونو برمی‌گردونه.
+    برای همکاران تأییدشده، تیکت با نوع partner_support ساخته می‌شه."""
     uid = _auth(request)
-    from db import ticket_ensure_schema, ticket_get_open_support, ticket_create
+    from db import ticket_ensure_schema, ticket_get_open_by_type, ticket_create
     ticket_ensure_schema()
-    t = ticket_get_open_support(uid)
+    ttype = _support_ticket_type(uid)
+    t = ticket_get_open_by_type(uid, ttype)
     if not t:
-        tid = ticket_create(uid, type_="support")
+        tid = ticket_create(uid, type_=ttype)
         from db import ticket_get
         t = ticket_get(tid)
     return {"ok": True, "ticket": _ticket_to_dict(t)}
 
 
-def _notify_admin_ticket(ticket_id: int, uid: int, text: str) -> None:
+def _notify_admin_ticket(ticket_id: int, uid: int, text: str, ttype: str = "support") -> None:
     from config import BOT_TOKEN, ADMIN_ID
     import requests
     if not BOT_TOKEN or not ADMIN_ID:
         return
+    label = "🤝 پیام همکار جدید" if ttype == "partner_support" else "🔵 پیام پشتیبانی جدید"
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": ADMIN_ID,
-                "text": (f"🔵 پیام پشتیبانی جدید (از مینی‌اپ)\n"
+                "text": (f"{label} (از مینی‌اپ)\n"
                          f"تیکت #{ticket_id} — کاربر {uid}\n\n{text[:300]}\n\n"
                          f"https://panel.stland.ir/admin/tickets/{ticket_id}"),
             },
@@ -464,10 +474,11 @@ async def api_support_message(request: Request):
     if not text and not has_photo:
         raise HTTPException(400, "متن یا عکس ارسال نشده")
 
-    from db import ticket_ensure_schema, ticket_get_open_support, ticket_get, \
+    from db import ticket_ensure_schema, ticket_get_open_by_type, ticket_get, \
         ticket_add_message, ticket_user_sent
     ticket_ensure_schema()
-    t = ticket_get_open_support(uid)
+    ttype = _support_ticket_type(uid)
+    t = ticket_get_open_by_type(uid, ttype)
     if not t or t["status"] == "closed":
         raise HTTPException(400, "تیکت باز یافت نشد — یک تیکت جدید شروع کنید")
 
@@ -492,16 +503,18 @@ async def api_support_message(request: Request):
                         files={"photo": ("photo.jpg", photo_bytes, photo.content_type or "image/jpeg")},
                     )
                 tg_data = r.json()
+                if not tg_data.get("ok"):
+                    raise RuntimeError(tg_data.get("description") or "sendPhoto failed")
                 media_file_id = tg_data["result"]["photo"][-1]["file_id"]
                 media_type = "photo"
-            except Exception:
-                pass  # اگه آپلود عکس شکست خورد، حداقل متن (اگه بود) ثبت می‌شه
+            except Exception as e:
+                raise HTTPException(502, f"خطا در آپلود عکس — دوباره تلاش کنید: {e}")
 
     ticket_add_message(tid, "user", text or None, media_type=media_type,
                         media_file_id=media_file_id, source="miniapp")
     new_count = ticket_user_sent(tid)
     if new_count == 1:
-        _notify_admin_ticket(tid, uid, text or "📷 عکس")
+        _notify_admin_ticket(tid, uid, text or "📷 عکس", ttype)
 
     t2 = ticket_get(tid)
     return {"ok": True, "ticket": _ticket_to_dict(t2), "remaining": max(0, TICKET_MAX_USER_MSGS - new_count)}
