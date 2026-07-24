@@ -44,3 +44,26 @@ def current_tier(user_id: int) -> dict | None:
         return d
     finally:
         conn.close()
+
+
+def next_tier_progress(user_id: int) -> dict | None:
+    """سطح بعدی همکار + میزان پیشرفت تا رسیدن بهش — برای نوار پیشرفت مینی‌اپ.
+    اگه در بالاترین سطح باشه، None برمی‌گردونه."""
+    from db import _get_connection, ensure_partner_tiers_extended
+    ensure_partner_tiers_extended()
+    from core.orders import order_count
+    cnt = order_count(user_id)
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM partner_tiers WHERE min_orders>? ORDER BY min_orders ASC LIMIT 1;",
+            (cnt,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        needed = max(0, int(d["min_orders"]) - cnt)
+        d["orders_needed"] = needed
+        d["order_count"] = cnt
+        return d
+    finally:
+        conn.close()

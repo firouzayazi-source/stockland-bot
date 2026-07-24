@@ -326,6 +326,22 @@ async def api_checkin_claim(request: Request):
             "balance": wallet.get_balance(uid)}
 
 
+@router.get("/me/notifications")
+async def api_notifications_list(request: Request):
+    """تاریخچهٔ اعلان‌ها — موجود شدن/تخفیف علاقه‌مندی‌ها."""
+    uid = _auth(request)
+    from db import get_notifications
+    return {"ok": True, "items": get_notifications(uid, limit=30)}
+
+
+@router.post("/me/notifications/read")
+async def api_notifications_mark_read(request: Request):
+    uid = _auth(request)
+    from db import mark_notifications_read
+    mark_notifications_read(uid)
+    return {"ok": True}
+
+
 @router.get("/me/partner")
 async def api_partner(request: Request):
     """وضعیت همکاری کاربر."""
@@ -333,6 +349,7 @@ async def api_partner(request: Request):
     from core import partners, referrals
     is_approved = partners.is_approved(uid)
     tier = partners.current_tier(uid) if is_approved else None
+    next_tier = partners.next_tier_progress(uid) if is_approved else None
     pending_status = None
     if not is_approved:
         try:
@@ -349,6 +366,9 @@ async def api_partner(request: Request):
         "balance": partners.partner_balance(uid),
         "tier": {"name": tier["name"], "icon": tier.get("icon"),
                  "order_count": tier.get("order_count", 0)} if tier else None,
+        "next_tier": {"name": next_tier["name"], "icon": next_tier.get("icon"),
+                      "min_orders": int(next_tier["min_orders"]),
+                      "orders_needed": next_tier["orders_needed"]} if next_tier else None,
         "referrals": referrals.stats(uid),
     }
 
@@ -966,7 +986,8 @@ async def api_content_item(cid: int):
 @router.get("/categories")
 async def api_categories():
     """درخت دسته‌بندی‌ها برای PWA — فعال‌ها، مرتب‌شده."""
-    from db import get_root_categories, get_subcategories, get_category_products
+    from db import get_root_categories, get_subcategories, get_category_products, ensure_product_support_schema
+    ensure_product_support_schema()
     roots = [dict(r) for r in get_root_categories(active_only=True)]
     from db import apply_flash_price, get_product_rating
     def _with_rating(p):
