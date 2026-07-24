@@ -795,20 +795,16 @@ def get_products_by_category(category: str):
     return rows
 
 def get_product_by_id(pid: int):
+    ensure_product_support_schema()
     conn = _get_connection()
     try:
         cur = conn.cursor()
-        # بررسی وجود ستونها (برای سازگاری با دیتابیسهای قدیمی)
-        try:
-            pass
-        except Exception:
-            pass
-
         select_cols = [
             'id', 'category', 'title', 'price', 'description', 'is_active',
             'COALESCE(partner_price, 0) AS partner_price',
             'COALESCE(daily_limit_customer, 0) AS daily_limit_customer',
             'COALESCE(daily_limit_partner, 0) AS daily_limit_partner',
+            "COALESCE(image_url, '') AS image_url",
         ]
         cur.execute(
             f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
@@ -2890,13 +2886,20 @@ def reset_subscriptions_on_restock(product_id: int):
 # ─── پشتیبانی اختصاصی محصول ─────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
+_ENSURE_PRODUCT_SUPPORT_SCHEMA_DONE = False
+
 def ensure_product_support_schema():
-    """اضافه کردن ستونهای setup به products."""
+    """اضافه کردن ستونهای setup + عکس محصول به products."""
+    global _ENSURE_PRODUCT_SUPPORT_SCHEMA_DONE
+    if _ENSURE_PRODUCT_SUPPORT_SCHEMA_DONE:
+        return
+    _ENSURE_PRODUCT_SUPPORT_SCHEMA_DONE = True
     conn = _get_connection()
     try:
         for col, default in [
             ("support_after_purchase", "INTEGER DEFAULT 0"),
             ("setup_message", "TEXT DEFAULT ''"),
+            ("image_url", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE products ADD COLUMN {col} {default};")
@@ -5050,6 +5053,80 @@ def get_product_favoriters(product_id: int) -> list:
     try:
         rows = conn.execute("SELECT user_id FROM favorites WHERE product_id=?;", (product_id,)).fetchall()
         return [int(r[0]) for r in rows]
+    finally:
+        conn.close()
+
+
+# ─── اعلان‌های مینی‌اپ (تاریخچه، مکمل پیام تلگرام) ─────────────────────────────
+
+_ENSURE_NOTIFICATIONS_SCHEMA_DONE = False
+
+def ensure_notifications_schema():
+    global _ENSURE_NOTIFICATIONS_SCHEMA_DONE
+    if _ENSURE_NOTIFICATIONS_SCHEMA_DONE:
+        return
+    _ENSURE_NOTIFICATIONS_SCHEMA_DONE = True
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_notifications (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                icon       TEXT DEFAULT '🔔',
+                title      TEXT NOT NULL,
+                body       TEXT DEFAULT '',
+                is_read    INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_notification(user_id: int, title: str, body: str = "", icon: str = "🔔") -> None:
+    ensure_notifications_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO user_notifications (user_id, icon, title, body) VALUES (?,?,?,?);",
+            (user_id, icon, title, body),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_notifications(user_id: int, limit: int = 30) -> list:
+    ensure_notifications_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT id, icon, title, body, is_read, created_at FROM user_notifications "
+            "WHERE user_id=? ORDER BY id DESC LIMIT ?;", (user_id, limit)
+        ).fetchall()]
+    finally:
+        conn.close()
+
+
+def has_unread_notifications(user_id: int) -> bool:
+    ensure_notifications_schema()
+    conn = _get_connection()
+    try:
+        return conn.execute(
+            "SELECT 1 FROM user_notifications WHERE user_id=? AND is_read=0 LIMIT 1;", (user_id,)
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def mark_notifications_read(user_id: int) -> None:
+    ensure_notifications_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE user_notifications SET is_read=1 WHERE user_id=? AND is_read=0;", (user_id,))
+        conn.commit()
     finally:
         conn.close()
 

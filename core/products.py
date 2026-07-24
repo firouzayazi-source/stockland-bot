@@ -5,7 +5,8 @@ from typing import Optional
 def list_products(category: str = "", active_only: bool = True, limit: int = 100, q: str = "") -> list:
     """لیست محصولات با قیمت مؤثر (فلش‌سیل اعمال‌شده)."""
     import db
-    from db import _get_connection, apply_flash_price
+    from db import _get_connection, apply_flash_price, ensure_product_support_schema
+    ensure_product_support_schema()
     conn = _get_connection()
     try:
         where, params = [], []
@@ -22,7 +23,7 @@ def list_products(category: str = "", active_only: bool = True, limit: int = 100
         w = ("WHERE " + " AND ".join(where)) if where else ""
         rows = conn.execute(
             f"SELECT id, category, title, price, description, is_active, "
-            f"COALESCE(partner_price,0) AS partner_price "
+            f"COALESCE(partner_price,0) AS partner_price, COALESCE(image_url,'') AS image_url "
             f"FROM products {w} ORDER BY id DESC LIMIT ?;",
             (*params, limit)).fetchall()
         from db import get_product_rating
@@ -41,6 +42,7 @@ def list_products(category: str = "", active_only: bool = True, limit: int = 100
                 "flash_active": bool(flash),
                 "partner_price": int(r["partner_price"] or 0),
                 "description": r["description"] or "",
+                "image_url": r["image_url"] or "",
                 "rating_avg": rating.get("avg", 0),
                 "rating_count": rating.get("count", 0),
             })
@@ -81,6 +83,7 @@ def get_product(pid: int) -> Optional[dict]:
         "description": p.get("description") or "",
         "is_active": bool(p.get("is_active", 1)),
         "stock": int(remaining),
+        "image_url": p.get("image_url") or "",
         "rating_avg": rating.get("avg", 0),
         "rating_count": rating.get("count", 0),
         "reviews": reviews,
@@ -91,15 +94,16 @@ def get_product(pid: int) -> Optional[dict]:
 def favorite_products(user_id: int) -> list:
     """محصولات علاقه‌مندی کاربر — فقط فعال‌ها، جدیدترین اول."""
     import db
-    from db import get_favorite_ids, apply_flash_price, get_product_rating
+    from db import get_favorite_ids, apply_flash_price, get_product_rating, ensure_product_support_schema
     ids = get_favorite_ids(user_id)
     if not ids:
         return []
+    ensure_product_support_schema()
     conn = db._get_connection()
     try:
         placeholders = ",".join("?" * len(ids))
         rows = conn.execute(
-            f"SELECT id, category, title, price, description, is_active "
+            f"SELECT id, category, title, price, description, is_active, COALESCE(image_url,'') AS image_url "
             f"FROM products WHERE id IN ({placeholders}) AND COALESCE(is_active,1)=1 "
             f"ORDER BY id DESC;", tuple(ids)).fetchall()
         out = []
@@ -113,7 +117,7 @@ def favorite_products(user_id: int) -> list:
             out.append({
                 "id": int(r["id"]), "category": r["category"], "title": r["title"],
                 "price": base, "effective_price": int(eff), "flash_active": bool(flash),
-                "description": r["description"] or "",
+                "description": r["description"] or "", "image_url": r["image_url"] or "",
                 "rating_avg": rating.get("avg", 0), "rating_count": rating.get("count", 0),
             })
         return out
