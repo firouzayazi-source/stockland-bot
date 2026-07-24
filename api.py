@@ -262,33 +262,36 @@ _CARD2CARD_NAME = "سید فیروز ایازی"
 async def _upload_photo_to_telegram(photo_bytes: bytes, content_type: str | None, caption: str) -> str:
     """آپلود عکس به چت ادمین در تلگرام برای گرفتن یه file_id واقعی (رسید/تیکت).
 
-    خطای کامل رو لاگ می‌کنه (برای journalctl) و پیام قابل‌فهم برمی‌گردونه —
-    چون بعضی خطاهای httpx مثل تایم‌اوت شبکه با str() خالی چاپ می‌شن و بدون
-    گفتن نوع/کلاس خطا اصلاً قابل تشخیص نیستن.
-
-    timeout اتصال با apihelper.CONNECT_TIMEOUT=15 در bot.py هماهنگ شده (همون
-    مقداری که خود ربات برای همین سرور به کار می‌بره و کار می‌کنه) — قبلاً ۱۰
-    ثانیه بود که برای این سرور به تلگرام کم بود (ConnectTimeout واقعی می‌داد).
-    یک retry هم روی خطاهای سطح اتصال (نه خطاهای منطقی) انجام می‌شه، چون این
-    نوع قطعی‌ها معمولاً موقتی‌ان و تلاش دوم معمولاً جواب می‌ده."""
+    عمداً از requests استفاده می‌کنه، نه httpx: httpx (httpcore) روی این سرور
+    مشخص شد که با ConnectTimeout پایدار (نه گاه‌به‌گاه) شکست می‌خوره حتی با
+    مهلت ۲۰ ثانیه و retry — که دقیقاً علامت یه محدودیت شناخته‌شدهٔ httpcore
+    است: برخلاف requests/urllib3، اگه اولین آدرس resolve‌شده (مثلاً IPv6) روی
+    این سرور بلاک/بی‌پاسخ باشه، httpcore به آدرس بعدی (IPv4) fallback نمی‌کنه
+    و کل مدت timeout رو منتظر همون آدرس مرده می‌مونه. requests همینجا (در
+    _notify_admin_ticket/partner apply) و در کل bot.py (از طریق apihelper)
+    برای همین سرور به تلگرام همیشه کار کرده، پس همون رو استفاده می‌کنیم —
+    در یه ترد جدا (asyncio.to_thread) که event loop رو بلاک نکنه."""
     from config import BOT_TOKEN, ADMIN_ID
     import asyncio
-    import httpx
-    timeout = httpx.Timeout(20.0, connect=20.0, read=60.0, write=60.0)
+    import requests
+
+    def _do_upload():
+        r = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+            data={"chat_id": ADMIN_ID, "caption": caption},
+            files={"photo": ("photo.jpg", photo_bytes, content_type or "image/jpeg")},
+            timeout=(15, 60),  # (connect, read) — همون مقادیر apihelper.CONNECT/READ_TIMEOUT در bot.py
+        )
+        return r.json()
+
     last_err = None
     for attempt in range(2):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                    data={"chat_id": ADMIN_ID, "caption": caption},
-                    files={"photo": ("photo.jpg", photo_bytes, content_type or "image/jpeg")},
-                )
-            tg_data = r.json()
+            tg_data = await asyncio.to_thread(_do_upload)
             if not tg_data.get("ok"):
-                raise RuntimeError(tg_data.get("description") or f"HTTP {r.status_code} از تلگرام")
+                raise RuntimeError(tg_data.get("description") or "خطای نامشخص از تلگرام")
             return tg_data["result"]["photo"][-1]["file_id"]
-        except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             last_err = e
             logger.warning("تلاش %d/2 آپلود عکس به تلگرام با خطای اتصال شکست خورد: %r", attempt + 1, e)
             if attempt == 0:
