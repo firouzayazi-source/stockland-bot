@@ -5728,3 +5728,80 @@ def get_app_content_item(cid: int):
         return dict(r) if r else None
     finally:
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── ورود وب‌سایت با تأیید داخل ربات (دیپ‌لینک weblogin_TOKEN) ─────────────
+# ══════════════════════════════════════════════════════════════════════════
+_ENSURE_WEB_LOGIN_DONE = False
+
+
+def ensure_web_login_schema():
+    global _ENSURE_WEB_LOGIN_DONE
+    if _ENSURE_WEB_LOGIN_DONE:
+        return
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS web_login_tokens (
+                token TEXT PRIMARY KEY,
+                status TEXT DEFAULT 'pending',
+                user_id INTEGER,
+                created_at INTEGER DEFAULT 0
+            );
+        """)
+        conn.commit()
+        _ENSURE_WEB_LOGIN_DONE = True
+    finally:
+        conn.close()
+
+
+def create_web_login_token(token: str) -> None:
+    ensure_web_login_schema()
+    import time as _t
+    now = int(_t.time())
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM web_login_tokens WHERE created_at < ?;", (now - 86400,))
+        conn.execute("INSERT INTO web_login_tokens (token, status, created_at) VALUES (?, 'pending', ?);",
+                     (token, now))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def confirm_web_login_token(token: str, user_id: int) -> bool:
+    """توسط ربات صدا زده می‌شه وقتی کاربر روی دیپ‌لینک weblogin_TOKEN بزنه — True یعنی واقعاً تأیید ثبت شد."""
+    ensure_web_login_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "UPDATE web_login_tokens SET status='confirmed', user_id=? WHERE token=? AND status='pending';",
+            (user_id, token))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_web_login_token(token: str):
+    ensure_web_login_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM web_login_tokens WHERE token=?;", (token,)).fetchone()
+    finally:
+        conn.close()
+
+
+def get_user_full_name(user_id: int) -> str:
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT full_name FROM users WHERE user_id=? LIMIT 1;", (int(user_id),)).fetchone()
+        if not row:
+            return ""
+        return (row["full_name"] if hasattr(row, "keys") else row[0]) or ""
+    except Exception:
+        return ""
+    finally:
+        conn.close()

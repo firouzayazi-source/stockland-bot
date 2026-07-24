@@ -25,10 +25,14 @@ function err(m){return '<div class="sl-empty"><span class="sl-empty-e">📡</spa
 var botUser='stock_land_ir';
 api('/bot-info').then(function(d){if(d&&d.username)botUser=d.username}).catch(function(){});
 
-/* ─── ورود وب‌سایت (خارج از مینی‌اپ) با Telegram Login Widget ───
-   داخل مینی‌اپ initData همیشه معتبره؛ رو وب‌سایت خالص، loggedIn بعد از
-   ویجت یا کوکی سشن قبلی true می‌شه. همهٔ fetchهای app.js همین الان هم
-   same-origin هستن، پس کوکی بدون هیچ تغییری در آپلودها/API خودکار می‌ره. */
+/* ─── ورود وب‌سایت (خارج از مینی‌اپ) — دیپ‌لینک به اپ واقعی تلگرام + تأیید داخل ربات ───
+   داخل مینی‌اپ initData همیشه معتبره؛ رو وب‌سایت خالص، loggedIn بعد از تأیید در ربات
+   یا کوکی سشن قبلی true می‌شه. همهٔ fetchهای app.js همین الان هم same-origin هستن،
+   پس کوکی بدون هیچ تغییری در آپلودها/API خودکار می‌ره.
+   عمداً از Telegram Login Widget استفاده نمی‌کنیم — اون یه پاپ‌آپ/صفحهٔ oauth.telegram.org
+   باز می‌کنه که برای خیلی از کاربرها (به‌خصوص ایران) قابل‌اعتماد/در دسترس نیست و به‌جای
+   ورود واقعی فقط صفحهٔ خالی/گیر می‌ده. این مسیر مستقیم اپ تلگرام رو با t.me باز می‌کنه —
+   همون چیزی که همه‌جای این پروژه برای «باز کردن ربات» استفاده می‌شه و واقعاً کار می‌کنه. */
 var loggedIn=inTG;
 if(!inTG){
   fetch('/api/v1/auth/whoami').then(function(r){return r.ok?r.json():null}).then(function(d){
@@ -38,27 +42,42 @@ if(!inTG){
     }
   }).catch(function(){});
 }
-function _mountTelegramLoginWidget(containerId){
-  var el=document.getElementById(containerId);
-  if(!el)return;
-  el.innerHTML='';
-  var s=document.createElement('script');
-  s.async=true;s.src='https://telegram.org/js/telegram-widget.js?22';
-  s.setAttribute('data-telegram-login',botUser);
-  s.setAttribute('data-size','large');
-  s.setAttribute('data-radius','12');
-  s.setAttribute('data-onauth','onTelegramAuth(user)');
-  s.setAttribute('data-request-access','write');
-  el.appendChild(s);
+var _loginPoll=null;
+function startWebLogin(containerId){
+  var box=document.getElementById(containerId);
+  if(!box)return;
+  box.innerHTML='<button class="sl-login-btn" id="tg-login-start-btn" style="border:none;font-family:inherit;cursor:pointer;font-size:14px">🤖 ورود با ربات تلگرام</button>';
+  var btn=document.getElementById('tg-login-start-btn');
+  if(!btn)return;
+  btn.addEventListener('click',function(){
+    if(_loginPoll){clearInterval(_loginPoll);_loginPoll=null}
+    box.innerHTML='<div class="sl-checkout-note">در حال اتصال…</div>';
+    fetch('/api/v1/auth/start-login',{method:'POST'}).then(function(r){return r.json()}).then(function(d){
+      if(!d||!d.ok){box.innerHTML='<div class="sl-checkout-note">خطا — دوباره تلاش کنید</div>';return}
+      window.open(d.deep_link,'_blank');
+      box.innerHTML='<div class="sl-checkout-note">⏳ منتظر تأیید در تلگرام هستیم…<br>'+
+        '۱. اگه ربات باز نشد <a href="'+esc(d.deep_link)+'" target="_blank">اینجا رو بزنید</a><br>'+
+        '۲. تو ربات پیام بفرستید یا فقط وارد چت بشید<br>'+
+        '۳. برگردید همین صفحه — خودکار وارد می‌شید</div>';
+      var tries=0;
+      _loginPoll=setInterval(function(){
+        tries++;
+        if(tries>150){clearInterval(_loginPoll);_loginPoll=null;
+          box.innerHTML='<div class="sl-checkout-note">زمان تمام شد — دوباره تلاش کنید</div>';return}
+        fetch('/api/v1/auth/poll-login?token='+encodeURIComponent(d.token)).then(function(r){return r.json()}).then(function(pd){
+          if(pd&&pd.status==='confirmed'){
+            clearInterval(_loginPoll);_loginPoll=null;
+            loggedIn=true;tgUser={first_name:pd.full_name||'کاربر',username:''};
+            _m=0;loadMe();
+          }else if(pd&&pd.status==='expired'){
+            clearInterval(_loginPoll);_loginPoll=null;
+            box.innerHTML='<div class="sl-checkout-note">لینک منقضی شد — دوباره تلاش کنید</div>';
+          }
+        }).catch(function(){});
+      },2000);
+    }).catch(function(){box.innerHTML='<div class="sl-checkout-note">خطای شبکه</div>'});
+  });
 }
-window.onTelegramAuth=function(user){
-  fetch('/api/v1/auth/telegram-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(user)})
-    .then(function(r){return r.json()}).then(function(d){
-      if(!d||!d.ok){window._slApp.dialog.alert('ورود ناموفق بود','خطا');return}
-      loggedIn=true;tgUser={first_name:user.first_name||'کاربر',username:user.username||''};
-      _m=0;loadMe();
-    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا')});
-};
 
 /* ── دسته‌بندی دایره‌ای ── */
 var cats=[],prods=[];
@@ -340,12 +359,12 @@ function loadMe(){if(_m)return;_m=1;
     '<div class="sl-foot">استوک‌لند · نسخه ۲.۰</div>';
   function row(c,i,l,cmd,x){return '<a class="sl-row" href="https://t.me/'+botUser+'?start='+cmd+'" target="_blank"><span class="sl-ric" style="background:'+c+'">'+i+'</span><span class="sl-row-grow">'+l+'</span>'+(x||'')+'<span class="sl-chev">‹</span></a>'}
   if(!loggedIn){
+    // این حالت فقط خارج از مینی‌اپ (وب‌سایت خالص) پیش میاد — داخل تلگرام initData همیشه معتبره
     nm.textContent='حساب من';
     body.innerHTML='<div class="sl-login"><div class="sl-login-e">🔐</div><div class="sl-login-t">ورود به حساب</div>'+
       '<div class="sl-login-s">برای مشاهده کیف پول، خرید و سفارش‌ها وارد شوید.</div>'+
-      (inTG?'':'<div id="tg-login-widget" style="margin-top:16px;display:flex;justify-content:center"></div><div style="margin:10px 0;font-size:12px;color:var(--mu)">یا</div>')+
-      '<a class="sl-login-btn" href="https://t.me/'+botUser+'?start=app" target="_blank">📱 باز کردن ربات تلگرام</a></div>'+foot;
-    if(!inTG)_mountTelegramLoginWidget('tg-login-widget');
+      '<div id="tg-login-widget" style="margin-top:16px;display:flex;justify-content:center"></div></div>';
+    startWebLogin('tg-login-widget');
     return;
   }
   var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';nm.textContent=un;
