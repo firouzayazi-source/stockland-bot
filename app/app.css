@@ -313,9 +313,16 @@ html.dark .sl-checkout-emoji{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-sp-msg{max-width:78%;padding:10px 14px;border-radius:16px;font-size:13.5px;line-height:1.7;word-break:break-word}
 .sl-sp-mine{align-self:flex-end;background:var(--br);color:#fff;border-bottom-left-radius:5px}
 .sl-sp-theirs{align-self:flex-start;background:var(--card);color:var(--ink);box-shadow:var(--sh);border-bottom-right-radius:5px}
-.sl-sp-input-row{display:flex;gap:8px;padding:8px 20px 0;align-items:center}
-.sl-sp-input{flex:1;min-width:0;box-sizing:border-box;border:1px solid var(--ln);border-radius:12px;padding:10px 14px;
- font-family:inherit;font-size:13.5px;background:var(--card);color:var(--ink);outline:none}
+.sl-sp-input-row{display:flex;gap:8px;padding:10px 20px;align-items:center;
+ background:var(--card);border-top:1px solid var(--ln)}
+/* input.sl-sp-input (نه فقط .sl-sp-input) چون قاعدهٔ پایهٔ F7 روی input[type="text"] با
+   اسپسیفیسیتی (0,1,1) باعث می‌شه border:none خودش ببره جلوی کلاس تنها (0,1,0) — صرف‌نظر از ترتیب لود */
+input.sl-sp-input{flex:1;min-width:0;box-sizing:border-box;border:1.5px solid var(--ln);border-radius:12px;padding:11px 14px;
+ font-family:inherit;font-size:13.5px;background:var(--bg);color:var(--ink);outline:none;
+ transition:border-color .15s,box-shadow .15s}
+input.sl-sp-input:focus{border-color:var(--br);box-shadow:0 0 0 3px rgba(10,99,255,.15)}
+input.sl-sp-input:disabled{opacity:.6}
+.sl-sp-send:disabled,.sl-sp-attach-btn.sl-sp-disabled{opacity:.55;cursor:default}
 /* width:auto صریح چون F7 یه قاعدهٔ پایه button{width:100%} داره که این دکمهٔ کنار input رو کل ردیف می‌کرد */
 .sl-sp-send{flex:none;width:auto;background:var(--br);color:#fff;border:none;border-radius:12px;
  padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
