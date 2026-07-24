@@ -2,7 +2,7 @@
 from typing import Optional
 
 
-def list_products(category: str = "", active_only: bool = True, limit: int = 100) -> list:
+def list_products(category: str = "", active_only: bool = True, limit: int = 100, q: str = "") -> list:
     """لیست محصولات با قیمت مؤثر (فلش‌سیل اعمال‌شده)."""
     import db
     from db import _get_connection, apply_flash_price
@@ -14,6 +14,11 @@ def list_products(category: str = "", active_only: bool = True, limit: int = 100
         if category:
             where.append("category=?")
             params.append(category)
+        if q:
+            where.append("(title LIKE ? OR description LIKE ?)")
+            like = f"%{q}%"
+            params.append(like)
+            params.append(like)
         w = ("WHERE " + " AND ".join(where)) if where else ""
         rows = conn.execute(
             f"SELECT id, category, title, price, description, is_active, "
