@@ -510,7 +510,8 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>فروش</span></div>
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
-            {nav_item("/admin/app-content", "smartphone", "محتوای اپ", "settings")}
+            {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
+            {nav_item("/admin/app-content", "smartphone", "آموزش", "settings")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
             {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
             <div class="nav-divider"><span>کاربران</span></div>
@@ -10929,7 +10930,7 @@ async def webhook_switch_impl(request: Request, mode: str):
 # ══════════════════════════════════════════════════════════════════════════
 APP_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_media")
 
-_KIND_LABELS = {"tutorial": "📚 آموزش", "news": "📰 خبر", "feature": "✨ امکانات", "daily": "📋 لیست روزانه"}
+_KIND_LABELS = {"tutorial": "📚 آموزش", "feature": "✨ امکانات", "daily": "📋 لیست روزانه"}
 
 
 @router.get("/app-content", response_class=HTMLResponse)
@@ -10937,15 +10938,14 @@ async def app_content_page(request: Request, kind: str = "", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
-    from db import get_app_content, get_cfg
+    from db import get_app_content
     k = kind if kind in _KIND_LABELS else None
     items = get_app_content(kind=k, active_only=False, limit=100)
-    news_blog_url = get_cfg("NEWS_BLOG_URL", "")
 
     tabs = ''.join(
         f'<a href="/admin/app-content?kind={s}" class="px-3 py-1.5 rounded-lg text-xs border '
         f'{"bg-indigo-600 text-white" if kind==s else "bg-white text-gray-500"}">{l}</a>'
-        for s, l in [("", "همه"), ("tutorial", "📚 آموزش"), ("news", "📰 اخبار"), ("feature", "✨ امکانات")]
+        for s, l in [("", "همه"), ("tutorial", "📚 آموزش"), ("feature", "✨ امکانات")]
     )
 
     rows = ""
@@ -10974,15 +10974,6 @@ async def app_content_page(request: Request, kind: str = "", flash: str = ""):
         rows = '<tr><td colspan="6" class="p-6 text-center text-gray-400 text-sm">هنوز محتوایی ثبت نشده.</td></tr>'
 
     body = f"""
-    <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
-      <div class="text-sm font-medium mb-2">🔗 لینک آرشیو کامل اخبار/مقالات (وبلاگ خارجی)</div>
-      <form method="post" action="/admin/app-content/news-blog-url" class="flex gap-2">
-        <input name="url" value="{html.escape(news_blog_url)}" dir="ltr"
-               class="flex-1 border rounded-lg p-2 text-sm" placeholder="https://stland.ir/آرشیو-بلاگ/">
-        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">ذخیره</button>
-      </form>
-      <div class="text-xs text-gray-400 mt-1">تب «خبر» اپ به‌جای فهرست پست، یک دکمه به همین آدرس نشون می‌ده — مقاله‌های جدید همونجا (نه اینجا) اضافه می‌شن.</div>
-    </div>
     <div class="flex items-center justify-between mb-4">
       <div class="flex gap-2">{tabs}</div>
       <a href="/admin/app-content/new" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">＋ افزودن محتوا</a>
@@ -11104,15 +11095,80 @@ async def app_content_save(request: Request, cid: str = Form(""), kind: str = Fo
     return _redir("/admin/app-content")
 
 
-@router.post("/app-content/news-blog-url")
-async def app_content_news_blog_url(request: Request, url: str = Form("")):
+@router.get("/news-feed", response_class=HTMLResponse)
+async def news_feed_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_cfg
+    from core.news import get_feed
+    url = get_cfg("NEWS_FEED_URL", "")
+    d = get_feed(force=False)  # از کش می‌خونه، تا پنل رو کند نکنه
+    status = d.get("status")
+    status_badge = {
+        "ok": '<span class="text-green-600 text-xs font-medium">🟢 متصل</span>',
+        "error": '<span class="text-red-600 text-xs font-medium">🔴 خطا در آخرین تلاش</span>',
+        "unset": '<span class="text-gray-400 text-xs font-medium">⚪️ هنوز تنظیم نشده</span>',
+    }.get(status, status or "—")
+    last_sync = d.get("last_sync")
+    last_sync_str = datetime.fromtimestamp(int(last_sync)).strftime("%Y-%m-%d %H:%M") if last_sync else "—"
+    items_preview = d.get("items") or []
+    error_box = (f'<div class="text-xs text-red-500 mt-2">خطا: {html.escape(d.get("error") or "")}</div>'
+                 if status == "error" else "")
+
+    preview_rows = "".join(f"""
+      <div class="border-b py-2 last:border-0">
+        <div class="text-sm font-medium">{html.escape(it.get('title',''))}</div>
+        <div class="text-xs text-gray-400">{html.escape(it.get('pub_date',''))}</div>
+      </div>""" for it in items_preview) or '<div class="text-sm text-gray-400 text-center py-6">هنوز خبری فچ نشده.</div>'
+
+    body = f"""
+    <div class="bg-white rounded-xl shadow-sm p-5 max-w-2xl mb-4">
+      <div class="text-sm font-medium mb-2">آدرس فید RSS وبلاگ</div>
+      <form method="post" action="/admin/news-feed/settings" class="flex gap-2 mb-3">
+        <input name="url" value="{html.escape(url)}" dir="ltr"
+               class="flex-1 border rounded-lg p-2 text-sm" placeholder="https://stland.ir/feed/">
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">ذخیره</button>
+      </form>
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div><span class="text-gray-400">وضعیت اتصال: </span>{status_badge}</div>
+        <div><span class="text-gray-400">آخرین همگام‌سازی: </span>{last_sync_str}</div>
+      </div>
+      {error_box}
+      <form method="post" action="/admin/news-feed/refresh" class="mt-3">
+        <button class="border px-4 py-2 rounded-lg text-sm">🔄 بروزرسانی دستی</button>
+      </form>
+      <div class="text-xs text-gray-400 mt-2">تب «اخبار تکنولوژی» اپ آخرین ۱۰ مقاله رو مستقیم از همین فید نشون می‌ده — نیازی به ثبت دستی نیست.</div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-4 max-w-2xl">
+      <div class="text-sm font-medium mb-3">پیش‌نمایش {len(items_preview)} خبر آخر</div>
+      {preview_rows}
+    </div>"""
+    return _layout("اخبار تکنولوژی", body, adm, flash=flash)
+
+
+@router.post("/news-feed/settings")
+async def news_feed_settings_save(request: Request, url: str = Form("")):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     from db import set_cfg
-    set_cfg("NEWS_BLOG_URL", url.strip())
-    _log(request, "تنظیم لینک آرشیو اخبار", "محتوای اپ", url.strip(), admin_info=adm)
-    return _redir(f"/admin/app-content?flash={e('✅ ذخیره شد')}")
+    set_cfg("NEWS_FEED_URL", url.strip())
+    _log(request, "تنظیم آدرس فید اخبار", "اخبار تکنولوژی", url.strip(), admin_info=adm)
+    return _redir(f"/admin/news-feed?flash={e('✅ ذخیره شد')}")
+
+
+@router.post("/news-feed/refresh")
+async def news_feed_refresh(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from core.news import get_feed
+    d = get_feed(force=True)
+    ok = d.get("status") == "ok"
+    msg = f"{len(d.get('items') or [])} خبر گرفته شد" if ok else f"خطا: {(d.get('error') or '')[:80]}"
+    _log(request, "بروزرسانی دستی فید اخبار", "اخبار تکنولوژی", msg, admin_info=adm)
+    return _redir(f"/admin/news-feed?flash={e(('✅ ' if ok else '❌ ') + msg)}")
 
 
 @router.post("/app-content/{cid}/delete")

@@ -29,6 +29,9 @@
     <a href="#tab-learn" class="tab-link">
      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
      <span class="tabbar-label">آموزش</span></a>
+    <a href="#tab-news" class="tab-link">
+     <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg></span>
+     <span class="tabbar-label">اخبار</span></a>
     <a href="#tab-me" class="tab-link">
      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 5-6 8-6s6.5 2 8 6"/></svg></span>
      <span class="tabbar-label">حساب</span></a>
@@ -69,7 +72,7 @@
     <div id="daily-post"></div>
     <div class="sl-sec" id="learn-sec"><b>📚 بیاموز</b><a class="sl-link" data-tab="tab-learn">همه</a></div>
     <div id="learn-card"></div>
-    <div class="sl-sec" id="news-sec"><b>📰 تازه‌ها</b></div>
+    <div class="sl-sec" id="news-sec"><b>📰 تازه‌های تکنولوژی</b><a class="sl-link" data-tab="tab-news">همه</a></div>
     <div class="sl-hrow" id="news-row"></div>
     <div style="height:20px"></div>
    </div>
@@ -89,10 +92,17 @@
     <div class="sl-head"><div class="sl-eyebrow">مرکز یادگیری</div><div class="sl-big">آموزش</div></div>
     <div class="sl-seg" id="learn-seg">
      <button class="on" data-k="tutorial">📚 آموزش‌ها</button>
-     <button data-k="news">📰 اخبار</button>
      <button data-k="feature">✨ امکانات</button>
     </div>
     <div id="learn-list"></div>
+    <div style="height:20px"></div>
+   </div>
+
+   <!-- اخبار تکنولوژی -->
+   <div id="tab-news" class="page-content tab ptr-content" data-ptr-distance="55">
+    <div class="ptr-preloader"><div class="preloader"></div><div class="ptr-arrow"></div></div>
+    <div class="sl-head"><div class="sl-eyebrow">تازه‌های دنیای تکنولوژی</div><div class="sl-big">اخبار</div></div>
+    <div id="news-list"></div>
     <div style="height:20px"></div>
    </div>
 
