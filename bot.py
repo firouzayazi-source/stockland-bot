@@ -1259,6 +1259,22 @@ def handle_start(message):
             except Exception:
                 pass
             return
+        elif arg.startswith("weblogin_"):
+            # ورود وب‌سایت (خارج از مینی‌اپ) — رسیدن به همین‌جا (از حساب واقعی
+            # کاربر در تلگرام) خودش اثبات هویته، دکمهٔ تأیید جدا لازم نیست
+            token = arg[len("weblogin_"):]
+            try:
+                from db import confirm_web_login_token
+                if confirm_web_login_token(token, uid):
+                    bot.send_message(message.chat.id,
+                        "✅ <b>ورود به سایت تأیید شد.</b>\n\nبه صفحه‌ای که ازش اومدید برگردید — "
+                        "خودکار وارد حسابتون می‌شید.", parse_mode="HTML")
+                else:
+                    bot.send_message(message.chat.id,
+                        "⛔️ این لینک ورود منقضی شده یا قبلاً استفاده شده. دوباره از سایت تلاش کنید.")
+            except Exception:
+                pass
+            return
 
 
     text = tf("MSG_WELCOME", name=full_name or "دوست عزیز")
