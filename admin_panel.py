@@ -11315,6 +11315,7 @@ def _tutorial_form(it=None, categories=None):
             <input type="file" name="cover_image" id="cover_image_input" accept="image/*" class="flex-1 min-w-0 text-sm">
             <button type="button" onclick="document.getElementById('cover_image_input').value=''" class="shrink-0 text-xs text-red-500 border border-red-200 rounded-lg px-2 py-1.5 whitespace-nowrap">✕ پاک کردن</button>
           </div>
+          {f'<label class="flex items-center gap-1 text-xs text-red-500 mt-1"><input type="checkbox" name="cover_image_remove" value="1"> 🗑 حذف تصویر فعلاً بارگذاری‌شده</label>' if it.get('cover_image') else ''}
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">متن کامل آموزش</label>
@@ -11335,6 +11336,7 @@ def _tutorial_form(it=None, categories=None):
               <input type="file" name="video_upload" id="video_upload_input" accept="video/*" class="flex-1 min-w-0 text-sm">
               <button type="button" onclick="document.getElementById('video_upload_input').value=''" class="shrink-0 text-xs text-red-500 border border-red-200 rounded-lg px-2 py-1.5 whitespace-nowrap">✕ پاک کردن</button>
             </div>
+            {f'<label class="flex items-center gap-1 text-xs text-red-500 mt-1"><input type="checkbox" name="video_upload_remove" value="1"> 🗑 حذف ویدئوی فعلاً بارگذاری‌شده</label>' if it.get('video_upload') else ''}
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">لینک ویدیو (آپارات/یوتیوب/مستقیم)</label>
@@ -11348,6 +11350,7 @@ def _tutorial_form(it=None, categories=None):
               <input type="file" name="download_file" id="download_file_input" class="flex-1 min-w-0 text-sm">
               <button type="button" onclick="document.getElementById('download_file_input').value=''" class="shrink-0 text-xs text-red-500 border border-red-200 rounded-lg px-2 py-1.5 whitespace-nowrap">✕ پاک کردن</button>
             </div>
+            {f'<label class="flex items-center gap-1 text-xs text-red-500 mt-1"><input type="checkbox" name="download_file_remove" value="1"> 🗑 حذف فایل فعلاً بارگذاری‌شده</label>' if it.get('download_file') else ''}
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">برچسب دکمهٔ دانلود</label>
@@ -11475,16 +11478,28 @@ async def tutorials_save(request: Request):
     existing = get_tutorial(int(tid)) if tid.isdigit() else None
 
     cover_upload = form.get("cover_image")
-    cover_path = await _save_tutorial_file(cover_upload, "cover", _TUT_IMAGE_EXTS, "cv") \
-        if cover_upload is not None and getattr(cover_upload, "filename", "") else (existing.get("cover_image") if existing else "")
+    if cover_upload is not None and getattr(cover_upload, "filename", ""):
+        cover_path = await _save_tutorial_file(cover_upload, "cover", _TUT_IMAGE_EXTS, "cv")
+    elif form.get("cover_image_remove") == "1":
+        cover_path = ""
+    else:
+        cover_path = existing.get("cover_image") if existing else ""
 
     video_upload_file = form.get("video_upload")
-    video_upload_path = await _save_tutorial_file(video_upload_file, "video", _TUT_VIDEO_EXTS, "vd", force_ext=False) \
-        if video_upload_file is not None and getattr(video_upload_file, "filename", "") else (existing.get("video_upload") if existing else "")
+    if video_upload_file is not None and getattr(video_upload_file, "filename", ""):
+        video_upload_path = await _save_tutorial_file(video_upload_file, "video", _TUT_VIDEO_EXTS, "vd", force_ext=False)
+    elif form.get("video_upload_remove") == "1":
+        video_upload_path = ""
+    else:
+        video_upload_path = existing.get("video_upload") if existing else ""
 
     download_upload_file = form.get("download_file")
-    download_path = await _save_tutorial_file(download_upload_file, "files", _TUT_DOC_EXTS, "dl", force_ext=False) \
-        if download_upload_file is not None and getattr(download_upload_file, "filename", "") else (existing.get("download_file") if existing else "")
+    if download_upload_file is not None and getattr(download_upload_file, "filename", ""):
+        download_path = await _save_tutorial_file(download_upload_file, "files", _TUT_DOC_EXTS, "dl", force_ext=False)
+    elif form.get("download_file_remove") == "1":
+        download_path = ""
+    else:
+        download_path = existing.get("download_file") if existing else ""
 
     # گالری: حذف تیک‌خورده‌ها + اضافه‌کردن فایل‌های جدید
     gallery = json.loads(existing.get("gallery") or "[]") if existing else []
