@@ -25,6 +25,41 @@ function err(m){return '<div class="sl-empty"><span class="sl-empty-e">📡</spa
 var botUser='stock_land_ir';
 api('/bot-info').then(function(d){if(d&&d.username)botUser=d.username}).catch(function(){});
 
+/* ─── ورود وب‌سایت (خارج از مینی‌اپ) با Telegram Login Widget ───
+   داخل مینی‌اپ initData همیشه معتبره؛ رو وب‌سایت خالص، loggedIn بعد از
+   ویجت یا کوکی سشن قبلی true می‌شه. همهٔ fetchهای app.js همین الان هم
+   same-origin هستن، پس کوکی بدون هیچ تغییری در آپلودها/API خودکار می‌ره. */
+var loggedIn=inTG;
+if(!inTG){
+  fetch('/api/v1/auth/whoami').then(function(r){return r.ok?r.json():null}).then(function(d){
+    if(d&&d.ok){
+      loggedIn=true;tgUser={first_name:d.full_name||'کاربر',username:''};
+      if(_m){_m=0;loadMe()}
+    }
+  }).catch(function(){});
+}
+function _mountTelegramLoginWidget(containerId){
+  var el=document.getElementById(containerId);
+  if(!el)return;
+  el.innerHTML='';
+  var s=document.createElement('script');
+  s.async=true;s.src='https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login',botUser);
+  s.setAttribute('data-size','large');
+  s.setAttribute('data-radius','12');
+  s.setAttribute('data-onauth','onTelegramAuth(user)');
+  s.setAttribute('data-request-access','write');
+  el.appendChild(s);
+}
+window.onTelegramAuth=function(user){
+  fetch('/api/v1/auth/telegram-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(user)})
+    .then(function(r){return r.json()}).then(function(d){
+      if(!d||!d.ok){window._slApp.dialog.alert('ورود ناموفق بود','خطا');return}
+      loggedIn=true;tgUser={first_name:user.first_name||'کاربر',username:user.username||''};
+      _m=0;loadMe();
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا')});
+};
+
 /* ── دسته‌بندی دایره‌ای ── */
 var cats=[],prods=[];
 // استاندارد ترتیب: همه ← اپل آیدی ← بقیهٔ دسته‌ها به همون ترتیب قبلی
@@ -224,16 +259,23 @@ function openP(pid){
       (hs?'<div class="sl-pp-stock">'+(ok?'✅ موجود — '+p.stock+' عدد':'❌ ناموجود')+'</div>':'')+
       '<div class="sl-pp-divider"></div>'+
       (p.description?'<div class="sl-pp-desc">'+nl2br(p.description)+'</div>':'')+
-      (initData&&ok!==false?
-        '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید از اپ</button>':
-        '<a class="sl-pp-btn'+(hs&&!ok?' sl-pp-btn-off':'')+'" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">'+
-        (hs&&!ok?'🔔 اطلاع‌رسانی موجود شدن':'🛒 خرید از ربات')+'</a>');
+      (loggedIn&&ok!==false?
+        '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید</button>':
+        (hs&&!ok?
+          '<a class="sl-pp-btn sl-pp-btn-off" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">🔔 اطلاع‌رسانی موجود شدن</a>':
+          (inTG?
+            '<a class="sl-pp-btn" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">🛒 خرید از ربات</a>':
+            '<button class="sl-pp-btn" id="sl-login-prompt-'+p.id+'">🔐 ورود با تلگرام برای خرید</button>')));
     setTimeout(function(){
       var bn=document.getElementById('sl-buy-'+p.id);
-      if(!bn)return;
-      bn.addEventListener('click',function(){
+      if(bn)bn.addEventListener('click',function(){
         app.popup.close('#prod-popup');
         setTimeout(function(){openCheckout(p.id)},350);
+      });
+      var lp=document.getElementById('sl-login-prompt-'+p.id);
+      if(lp)lp.addEventListener('click',function(){
+        app.popup.close('#prod-popup');
+        setTimeout(function(){var l=document.querySelector('.tab-link[href="#tab-me"]');if(l)l.click()},350);
       });
     },150);
   }).catch(function(){b.innerHTML=err('خطا');});
@@ -297,7 +339,15 @@ function loadMe(){if(_m)return;_m=1;
     '<span class="sl-ric" style="background:#54A9EB">🤖</span><span class="sl-row-grow">باز کردن ربات</span><span class="sl-chev">‹</span></a></div>'+
     '<div class="sl-foot">استوک‌لند · نسخه ۲.۰</div>';
   function row(c,i,l,cmd,x){return '<a class="sl-row" href="https://t.me/'+botUser+'?start='+cmd+'" target="_blank"><span class="sl-ric" style="background:'+c+'">'+i+'</span><span class="sl-row-grow">'+l+'</span>'+(x||'')+'<span class="sl-chev">‹</span></a>'}
-  if(!initData){nm.textContent='حساب من';body.innerHTML='<div class="sl-login"><div class="sl-login-e">🔐</div><div class="sl-login-t">ورود به حساب</div><div class="sl-login-s">برای مشاهده کیف پول و سفارش‌ها<br>از داخل ربات تلگرام وارد شوید.</div><a class="sl-login-btn" href="https://t.me/'+botUser+'?start=app" target="_blank">📱 ورود از تلگرام</a></div>'+foot;return}
+  if(!loggedIn){
+    nm.textContent='حساب من';
+    body.innerHTML='<div class="sl-login"><div class="sl-login-e">🔐</div><div class="sl-login-t">ورود به حساب</div>'+
+      '<div class="sl-login-s">برای مشاهده کیف پول، خرید و سفارش‌ها وارد شوید.</div>'+
+      (inTG?'':'<div id="tg-login-widget" style="margin-top:16px;display:flex;justify-content:center"></div><div style="margin:10px 0;font-size:12px;color:var(--mu)">یا</div>')+
+      '<a class="sl-login-btn" href="https://t.me/'+botUser+'?start=app" target="_blank">📱 باز کردن ربات تلگرام</a></div>'+foot;
+    if(!inTG)_mountTelegramLoginWidget('tg-login-widget');
+    return;
+  }
   var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';nm.textContent=un;
   body.innerHTML='<div class="sl-me"><div class="sl-ava">'+esc(un.charAt(0))+'</div><div><div class="sl-me-n">'+esc(un)+'</div><div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div></div></div>'+
     '<div class="sl-wallet"><div class="sl-wallet-glow"></div><div class="sl-wallet-l">موجودی کیف پول</div>'+
@@ -307,9 +357,15 @@ function loadMe(){if(_m)return;_m=1;
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-invite-row"><span class="sl-ric" style="background:#22C55E">🎁</span><span class="sl-row-grow">دعوت دوستان</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-support-row"><span class="sl-ric" style="background:#6B7280">💬</span><span class="sl-row-grow">پشتیبانی</span><span class="sl-chev">‹</span></a>'+
-    '</div>'+foot;
+    '</div>'+
+    (inTG?'':'<div class="sl-group" style="margin-top:12px"><a class="sl-row" href="#" id="me-logout-row"><span class="sl-ric" style="background:#EF4444">🚪</span><span class="sl-row-grow">خروج از حساب</span></a></div>')+
+    foot;
   api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
   api('/me/partner',true).then(function(d){if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}}).catch(function(){});
+  var lo_=document.getElementById('me-logout-row');
+  if(lo_)lo_.addEventListener('click',function(e){e.preventDefault();
+    fetch('/api/v1/auth/logout',{method:'POST'}).then(function(){loggedIn=false;tgUser=null;_m=0;loadMe()});
+  });
   var or_=document.getElementById('me-orders-row');
   if(or_)or_.addEventListener('click',function(e){e.preventDefault();openOrders()});
   var wc_=document.getElementById('me-wallet-charge');
