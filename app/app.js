@@ -461,7 +461,7 @@ document.addEventListener('click',function(e){
   var BAR_SOLID=_dk?'#1C1C1E':'#FFFFFF';
   var PAGE_BG=_dk?'#000000':'#F2F2F7';
   var SNAP_PX=36;
-  var _lastHex='';var _wasSolid=null;
+  var _lastHex='';
   function setTgHeader(hex){if(hex===_lastHex)return;_lastHex=hex;try{if(tg&&tg.setHeaderColor)tg.setHeaderColor(hex)}catch(e){}}
   if(inTG){try{tg.setBackgroundColor(PAGE_BG)}catch(e){}setTgHeader(HERO_TOP)}
   var ticking=false;
@@ -471,13 +471,15 @@ document.addEventListener('click',function(e){
       ticking=false;
       var activeTab=document.querySelector('.tab.tab-active');
       if(!activeTab||activeTab.id!=='tab-home'){
-        if(_wasSolid!==false){nav.classList.remove('sl-nav--solid');_wasSolid=false}
+        nav.classList.remove('sl-nav--solid');
         setTgHeader(PAGE_BG);
         return;
       }
+      // همیشه دوباره محاسبه/ست می‌شه (نه فقط وقتی حالت عوض شده) — چون setTgHeader خودش
+      // با _lastHex از ارسال تکراری جلوگیری می‌کنه؛ قبلاً یه مقایسهٔ state اینجا بود که باعث
+      // می‌شد برگشتن به خانه (بدون اسکرول) رنگ هدر بومی تلگرام رو دوباره نفرسته و همون‌جوری
+      // که تب قبلی گذاشته بود (سفید/PAGE_BG) بمونه
       var solid=homeTab.scrollTop>SNAP_PX;
-      if(solid===_wasSolid)return;
-      _wasSolid=solid;
       if(solid){nav.classList.add('sl-nav--solid');setTgHeader(BAR_SOLID)}
       else{nav.classList.remove('sl-nav--solid');setTgHeader(HERO_TOP)}
     });
