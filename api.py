@@ -15,6 +15,7 @@ import os
 import hmac
 import hashlib
 import json
+import logging
 import time
 from urllib.parse import parse_qsl
 
@@ -22,6 +23,7 @@ from fastapi import APIRouter, Request, HTTPException, Header
 from fastapi.responses import JSONResponse, RedirectResponse
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger("stockland.api")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -257,6 +259,34 @@ _CARD2CARD_NUMBER = "6037701608004393"
 _CARD2CARD_NAME = "سید فیروز ایازی"
 
 
+async def _upload_photo_to_telegram(photo_bytes: bytes, content_type: str | None, caption: str) -> str:
+    """آپلود عکس به چت ادمین در تلگرام برای گرفتن یه file_id واقعی (رسید/تیکت).
+
+    خطای کامل رو لاگ می‌کنه (برای journalctl) و پیام قابل‌فهم برمی‌گردونه —
+    چون بعضی خطاهای httpx مثل تایم‌اوت شبکه با str() خالی چاپ می‌شن و بدون
+    گفتن نوع/کلاس خطا اصلاً قابل تشخیص نیستن (دقیقاً همین چیزی که این بار پیش اومد)."""
+    from config import BOT_TOKEN, ADMIN_ID
+    import httpx
+    # آپلود عکس از موبایل می‌تونه کند باشه؛ timeout اتصال سخت‌گیرانه (خطای واقعی شبکه
+    # زود مشخص بشه) ولی مهلت خوندن/نوشتن بازتر (آپلود واقعی فایل فرصت داشته باشه)
+    timeout = httpx.Timeout(10.0, connect=10.0, read=45.0, write=45.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data={"chat_id": ADMIN_ID, "caption": caption},
+                files={"photo": ("photo.jpg", photo_bytes, content_type or "image/jpeg")},
+            )
+        tg_data = r.json()
+        if not tg_data.get("ok"):
+            raise RuntimeError(tg_data.get("description") or f"HTTP {r.status_code} از تلگرام")
+        return tg_data["result"]["photo"][-1]["file_id"]
+    except Exception as e:
+        logger.exception("خطا در آپلود عکس به تلگرام (caption=%r)", caption)
+        why = str(e) or f"{type(e).__name__} — احتمالاً تایم‌اوت/قطعی اتصال سرور به تلگرام"
+        raise HTTPException(502, f"خطا در آپلود عکس — دوباره تلاش کنید ({why})")
+
+
 @router.get("/payment/methods")
 async def api_payment_methods():
     """روش‌های فعال شارژ کیف‌پول — دقیقاً همون تنظیماتی که ربات هم می‌خونه."""
@@ -299,19 +329,9 @@ async def api_wallet_card2card(request: Request):
     if not photo_bytes:
         raise HTTPException(400, "عکس رسید خالی است")
 
-    from config import BOT_TOKEN, ADMIN_ID
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                data={"chat_id": ADMIN_ID, "caption": f"رسید کارت‌به‌کارت — کاربر {uid} — {amount:,} تومان (از مینی‌اپ)"},
-                files={"photo": ("receipt.jpg", photo_bytes, photo.content_type or "image/jpeg")},
-            )
-        tg_data = r.json()
-        file_id = tg_data["result"]["photo"][-1]["file_id"]
-    except Exception as e:
-        raise HTTPException(502, f"خطا در آپلود رسید: {e}")
+    file_id = await _upload_photo_to_telegram(
+        photo_bytes, photo.content_type,
+        f"رسید کارت‌به‌کارت — کاربر {uid} — {amount:,} تومان (از مینی‌اپ)")
 
     from db import save_card_receipt, ensure_card_receipts_schema
     ensure_card_receipts_schema()
@@ -492,23 +512,9 @@ async def api_support_message(request: Request):
     if has_photo:
         photo_bytes = await photo.read()
         if photo_bytes:
-            from config import BOT_TOKEN, ADMIN_ID
-            import httpx
-            try:
-                async with httpx.AsyncClient(timeout=20) as client:
-                    r = await client.post(
-                        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                        data={"chat_id": ADMIN_ID,
-                              "caption": f"عکس تیکت #{tid} — کاربر {uid} (از مینی‌اپ)"},
-                        files={"photo": ("photo.jpg", photo_bytes, photo.content_type or "image/jpeg")},
-                    )
-                tg_data = r.json()
-                if not tg_data.get("ok"):
-                    raise RuntimeError(tg_data.get("description") or "sendPhoto failed")
-                media_file_id = tg_data["result"]["photo"][-1]["file_id"]
-                media_type = "photo"
-            except Exception as e:
-                raise HTTPException(502, f"خطا در آپلود عکس — دوباره تلاش کنید: {e}")
+            media_file_id = await _upload_photo_to_telegram(
+                photo_bytes, photo.content_type, f"عکس تیکت #{tid} — کاربر {uid} (از مینی‌اپ)")
+            media_type = "photo"
 
     ticket_add_message(tid, "user", text or None, media_type=media_type,
                         media_file_id=media_file_id, source="miniapp")
