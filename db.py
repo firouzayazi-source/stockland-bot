@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 from datetime import datetime
 
@@ -5803,5 +5804,220 @@ def get_user_full_name(user_id: int) -> str:
         return (row["full_name"] if hasattr(row, "keys") else row[0]) or ""
     except Exception:
         return ""
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── آموزش — CMS داخلی کامل (فاز ۲) ────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+_ENSURE_TUTORIALS_DONE = False
+
+_TUTORIAL_COLUMNS = (
+    "title", "cover_image", "short_desc", "body", "gallery",
+    "video_upload", "video_link", "download_file", "download_label",
+    "category_id", "tags", "status", "publish_date", "sort_order", "featured",
+)
+
+
+def ensure_tutorials_schema():
+    global _ENSURE_TUTORIALS_DONE
+    if _ENSURE_TUTORIALS_DONE:
+        return
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tutorial_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                slug TEXT DEFAULT '',
+                sort_order INTEGER DEFAULT 0
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tutorials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                cover_image TEXT DEFAULT '',
+                short_desc TEXT DEFAULT '',
+                body TEXT DEFAULT '',
+                gallery TEXT DEFAULT '[]',
+                video_upload TEXT DEFAULT '',
+                video_link TEXT DEFAULT '',
+                download_file TEXT DEFAULT '',
+                download_label TEXT DEFAULT '',
+                category_id INTEGER DEFAULT 0,
+                tags TEXT DEFAULT '[]',
+                status TEXT DEFAULT 'draft',
+                publish_date TEXT DEFAULT '',
+                sort_order INTEGER DEFAULT 0,
+                featured INTEGER DEFAULT 0,
+                view_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+        _ENSURE_TUTORIALS_DONE = True
+    finally:
+        conn.close()
+
+
+def add_tutorial_category(name: str, slug: str = "") -> int:
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute("INSERT INTO tutorial_categories (name, slug) VALUES (?, ?);",
+                           (name.strip(), (slug or name).strip()))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_tutorial_category(cid: int) -> None:
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM tutorial_categories WHERE id=?;", (int(cid),))
+        conn.execute("UPDATE tutorials SET category_id=0 WHERE category_id=?;", (int(cid),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_tutorial_categories() -> list:
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM tutorial_categories ORDER BY sort_order, id;").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_all_tutorial_tags() -> list:
+    """همهٔ برچسب‌های استفاده‌شده تو آموزش‌ها — بدون جدول جدا، فقط aggregate از ستون tags."""
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute("SELECT tags FROM tutorials;").fetchall()
+        out = set()
+        for r in rows:
+            try:
+                for t in json.loads(r["tags"] if hasattr(r, "keys") else r[0] or "[]"):
+                    if t:
+                        out.add(t)
+            except Exception:
+                pass
+        return sorted(out)
+    finally:
+        conn.close()
+
+
+def add_tutorial(**fields) -> int:
+    ensure_tutorials_schema()
+    cols = [c for c in _TUTORIAL_COLUMNS if c in fields]
+    conn = _get_connection()
+    try:
+        placeholders = ",".join(["?"] * len(cols))
+        cur = conn.execute(
+            f"INSERT INTO tutorials ({','.join(cols)}) VALUES ({placeholders});",
+            tuple(fields[c] for c in cols),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_tutorial(tid: int, **fields) -> None:
+    ensure_tutorials_schema()
+    cols = [c for c in _TUTORIAL_COLUMNS if c in fields]
+    if not cols:
+        return
+    conn = _get_connection()
+    try:
+        set_clause = ",".join(f"{c}=?" for c in cols)
+        conn.execute(
+            f"UPDATE tutorials SET {set_clause}, updated_at=datetime('now') WHERE id=?;",
+            tuple(fields[c] for c in cols) + (int(tid),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_tutorial(tid: int) -> None:
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM tutorials WHERE id=?;", (int(tid),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_tutorial_status(tid: int, status: str) -> None:
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE tutorials SET status=?, updated_at=datetime('now') WHERE id=?;",
+                     (status, int(tid)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def increment_tutorial_views(tid: int) -> None:
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE tutorials SET view_count=view_count+1 WHERE id=?;", (int(tid),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_tutorial(tid: int):
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        r = conn.execute("SELECT * FROM tutorials WHERE id=?;", (int(tid),)).fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+
+def get_tutorials(category_id: int = None, tag: str = None, status: str = None,
+                  q: str = None, sort: str = "newest", limit: int = 50, offset: int = 0) -> list:
+    """لیست آموزش‌ها — برای پنل (status=None یعنی همه) و PWA (status='published').
+    sort: newest | oldest | popular"""
+    ensure_tutorials_schema()
+    conn = _get_connection()
+    try:
+        query = "SELECT * FROM tutorials WHERE 1=1"
+        params = []
+        if status:
+            query += " AND status=?"
+            params.append(status)
+        if category_id:
+            query += " AND category_id=?"
+            params.append(int(category_id))
+        if q:
+            query += " AND (title LIKE ? OR short_desc LIKE ?)"
+            like = f"%{q}%"
+            params += [like, like]
+        rows = conn.execute(query, tuple(params)).fetchall()
+        items = [dict(r) for r in rows]
+        if tag:
+            items = [it for it in items if tag in (json.loads(it.get("tags") or "[]"))]
+        if sort == "popular":
+            items.sort(key=lambda it: (-(it.get("featured") or 0), -(it.get("view_count") or 0), -(it["id"])))
+        elif sort == "oldest":
+            items.sort(key=lambda it: it["id"])
+        else:  # newest
+            items.sort(key=lambda it: (-(it.get("featured") or 0), -(it.get("sort_order") or 0), -(it["id"])))
+        return items[offset:offset + limit]
     finally:
         conn.close()

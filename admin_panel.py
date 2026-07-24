@@ -511,7 +511,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
             {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
-            {nav_item("/admin/app-content", "smartphone", "آموزش", "settings")}
+            {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
             {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
             <div class="nav-divider"><span>کاربران</span></div>
@@ -11124,12 +11124,13 @@ async def news_feed_page(request: Request, flash: str = ""):
 
     body = f"""
     <div class="bg-white rounded-xl shadow-sm p-5 max-w-2xl mb-4">
-      <div class="text-sm font-medium mb-2">آدرس فید RSS وبلاگ</div>
+      <div class="text-sm font-medium mb-2">دامنهٔ وبلاگ (وردپرس)</div>
       <form method="post" action="/admin/news-feed/settings" class="flex gap-2 mb-3">
         <input name="url" value="{html.escape(url)}" dir="ltr"
-               class="flex-1 border rounded-lg p-2 text-sm" placeholder="https://stland.ir/feed/">
+               class="flex-1 border rounded-lg p-2 text-sm" placeholder="stland.ir">
         <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">ذخیره</button>
       </form>
+      <div class="text-xs text-gray-400 -mt-2 mb-3">فقط دامنهٔ سایت رو وارد کنید (مثلاً stland.ir) — آدرس دقیق صفحهٔ آرشیو لازم نیست، از REST API رسمی وردپرس (wp-json) به‌صورت خودکار پست‌ها خونده می‌شه.</div>
       <div class="grid grid-cols-2 gap-3 text-sm">
         <div><span class="text-gray-400">وضعیت اتصال: </span>{status_badge}</div>
         <div><span class="text-gray-400">آخرین همگام‌سازی: </span>{last_sync_str}</div>
@@ -11179,3 +11180,439 @@ async def app_content_delete(request: Request, cid: int):
     from db import delete_app_content
     delete_app_content(cid)
     return _redir("/admin/app-content")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── آموزش — CMS داخلی کامل (فاز ۲) ────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+_TUT_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_TUT_VIDEO_EXTS = (".mp4", ".webm", ".mov")
+_TUT_DOC_EXTS = (".pdf", ".zip", ".rar", ".7z", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv")
+
+
+async def _save_tutorial_file(file, subdir: str, allowed_exts: tuple, prefix: str, force_ext: bool = True) -> str:
+    """آپلود یک فایل آموزش (کاور/گالری/ویدیو/دانلودی) — مسیر عمومی برمی‌گردونه یا ''.
+    force_ext=True یعنی پسوند نامعتبر به اولین پسوند مجاز تبدیل می‌شه (برای تصویر بی‌خطره)؛
+    False یعنی فایل با پسوند غیرمجاز کلاً رد می‌شه (برای ویدیو/فایل دانلودی که تبدیل پسوند خرابش می‌کنه)."""
+    if file is None or not getattr(file, "filename", ""):
+        return ""
+    try:
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in allowed_exts:
+            if not force_ext:
+                return ""
+            ext = allowed_exts[0]
+        target_dir = os.path.join(APP_MEDIA_DIR, "tutorials", subdir)
+        os.makedirs(target_dir, exist_ok=True)
+        fname = f"{prefix}{int(time.time()*1000)}{ext}"
+        data = await file.read()
+        if not data:
+            return ""
+        with open(os.path.join(target_dir, fname), "wb") as f:
+            f.write(data)
+        return f"/app-media/tutorials/{subdir}/{fname}"
+    except Exception:
+        return ""
+
+
+@router.get("/tutorials", response_class=HTMLResponse)
+async def tutorials_page(request: Request, status: str = "", category: str = "", q: str = "", flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_tutorials, get_tutorial_categories
+    cats = get_tutorial_categories()
+    cat_names = {c["id"]: c["name"] for c in cats}
+    items = get_tutorials(
+        category_id=int(category) if category.isdigit() else None,
+        status=status or None, q=q.strip() or None, sort="newest", limit=200,
+    )
+
+    status_tabs = ''.join(
+        f'<a href="/admin/tutorials?status={s}" class="px-3 py-1.5 rounded-lg text-xs border '
+        f'{"bg-indigo-600 text-white" if status==s else "bg-white text-gray-500"}">{l}</a>'
+        for s, l in [("", "همه"), ("published", "✅ منتشرشده"), ("draft", "📝 پیش‌نویس")]
+    )
+    cat_opts = ''.join(f'<option value="{c["id"]}" {"selected" if category==str(c["id"]) else ""}>{html.escape(c["name"])}</option>' for c in cats)
+
+    rows = ""
+    for it in items:
+        badge = ('<span class="text-green-600 text-xs">✅ منتشرشده</span>' if it.get("status") == "published"
+                 else '<span class="text-gray-400 text-xs">📝 پیش‌نویس</span>')
+        featured = '<span class="text-amber-500 text-xs">⭐️</span>' if it.get("featured") else ""
+        img = (f'<img src="{html.escape(it.get("cover_image") or "")}" class="w-10 h-10 rounded-lg object-cover">'
+               if it.get("cover_image") else '<div class="w-10 h-10 rounded-lg bg-gray-100"></div>')
+        toggle_label = "غیرفعال کن" if it.get("status") == "published" else "منتشر کن"
+        rows += f"""
+        <tr class="border-b">
+          <td class="p-2">{img}</td>
+          <td class="p-2 text-sm font-medium">{featured} {html.escape(it.get('title') or '')}</td>
+          <td class="p-2 text-xs">{html.escape(cat_names.get(it.get('category_id'), '—'))}</td>
+          <td class="p-2">{badge}</td>
+          <td class="p-2 text-xs text-gray-400">👁 {it.get('view_count', 0)}</td>
+          <td class="p-2 text-xs text-gray-400">{html.escape(str(it.get('publish_date') or it.get('created_at') or '')[:16])}</td>
+          <td class="p-2 whitespace-nowrap">
+            <a href="/admin/tutorials/{it['id']}/preview" target="_blank" class="text-gray-500 text-xs ml-2">👁 پیش‌نمایش</a>
+            <a href="/admin/tutorials/{it['id']}/edit" class="text-indigo-600 text-xs ml-2">✏️ ویرایش</a>
+            <form method="post" action="/admin/tutorials/{it['id']}/toggle" class="inline">
+              <button class="text-amber-600 text-xs ml-2">{toggle_label}</button>
+            </form>
+            <form method="post" action="/admin/tutorials/{it['id']}/delete" class="inline" onsubmit="return confirm('حذف شود؟')">
+              <button class="text-red-500 text-xs">🗑 حذف</button>
+            </form>
+          </td>
+        </tr>"""
+    if not rows:
+        rows = '<tr><td colspan="7" class="p-6 text-center text-gray-400 text-sm">آموزشی یافت نشد.</td></tr>'
+
+    body = f"""
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div class="flex gap-2 flex-wrap">{status_tabs}</div>
+      <div class="flex gap-2">
+        <a href="/admin/tutorials/categories" class="border px-4 py-2 rounded-lg text-sm">🏷 دسته‌بندی‌ها</a>
+        <a href="/admin/tutorials/new" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">＋ افزودن آموزش</a>
+      </div>
+    </div>
+    <form method="get" action="/admin/tutorials" class="flex gap-2 mb-4">
+      <input type="hidden" name="status" value="{e(status)}">
+      <input name="q" value="{html.escape(q)}" placeholder="جستجو در عنوان/توضیح…" class="flex-1 border rounded-lg p-2 text-sm">
+      <select name="category" class="border rounded-lg p-2 text-sm" onchange="this.form.submit()">
+        <option value="">همهٔ دسته‌ها</option>{cat_opts}
+      </select>
+      <button class="border px-4 py-2 rounded-lg text-sm">جستجو</button>
+    </form>
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b">
+          <th class="p-2">کاور</th><th class="p-2">عنوان</th><th class="p-2">دسته</th>
+          <th class="p-2">وضعیت</th><th class="p-2">بازدید</th><th class="p-2">تاریخ</th><th class="p-2">عملیات</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _layout("آموزش", body, adm, flash=flash)
+
+
+def _tutorial_form(it=None, categories=None):
+    it = it or {}
+    categories = categories or []
+    cat_opts = ''.join(
+        f'<option value="{c["id"]}" {"selected" if it.get("category_id")==c["id"] else ""}>{html.escape(c["name"])}</option>'
+        for c in categories
+    )
+    tags_str = ", ".join(json.loads(it.get("tags") or "[]")) if it else ""
+    gallery = json.loads(it.get("gallery") or "[]") if it else []
+    gallery_preview = "".join(f"""
+      <label class="relative inline-block">
+        <img src="{html.escape(g)}" class="w-16 h-16 rounded-lg object-cover border">
+        <input type="checkbox" name="gallery_remove" value="{html.escape(g)}" class="absolute top-1 right-1">
+      </label>""" for g in gallery)
+    checked_pub = "checked" if it.get("status") == "published" else ""
+    checked_draft = "checked" if it.get("status") != "published" else ""
+    checked_featured = "checked" if it.get("featured") else ""
+    body_json = json.dumps(it.get("body") or "")
+
+    return f"""
+    <form method="post" action="/admin/tutorials/save" enctype="multipart/form-data" class="max-w-3xl space-y-4">
+      <input type="hidden" name="tid" value="{it.get('id','')}">
+      <div class="bg-white rounded-xl shadow-sm p-5 space-y-4">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">عنوان</label>
+          <input name="title" required value="{html.escape(str(it.get('title') or ''))}" class="w-full border rounded-lg p-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">توضیح کوتاه</label>
+          <textarea name="short_desc" rows="2" class="w-full border rounded-lg p-2 text-sm">{html.escape(str(it.get('short_desc') or ''))}</textarea>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">تصویر کاور {f'<img src="{html.escape(it.get("cover_image",""))}" class="inline w-8 h-8 rounded object-cover align-middle mr-1">' if it.get('cover_image') else ''}</label>
+          <input type="file" name="cover_image" accept="image/*" class="w-full text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">متن کامل آموزش</label>
+          <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
+          <div id="quill-editor" style="height:280px;background:#fff" class="rounded-lg border"></div>
+          <textarea name="body" id="body-input" hidden></textarea>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">گالری تصاویر</label>
+          <div class="flex gap-2 flex-wrap mb-2">{gallery_preview}</div>
+          <input type="file" name="gallery" accept="image/*" multiple class="w-full text-sm">
+          <div class="text-xs text-gray-400 mt-1">تیک‌خورده‌ها موقع ذخیره حذف می‌شن؛ فایل‌های جدید اضافه می‌شن.</div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">ویدئوی آپلودی {f'(فعلی: <a href="{html.escape(it.get("video_upload",""))}" target="_blank" class="text-indigo-600">مشاهده</a>)' if it.get('video_upload') else ''}</label>
+            <input type="file" name="video_upload" accept="video/*" class="w-full text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">لینک ویدیو (آپارات/یوتیوب/مستقیم)</label>
+            <input name="video_link" value="{html.escape(str(it.get('video_link') or ''))}" dir="ltr" class="w-full border rounded-lg p-2 text-sm" placeholder="https://aparat.com/v/...">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">فایل دانلودی {f'(فعلی: <a href="{html.escape(it.get("download_file",""))}" target="_blank" class="text-indigo-600">دانلود</a>)' if it.get('download_file') else ''}</label>
+            <input type="file" name="download_file" class="w-full text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">برچسب دکمهٔ دانلود</label>
+            <input name="download_label" value="{html.escape(str(it.get('download_label') or ''))}" class="w-full border rounded-lg p-2 text-sm" placeholder="مثلاً: دانلود PDF">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">دسته‌بندی</label>
+            <select name="category_id" class="w-full border rounded-lg p-2 text-sm">
+              <option value="0">بدون دسته</option>{cat_opts}
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">برچسب‌ها (با کاما جدا کنید)</label>
+            <input name="tags" value="{html.escape(tags_str)}" class="w-full border rounded-lg p-2 text-sm" placeholder="اپل، آموزش، مبتدی">
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">تاریخ انتشار</label>
+            <input type="date" name="publish_date" value="{html.escape(str(it.get('publish_date') or ''))}" class="w-full border rounded-lg p-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">ترتیب نمایش</label>
+            <input type="number" name="sort_order" value="{it.get('sort_order', 0)}" class="w-full border rounded-lg p-2 text-sm">
+          </div>
+          <div class="flex items-end">
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="featured" value="1" {checked_featured}> ⭐️ آموزش ویژه</label>
+          </div>
+        </div>
+        <div class="flex gap-4 text-sm">
+          <label class="flex items-center gap-2"><input type="radio" name="status" value="published" {checked_pub}> منتشر شده</label>
+          <label class="flex items-center gap-2"><input type="radio" name="status" value="draft" {checked_draft}> پیش‌نویس</label>
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm">ذخیره</button>
+        <a href="/admin/tutorials" class="px-5 py-2 rounded-lg text-sm border">انصراف</a>
+      </div>
+    </form>
+    <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+    <script>
+    (function(){{
+      var quill = new Quill('#quill-editor', {{theme:'snow', placeholder:'متن کامل آموزش را بنویسید...'}});
+      quill.root.innerHTML = {body_json};
+      document.querySelector('form[action="/admin/tutorials/save"]').addEventListener('submit', function(){{
+        document.getElementById('body-input').value = quill.root.innerHTML;
+      }});
+    }})();
+    </script>"""
+
+
+@router.get("/tutorials/new", response_class=HTMLResponse)
+async def tutorials_new(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_tutorial_categories
+    return _layout("افزودن آموزش", _tutorial_form(categories=get_tutorial_categories()), adm)
+
+
+@router.get("/tutorials/{tid}/edit", response_class=HTMLResponse)
+async def tutorials_edit(request: Request, tid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_tutorial, get_tutorial_categories
+    it = get_tutorial(tid)
+    if not it:
+        return _redir("/admin/tutorials")
+    return _layout("ویرایش آموزش", _tutorial_form(it, get_tutorial_categories()), adm)
+
+
+@router.get("/tutorials/{tid}/preview", response_class=HTMLResponse)
+async def tutorials_preview(request: Request, tid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_tutorial, get_tutorial_categories
+    it = get_tutorial(tid)
+    if not it:
+        return _redir("/admin/tutorials")
+    cats = {c["id"]: c["name"] for c in get_tutorial_categories()}
+    gallery = json.loads(it.get("gallery") or "[]")
+    tags = json.loads(it.get("tags") or "[]")
+    gallery_html = "".join(f'<img src="{html.escape(g)}" class="w-24 h-24 rounded-lg object-cover">' for g in gallery)
+    tags_html = "".join(f'<span class="bg-gray-100 text-xs px-2 py-1 rounded-full">{html.escape(t)}</span>' for t in tags)
+    body = f"""
+    <div class="max-w-2xl bg-white rounded-xl shadow-sm p-6 space-y-4">
+      {f'<img src="{html.escape(it.get("cover_image",""))}" class="w-full rounded-xl">' if it.get('cover_image') else ''}
+      <div class="text-xs text-gray-400">{html.escape(cats.get(it.get('category_id'), '—'))} · {html.escape(str(it.get('publish_date') or ''))}</div>
+      <h1 class="text-xl font-bold">{html.escape(it.get('title') or '')}</h1>
+      <p class="text-gray-500">{html.escape(it.get('short_desc') or '')}</p>
+      <div class="flex gap-2 flex-wrap">{tags_html}</div>
+      <div class="prose max-w-none">{it.get('body') or ''}</div>
+      <div class="flex gap-2 flex-wrap">{gallery_html}</div>
+      {f'<video controls class="w-full rounded-xl" src="{html.escape(it.get("video_upload",""))}"></video>' if it.get('video_upload') else ''}
+      {f'<a href="{html.escape(it.get("video_link",""))}" target="_blank" class="text-indigo-600 text-sm block">🎬 مشاهدهٔ ویدیو</a>' if it.get('video_link') else ''}
+      {f'<a href="{html.escape(it.get("download_file",""))}" target="_blank" class="bg-gray-100 rounded-lg px-4 py-2 text-sm inline-block">⬇️ {html.escape(it.get("download_label") or "دانلود فایل")}</a>' if it.get('download_file') else ''}
+    </div>"""
+    return _layout("پیش‌نمایش آموزش", body, adm)
+
+
+@router.post("/tutorials/save")
+async def tutorials_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import add_tutorial, update_tutorial, get_tutorial
+
+    form = await request.form()
+    tid = str(form.get("tid") or "").strip()
+    title = str(form.get("title") or "").strip()
+    if not title:
+        return _redir("/admin/tutorials?flash=" + e("❌ عنوان الزامی است"))
+
+    existing = get_tutorial(int(tid)) if tid.isdigit() else None
+
+    cover_upload = form.get("cover_image")
+    cover_path = await _save_tutorial_file(cover_upload, "cover", _TUT_IMAGE_EXTS, "cv") \
+        if cover_upload is not None and getattr(cover_upload, "filename", "") else (existing.get("cover_image") if existing else "")
+
+    video_upload_file = form.get("video_upload")
+    video_upload_path = await _save_tutorial_file(video_upload_file, "video", _TUT_VIDEO_EXTS, "vd", force_ext=False) \
+        if video_upload_file is not None and getattr(video_upload_file, "filename", "") else (existing.get("video_upload") if existing else "")
+
+    download_upload_file = form.get("download_file")
+    download_path = await _save_tutorial_file(download_upload_file, "files", _TUT_DOC_EXTS, "dl", force_ext=False) \
+        if download_upload_file is not None and getattr(download_upload_file, "filename", "") else (existing.get("download_file") if existing else "")
+
+    # گالری: حذف تیک‌خورده‌ها + اضافه‌کردن فایل‌های جدید
+    gallery = json.loads(existing.get("gallery") or "[]") if existing else []
+    removed = set(form.getlist("gallery_remove"))
+    gallery = [g for g in gallery if g not in removed]
+    for gf in form.getlist("gallery"):
+        if getattr(gf, "filename", ""):
+            path = await _save_tutorial_file(gf, "gallery", _TUT_IMAGE_EXTS, "gl")
+            if path:
+                gallery.append(path)
+
+    tags = [t.strip() for t in str(form.get("tags") or "").split(",") if t.strip()]
+
+    try:
+        category_id = int(form.get("category_id") or 0)
+    except Exception:
+        category_id = 0
+    try:
+        sort_order = int(form.get("sort_order") or 0)
+    except Exception:
+        sort_order = 0
+
+    fields = dict(
+        title=title,
+        cover_image=cover_path or "",
+        short_desc=str(form.get("short_desc") or "").strip(),
+        body=str(form.get("body") or ""),
+        gallery=json.dumps(gallery, ensure_ascii=False),
+        video_upload=video_upload_path or "",
+        video_link=str(form.get("video_link") or "").strip(),
+        download_file=download_path or "",
+        download_label=str(form.get("download_label") or "").strip(),
+        category_id=category_id,
+        tags=json.dumps(tags, ensure_ascii=False),
+        status=str(form.get("status") or "draft"),
+        publish_date=str(form.get("publish_date") or "").strip(),
+        sort_order=sort_order,
+        featured=1 if form.get("featured") == "1" else 0,
+    )
+
+    if existing:
+        update_tutorial(existing["id"], **fields)
+        _log(request, "ویرایش آموزش", "آموزش", title, admin_info=adm)
+    else:
+        add_tutorial(**fields)
+        _log(request, "افزودن آموزش", "آموزش", title, admin_info=adm)
+    return _redir(f"/admin/tutorials?flash={e('✅ ذخیره شد')}")
+
+
+@router.post("/tutorials/{tid}/toggle")
+async def tutorials_toggle(request: Request, tid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_tutorial, set_tutorial_status
+    it = get_tutorial(tid)
+    if it:
+        new_status = "draft" if it.get("status") == "published" else "published"
+        set_tutorial_status(tid, new_status)
+        _log(request, f"سوییچ وضعیت آموزش → {new_status}", "آموزش", it.get("title") or "", admin_info=adm)
+    return _redir("/admin/tutorials")
+
+
+@router.post("/tutorials/{tid}/delete")
+async def tutorials_delete(request: Request, tid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import delete_tutorial
+    delete_tutorial(tid)
+    _log(request, "حذف آموزش", "آموزش", str(tid), admin_info=adm)
+    return _redir("/admin/tutorials")
+
+
+@router.get("/tutorials/categories", response_class=HTMLResponse)
+async def tutorial_categories_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_tutorial_categories
+    cats = get_tutorial_categories()
+    rows = "".join(f"""
+    <tr class="border-b">
+      <td class="p-2 text-sm">{html.escape(c['name'])}</td>
+      <td class="p-2 text-xs text-gray-400" dir="ltr">{html.escape(c.get('slug') or '')}</td>
+      <td class="p-2">
+        <form method="post" action="/admin/tutorials/categories/{c['id']}/delete" onsubmit="return confirm('حذف شود؟ آموزش‌های این دسته بدون‌دسته می‌شن.')">
+          <button class="text-red-500 text-xs">🗑 حذف</button>
+        </form>
+      </td>
+    </tr>""" for c in cats) or '<tr><td colspan="3" class="p-6 text-center text-gray-400 text-sm">دسته‌ای ثبت نشده.</td></tr>'
+
+    body = f"""
+    <a href="/admin/tutorials" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به آموزش‌ها</a>
+    <div class="bg-white rounded-xl shadow-sm p-5 max-w-lg mb-4">
+      <div class="text-sm font-medium mb-2">افزودن دستهٔ جدید</div>
+      <form method="post" action="/admin/tutorials/categories/add" class="flex gap-2">
+        <input name="name" required placeholder="نام دسته" class="flex-1 border rounded-lg p-2 text-sm">
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">افزودن</button>
+      </form>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto max-w-lg">
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b"><th class="p-2">نام</th><th class="p-2">اسلاگ</th><th class="p-2">عملیات</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _layout("دسته‌بندی‌های آموزش", body, adm, flash=flash)
+
+
+@router.post("/tutorials/categories/add")
+async def tutorial_categories_add(request: Request, name: str = Form(...)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import add_tutorial_category
+    if name.strip():
+        add_tutorial_category(name.strip())
+        _log(request, "افزودن دستهٔ آموزش", "آموزش", name.strip(), admin_info=adm)
+    return _redir("/admin/tutorials/categories")
+
+
+@router.post("/tutorials/categories/{cid}/delete")
+async def tutorial_categories_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import delete_tutorial_category
+    delete_tutorial_category(cid)
+    _log(request, "حذف دستهٔ آموزش", "آموزش", str(cid), admin_info=adm)
+    return _redir("/admin/tutorials/categories")
