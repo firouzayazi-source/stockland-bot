@@ -510,10 +510,11 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>فروش</span></div>
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
-            {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
-            {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
             {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
+            <div class="nav-divider"><span>مدیریت اپ</span></div>
+            {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
+            {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "users")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
@@ -8095,10 +8096,11 @@ def _week_start() -> str:
 
 
 @router.get("/accounting", response_class=HTMLResponse)
-async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_g: str = "", dt_g: str = "", flash: str = ""):
-    # df_g/dt_g are Gregorian equivalents of Jalali df/dt
-    if df_g: df = df_g
-    if dt_g: dt = dt_g
+async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_fa: str = "", dt_fa: str = "", flash: str = ""):
+    # df_fa/dt_fa (شمسی، از فرم فیلتر) در سمت سرور به میلادی تبدیل می‌شن؛ df/dt هم مستقیم می‌تونن میلادی باشن (لینک‌های میان‌بر)
+    from db import jalali_str_to_gregorian_iso
+    if df_fa: df = jalali_str_to_gregorian_iso(df_fa) or df
+    if dt_fa: dt = jalali_str_to_gregorian_iso(dt_fa) or dt
     adm = _get_admin(request)
     guard = _require(adm, "accounting")
     if guard: return guard
@@ -8112,15 +8114,15 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
     <form method="get" class="flex gap-2 items-center mb-6 flex-wrap">
       <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
         <span class="text-xs text-gray-400 whitespace-nowrap">از:</span>
-        <input type="text" name="df" id="df" value="{_to_jalali(df)}" placeholder="۱۴۰۴/۰۱/۰۱"
-          class="w-28 text-sm outline-none" autocomplete="off" onchange="syncGreg(this,'df_g')">
-        <input type="hidden" name="df_g" id="df_g" value="{df}">
+        <input type="text" name="df_fa" value="{_to_jalali(df)}" placeholder="۱۴۰۴/۰۱/۰۱"
+          class="w-28 text-sm outline-none" autocomplete="off">
+        <input type="hidden" name="df" value="{df}">
       </div>
       <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
         <span class="text-xs text-gray-400 whitespace-nowrap">تا:</span>
-        <input type="text" name="dt" id="dt" value="{_to_jalali(dt)}" placeholder="۱۴۰۴/۰۱/۳۱"
-          class="w-28 text-sm outline-none" autocomplete="off" onchange="syncGreg(this,'dt_g')">
-        <input type="hidden" name="dt_g" id="dt_g" value="{dt}">
+        <input type="text" name="dt_fa" value="{_to_jalali(dt)}" placeholder="۱۴۰۴/۰۱/۳۱"
+          class="w-28 text-sm outline-none" autocomplete="off">
+        <input type="hidden" name="dt" value="{dt}">
       </div>
       <div class="flex gap-1">
         <button type="submit" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium">فیلتر</button>
@@ -8132,31 +8134,7 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
         <a href="/admin/accounting?df={_week_start()}&dt={today_g}" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">این هفته</a>
         <a href="/admin/accounting?df=&dt=" class="px-2 py-1.5 bg-blue-50 text-blue-600 rounded text-xs">کل</a>
       </div>
-    </form>
-    <script>
-    function jalaliToGregorian(jy,jm,jd){{
-      var gy,gm,gd,g_d_no,j_d_no,j_np,i,jy2=jy-979,jm2=jm-1,jd2=jd-1;
-      j_d_no=365*jy2+(~~(jy2/33))*8+(~~((jy2%33+3)/4));
-      for(i=0;i<jm2;++i) j_d_no+=([31,31,31,31,31,31,30,30,30,30,30,29])[i];
-      j_d_no+=jd2;
-      g_d_no=j_d_no+79;
-      gy=1600+(~~(g_d_no/36524.25))*100; g_d_no%=36524.25;
-      if(g_d_no>=36160.75){{gy+=100;g_d_no-=36160.75;}}
-      gy+=~~(g_d_no/365.25); g_d_no%=365.25;
-      gm=~~((g_d_no+16.5)/30.6001)+1;
-      gd=~~(g_d_no+16.5)-~~(30.6001*gm)+1;
-      if(gm>12){{++gy;gm-=12;}}
-      return [gy,gm,gd];
-    }}
-    function syncGreg(inp,hiddenId){{
-      var v=inp.value.trim().replace(/[۰-۹]/g,function(c){{return String.fromCharCode(c.charCodeAt(0)-1728);}});
-      var p=v.split('/'); if(p.length===3){{
-        var r=jalaliToGregorian(+p[0],+p[1],+p[2]);
-        var g=r[0]+'-'+(r[1]<10?'0'+r[1]:r[1])+'-'+(r[2]<10?'0'+r[2]:r[2]);
-        document.getElementById(hiddenId).value=g;
-      }}
-    }}
-    </script>"""
+    </form>"""
     body = f"""
     <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <h1 class="text-2xl font-bold text-gray-800">💰 حسابداری</h1>
@@ -11112,15 +11090,9 @@ async def news_feed_page(request: Request, flash: str = ""):
     }.get(status, status or "—")
     last_sync = d.get("last_sync")
     last_sync_str = datetime.fromtimestamp(int(last_sync)).strftime("%Y-%m-%d %H:%M") if last_sync else "—"
-    items_preview = d.get("items") or []
+    items_count = len(d.get("items") or [])
     error_box = (f'<div class="text-xs text-red-500 mt-2">خطا: {html.escape(d.get("error") or "")}</div>'
                  if status == "error" else "")
-
-    preview_rows = "".join(f"""
-      <div class="border-b py-2 last:border-0">
-        <div class="text-sm font-medium">{html.escape(it.get('title',''))}</div>
-        <div class="text-xs text-gray-400">{html.escape(it.get('pub_date',''))}</div>
-      </div>""" for it in items_preview) or '<div class="text-sm text-gray-400 text-center py-6">هنوز خبری فچ نشده.</div>'
 
     body = f"""
     <div class="bg-white rounded-xl shadow-sm p-5 max-w-2xl mb-4">
@@ -11139,11 +11111,7 @@ async def news_feed_page(request: Request, flash: str = ""):
       <form method="post" action="/admin/news-feed/refresh" class="mt-3">
         <button class="border px-4 py-2 rounded-lg text-sm">🔄 بروزرسانی دستی</button>
       </form>
-      <div class="text-xs text-gray-400 mt-2">تب «اخبار تکنولوژی» اپ آخرین ۱۰ مقاله رو مستقیم از همین فید نشون می‌ده — نیازی به ثبت دستی نیست.</div>
-    </div>
-    <div class="bg-white rounded-xl shadow-sm p-4 max-w-2xl">
-      <div class="text-sm font-medium mb-3">پیش‌نمایش {len(items_preview)} خبر آخر</div>
-      {preview_rows}
+      <div class="text-xs text-gray-400 mt-2">تب «اخبار تکنولوژی» اپ همهٔ {items_count} مقالهٔ فچ‌شده رو مستقیم از همین فید نشون می‌ده — نیازی به ثبت دستی نیست.</div>
     </div>"""
     return _layout("اخبار تکنولوژی", body, adm, flash=flash)
 
@@ -11206,11 +11174,23 @@ async def _save_tutorial_file(file, subdir: str, allowed_exts: tuple, prefix: st
         target_dir = os.path.join(APP_MEDIA_DIR, "tutorials", subdir)
         os.makedirs(target_dir, exist_ok=True)
         fname = f"{prefix}{int(time.time()*1000)}{ext}"
-        data = await file.read()
-        if not data:
+        target_path = os.path.join(target_dir, fname)
+        # فایل‌های بزرگ (ویدیو) رو تکه‌تکه روی دیسک می‌نویسیم، نه یکجا در RAM —
+        # وگرنه آپلود ویدیوهای حجیم می‌تونه به مصرف حافظهٔ زیاد/تایم‌اوت منجر بشه.
+        size = 0
+        with open(target_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                f.write(chunk)
+        if size == 0:
+            try:
+                os.remove(target_path)
+            except Exception:
+                pass
             return ""
-        with open(os.path.join(target_dir, fname), "wb") as f:
-            f.write(data)
         return f"/app-media/tutorials/{subdir}/{fname}"
     except Exception:
         return ""
@@ -11251,7 +11231,7 @@ async def tutorials_page(request: Request, status: str = "", category: str = "",
           <td class="p-2 text-xs">{html.escape(cat_names.get(it.get('category_id'), '—'))}</td>
           <td class="p-2">{badge}</td>
           <td class="p-2 text-xs text-gray-400">👁 {it.get('view_count', 0)}</td>
-          <td class="p-2 text-xs text-gray-400">{html.escape(str(it.get('publish_date') or it.get('created_at') or '')[:16])}</td>
+          <td class="p-2 text-xs text-gray-400">{fa_date(it.get('publish_date') or it.get('created_at') or '')}</td>
           <td class="p-2 whitespace-nowrap">
             <a href="/admin/tutorials/{it['id']}/preview" target="_blank" class="text-gray-500 text-xs ml-2">👁 پیش‌نمایش</a>
             <a href="/admin/tutorials/{it['id']}/edit" class="text-indigo-600 text-xs ml-2">✏️ ویرایش</a>
@@ -11313,6 +11293,10 @@ def _tutorial_form(it=None, categories=None):
     checked_featured = "checked" if it.get("featured") else ""
     body_json = json.dumps(it.get("body") or "")
 
+    from datetime import date as _dt_date
+    pubdate_g = str(it.get("publish_date") or "").strip() or _dt_date.today().isoformat()
+    pubdate_fa = _to_jalali(pubdate_g)  # فقط برای نمایش اولیه؛ ذخیره از publish_date_fa در سمت سرور انجام می‌شه
+
     return f"""
     <form method="post" action="/admin/tutorials/save" enctype="multipart/form-data" class="max-w-3xl space-y-4">
       <input type="hidden" name="tid" value="{it.get('id','')}">
@@ -11327,7 +11311,10 @@ def _tutorial_form(it=None, categories=None):
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">تصویر کاور {f'<img src="{html.escape(it.get("cover_image",""))}" class="inline w-8 h-8 rounded object-cover align-middle mr-1">' if it.get('cover_image') else ''}</label>
-          <input type="file" name="cover_image" accept="image/*" class="w-full text-sm">
+          <div class="flex items-center gap-2">
+            <input type="file" name="cover_image" id="cover_image_input" accept="image/*" class="flex-1 min-w-0 text-sm">
+            <button type="button" onclick="document.getElementById('cover_image_input').value=''" class="shrink-0 text-xs text-red-500 border border-red-200 rounded-lg px-2 py-1.5 whitespace-nowrap">✕ پاک کردن</button>
+          </div>
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">متن کامل آموزش</label>
@@ -11341,27 +11328,33 @@ def _tutorial_form(it=None, categories=None):
           <input type="file" name="gallery" accept="image/*" multiple class="w-full text-sm">
           <div class="text-xs text-gray-400 mt-1">تیک‌خورده‌ها موقع ذخیره حذف می‌شن؛ فایل‌های جدید اضافه می‌شن.</div>
         </div>
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label class="block text-xs text-gray-500 mb-1">ویدئوی آپلودی {f'(فعلی: <a href="{html.escape(it.get("video_upload",""))}" target="_blank" class="text-indigo-600">مشاهده</a>)' if it.get('video_upload') else ''}</label>
-            <input type="file" name="video_upload" accept="video/*" class="w-full text-sm">
+            <div class="flex items-center gap-2">
+              <input type="file" name="video_upload" id="video_upload_input" accept="video/*" class="flex-1 min-w-0 text-sm">
+              <button type="button" onclick="document.getElementById('video_upload_input').value=''" class="shrink-0 text-xs text-red-500 border border-red-200 rounded-lg px-2 py-1.5 whitespace-nowrap">✕ پاک کردن</button>
+            </div>
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">لینک ویدیو (آپارات/یوتیوب/مستقیم)</label>
             <input name="video_link" value="{html.escape(str(it.get('video_link') or ''))}" dir="ltr" class="w-full border rounded-lg p-2 text-sm" placeholder="https://aparat.com/v/...">
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label class="block text-xs text-gray-500 mb-1">فایل دانلودی {f'(فعلی: <a href="{html.escape(it.get("download_file",""))}" target="_blank" class="text-indigo-600">دانلود</a>)' if it.get('download_file') else ''}</label>
-            <input type="file" name="download_file" class="w-full text-sm">
+            <div class="flex items-center gap-2">
+              <input type="file" name="download_file" id="download_file_input" class="flex-1 min-w-0 text-sm">
+              <button type="button" onclick="document.getElementById('download_file_input').value=''" class="shrink-0 text-xs text-red-500 border border-red-200 rounded-lg px-2 py-1.5 whitespace-nowrap">✕ پاک کردن</button>
+            </div>
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">برچسب دکمهٔ دانلود</label>
             <input name="download_label" value="{html.escape(str(it.get('download_label') or ''))}" class="w-full border rounded-lg p-2 text-sm" placeholder="مثلاً: دانلود PDF">
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label class="block text-xs text-gray-500 mb-1">دسته‌بندی</label>
             <select name="category_id" class="w-full border rounded-lg p-2 text-sm">
@@ -11373,16 +11366,17 @@ def _tutorial_form(it=None, categories=None):
             <input name="tags" value="{html.escape(tags_str)}" class="w-full border rounded-lg p-2 text-sm" placeholder="اپل، آموزش، مبتدی">
           </div>
         </div>
-        <div class="grid grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">تاریخ انتشار</label>
-            <input type="date" name="publish_date" value="{html.escape(str(it.get('publish_date') or ''))}" class="w-full border rounded-lg p-2 text-sm">
+            <label class="block text-xs text-gray-500 mb-1">تاریخ انتشار (شمسی)</label>
+            <input type="text" name="publish_date_fa" id="pubdate_fa" value="{pubdate_fa}" placeholder="۱۴۰۴/۰۱/۰۱"
+              class="w-full border rounded-lg p-2 text-sm" autocomplete="off">
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">ترتیب نمایش</label>
             <input type="number" name="sort_order" value="{it.get('sort_order', 0)}" class="w-full border rounded-lg p-2 text-sm">
           </div>
-          <div class="flex items-end">
+          <div class="flex items-end pb-2">
             <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="featured" value="1" {checked_featured}> ⭐️ آموزش ویژه</label>
           </div>
         </div>
@@ -11464,7 +11458,7 @@ async def tutorials_save(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
-    from db import add_tutorial, update_tutorial, get_tutorial
+    from db import add_tutorial, update_tutorial, get_tutorial, jalali_str_to_gregorian_iso
 
     form = await request.form()
     tid = str(form.get("tid") or "").strip()
@@ -11507,6 +11501,9 @@ async def tutorials_save(request: Request):
     except Exception:
         sort_order = 0
 
+    from datetime import date as _tut_date
+    publish_date = jalali_str_to_gregorian_iso(str(form.get("publish_date_fa") or "").strip()) or _tut_date.today().isoformat()
+
     fields = dict(
         title=title,
         cover_image=cover_path or "",
@@ -11520,7 +11517,7 @@ async def tutorials_save(request: Request):
         category_id=category_id,
         tags=json.dumps(tags, ensure_ascii=False),
         status=str(form.get("status") or "draft"),
-        publish_date=str(form.get("publish_date") or "").strip(),
+        publish_date=publish_date,
         sort_order=sort_order,
         featured=1 if form.get("featured") == "1" else 0,
     )

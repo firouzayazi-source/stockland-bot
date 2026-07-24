@@ -7,6 +7,23 @@ var initData=(tg&&tg.initData)||'',tgUser=(tg&&tg.initDataUnsafe&&tg.initDataUns
 var app=new Framework7({el:'#app',name:'استوک‌لند',theme:'ios',darkMode:'auto',popup:{closeByBackdropClick:true}});
 window._slApp=app;window._slApi=function(){return api.apply(null,arguments)};window._slEsc=function(){return esc.apply(null,arguments)};window._slFmt=function(){return fmt.apply(null,arguments)};window._slInitData=initData;window._slTg=tg;
 
+/* داخل مینی‌اپ تلگرام، navigation طبیعی a[target=_blank] قابل‌اعتماد نیست —
+   همهٔ این لینک‌ها (خبر، دانلود، …) رو از طریق پل جاوااسکریپت تلگرام باز می‌کنیم. */
+if(inTG){
+  document.addEventListener('click',function(ev){
+    var a=ev.target.closest('a[target="_blank"]');
+    if(!a)return;
+    var href=a.getAttribute('href');
+    if(!href||href==='#')return;
+    ev.preventDefault();
+    try{
+      if(/^https:\/\/t\.me\//i.test(href)&&tg.openTelegramLink){tg.openTelegramLink(href)}
+      else if(tg.openLink){tg.openLink(href,{try_instant_view:false})}
+      else{window.open(href,'_blank')}
+    }catch(e){window.open(href,'_blank')}
+  },true);
+}
+
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function nl2br(s){return esc(s).replace(/\r?\n/g,'<br>')}
 /* قالب‌بندی سبک مقاله: **بولد**، خط‌های شروع‌شده با «- » به‌صورت بولت، لینک خودکار، شکست خط */
@@ -389,33 +406,54 @@ function openTutorial(tid){
 }
 window.openTutorial=openTutorial;
 
-/* ═══ اخبار تکنولوژی — فقط فید RSS زندهٔ وبلاگ، بدون هیچ محتوای داخلی ═══ */
-var _nw=0;
-function loadNews(force){
-  if(_nw&&!force)return;_nw=1;
+/* ═══ اخبار تکنولوژی — فقط فید RSS زندهٔ وبلاگ، بدون هیچ محتوای داخلی، بدون محدودیت تعداد ═══ */
+var _nwLoaded=false;
+var _newsState={offset:0,limit:20,loading:false};
+var _newsColors=['linear-gradient(120deg,#101826,#7C3AED)','linear-gradient(120deg,#0F172A,#0A63FF)',
+  'linear-gradient(120deg,#1B2B1B,#22C55E)','linear-gradient(120deg,#2B1B1B,#EF4444)',
+  'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
+function loadMoreNews(){
+  if(_newsState.loading)return;
+  _fetchNewsPage(false);
+}
+function loadNews(reset){
+  if(_nwLoaded&&!reset)return;_nwLoaded=true;
+  _fetchNewsPage(true);
+}
+function _fetchNewsPage(reset){
   var box=document.getElementById('news-list');if(!box)return;
-  box.innerHTML=skel(3);
-  var colors=['linear-gradient(120deg,#101826,#7C3AED)','linear-gradient(120deg,#0F172A,#0A63FF)',
-    'linear-gradient(120deg,#1B2B1B,#22C55E)','linear-gradient(120deg,#2B1B1B,#EF4444)',
-    'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
-  api('/news/feed').then(function(d){
+  var moreWrap=document.getElementById('news-more-wrap');
+  if(reset){_newsState.offset=0;box.innerHTML=skel(3);if(moreWrap)moreWrap.hidden=true}
+  if(_newsState.loading)return;_newsState.loading=true;
+  var moreBtn=document.getElementById('news-more-btn');
+  if(moreBtn&&!reset)moreBtn.textContent='در حال بارگذاری…';
+  api('/news/feed?limit='+_newsState.limit+'&offset='+_newsState.offset).then(function(d){
+    _newsState.loading=false;
     var it=(d&&d.items)||[];
-    if(!it.length){
+    if(reset&&!it.length){
       var msg=(d&&d.status==='unset')?'فید اخبار هنوز تنظیم نشده':'هنوز خبری نیست';
       box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📰</span>'+msg+'</div>';
+      if(moreWrap)moreWrap.hidden=true;
       return;
     }
-    box.innerHTML=it.map(function(p,i){
+    var startI=_newsState.offset;
+    var html=it.map(function(p,i){
       return '<a class="sl-post" href="'+esc(p.link)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'+
-        '<div class="sl-post-cv" style="background:'+colors[i%colors.length]+'">'+
+        '<div class="sl-post-cv" style="background:'+_newsColors[(startI+i)%_newsColors.length]+'">'+
         '<span class="sl-post-tag">📰 اخبار</span>'+
         (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'')+
         '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
         '<div class="sl-post-x">'+esc(p.excerpt)+'</div><div class="sl-post-m">'+esc(p.pub_date)+'</div></div></a>';
     }).join('');
-  }).catch(function(){_nw=0;box.innerHTML=err('خطا')+'<button class="sl-retry" onclick="loadNews(true)">تلاش مجدد</button>'});
+    if(reset)box.innerHTML=html;else box.insertAdjacentHTML('beforeend',html);
+    _newsState.offset+=it.length;
+    if(moreWrap)moreWrap.hidden=!(d&&d.has_more);
+    if(moreBtn)moreBtn.textContent='نمایش بیشتر';
+  }).catch(function(){_newsState.loading=false;_nwLoaded=false;if(reset)box.innerHTML=err('خطا')+'<button class="sl-retry" onclick="loadNews(true)">تلاش مجدد</button>'});
 }
 window.loadNews=loadNews;
+var _newsMoreBtn=document.getElementById('news-more-btn');
+if(_newsMoreBtn)_newsMoreBtn.addEventListener('click',loadMoreNews);
 function openC(cid){
   var t=document.getElementById('post-title'),b=document.getElementById('post-body');
   t.textContent='…';b.innerHTML=skel(2);app.popup.open('#post-popup');

@@ -11,7 +11,7 @@
 
 فقط از bot_config (get_cfg/set_cfg) استفاده می‌کنه، جدول جدید لازم نداره:
   NEWS_FEED_URL          دامنهٔ سایت یا آدرس کامل wp-json (تنظیم دستی ادمین)
-  NEWS_FEED_CACHE        JSON آخرین ۱۰ آیتم فچ‌شده
+  NEWS_FEED_CACHE        JSON همهٔ آیتم‌های فچ‌شده (بدون محدودیت تعداد)
   NEWS_FEED_LAST_SYNC    timestamp آخرین فچ موفق
   NEWS_FEED_LAST_STATUS  ok | error
   NEWS_FEED_LAST_ERROR   پیام خطای آخرین تلاش (برای «وضعیت اتصال» تو پنل)
@@ -22,7 +22,8 @@ import json
 from urllib.parse import urlparse
 
 _CACHE_TTL = 900  # ۱۵ دقیقه — برای کاهش فشار روی سرور وبلاگ/ما
-_ITEM_LIMIT = 10
+_PER_PAGE = 100    # حداکثر مجاز خود وردپرس برای هر صفحه
+_MAX_PAGES = 20    # سقف ایمنی برای جلوگیری از حلقهٔ بی‌پایان (تا ۲۰۰۰ پست)
 
 
 def _strip_html(html_str: str) -> str:
@@ -45,9 +46,9 @@ def _normalize_wp_api_url(raw: str) -> str:
     return f"{root}/wp-json/wp/v2/posts"
 
 
-def _parse_wp_posts(posts: list, limit: int = _ITEM_LIMIT) -> list[dict]:
+def _parse_wp_posts(posts: list) -> list[dict]:
     out = []
-    for p in posts[:limit]:
+    for p in posts:
         if not isinstance(p, dict):
             continue
         title = _strip_html((p.get("title") or {}).get("rendered") or "")
@@ -97,20 +98,36 @@ def get_feed(force: bool = False) -> dict:
     try:
         import requests
         sep = "&" if "?" in api_url else "?"
-        fetch_url = f"{api_url}{sep}per_page={_ITEM_LIMIT}&_embed=wp:featuredmedia"
-        r = requests.get(fetch_url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (compatible; StockLandNewsBot/1.0)"})
-        r.raise_for_status()
-        posts = r.json()
-        if not isinstance(posts, list):
-            raise ValueError((posts.get("message") if isinstance(posts, dict) else None) or "پاسخ نامعتبر از REST API وردپرس")
-        items = _parse_wp_posts(posts)
+        all_posts = []
+        for page in range(1, _MAX_PAGES + 1):
+            fetch_url = f"{api_url}{sep}per_page={_PER_PAGE}&page={page}&_embed=wp:featuredmedia"
+            r = requests.get(fetch_url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (compatible; StockLandNewsBot/1.0)"})
+            # صفحهٔ آخر رد شده — یعنی دیگه پستی نیست، خطای طبیعی، نه واقعی
+            if r.status_code == 400 and page > 1:
+                break
+            if r.status_code != 200:
+                snippet = (r.text or "")[:150].strip().replace("\n", " ")
+                raise ValueError(f"HTTP {r.status_code} از سرور وردپرس — پاسخ: {snippet or '(خالی)'}")
+            try:
+                posts = r.json()
+            except Exception:
+                snippet = (r.text or "")[:150].strip().replace("\n", " ")
+                raise ValueError(f"پاسخ JSON نامعتبر (HTTP {r.status_code}) — احتمالاً آدرس wp-json اشتباهه یا صفحهٔ HTML/خطا برگشته. متن پاسخ: {snippet or '(خالی)'}")
+            if not isinstance(posts, list):
+                raise ValueError((posts.get("message") if isinstance(posts, dict) else None) or "پاسخ نامعتبر از REST API وردپرس")
+            if not posts:
+                break
+            all_posts.extend(posts)
+            if len(posts) < _PER_PAGE:
+                break
+        items = _parse_wp_posts(all_posts)
         set_cfg("NEWS_FEED_CACHE", json.dumps(items, ensure_ascii=False))
         set_cfg("NEWS_FEED_LAST_SYNC", str(now))
         set_cfg("NEWS_FEED_LAST_STATUS", "ok")
         set_cfg("NEWS_FEED_LAST_ERROR", "")
         return {"items": items, "last_sync": now, "status": "ok", "error": ""}
     except Exception as e:
-        err = str(e)[:200]
+        err = str(e)[:300]
         set_cfg("NEWS_FEED_LAST_STATUS", "error")
         set_cfg("NEWS_FEED_LAST_ERROR", err)
         try:

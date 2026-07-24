@@ -56,6 +56,49 @@ def _to_jalali(gy, gm, gd):
         diff -= ml
     return jy, 12, 29
 
+
+def _jalali_nowruz(jy):
+    """تاریخ میلادی نوروز سال شمسی jy — با همون جدول/منطق _to_jalali (برای اطمینان از تبدیل دوطرفهٔ سازگار)."""
+    if jy in _NRZ:
+        return _NRZ[jy]
+    d = 0
+    if jy > _REF_JY:
+        for y in range(_REF_JY, jy): d += 366 if _is_leap_j(y) else 365
+        return _REF_G + _td(days=d)
+    for y in range(jy, _REF_JY): d += 366 if _is_leap_j(y) else 365
+    return _REF_G - _td(days=d)
+
+
+def _from_jalali(jy, jm, jd):
+    """تبدیل شمسی به میلادی — معکوس دقیق _to_jalali (همون جدول نوروز/طول ماه‌ها، تبدیل دوطرفه تضمین‌شده)."""
+    try:
+        jy, jm, jd = int(jy), int(jm), int(jd)
+        nrz = _jalali_nowruz(jy)
+        mlen = [31]*6+[30]*5+[30 if _is_leap_j(jy) else 29]
+        jm = max(1, min(12, jm))
+        jd = max(1, min(mlen[jm-1], jd))
+        g = nrz + _td(days=sum(mlen[:jm-1]) + (jd - 1))
+        return g.year, g.month, g.day
+    except Exception:
+        n = _date.today()
+        return n.year, n.month, n.day
+
+
+def jalali_str_to_gregorian_iso(s: str) -> str:
+    """رشتهٔ شمسی «۱۴۰۴/۰۱/۰۱» یا «1404-01-01» رو به ISO میلادی (YYYY-MM-DD) تبدیل می‌کنه.
+    ورودی نامعتبر → رشتهٔ خالی."""
+    if not s:
+        return ""
+    s = str(s).strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    import re
+    nums = re.findall(r"\d+", s)
+    if len(nums) != 3:
+        return ""
+    jy, jm, jd = nums
+    gy, gm, gd = _from_jalali(jy, jm, jd)
+    return f"{gy:04d}-{gm:02d}-{gd:02d}"
+
+
 _FA_TBL = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
