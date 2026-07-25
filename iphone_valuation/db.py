@@ -92,6 +92,29 @@ _IPHONE_CATALOG = [
 # دستهٔ «component» — کدوم قسمت دستگاه خرابه (چندانتخابی، فقط وقتی کاربر وضعیت کلی
 # دستگاه رو «نیازمند تعمیر» انتخاب کنه پرسیده می‌شه، چون اونجاست که واقعاً روی
 # قیمت اثر داره).
+PART_OPTIONS = [("LL", "LL/A"), ("ZA", "ZA/A"), ("CH", "CH/A"), ("OTHER", "سایر")]
+
+# اندازه‌های استاندارد حافظه (برای دراپ‌داون ثبت ظرفیت تازه در پنل — نه محدودیت سختگیرانه،
+# "سایر" همیشه به‌عنوان راه‌فرار برای مقدار دلخواه موجوده)
+STANDARD_CAPACITIES = ["4GB", "8GB", "16GB", "32GB", "64GB", "128GB", "256GB", "512GB", "1TB", "2TB"]
+
+
+def capacity_sort_key(label: str):
+    """برای مرتب‌سازی برچسب‌های ظرفیت به ترتیب اندازهٔ واقعی (نه الفبایی) — مثلاً
+    ۶۴GB باید قبل از ۲۵۶GB بیاد، نه بعدش (که ترتیب رشته‌ای اشتباه می‌ده)."""
+    s = (label or "").strip().upper()
+    try:
+        if s.endswith("TB"):
+            return float(s[:-2]) * 1024
+        if s.endswith("GB"):
+            return float(s[:-2])
+        if s.endswith("MB"):
+            return float(s[:-2]) / 1024
+        return float("".join(ch for ch in s if ch.isdigit() or ch == ".") or 0)
+    except ValueError:
+        return 0.0
+
+
 COMPONENT_DEFAULTS = [
     ("component", "comp_faceid", "Face ID", -15, 1),
     ("component", "comp_screen", "صفحه نمایش / تاچ", -20, 2),
@@ -161,6 +184,7 @@ def ensure_schema():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             model_id INTEGER NOT NULL,
             capacity_label TEXT NOT NULL,
+            part_number TEXT NOT NULL DEFAULT '',
             base_price INTEGER NOT NULL DEFAULT 0,
             buy_price_ref INTEGER NOT NULL DEFAULT 0,
             sell_price_ref INTEGER NOT NULL DEFAULT 0,
@@ -169,6 +193,15 @@ def ensure_schema():
             active INTEGER NOT NULL DEFAULT 1,
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );""")
+        # مهاجرت برای نصب‌های قبلی که iv_capacities رو بدون این ستون ساخته بودن — قیمت هر
+        # گوشی بسته به پارت (LL/ZA/CH/سایر) فرق می‌کنه، پس این ستون برای قیمت‌گذاری دقیق لازمه.
+        # ردیف‌های قدیمی part_number='' می‌مونن و به‌عنوان «قیمت پیش‌فرض بدون پارت مشخص»
+        # (fallback در resolve_capacity) همچنان کار می‌کنن — هیچ دیتایی از دست نمی‌ره.
+        try:
+            conn.execute("ALTER TABLE iv_capacities ADD COLUMN part_number TEXT NOT NULL DEFAULT '';")
+            conn.commit()
+        except Exception:
+            pass
         conn.execute("""CREATE TABLE IF NOT EXISTS iv_colors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             model_id INTEGER NOT NULL,
@@ -458,6 +491,21 @@ def update_model(model_id: int, **fields) -> None:
         conn.close()
 
 
+def delete_model(model_id: int) -> None:
+    """حذف کامل مدل + همهٔ ظرفیت/قیمت‌ها و رنگ‌هاش. تاریخچهٔ کارشناسی‌های قبلی
+    (iv_valuations/iv_transactions) دست‌نخورده می‌مونه — فقط model_id توشون یتیم می‌مونه،
+    دقیقاً مثل رفتار پروژه با محصولات حذف‌شده در سفارش‌های قدیمی."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM iv_capacities WHERE model_id=?;", (model_id,))
+        conn.execute("DELETE FROM iv_colors WHERE model_id=?;", (model_id,))
+        conn.execute("DELETE FROM iv_models WHERE id=?;", (model_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ─── ظرفیت/قیمت‌ها ───────────────────────────────────────────────────────
 
 def list_capacities(model_id: int | None = None, active_only: bool = True) -> list[dict]:
@@ -489,16 +537,16 @@ def get_capacity(cap_id: int) -> dict | None:
 
 def create_capacity(model_id: int, capacity_label: str, base_price: int,
                      buy_price_ref: int, sell_price_ref: int,
-                     fx_ref_rate: int = 0, demand_percent: float = 0) -> int:
+                     fx_ref_rate: int = 0, demand_percent: float = 0, part_number: str = "") -> int:
     ensure_schema()
     conn = _conn()
     try:
         cur = conn.execute(
             "INSERT INTO iv_capacities "
-            "(model_id, capacity_label, base_price, buy_price_ref, sell_price_ref, fx_ref_rate, demand_percent) "
-            "VALUES (?,?,?,?,?,?,?);",
-            (model_id, capacity_label.strip(), base_price, buy_price_ref, sell_price_ref,
-             fx_ref_rate, demand_percent))
+            "(model_id, capacity_label, part_number, base_price, buy_price_ref, sell_price_ref, "
+            "fx_ref_rate, demand_percent) VALUES (?,?,?,?,?,?,?,?);",
+            (model_id, capacity_label.strip(), (part_number or "").strip().upper(), base_price,
+             buy_price_ref, sell_price_ref, fx_ref_rate, demand_percent))
         conn.commit()
         return cur.lastrowid
     finally:
@@ -509,7 +557,7 @@ def update_capacity(cap_id: int, **fields) -> None:
     ensure_schema()
     if not fields:
         return
-    allowed = {"capacity_label", "base_price", "buy_price_ref", "sell_price_ref",
+    allowed = {"capacity_label", "part_number", "base_price", "buy_price_ref", "sell_price_ref",
                "fx_ref_rate", "demand_percent", "active"}
     cols = [k for k in fields if k in allowed]
     if not cols:
@@ -522,6 +570,60 @@ def update_capacity(cap_id: int, **fields) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def delete_capacity(cap_id: int) -> None:
+    ensure_schema()
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM iv_capacities WHERE id=?;", (cap_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def capacity_exists(model_id: int, capacity_label: str, part_number: str = "") -> bool:
+    """چک تکراری‌نبودن قبل از افزودن — یه (مدل، ظرفیت، پارت) نباید دوبار ثبت بشه، وگرنه
+    resolve_capacity نمی‌دونه کدوم ردیف رو انتخاب کنه."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number=? LIMIT 1;",
+            (model_id, capacity_label.strip(), (part_number or "").strip().upper())).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "") -> dict | None:
+    """قیمت دقیق (مدل+ظرفیت+پارت) رو پیدا می‌کنه؛ اگه قیمت اختصاصی برای اون پارت ثبت
+    نشده باشه، به ردیف عمومی بدون‌پارت (part_number='') همون ظرفیت fallback می‌کنه —
+    این یعنی ادمین فقط جایی که قیمت واقعاً فرق داره لازمه پارت‌به‌پارت وارد کنه."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        part = (part_number or "").strip().upper()
+        label = capacity_label.strip()
+        row = conn.execute(
+            "SELECT * FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number=? "
+            "AND active=1 LIMIT 1;", (model_id, label, part)).fetchone()
+        if not row and part:
+            row = conn.execute(
+                "SELECT * FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number='' "
+                "AND active=1 LIMIT 1;", (model_id, label)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_capacity_labels(model_id: int, active_only: bool = True) -> list[str]:
+    """برچسب‌های یکتای ظرفیت این مدل، صرف‌نظر از پارت (برای مرحلهٔ انتخاب ظرفیت در ویزارد
+    ربات — چون کاربر یه ظرفیت رو انتخاب می‌کنه، نه یه ردیف قیمت خاص)، مرتب‌شده به ترتیب
+    اندازهٔ واقعی."""
+    caps = list_capacities(model_id=model_id, active_only=active_only)
+    labels = sorted({c["capacity_label"] for c in caps}, key=capacity_sort_key)
+    return labels
 
 
 # ─── رنگ‌ها ──────────────────────────────────────────────────────────────
