@@ -11838,7 +11838,7 @@ _IV_CATEGORY_LABELS = {
     "condition": "وضعیت کلی دستگاه",
     "battery": "سلامت باتری",
     "repair": "تعمیرات / بازشدگی",
-    "registry": "رجیستری",
+    "registry": "وضعیت مالکیت",
     "box": "جعبه و لوازم",
     "cosmetic": "وضعیت ظاهری",
     "cable": "کابل",
