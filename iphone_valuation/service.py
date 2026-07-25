@@ -70,6 +70,7 @@ def valuate(payload: dict) -> dict:
         "contributions": price_result["contributions"],
         "sim_type": payload.get("sim_type") or "",
         "part_number": payload.get("part_number") or "",
+        "color": payload.get("color") or "",
     }
 
     try:
