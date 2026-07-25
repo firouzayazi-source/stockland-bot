@@ -541,21 +541,20 @@ window.openC=openC;
 /* ═══ حساب ═══ */
 var _m=0;
 function loadMe(){if(_m)return;_m=1;
-  var body=document.getElementById('me-body'),nm=document.getElementById('me-name');
+  var body=document.getElementById('me-body');
   var foot='<div class="sl-group" style="margin-top:12px"><a class="sl-row" href="https://t.me/'+botUser+'" target="_blank">'+
     '<span class="sl-ric" style="background:#54A9EB">🤖</span><span class="sl-row-grow">باز کردن ربات</span><span class="sl-chev">‹</span></a></div>'+
     '<div class="sl-foot">استوک‌لند · نسخه ۲.۰</div>';
   function row(c,i,l,cmd,x){return '<a class="sl-row" href="https://t.me/'+botUser+'?start='+cmd+'" target="_blank"><span class="sl-ric" style="background:'+c+'">'+i+'</span><span class="sl-row-grow">'+l+'</span>'+(x||'')+'<span class="sl-chev">‹</span></a>'}
   if(!loggedIn){
     // این حالت فقط خارج از مینی‌اپ (وب‌سایت خالص) پیش میاد — داخل تلگرام initData همیشه معتبره
-    nm.textContent='حساب من';
     body.innerHTML='<div class="sl-login"><div class="sl-login-e">🔐</div><div class="sl-login-t">ورود به حساب</div>'+
       '<div class="sl-login-s">برای مشاهده کیف پول، خرید و سفارش‌ها وارد شوید.</div>'+
       '<div id="tg-login-widget" style="margin-top:16px;display:flex;justify-content:center"></div></div>';
     startWebLogin('tg-login-widget');
     return;
   }
-  var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';nm.textContent=un;
+  var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';
   body.innerHTML='<div class="sl-me sl-me-c">'+
     '<div class="sl-ava-wrap" id="me-ava-wrap">'+
       '<div class="sl-ava" id="me-ava">'+esc(un.charAt(0))+'</div>'+
