@@ -213,24 +213,33 @@ html.dark .sl-pic{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-post-m{color:var(--mu);font-size:11px;margin-top:9px}
 .sl-me{padding:16px 20px 4px}
 .sl-me-c{display:flex;flex-direction:column;align-items:center;text-align:center;gap:2px;
- padding:30px 20px 16px;position:relative;overflow:hidden}
-.sl-me-c::before{content:'';position:absolute;top:0;left:0;right:0;height:130px;
- background:linear-gradient(180deg,rgba(10,99,255,.10),transparent);pointer-events:none}
+ padding:36px 20px 28px;position:relative;overflow:hidden;
+ background:linear-gradient(180deg,
+   #4255FF 0%,#4255FF 55%,#4A66F8 65%,#5C82F8 73%,#7CA2F8 80%,#A6C2F9 87%,#CCDCF8 93%,#E6EDF8 97%,var(--bg) 100%)}
+html.dark .sl-me-c{
+ background:linear-gradient(180deg,
+   #2838D8 0%,#2838D8 55%,#2230B8 66%,#182282 75%,#101656 83%,#090C30 90%,#040616 96%,var(--bg) 100%)}
+.sl-me-c::before{content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+ background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+ opacity:.028;mix-blend-mode:overlay;
+ -webkit-mask-image:linear-gradient(180deg,#000 0%,#000 62%,transparent 84%);
+ mask-image:linear-gradient(180deg,#000 0%,#000 62%,transparent 84%)}
 .sl-ava-wrap{position:relative;width:96px;height:96px;margin-bottom:12px;z-index:1;cursor:pointer}
-.sl-ava{width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg,var(--br),#7DA6FF);
- display:grid;place-items:center;color:#fff;font-weight:800;font-size:36px;
- box-shadow:0 8px 22px rgba(10,99,255,.28);border:3px solid var(--card)}
+.sl-ava{width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg,#C88A4A,#8B5A2B);
+ display:grid;place-items:center;color:#fff;font-weight:800;font-size:38px;
+ box-shadow:0 8px 22px rgba(0,0,0,.25);border:3px solid rgba(255,255,255,.85)}
 .sl-ava-img{position:absolute;inset:0;width:96px;height:96px;border-radius:50%;object-fit:cover;
- box-shadow:0 8px 22px rgba(10,99,255,.2);border:3px solid var(--card)}
+ box-shadow:0 8px 22px rgba(0,0,0,.25);border:3px solid rgba(255,255,255,.85)}
 .sl-ava-spin{position:absolute;inset:0;border-radius:50%;background:rgba(0,0,0,.45);display:none;place-items:center}
 .sl-spin{width:22px;height:22px;border-radius:50%;border:2.5px solid rgba(255,255,255,.35);
  border-top-color:#fff;animation:sl-spin .7s linear infinite}
 @keyframes sl-spin{to{transform:rotate(360deg)}}
 .sl-ava-edit{position:absolute;bottom:0;right:0;width:30px;height:30px;border-radius:50%;
- background:var(--br);color:#fff;border:3px solid var(--card);display:grid;place-items:center;
- font-size:13px;cursor:pointer;padding:0;box-shadow:0 2px 8px rgba(0,0,0,.2)}
-.sl-me-n{font-size:19px;font-weight:800;z-index:1;position:relative}
-.sl-me-u{font-size:12.5px;color:var(--mu);direction:ltr;text-align:center;z-index:1;position:relative;margin-top:2px}
+ background:#fff;color:var(--br);border:3px solid rgba(255,255,255,.85);display:grid;place-items:center;
+ font-size:13px;cursor:pointer;padding:0;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.sl-me-n{font-size:19px;font-weight:800;z-index:1;position:relative;color:#fff;
+ text-shadow:0 2px 10px rgba(8,8,80,.25)}
+.sl-me-u{font-size:12.5px;color:rgba(255,255,255,.82);direction:ltr;text-align:center;z-index:1;position:relative;margin-top:2px}
 .sl-wallet{margin:14px 20px 0;border-radius:22px;padding:18px;
  background:linear-gradient(140deg,#0B1B4A,#12318F 55%,#0A63FF);color:#fff;position:relative;overflow:hidden}
 .sl-wallet-glow{position:absolute;width:190px;height:190px;border-radius:50%;

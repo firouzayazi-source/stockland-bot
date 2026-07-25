@@ -557,7 +557,7 @@ function loadMe(){if(_m)return;_m=1;
   var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';
   body.innerHTML='<div class="sl-me sl-me-c">'+
     '<div class="sl-ava-wrap" id="me-ava-wrap">'+
-      '<div class="sl-ava" id="me-ava">'+esc(un.charAt(0))+'</div>'+
+      '<div class="sl-ava" id="me-ava">🥉</div>'+
       '<img class="sl-ava-img" id="me-ava-img" style="display:none" alt="">'+
       '<div class="sl-ava-spin" id="me-ava-spin" style="display:none"><div class="sl-spin"></div></div>'+
       '<button class="sl-ava-edit" id="me-ava-edit" type="button" title="تغییر عکس پروفایل">📷</button>'+
@@ -580,7 +580,10 @@ function loadMe(){if(_m)return;_m=1;
     (inTG?'':'<div class="sl-group" style="margin-top:12px"><a class="sl-row" href="#" id="me-logout-row"><span class="sl-ric" style="background:#EF4444">🚪</span><span class="sl-row-grow">خروج از حساب</span></a></div>')+
     foot;
   api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
-  api('/me/partner',true).then(function(d){if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}}).catch(function(){});
+  api('/me/partner',true).then(function(d){
+    if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}
+    if(d.is_partner&&d.tier)setTierAvatar(d.tier.name,d.tier.icon);
+  }).catch(function(){});
   renderCheckinCard();
   initAvatarUpload();
   api('/me/profile',true).then(function(d){if(d&&d.avatar_url)setAvatarImg(d.avatar_url)}).catch(function(){});
@@ -611,6 +614,18 @@ function loadMe(){if(_m)return;_m=1;
 window.loadMe=loadMe;
 
 /* ─── عکس پروفایل ─── */
+var TIER_GRADIENTS={
+  'برنز':'linear-gradient(135deg,#C88A4A,#8B5A2B)',
+  'نقره‌ای':'linear-gradient(135deg,#D6D9DD,#9AA0A6)',
+  'طلایی':'linear-gradient(135deg,#F6D465,#D9A62A)',
+  'الماس':'linear-gradient(135deg,#8FE3E8,#3AA7C4)'
+};
+function setTierAvatar(tierName,tierIcon){
+  var ava=document.getElementById('me-ava');
+  if(!ava)return;
+  ava.textContent=tierIcon||'🥉';
+  ava.style.background=TIER_GRADIENTS[tierName]||TIER_GRADIENTS['برنز'];
+}
 function setAvatarImg(url){
   var img=document.getElementById('me-ava-img'),lt=document.getElementById('me-ava');
   if(!img)return;
