@@ -509,6 +509,7 @@ client_body_timeout 300s;
 | نوار پیشرفت سطح بعدی همکار | `GET /me/partner` (فیلد `next_tier`) | `partner_tiers` (`core/partners.next_tier_progress`) | مدیریت سطوح همکاری در پنل (`partner_tiers`) |
 | اشتراک‌گذاری محصول | (فقط JS، `tg.openTelegramLink('t.me/share/url?...')` با دیپ‌لینک `?start=buy_{id}`) | — | — |
 | عکس محصول (با fallback به آیکون دسته) | `GET /categories`, `GET /products/{id}` (فیلد `image_url`) | `products.image_url` | فیلد آپلود در فرم افزودن/ویرایش محصول پنل (`_save_tutorial_file` مسیر `app_media/tutorials/products/...` — نام پوشه ظاهریه، اثر عملکردی نداره) |
+| عکس پروفایل کاربر (آپلود خودش، آواتار ۹۶px وسط تب حساب) | `GET /me/profile`, `POST /me/avatar` (روی دیسک `app_media/avatars/{uid}.ext`، نه تلگرام — بدون Pillow، برش دایره‌ای فقط CSS) | `users.avatar_url` | — (کاملاً خودمدیریتی کاربر، بدون نیاز به تأیید ادمین) |
 
 ### الگوهای JS قابل‌استفادهٔ مجدد در `app.js`
 - `prodImgHtml(p)` — رندر عکس محصول با fallback ایموجی/آیکون؛ همیشه برای هر UI جدید که محصول نشون می‌ده استفاده شود، نه `<img>` مستقیم.
