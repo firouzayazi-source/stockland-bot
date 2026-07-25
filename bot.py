@@ -4233,12 +4233,14 @@ def _iv_ask_features(chat_id, uid):
 
 
 def _iv_ask_part(chat_id, uid):
+    # لیست پارت‌ها از جدول iv_parts (نه ثابت هاردکدشدهٔ پایتون) — ادمین می‌تونه از پنل
+    # پارت جدید اضافه کنه بدون نیاز به تغییر کد؛ هر پارت یه ردیف جدا (نه kb.row ثابت سه‌تایی)
+    # چون تعدادشون دیگه محدود به سه‌تای هاردکدشده نیست.
     import iphone_valuation.db as ivdb
     kb = types.InlineKeyboardMarkup()
-    row = [types.InlineKeyboardButton(label, callback_data=f"ivw_part_{code}")
-           for code, label in ivdb.PART_OPTIONS if code != "OTHER"]
-    kb.row(*row)
-    kb.row(types.InlineKeyboardButton("سایر", callback_data="ivw_part_OTHER"))
+    for p in ivdb.list_parts(active_only=True):
+        kb.add(types.InlineKeyboardButton(p["label"], callback_data=f"ivw_part_{p['code']}"))
+    kb.add(types.InlineKeyboardButton("سایر", callback_data="ivw_part_OTHER"))
     bot.send_message(chat_id, "🔠 پارت نامبر دستگاه؟ (آخر پک یا زیر تنظیمات > عمومی > اطلاعات دستگاه)", reply_markup=kb)
 
 
@@ -4352,7 +4354,7 @@ def _iv_finalize(chat_id, uid):
     import iphone_valuation.db as ivdb
     sim_labels = {"single": "تک سیم", "dual": "دو سیم", "esim": "eSIM"}
     sim_label = sim_labels.get(result.get("sim_type", ""), "—")
-    part_label_map = dict(ivdb.PART_OPTIONS)
+    part_label_map = {p["code"]: p["label"] for p in ivdb.list_parts(active_only=False)}
     part_display = part_label_map.get(result.get("part_number") or "", result.get("part_number") or "—")
     color_display = result.get("color") or "—"
     txt = (
