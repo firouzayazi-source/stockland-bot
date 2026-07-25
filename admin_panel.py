@@ -11834,12 +11834,6 @@ async def tutorial_categories_delete(request: Request, cid: int):
 # ─── کارشناسی هوشمند قیمت آیفون ────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
 
-_IV_COMMON_COLORS = [
-    "مشکی", "سفید", "نقره‌ای", "خاکستری فضایی", "طلایی", "رزگلد",
-    "آبی", "سبز", "بنفش", "صورتی", "زرد", "قرمز (PRODUCT RED)",
-    "تیتانیوم طبیعی", "تیتانیوم آبی", "تیتانیوم سفید", "تیتانیوم مشکی", "مرجانی",
-]
-
 _IV_CATEGORY_LABELS = {
     "condition": "وضعیت کلی دستگاه",
     "battery": "سلامت باتری",
@@ -11914,8 +11908,12 @@ async def iphone_dashboard(request: Request, flash: str = ""):
 
     <div class="grid md:grid-cols-2 gap-4 mb-4">
       <a href="/admin/iphone/models" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
-        <div class="font-medium text-sm mb-1">📦 مدل‌ها و قیمت‌ها</div>
-        <div class="text-xs text-gray-400">مدل، ظرفیت، قیمت پایه/خرید/فروش، عرضه و تقاضا</div>
+        <div class="font-medium text-sm mb-1">🗂 مدل‌ها</div>
+        <div class="text-xs text-gray-400">نام/سری، ظرفیت‌ها، رنگ‌ها، کلید اثر رنگ/پارت روی قیمت</div>
+      </a>
+      <a href="/admin/iphone/prices" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
+        <div class="font-medium text-sm mb-1">💰 قیمت‌ها</div>
+        <div class="text-xs text-gray-400">لیست کامل قیمت‌های ثبت‌شده + ثبت سریع قیمت تازه</div>
       </a>
       <a href="/admin/iphone/coefficients" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
         <div class="font-medium text-sm mb-1">⚖️ ضرایب قیمت و امتیاز</div>
@@ -11955,6 +11953,8 @@ async def iphone_toggle(request: Request):
 
 @router.get("/iphone/models", response_class=HTMLResponse)
 async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
+    """این صفحه فقط کاتالوگ (نام/سری/ظرفیت‌ها/رنگ‌ها/کلید اثر رنگ‌وپارت روی قیمت) رو مدیریت
+    می‌کنه — ثبت قیمت واقعی جای دیگه‌ست: /admin/iphone/prices."""
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
@@ -11963,123 +11963,21 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
 
     blocks = ""
     for m in models:
-        caps = ivdb.list_capacities(model_id=m["id"], active_only=False)
+        storages = ivdb.list_storages(m["id"], active_only=False)
         colors = ivdb.list_colors(model_id=m["id"], active_only=False)
-        no_price = any(not c["base_price"] for c in caps)
-        # پارت فقط برای مدل‌هایی معنی داره که dual_sim_parts پرشون کرده (از XS Max به بعد) —
-        # همون فلگی که سیاست تک‌سیم/دوسیم ربات ازش استفاده می‌کنه (بخش ۲۲ کارشناسی آیفون)
         part_relevant = bool((m.get("dual_sim_parts") or "").strip())
-        part_label_map = dict(ivdb.PART_OPTIONS)
 
-        def _iv_field(label, name, value, decimal=False):
-            # type="text"+inputmode (نه type="number") چون کیبورد فارسی موبایل رقم فارسی رو
-            # داخل input type=number اصلاً وارد نمی‌کنه (نه پارس، رد می‌شه) — همون علت واقعی
-            # «ذخیره نمی‌شه» و پرش/لرزش فیلد روی موبایل؛ پارس رقم فارسی سمت سرور با _iv_parse_num
-            im = "decimal" if decimal else "numeric"
-            return (f'<div class="flex flex-col gap-0.5">'
-                    f'<span class="text-[9px] text-gray-400">{label}</span>'
-                    f'<input type="text" inputmode="{im}" name="{name}" value="{value}" '
-                    f'class="border rounded p-1.5 w-full text-xs" dir="ltr"></div>')
+        storage_chips = "".join(f"""
+          <span class="inline-flex items-center gap-1 bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs {'opacity-40' if not s['active'] else ''}">
+            {html.escape(s['label'])}
+            <button type="submit" form="iv-stor-del-{s['id']}" class="text-red-400">×</button>
+          </span>""" for s in storages) or '<span class="text-xs text-gray-400">ظرفیتی ثبت نشده.</span>'
+        storage_del_forms = "".join(f"""
+          <form id="iv-stor-del-{s['id']}" method="post" action="/admin/iphone/storages/{s['id']}/delete"
+                onsubmit="return confirm('این ظرفیت و هر قیمتی که براش ثبت شده حذف بشه؟')">
+            <input type="hidden" name="model_id" value="{m['id']}">
+          </form>""" for s in storages)
 
-        def _part_badge(pn):
-            if not pn:
-                return '<span class="text-gray-400">همهٔ پارت‌ها</span>'
-            return f'<span class="text-indigo-600 font-medium">{e(part_label_map.get(pn, pn))}</span>'
-
-        def _color_badge(clr):
-            if not clr:
-                return '<span class="text-gray-400">همهٔ رنگ‌ها</span>'
-            return f'<span class="text-emerald-600 font-medium">🎨 {html.escape(clr)}</span>'
-
-        groups: dict[str, list] = {}
-        for c in sorted(caps, key=lambda c: ivdb.capacity_sort_key(c["capacity_label"])):
-            groups.setdefault(c["capacity_label"], []).append(c)
-
-        cap_rows = ""
-        for label, rows in groups.items():
-            cap_rows += f'<div class="font-medium text-sm px-1 pt-3 pb-1 border-t mt-2">{html.escape(label)}</div>'
-            for c in rows:
-                badge_bits = ([_part_badge(c["part_number"])] if part_relevant else []) + [_color_badge(c["color"])]
-                cap_rows += f"""
-              <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="py-2 text-sm">
-                <input type="hidden" name="model_id" value="{m['id']}">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs">{' · '.join(badge_bits)}</span>
-                  <div class="flex items-center gap-3">
-                    <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
-                    <button type="submit" form="iv-cap-del-{c['id']}" class="text-red-500 text-xs">حذف</button>
-                  </div>
-                </div>
-                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {_iv_field("قیمت پایه (بازار)", "base_price", c['base_price'])}
-                  {_iv_field("قیمت خرید فروشگاه", "buy_price_ref", c['buy_price_ref'])}
-                  {_iv_field("قیمت فروش فروشگاه", "sell_price_ref", c['sell_price_ref'])}
-                  {_iv_field("نرخ ارز مرجع", "fx_ref_rate", c['fx_ref_rate'])}
-                  {_iv_field("عرضه/تقاضا٪", "demand_percent", c['demand_percent'], decimal=True)}
-                </div>
-                <button class="mt-2.5 bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">ذخیره</button>
-              </form>
-              <form id="iv-cap-del-{c['id']}" method="post" action="/admin/iphone/capacities/{c['id']}/delete"
-                    onsubmit="return confirm('این ردیف قیمت حذف بشه؟')">
-                <input type="hidden" name="model_id" value="{m['id']}">
-              </form>"""
-        cap_rows = cap_rows or '<div class="text-xs text-gray-400 py-2">ظرفیتی ثبت نشده.</div>'
-
-        # فرم واحد ثبت/به‌روزرسانی قیمت — همون «منوی تعریف» که مالک پروژه خواست: ظرفیت + رنگ +
-        # (اگه لازم بود) پارت، هرکدوم فقط از بین گزینه‌های خودِ همین مدل، بعد قیمت‌ها، یک دکمهٔ
-        # ذخیره. ذخیره روی ترکیب (ظرفیت+پارت+رنگ) upsert می‌کنه — نه رد تکراری، نه خطای مبهم.
-        cap_opts_model = "".join(f'<option value="{e(lbl)}">{html.escape(lbl)}</option>'
-                                  for lbl in ivdb.list_capacity_labels(m["id"], active_only=False))
-        color_pricing_on = bool(m.get("color_pricing"))
-        part_pricing_on = part_relevant and bool(m.get("part_pricing"))
-        color_select_html = ""
-        if color_pricing_on:
-            color_opts_model = "".join(f'<option value="{e(c["name"])}">{html.escape(c["name"])}</option>' for c in colors)
-            color_select_html = f"""
-              <div class="flex flex-col gap-0.5">
-                <span class="text-[9px] text-gray-400">رنگ</span>
-                <select name="color" class="border rounded p-1.5 text-xs">
-                  <option value="">— همهٔ رنگ‌ها —</option>
-                  {color_opts_model}
-                </select>
-              </div>"""
-        part_select_html = ""
-        if part_pricing_on:
-            part_opts_all = "".join(f'<option value="{code}">{lbl}</option>' for code, lbl in ivdb.PART_OPTIONS)
-            part_select_html = f"""
-              <div class="flex flex-col gap-0.5">
-                <span class="text-[9px] text-gray-400">پارت</span>
-                <select name="part_number" class="border rounded p-1.5 text-xs">
-                  <option value="">— همهٔ پارت‌ها —</option>
-                  {part_opts_all}
-                </select>
-              </div>"""
-        add_cap_form = f"""
-            <form method="post" action="/admin/iphone/capacities/upsert" class="pt-3 mt-2 border-t text-sm">
-              <input type="hidden" name="model_id" value="{m['id']}">
-              <div class="text-xs text-gray-500 mb-2">📝 ثبت/به‌روزرسانی قیمت این مدل</div>
-              <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 items-end">
-                <div class="flex flex-col gap-0.5">
-                  <span class="text-[9px] text-gray-400">ظرفیت</span>
-                  <select class="border rounded p-1.5 text-xs"
-                          onchange="var t=this.nextElementSibling; if(this.value==='__other__'){{t.value='';t.style.display='block';t.focus()}}else{{t.value=this.value;t.style.display='none'}}">
-                    <option value="">— انتخاب —</option>
-                    {cap_opts_model}
-                    <option value="__other__">سایر (دستی)</option>
-                  </select>
-                  <input type="text" name="capacity_label" class="border rounded p-1.5 text-xs mt-1" placeholder="مثلاً 128GB" required style="display:none">
-                </div>
-                {color_select_html}
-                {part_select_html}
-                <input type="text" inputmode="numeric" dir="ltr" name="base_price" class="border rounded p-1.5 text-xs" placeholder="قیمت پایه" required>
-                <input type="text" inputmode="numeric" dir="ltr" name="buy_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت خرید" required>
-                <input type="text" inputmode="numeric" dir="ltr" name="sell_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت فروش" required>
-                <input type="text" inputmode="numeric" dir="ltr" name="fx_ref_rate" class="border rounded p-1.5 text-xs" placeholder="نرخ ارز مرجع (خالی=نرخ فعلی)">
-              </div>
-              <button class="mt-2.5 bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">ذخیره</button>
-            </form>"""
-
-        color_opts_html = "".join(f'<option value="{e(c)}">{html.escape(c)}</option>' for c in _IV_COMMON_COLORS)
         color_chips = "".join(f"""
           <form method="post" action="/admin/iphone/colors/{c['id']}/delete" class="inline" onsubmit="return confirm('حذف بشه؟')">
             <input type="hidden" name="model_id" value="{m['id']}">
@@ -12090,16 +11988,15 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
 
         is_open = str(m["id"]) == open
         blocks += f"""
-        <details id="iv-model-{m['id']}" {"open" if is_open else ""} class="bg-white rounded-xl shadow-sm mb-3 {'ring-1 ring-amber-300' if no_price else ''} {'ring-2 ring-indigo-400' if is_open else ''}">
+        <details id="iv-model-{m['id']}" {"open" if is_open else ""} class="bg-white rounded-xl shadow-sm mb-3 {'ring-2 ring-indigo-400' if is_open else ''}">
           <summary class="p-4 cursor-pointer flex items-center justify-between flex-wrap gap-2">
             <span class="font-medium text-sm">{html.escape(m['name'])} <span class="text-gray-400 text-xs">({html.escape(m['series'])})</span>
-              {' <span class="text-amber-500 text-xs">⚠️ قیمت پر نشده</span>' if no_price else ''}
               {'' if m['active'] else ' <span class="text-red-400 text-xs">(غیرفعال)</span>'}
             </span>
-            <span class="text-xs text-gray-400">{len(caps)} ظرفیت · {len(colors)} رنگ</span>
+            <span class="text-xs text-gray-400">{len(storages)} ظرفیت · {len(colors)} رنگ</span>
           </summary>
           <div class="p-4 pt-0">
-            <div class="flex items-center justify-between mb-2 pt-2 border-t">
+            <div class="flex items-center justify-between mb-2 pt-2 border-t flex-wrap gap-2">
               <form method="post" action="/admin/iphone/models/{m['id']}/edit" class="flex flex-wrap gap-2 items-end flex-1">
                 <div class="flex flex-col gap-0.5">
                   <span class="text-[9px] text-gray-400">نام</span>
@@ -12125,26 +12022,35 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
                 <button class="text-xs text-red-600">حذف مدل</button>
               </form>
             </div>
-            {cap_rows}
-            {add_cap_form}
-            <div class="flex flex-wrap gap-1.5 items-center pt-3 mt-2 border-t">
-              {color_chips}
+
+            <div class="pt-3 mt-2 border-t">
+              <div class="text-xs text-gray-500 mb-2">ظرفیت‌ها</div>
+              <div class="flex flex-wrap gap-1.5 items-center">{storage_chips}</div>
+              {storage_del_forms}
+              <form method="post" action="/admin/iphone/storages/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+                <input type="hidden" name="model_id" value="{m['id']}">
+                <input type="text" name="label" class="border rounded p-1 w-32 text-xs" placeholder="مثلاً 128GB" required>
+                <button class="bg-gray-700 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن ظرفیت</button>
+              </form>
             </div>
-            <form method="post" action="/admin/iphone/colors/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
-              <input type="hidden" name="model_id" value="{m['id']}">
-              <select class="border rounded p-1.5 text-xs"
-                      onchange="var t=this.nextElementSibling; if(this.value==='__other__'){{t.value='';t.style.display='inline-block';t.focus()}}else{{t.value=this.value;t.style.display='none'}}">
-                <option value="">— انتخاب رنگ —</option>
-                {color_opts_html}
-                <option value="__other__">سایر (دستی)</option>
-              </select>
-              <input type="text" name="name" class="border rounded p-1 w-40 text-xs" placeholder="نام رنگ" required style="display:none">
-              <button class="bg-gray-700 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن رنگ</button>
-            </form>
+
+            <div class="pt-3 mt-2 border-t">
+              <div class="text-xs text-gray-500 mb-2">رنگ‌ها</div>
+              <div class="flex flex-wrap gap-1.5 items-center">{color_chips}</div>
+              <form method="post" action="/admin/iphone/colors/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+                <input type="hidden" name="model_id" value="{m['id']}">
+                <input type="text" name="name" class="border rounded p-1 w-32 text-xs" placeholder="نام رنگ" required>
+                <button class="bg-gray-700 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن رنگ</button>
+              </form>
+            </div>
           </div>
         </details>"""
 
     body = f"""
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h1 class="text-xl font-bold text-gray-800">🗂 مدل‌های آیفون</h1>
+      <a href="/admin/iphone/prices" class="px-3 py-1.5 text-xs rounded-lg bg-indigo-600 text-white">💰 مدیریت قیمت‌ها</a>
+    </div>
     <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
       <div class="text-sm font-medium mb-2">+ افزودن مدل جدید</div>
       <form method="post" action="/admin/iphone/models/add" class="flex flex-wrap gap-2">
@@ -12152,12 +12058,12 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
         <input type="text" name="series" class="border rounded-lg p-2 text-sm w-40" placeholder="سری (مثلاً iPhone 13)">
         <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">افزودن</button>
       </form>
-      <div class="text-xs text-gray-400 mt-2">هر مدل رو باز کن تا ظرفیت/رنگ/قیمتش رو ببینی و ویرایش کنی. مدل‌هایی که هنوز قیمت‌شون پر نشده با ⚠️ مشخص شدن.</div>
+      <div class="text-xs text-gray-400 mt-2">هر مدل رو باز کن تا ظرفیت/رنگ‌هاش و کلید اثر رنگ/پارت روی قیمت رو تنظیم کنی. برای ثبت خودِ قیمت به «💰 مدیریت قیمت‌ها» برو.</div>
     </div>
     {blocks or '<div class="text-center text-gray-400 text-sm py-10">هنوز مدلی ثبت نشده.</div>'}
     {f'<script>document.getElementById("iv-model-{e(open)}")?.scrollIntoView({{block:"center"}});</script>' if open else ''}
     """
-    return _layout("مدل‌ها و قیمت‌های آیفون", body, adm, flash=flash)
+    return _layout("مدل‌های آیفون", body, adm, flash=flash)
 
 
 @router.post("/iphone/models/add")
@@ -12214,62 +12120,231 @@ async def iphone_models_delete(request: Request, mid: int):
     return _redir(f"/admin/iphone/models?flash={e('✅ مدل حذف شد')}")
 
 
-@router.post("/iphone/capacities/upsert")
-async def iphone_capacities_upsert(request: Request, model_id: int = Form(...), capacity_label: str = Form(...),
-                                    part_number: str = Form(""), color: str = Form(""),
-                                    base_price: str = Form(...), buy_price_ref: str = Form(...),
-                                    sell_price_ref: str = Form(...), fx_ref_rate: str = Form("")):
-    """فرم واحد «ثبت/به‌روزرسانی قیمت» — ذخیره روی ترکیب (ظرفیت+پارت+رنگ) upsert می‌کنه؛
-    اگه از قبل بود آپدیت می‌شه، وگرنه ردیف تازه ساخته می‌شه — هیچ‌وقت رد/خطای «تکراریه» نشون
-    نمی‌ده (که خودش می‌تونست مثل باگ قدیمی «ذخیره نمی‌شه» به نظر بیاد)."""
+@router.post("/iphone/storages/add")
+async def iphone_storages_add(request: Request, model_id: int = Form(...), label: str = Form(...)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    if label.strip():
+        ivdb.create_storage(model_id, label.strip())
+        _log(request, "افزودن ظرفیت آیفون", "کارشناسی آیفون", f"model={model_id} {label.strip()}", admin_info=adm)
+    return _redir(f"/admin/iphone/models?flash={e('✅ ظرفیت اضافه شد')}&open={model_id}")
+
+
+@router.post("/iphone/storages/{sid}/delete")
+async def iphone_storages_delete(request: Request, sid: int, model_id: int = Form(0)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.delete_storage(sid)
+    return _redir(f"/admin/iphone/models?flash={e('✅ حذف شد')}&open={model_id}")
+
+
+@router.get("/iphone/prices", response_class=HTMLResponse)
+async def iphone_prices_page(request: Request, flash: str = ""):
+    """صفحهٔ مستقل و ساده فقط برای ثبت/ویرایش/حذف قیمت — یک فرم واحد با دراپ‌داون‌های
+    آبشاری (مدل → ظرفیت → رنگ اگه لازم بود → پارت اگه لازم بود) بالای صفحه، و لیست تخت همهٔ
+    قیمت‌های ثبت‌شده (شبیه لیست تیکت‌ها) پایینش — هر ردیف یعنی یک رکورد قیمت مستقل."""
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    models = ivdb.list_models(active_only=False)
+    parts = ivdb.list_parts(active_only=True)
+
+    model_data = {}
+    model_opts = ""
+    for m in models:
+        storages = ivdb.list_storages(m["id"], active_only=True)
+        colors = ivdb.list_colors(model_id=m["id"], active_only=True)
+        part_relevant = bool((m.get("dual_sim_parts") or "").strip())
+        model_data[str(m["id"])] = {
+            "storages": [{"id": s["id"], "label": s["label"]} for s in storages],
+            "colors": [{"id": c["id"], "name": c["name"]} for c in colors] if m.get("color_pricing") else [],
+            "parts": [{"id": p["id"], "label": p["label"]} for p in parts]
+                     if (part_relevant and m.get("part_pricing")) else [],
+        }
+        model_opts += f'<option value="{m["id"]}">{html.escape(m["name"])} ({html.escape(m["series"])})</option>'
+
+    add_form = f"""
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+      <div class="text-sm font-medium mb-3">📝 ثبت قیمت تازه</div>
+      <form method="post" action="/admin/iphone/prices/upsert" class="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+        <div class="flex flex-col gap-0.5 col-span-2 sm:col-span-1">
+          <span class="text-[9px] text-gray-400">مدل</span>
+          <select name="model_id" id="iv-p-model" class="border rounded p-1.5 text-xs" required>
+            <option value="">— انتخاب مدل —</option>
+            {model_opts}
+          </select>
+        </div>
+        <div class="flex flex-col gap-0.5">
+          <span class="text-[9px] text-gray-400">ظرفیت</span>
+          <select name="storage_id" id="iv-p-storage" class="border rounded p-1.5 text-xs" required disabled>
+            <option value="">ابتدا مدل رو انتخاب کن</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-0.5" id="iv-p-color-wrap" style="display:none">
+          <span class="text-[9px] text-gray-400">رنگ</span>
+          <select name="color_id" id="iv-p-color" class="border rounded p-1.5 text-xs">
+            <option value="">— همهٔ رنگ‌ها —</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-0.5" id="iv-p-part-wrap" style="display:none">
+          <span class="text-[9px] text-gray-400">پارت</span>
+          <select name="part_id" id="iv-p-part" class="border rounded p-1.5 text-xs">
+            <option value="">— همهٔ پارت‌ها —</option>
+          </select>
+        </div>
+        <input type="text" inputmode="numeric" dir="ltr" name="base_price" class="border rounded p-1.5 text-xs" placeholder="قیمت پایه" required>
+        <input type="text" inputmode="numeric" dir="ltr" name="buy_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت خرید" required>
+        <input type="text" inputmode="numeric" dir="ltr" name="sell_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت فروش" required>
+        <input type="text" inputmode="numeric" dir="ltr" name="fx_ref_rate" class="border rounded p-1.5 text-xs" placeholder="نرخ ارز مرجع (خالی=فعلی)">
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs">ثبت قیمت</button>
+      </form>
+    </div>
+    <script>
+    var IV_MODEL_DATA = {json.dumps(model_data, ensure_ascii=False)};
+    (function(){{
+      var modelSel = document.getElementById('iv-p-model');
+      var storSel = document.getElementById('iv-p-storage');
+      var colorWrap = document.getElementById('iv-p-color-wrap');
+      var colorSel = document.getElementById('iv-p-color');
+      var partWrap = document.getElementById('iv-p-part-wrap');
+      var partSel = document.getElementById('iv-p-part');
+      modelSel.addEventListener('change', function(){{
+        var d = IV_MODEL_DATA[modelSel.value];
+        storSel.innerHTML = '';
+        colorSel.innerHTML = '<option value="">— همهٔ رنگ‌ها —</option>';
+        partSel.innerHTML = '<option value="">— همهٔ پارت‌ها —</option>';
+        if(!d){{
+          storSel.disabled = true;
+          storSel.innerHTML = '<option value="">ابتدا مدل رو انتخاب کن</option>';
+          colorWrap.style.display = 'none'; partWrap.style.display = 'none';
+          return;
+        }}
+        storSel.disabled = false;
+        if(!d.storages.length){{ storSel.innerHTML = '<option value="">این مدل ظرفیتی نداره</option>'; }}
+        d.storages.forEach(function(s){{ var o=document.createElement('option'); o.value=s.id; o.textContent=s.label; storSel.appendChild(o); }});
+        colorWrap.style.display = d.colors.length ? '' : 'none';
+        d.colors.forEach(function(c){{ var o=document.createElement('option'); o.value=c.id; o.textContent=c.name; colorSel.appendChild(o); }});
+        partWrap.style.display = d.parts.length ? '' : 'none';
+        d.parts.forEach(function(p){{ var o=document.createElement('option'); o.value=p.id; o.textContent=p.label; partSel.appendChild(o); }});
+      }});
+    }})();
+    </script>
+    """
+
+    caps = ivdb.list_capacities(active_only=False)
+    model_names = {m["id"]: f"{m['name']} ({m['series']})" for m in models}
+    caps.sort(key=lambda c: (model_names.get(c["model_id"], ""), ivdb.capacity_sort_key(c["capacity_label"])))
+
+    rows_html = ""
+    hidden_forms = ""
+    for c in caps:
+        mname = model_names.get(c["model_id"], "—")
+        rows_html += f"""
+        <tr class="border-b hover:bg-gray-50 {'opacity-40' if not c['active'] else ''}" data-model="{e(mname.lower())}">
+          <td class="px-3 py-2 text-xs font-medium whitespace-nowrap">{html.escape(mname)}</td>
+          <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c['capacity_label'])}</td>
+          <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c['color']) or '—'}</td>
+          <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c['part_number']) or '—'}</td>
+          <td class="px-2 py-2"><input form="iv-pe-{c['id']}" type="text" inputmode="numeric" dir="ltr" name="base_price" value="{c['base_price']}" class="border rounded p-1 w-24 text-xs"></td>
+          <td class="px-2 py-2"><input form="iv-pe-{c['id']}" type="text" inputmode="numeric" dir="ltr" name="buy_price_ref" value="{c['buy_price_ref']}" class="border rounded p-1 w-24 text-xs"></td>
+          <td class="px-2 py-2"><input form="iv-pe-{c['id']}" type="text" inputmode="numeric" dir="ltr" name="sell_price_ref" value="{c['sell_price_ref']}" class="border rounded p-1 w-24 text-xs"></td>
+          <td class="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{fa_date(c['updated_at'] or '', with_time=True)}</td>
+          <td class="px-3 py-2 whitespace-nowrap">
+            <button type="submit" form="iv-pe-{c['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">💾 ذخیره</button>
+            <button type="submit" form="iv-pd-{c['id']}" class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>
+          </td>
+        </tr>"""
+        hidden_forms += (
+            f'<form id="iv-pe-{c["id"]}" method="post" action="/admin/iphone/prices/{c["id"]}/edit"></form>'
+            f'<form id="iv-pd-{c["id"]}" method="post" action="/admin/iphone/prices/{c["id"]}/delete" '
+            f'onsubmit="return confirm(\'این ردیف قیمت حذف بشه؟\')"></form>')
+
+    body = f"""
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h1 class="text-xl font-bold text-gray-800">💰 قیمت‌های آیفون</h1>
+      <a href="/admin/iphone/models" class="px-3 py-1.5 text-xs rounded-lg border bg-gray-50 text-gray-500 border-gray-200">🗂 مدل‌ها</a>
+    </div>
+    {add_form}
+    <div class="bg-white rounded-xl shadow-sm p-3 mb-3">
+      <input type="text" id="iv-price-search" placeholder="🔍 جست‌وجو بر اساس نام مدل…" class="border rounded-lg p-2 text-sm w-full">
+    </div>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max" id="iv-price-table">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-3 py-3">مدل</th><th class="px-3 py-3">ظرفیت</th><th class="px-3 py-3">رنگ</th>
+            <th class="px-3 py-3">پارت</th><th class="px-3 py-3">قیمت پایه</th><th class="px-3 py-3">قیمت خرید</th>
+            <th class="px-3 py-3">قیمت فروش</th><th class="px-3 py-3">بروزرسانی</th><th class="px-3 py-3"></th>
+          </tr></thead>
+          <tbody>{rows_html or '<tr><td colspan="9" class="text-center py-8 text-gray-400">هنوز قیمتی ثبت نشده.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    {hidden_forms}
+    <script>
+    document.getElementById('iv-price-search').addEventListener('input', function(){{
+      var q = this.value.trim().toLowerCase();
+      document.querySelectorAll('#iv-price-table tbody tr[data-model]').forEach(function(tr){{
+        tr.style.display = tr.dataset.model.indexOf(q) === -1 ? 'none' : '';
+      }});
+    }});
+    </script>
+    """
+    return _layout("قیمت‌های آیفون", body, adm, flash=flash)
+
+
+@router.post("/iphone/prices/upsert")
+async def iphone_prices_upsert(request: Request, model_id: int = Form(...), storage_id: int = Form(...),
+                                color_id: str = Form(""), part_id: str = Form(""),
+                                base_price: str = Form(...), buy_price_ref: str = Form(...),
+                                sell_price_ref: str = Form(...), fx_ref_rate: str = Form("")):
+    """فرم واحد ثبت قیمت — ذخیره روی ترکیب (ظرفیت+پارت+رنگ، با شناسه) upsert می‌کنه؛
+    اگه از قبل بود آپدیت می‌شه، وگرنه ردیف تازه ساخته می‌شه — هیچ‌وقت رد/خطای «تکراریه»
+    نشون نمی‌ده (که خودش می‌تونست مثل باگ قدیمی «ذخیره نمی‌شه» به نظر بیاد)."""
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
     import iphone_valuation.fx as ivfx
-    label = capacity_label.strip()
-    part = part_number.strip().upper()
-    clr = color.strip()
     # حتی اگه فرم دستکاری بشه، اگه قیمت‌گذاری رنگ/پارت برای این مدل خاموش باشه، همیشه
-    # روی ردیف عمومی (بدون رنگ/پارت مشخص) ذخیره می‌شه — همون‌طور که resolve_capacity هم
+    # روی ردیف عمومی (color_id/part_id=NULL) ذخیره می‌شه — همون‌طور که resolve_capacity هم
     # طبق همین دو فلگ رفتار می‌کنه، تا هیچ ردیف یتیمی که هیچ‌وقت استفاده نمی‌شه ساخته نشه.
     m = ivdb.get_model(model_id)
-    if m:
-        if not m.get("color_pricing"):
-            clr = ""
-        if not m.get("part_pricing"):
-            part = ""
+    cid_ = int(color_id) if (color_id and m and m.get("color_pricing")) else None
+    pid_ = int(part_id) if (part_id and m and m.get("part_pricing")) else None
     bp, bpr, spr = _iv_parse_num(base_price), _iv_parse_num(buy_price_ref), _iv_parse_num(sell_price_ref)
     fx_rate = _iv_parse_num(fx_ref_rate) or ivfx.get_current_rate()
-    ivdb.upsert_capacity(model_id, label, bp, bpr, spr, fx_rate, part_number=part, color=clr)
-    _log(request, "ثبت/به‌روزرسانی قیمت آیفون", "کارشناسی آیفون", f"model={model_id} {label} {part} {clr}", admin_info=adm)
-    return _redir(f"/admin/iphone/models?flash={e('✅ قیمت ذخیره شد')}&open={model_id}")
+    ivdb.upsert_capacity(model_id, storage_id, bp, bpr, spr, fx_rate, part_id=pid_, color_id=cid_)
+    _log(request, "ثبت/به‌روزرسانی قیمت آیفون", "کارشناسی آیفون",
+         f"model={model_id} storage={storage_id} color={cid_} part={pid_}", admin_info=adm)
+    return _redir(f"/admin/iphone/prices?flash={e('✅ قیمت ذخیره شد')}")
 
 
-@router.post("/iphone/capacities/{cid}/delete")
-async def iphone_capacities_delete(request: Request, cid: int, model_id: int = Form(0)):
-    adm = _get_admin(request)
-    guard = _require(adm, "settings")
-    if guard: return guard
-    import iphone_valuation.db as ivdb
-    ivdb.delete_capacity(cid)
-    return _redir(f"/admin/iphone/models?flash={e('✅ ردیف قیمت حذف شد')}&open={model_id}")
-
-
-@router.post("/iphone/capacities/{cid}/edit")
-async def iphone_capacities_edit(request: Request, cid: int, model_id: int = Form(0), base_price: str = Form(...),
-                                  buy_price_ref: str = Form(...), sell_price_ref: str = Form(...),
-                                  fx_ref_rate: str = Form("0"), demand_percent: str = Form("0"),
-                                  active: str | None = Form(None)):
+@router.post("/iphone/prices/{cid}/edit")
+async def iphone_prices_edit(request: Request, cid: int, base_price: str = Form(...),
+                              buy_price_ref: str = Form(...), sell_price_ref: str = Form(...)):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.update_capacity(cid, base_price=_iv_parse_num(base_price), buy_price_ref=_iv_parse_num(buy_price_ref),
-                          sell_price_ref=_iv_parse_num(sell_price_ref), fx_ref_rate=_iv_parse_num(fx_ref_rate),
-                          demand_percent=_iv_parse_num(demand_percent, cast=float),
-                          active=1 if active else 0)
-    return _redir(f"/admin/iphone/models?flash={e('✅ قیمت ذخیره شد')}&open={model_id}")
+                          sell_price_ref=_iv_parse_num(sell_price_ref))
+    return _redir(f"/admin/iphone/prices?flash={e('✅ قیمت ذخیره شد')}")
+
+
+@router.post("/iphone/prices/{cid}/delete")
+async def iphone_prices_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.delete_capacity(cid)
+    return _redir(f"/admin/iphone/prices?flash={e('✅ ردیف قیمت حذف شد')}")
 
 
 @router.post("/iphone/colors/add")
