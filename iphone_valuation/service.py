@@ -90,7 +90,8 @@ def list_models_with_capacities() -> list[dict]:
     out = []
     for m in models:
         caps = ivdb.list_capacities(model_id=m["id"], active_only=True)
-        out.append({**m, "capacities": caps})
+        colors = ivdb.list_colors(model_id=m["id"], active_only=True)
+        out.append({**m, "capacities": caps, "colors": colors})
     return out
 
 
