@@ -11850,6 +11850,26 @@ def _iv_num(v):
     return f"{v:,}" if v else "—"
 
 
+_IV_DIGIT_MAP = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _iv_parse_num(raw, cast=int, default=0):
+    """اعداد فارسی/عربی رو به انگلیسی تبدیل می‌کنه و به int/float پارس می‌کنه —
+    چون input type=number روی کیبورد فارسی موبایل، رقم فارسی رو اصلاً قبول نمی‌کنه
+    (کلاً وارد نمی‌شه)، این فیلدها به text+inputmode تبدیل شدن و پارس اینجا انجام می‌شه."""
+    if raw is None:
+        return default
+    s = str(raw).translate(_IV_DIGIT_MAP).strip()
+    s = s.replace(",", "").replace("٬", "").replace(" ", "").replace("٫", ".")
+    if not s or s in ("-", "."):
+        return default
+    try:
+        f = float(s)
+    except ValueError:
+        return default
+    return cast(f)
+
+
 @router.get("/iphone", response_class=HTMLResponse)
 async def iphone_dashboard(request: Request, flash: str = ""):
     adm = _get_admin(request)
@@ -11941,27 +11961,31 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
         colors = ivdb.list_colors(model_id=m["id"], active_only=False)
         no_price = any(not c["base_price"] for c in caps)
 
-        def _iv_field(label, name, value, width, step=None):
-            step_attr = f' step="{step}"' if step else ""
+        def _iv_field(label, name, value, decimal=False):
+            # type="text"+inputmode (نه type="number") چون کیبورد فارسی موبایل رقم فارسی رو
+            # داخل input type=number اصلاً وارد نمی‌کنه (نه پارس، رد می‌شه) — همون علت واقعی
+            # «ذخیره نمی‌شه» و پرش/لرزش فیلد روی موبایل؛ پارس رقم فارسی سمت سرور با _iv_parse_num
+            im = "decimal" if decimal else "numeric"
             return (f'<div class="flex flex-col gap-0.5">'
                     f'<span class="text-[9px] text-gray-400">{label}</span>'
-                    f'<input type="number"{step_attr} name="{name}" value="{value}" '
-                    f'class="border rounded p-1 {width} text-xs"></div>')
+                    f'<input type="text" inputmode="{im}" name="{name}" value="{value}" '
+                    f'class="border rounded p-1.5 w-full text-xs" dir="ltr"></div>')
 
         cap_rows = "".join(f"""
-          <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="flex flex-wrap gap-3 items-end border-b py-3 text-sm">
+          <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="border-b py-3 text-sm">
             <input type="hidden" name="model_id" value="{m['id']}">
-            <div class="flex flex-col gap-0.5">
-              <span class="text-[9px] text-gray-400">ظرفیت</span>
-              <span class="w-20 font-medium py-1">{html.escape(c['capacity_label'])}</span>
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-medium text-sm">{html.escape(c['capacity_label'])}</span>
+              <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
             </div>
-            {_iv_field("قیمت پایه (بازار)", "base_price", c['base_price'], "w-28")}
-            {_iv_field("قیمت خرید فروشگاه", "buy_price_ref", c['buy_price_ref'], "w-28")}
-            {_iv_field("قیمت فروش فروشگاه", "sell_price_ref", c['sell_price_ref'], "w-28")}
-            {_iv_field("نرخ ارز مرجع", "fx_ref_rate", c['fx_ref_rate'], "w-24")}
-            {_iv_field("عرضه/تقاضا٪", "demand_percent", c['demand_percent'], "w-16", step="0.1")}
-            <label class="text-xs flex items-center gap-1 pb-1.5"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
-            <button class="text-indigo-600 text-xs pb-1.5">ذخیره</button>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {_iv_field("قیمت پایه (بازار)", "base_price", c['base_price'])}
+              {_iv_field("قیمت خرید فروشگاه", "buy_price_ref", c['buy_price_ref'])}
+              {_iv_field("قیمت فروش فروشگاه", "sell_price_ref", c['sell_price_ref'])}
+              {_iv_field("نرخ ارز مرجع", "fx_ref_rate", c['fx_ref_rate'])}
+              {_iv_field("عرضه/تقاضا٪", "demand_percent", c['demand_percent'], decimal=True)}
+            </div>
+            <button class="mt-2.5 bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">ذخیره</button>
           </form>""" for c in caps) or '<div class="text-xs text-gray-400 py-2">ظرفیتی ثبت نشده.</div>'
 
         color_chips = "".join(f"""
@@ -11993,14 +12017,6 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
                   <span class="text-[9px] text-gray-400">سری</span>
                   <input type="text" name="series" value="{e(m['series'])}" class="border rounded p-1.5 text-xs w-24">
                 </div>
-                <div class="flex flex-col gap-0.5">
-                  <span class="text-[9px] text-gray-400">پارت‌های دوسیم (با کاما)</span>
-                  <input type="text" name="dual_sim_parts" value="{e(m['dual_sim_parts'])}" dir="ltr"
-                         class="border rounded p-1.5 text-xs w-28" placeholder="مثلاً ZA,CH">
-                </div>
-                <label class="text-xs flex items-center gap-1 pb-1.5">
-                  <input type="checkbox" name="esim_only" {"checked" if m['esim_only'] else ""}> فقط eSIM
-                </label>
                 <button class="text-indigo-600 text-xs pb-1.5">ذخیره</button>
               </form>
               <form method="post" action="/admin/iphone/models/{m['id']}/toggle" class="mr-2">
@@ -12008,14 +12024,17 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
               </form>
             </div>
             {cap_rows}
-            <form method="post" action="/admin/iphone/capacities/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+            <form method="post" action="/admin/iphone/capacities/add" class="pt-3 mt-1 border-t text-sm">
               <input type="hidden" name="model_id" value="{m['id']}">
-              <input type="text" name="capacity_label" class="border rounded p-1 w-24 text-xs" placeholder="ظرفیت مثلاً 128GB" required>
-              <input type="number" name="base_price" class="border rounded p-1 w-28 text-xs" placeholder="قیمت پایه" required>
-              <input type="number" name="buy_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت خرید" required>
-              <input type="number" name="sell_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت فروش" required>
-              <input type="number" name="fx_ref_rate" class="border rounded p-1 w-24 text-xs" placeholder="نرخ ارز مرجع (خالی=نرخ فعلی)">
-              <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن ظرفیت</button>
+              <div class="text-xs text-gray-500 mb-2">+ افزودن ظرفیت جدید</div>
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <input type="text" name="capacity_label" class="border rounded p-1.5 text-xs" placeholder="ظرفیت مثلاً 128GB" required>
+                <input type="text" inputmode="numeric" dir="ltr" name="base_price" class="border rounded p-1.5 text-xs" placeholder="قیمت پایه" required>
+                <input type="text" inputmode="numeric" dir="ltr" name="buy_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت خرید" required>
+                <input type="text" inputmode="numeric" dir="ltr" name="sell_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت فروش" required>
+                <input type="text" inputmode="numeric" dir="ltr" name="fx_ref_rate" class="border rounded p-1.5 text-xs" placeholder="نرخ ارز مرجع (خالی=نرخ فعلی)">
+              </div>
+              <button class="mt-2.5 bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن ظرفیت</button>
             </form>
             <div class="flex flex-wrap gap-1.5 items-center pt-3 mt-2 border-t">
               {color_chips}
@@ -12059,15 +12078,15 @@ async def iphone_models_add(request: Request, name: str = Form(...), series: str
 
 
 @router.post("/iphone/models/{mid}/edit")
-async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form(""),
-                              dual_sim_parts: str = Form(""), esim_only: str | None = Form(None)):
+async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form("")):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    parts = ",".join(p.strip().upper() for p in dual_sim_parts.split(",") if p.strip())
-    ivdb.update_model(mid, name=name.strip(), series=series.strip(),
-                       dual_sim_parts=parts, esim_only=1 if esim_only else 0)
+    # dual_sim_parts/esim_only دیگه از این فرم ویرایش نمی‌شن — استاندارد تک‌سیم/دوسیم
+    # به‌صورت خودکار طبق قاعدهٔ پروژه محاسبه می‌شه (_iv_sim_policy در iphone_valuation/db.py)
+    # و نباید اینجا با یک مقدار خالی/پیش‌فرض بی‌صدا رونویسی بشه
+    ivdb.update_model(mid, name=name.strip(), series=series.strip())
     return _redir(f"/admin/iphone/models?flash={e('✅ ذخیره شد')}&open={mid}")
 
 
@@ -12085,30 +12104,33 @@ async def iphone_models_toggle(request: Request, mid: int):
 
 @router.post("/iphone/capacities/add")
 async def iphone_capacities_add(request: Request, model_id: int = Form(...), capacity_label: str = Form(...),
-                                 base_price: int = Form(...), buy_price_ref: int = Form(...),
-                                 sell_price_ref: int = Form(...), fx_ref_rate: int = Form(0)):
+                                 base_price: str = Form(...), buy_price_ref: str = Form(...),
+                                 sell_price_ref: str = Form(...), fx_ref_rate: str = Form("")):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
     import iphone_valuation.fx as ivfx
-    fx_rate = fx_ref_rate or ivfx.get_current_rate()
-    ivdb.create_capacity(model_id, capacity_label.strip(), base_price, buy_price_ref, sell_price_ref, fx_rate)
+    bp, bpr, spr = _iv_parse_num(base_price), _iv_parse_num(buy_price_ref), _iv_parse_num(sell_price_ref)
+    fx_rate = _iv_parse_num(fx_ref_rate) or ivfx.get_current_rate()
+    ivdb.create_capacity(model_id, capacity_label.strip(), bp, bpr, spr, fx_rate)
     _log(request, "افزودن ظرفیت آیفون", "کارشناسی آیفون", f"model={model_id} {capacity_label}", admin_info=adm)
     return _redir(f"/admin/iphone/models?flash={e('✅ ظرفیت اضافه شد')}&open={model_id}")
 
 
 @router.post("/iphone/capacities/{cid}/edit")
-async def iphone_capacities_edit(request: Request, cid: int, model_id: int = Form(0), base_price: int = Form(...),
-                                  buy_price_ref: int = Form(...), sell_price_ref: int = Form(...),
-                                  fx_ref_rate: int = Form(0), demand_percent: float = Form(0),
+async def iphone_capacities_edit(request: Request, cid: int, model_id: int = Form(0), base_price: str = Form(...),
+                                  buy_price_ref: str = Form(...), sell_price_ref: str = Form(...),
+                                  fx_ref_rate: str = Form("0"), demand_percent: str = Form("0"),
                                   active: str | None = Form(None)):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    ivdb.update_capacity(cid, base_price=base_price, buy_price_ref=buy_price_ref, sell_price_ref=sell_price_ref,
-                          fx_ref_rate=fx_ref_rate, demand_percent=demand_percent, active=1 if active else 0)
+    ivdb.update_capacity(cid, base_price=_iv_parse_num(base_price), buy_price_ref=_iv_parse_num(buy_price_ref),
+                          sell_price_ref=_iv_parse_num(sell_price_ref), fx_ref_rate=_iv_parse_num(fx_ref_rate),
+                          demand_percent=_iv_parse_num(demand_percent, cast=float),
+                          active=1 if active else 0)
     return _redir(f"/admin/iphone/models?flash={e('✅ قیمت ذخیره شد')}&open={model_id}")
 
 
