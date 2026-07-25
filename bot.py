@@ -4198,6 +4198,31 @@ def _iv_advance_coeff(chat_id, uid, idx):
         _iv_ask_features(chat_id, uid)
 
 
+def _iv_ask_broken_parts(chat_id, uid, message_id=None):
+    """چندانتخابی — فقط وقتی وضعیت کلی دستگاه «نیازمند تعمیر» انتخاب شده باشه.
+    هر تپ روی گزینه، وضعیت تیک‌خورده/نخورده رو toggle می‌کنه (پیام قبلی edit می‌شه)،
+    تا کاربر بتونه چند قطعهٔ خراب رو هم‌زمان انتخاب کنه."""
+    import iphone_valuation.db as ivdb
+    state = user_states.get(uid)
+    if not state:
+        return
+    selected = state.get("broken_parts", set())
+    options = ivdb.list_coefficients(category="component", active_only=True)
+    kb = types.InlineKeyboardMarkup()
+    for o in options:
+        mark = "✅ " if o["option_key"] in selected else "⬜️ "
+        kb.add(types.InlineKeyboardButton(mark + o["option_label"], callback_data=f"ivw_bpart_{o['option_key']}"))
+    kb.add(types.InlineKeyboardButton("➡️ تایید و ادامه", callback_data="ivw_bpart_done"))
+    text = "🛠 کدوم قسمت(ها) خرابه؟ (می‌تونی چندتا انتخاب کنی، بعد «تایید و ادامه» رو بزن)"
+    if message_id:
+        try:
+            bot.edit_message_text(text, chat_id, message_id, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
 def _iv_ask_features(chat_id, uid):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("✅ بله، همه سالمه", callback_data="ivw_feat_yes"),
@@ -4330,7 +4355,26 @@ def _iv_wizard_callback(call):
         chosen = next((o for o in opts if o["id"] == coef_id), None)
         if chosen:
             state["selections"][category] = chosen["option_key"]
+            if category == "condition" and chosen["option_key"] == "cond_needs_repair":
+                state["broken_parts"] = set()
+                _iv_ask_broken_parts(chat_id, uid)
+                return
         _iv_advance_coeff(chat_id, uid, idx + 1)
+        return
+
+    if data == "ivw_bpart_done":
+        state["selections"]["component"] = sorted(state.get("broken_parts", set()))
+        _iv_advance_coeff(chat_id, uid, state.get("step_idx", 0) + 1)
+        return
+
+    if data.startswith("ivw_bpart_"):
+        option_key = data[len("ivw_bpart_"):]
+        bp = state.setdefault("broken_parts", set())
+        if option_key in bp:
+            bp.discard(option_key)
+        else:
+            bp.add(option_key)
+        _iv_ask_broken_parts(chat_id, uid, message_id=call.message.message_id)
         return
 
     if data in ("ivw_feat_yes", "ivw_feat_no"):
