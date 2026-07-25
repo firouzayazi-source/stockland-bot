@@ -3514,12 +3514,36 @@ def ensure_user_extra_schema():
             ("admin_note", "TEXT DEFAULT ''"),
             ("tags",       "TEXT DEFAULT ''"),
             ("is_blocked", "INTEGER DEFAULT 0"),
+            ("avatar_url", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {col} {default};")
                 conn.commit()
             except Exception:
                 pass
+    finally:
+        conn.close()
+
+
+def get_user_avatar(user_id: int) -> str:
+    ensure_user_extra_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT avatar_url FROM users WHERE user_id=?;", (user_id,)).fetchone()
+        return (row["avatar_url"] if row else "") or ""
+    finally:
+        conn.close()
+
+
+def set_user_avatar(user_id: int, url: str) -> None:
+    ensure_user_extra_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO users (user_id, avatar_url) VALUES (?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET avatar_url=excluded.avatar_url;",
+            (user_id, url))
+        conn.commit()
     finally:
         conn.close()
 

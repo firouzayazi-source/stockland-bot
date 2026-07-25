@@ -249,6 +249,65 @@ async def api_wallet(request: Request):
     return {"ok": True, "balance": wallet.get_balance(uid)}
 
 
+@router.get("/me/profile")
+async def api_me_profile(request: Request):
+    """اطلاعات پروفایل کاربر که فقط سمت سرور موجوده (فعلاً فقط عکس آپلودی)."""
+    uid = _auth(request)
+    from db import get_user_avatar
+    return {"ok": True, "avatar_url": get_user_avatar(uid)}
+
+
+_AVATAR_EXTS = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+_AVATAR_MIME_TO_EXT = {"image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+_AVATAR_MAX_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/me/avatar")
+async def api_me_avatar_upload(request: Request):
+    """آپلود عکس پروفایل کاربر — روی دیسک (app_media/avatars/{uid}.ext) ذخیره می‌شه، نه
+    تلگرام، چون برخلاف عکس تیکت این‌جا به یه URL مستقیم قابل‌نمایش در <img> نیاز داریم.
+    برش دایره‌ای صرفاً با CSS (border-radius+object-fit) انجام می‌شه، بدون وابستگی به Pillow."""
+    uid = _auth(request)
+    form = await request.form()
+    photo = form.get("photo")
+    if photo is None or not hasattr(photo, "read"):
+        raise HTTPException(400, "عکسی ارسال نشده")
+
+    orig_name = (getattr(photo, "filename", "") or "").lower()
+    ext = next((e for e in _AVATAR_EXTS if orig_name.endswith(e)), None)
+    if not ext:
+        ext = _AVATAR_MIME_TO_EXT.get((photo.content_type or "").lower())
+    if not ext:
+        raise HTTPException(400, "فرمت عکس پشتیبانی نمی‌شود (jpg/png/webp)")
+
+    data = await photo.read()
+    if not data:
+        raise HTTPException(400, "فایل خالی است")
+    if len(data) > _AVATAR_MAX_BYTES:
+        raise HTTPException(400, "حجم عکس نباید بیشتر از ۵ مگابایت باشد")
+
+    import os
+    import time
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    avatars_dir = os.path.join(base_dir, "app_media", "avatars")
+    os.makedirs(avatars_dir, exist_ok=True)
+    for old_ext in _AVATAR_EXTS:
+        old_path = os.path.join(avatars_dir, f"{uid}{old_ext}")
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except Exception:
+                pass
+    file_path = os.path.join(avatars_dir, f"{uid}{ext}")
+    with open(file_path, "wb") as f:
+        f.write(data)
+
+    from db import set_user_avatar
+    avatar_url = f"/app-media/avatars/{uid}{ext}?v={int(time.time())}"
+    set_user_avatar(uid, avatar_url)
+    return {"ok": True, "avatar_url": avatar_url}
+
+
 @router.get("/me/orders")
 async def api_orders(request: Request, limit: int = 50):
     """سفارش‌های کاربر."""

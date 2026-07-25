@@ -556,7 +556,17 @@ function loadMe(){if(_m)return;_m=1;
     return;
   }
   var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';nm.textContent=un;
-  body.innerHTML='<div class="sl-me"><div class="sl-ava">'+esc(un.charAt(0))+'</div><div><div class="sl-me-n">'+esc(un)+'</div><div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div></div></div>'+
+  body.innerHTML='<div class="sl-me sl-me-c">'+
+    '<div class="sl-ava-wrap" id="me-ava-wrap">'+
+      '<div class="sl-ava" id="me-ava">'+esc(un.charAt(0))+'</div>'+
+      '<img class="sl-ava-img" id="me-ava-img" style="display:none" alt="">'+
+      '<div class="sl-ava-spin" id="me-ava-spin" style="display:none"><div class="sl-spin"></div></div>'+
+      '<button class="sl-ava-edit" id="me-ava-edit" type="button" title="تغییر عکس پروفایل">📷</button>'+
+      '<input type="file" id="me-ava-input" accept="image/*" style="display:none">'+
+    '</div>'+
+    '<div class="sl-me-n">'+esc(un)+'</div>'+
+    '<div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div>'+
+    '</div>'+
     '<div id="me-checkin-card"></div>'+
     '<div class="sl-wallet"><div class="sl-wallet-glow"></div><div class="sl-wallet-l">موجودی کیف پول</div>'+
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
@@ -573,6 +583,8 @@ function loadMe(){if(_m)return;_m=1;
   api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
   api('/me/partner',true).then(function(d){if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}}).catch(function(){});
   renderCheckinCard();
+  initAvatarUpload();
+  api('/me/profile',true).then(function(d){if(d&&d.avatar_url)setAvatarImg(d.avatar_url)}).catch(function(){});
   var lo_=document.getElementById('me-logout-row');
   if(lo_)lo_.addEventListener('click',function(e){e.preventDefault();
     fetch('/api/v1/auth/logout',{method:'POST'}).then(function(){loggedIn=false;tgUser=null;_m=0;loadMe()});
@@ -598,6 +610,44 @@ function loadMe(){if(_m)return;_m=1;
   if(sp_)sp_.addEventListener('click',function(e){e.preventDefault();openSupport()});
 }
 window.loadMe=loadMe;
+
+/* ─── عکس پروفایل ─── */
+function setAvatarImg(url){
+  var img=document.getElementById('me-ava-img'),lt=document.getElementById('me-ava');
+  if(!img)return;
+  img.onload=function(){img.style.display='block';if(lt)lt.style.display='none'};
+  img.onerror=function(){img.style.display='none';if(lt)lt.style.display=''};
+  img.src=url;
+}
+function initAvatarUpload(){
+  var wrap=document.getElementById('me-ava-wrap'),input=document.getElementById('me-ava-input'),
+      spin=document.getElementById('me-ava-spin');
+  if(!wrap||!input)return;
+  function openPicker(e){if(e){e.preventDefault();e.stopPropagation()}input.click()}
+  wrap.addEventListener('click',openPicker);
+  input.addEventListener('change',function(){
+    var file=input.files&&input.files[0];if(!file)return;
+    if(!/^image\//.test(file.type)){window._slApp.dialog.alert('فقط فایل عکس قابل قبوله','خطا');input.value='';return}
+    if(file.size>5*1024*1024){window._slApp.dialog.alert('حجم عکس نباید بیشتر از ۵ مگابایت باشد','خطا');input.value='';return}
+    if(spin)spin.style.display='grid';
+    var fd=new FormData();fd.append('photo',file);
+    fetch('/api/v1/me/avatar',{method:'POST',headers:{'X-Telegram-Init-Data':initData},body:fd})
+      .then(function(r){return r.json()}).then(function(res){
+        if(spin)spin.style.display='none';
+        if(res&&res.ok&&res.avatar_url){
+          setAvatarImg(res.avatar_url);
+          if(window._slTg&&window._slTg.HapticFeedback)try{window._slTg.HapticFeedback.notificationOccurred('success')}catch(e){}
+        }else{
+          window._slApp.dialog.alert((res&&res.detail)||'آپلود عکس ناموفق بود','خطا');
+        }
+        input.value='';
+      }).catch(function(){
+        if(spin)spin.style.display='none';
+        window._slApp.dialog.alert('خطای شبکه در آپلود عکس','خطا');
+        input.value='';
+      });
+  });
+}
 
 /* ─── پاداش سرزدن روزانه ─── */
 function renderCheckinCard(){
