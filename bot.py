@@ -4278,6 +4278,25 @@ def _iv_ask_color(chat_id, uid):
     bot.send_message(chat_id, "🎨 رنگ دستگاه؟", reply_markup=kb)
 
 
+def _iv_resolve_and_advance(chat_id, uid):
+    """آخرین مرحلهٔ انتخاب (بعد از ظرفیت+رنگ، و پارت اگه پرسیده شده بود) — قیمت واقعی رو
+    پیدا می‌کنه. resolve_capacity خودش طبق تنظیمات فعال/غیرفعال‌بودن اثر رنگ/پارت روی
+    قیمت این مدل (iv_models.color_pricing/part_pricing) تصمیم می‌گیره کدوم بعد واقعاً
+    توی قیمت لحاظ بشه — اینجا فقط هرچی کاربر انتخاب کرده رو بدون قضاوت پاس می‌ده."""
+    import iphone_valuation.db as ivdb
+    state = user_states.get(uid)
+    if not state:
+        return
+    row = ivdb.resolve_capacity(state.get("model_id"), state.get("capacity_label", ""),
+                                 state.get("part_number", ""), state.get("color", ""))
+    if not row:
+        bot.send_message(chat_id, "⚠️ قیمتی برای این ترکیب هنوز در پنل ثبت نشده. با پشتیبانی هماهنگ کن.")
+        user_states.pop(uid, None)
+        return
+    state["capacity_id"] = row["id"]
+    _iv_advance_coeff(chat_id, uid, 0)
+
+
 def _iv_ask_seller_type(chat_id, uid):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🏬 فروشگاه", callback_data="ivw_stype_store"),
@@ -4372,18 +4391,9 @@ def _iv_wizard_callback(call):
             bot.send_message(chat_id, "⏳ این کارشناسی منقضی شده. دوباره از منو شروع کن.")
             return
         state["model_id"] = model_id
-        # پارت فقط برای مدل‌هایی پرسیده می‌شه که واقعاً روی سیم‌کارت/قیمت اثر داره
-        # (dual_sim_parts پر — یعنی از iPhone XS Max به بعد، به‌جز مینی‌ها/Air که همیشه
-        # مستقلن)؛ برای بقیه (XS و پایین‌تر) بی‌معنیه و پرسیده نمی‌شه.
-        if (model.get("dual_sim_parts") or "").strip():
-            _iv_ask_part(chat_id, uid)
-        else:
-            state["part_number"] = ""
-            _iv_ask_capacity(chat_id, uid)
-        return
-
-    if data.startswith("ivw_part_"):
-        state["part_number"] = data.replace("ivw_part_", "")
+        state["part_number"] = ""
+        # ترتیب انتخاب کاربر: مدل → ظرفیت → رنگ → پارت (اگه لازم بود، آخرین مرحله چون
+        # فقط برای تشخیص نوع سیم/قیمت لازمه، نه انتخاب اولیهٔ دستگاه)
         _iv_ask_capacity(chat_id, uid)
         return
 
@@ -4407,14 +4417,19 @@ def _iv_wizard_callback(call):
             names = state.get("colors") or []
             color = names[idx] if idx < len(names) else ""
         state["color"] = color
-        row = ivdb.resolve_capacity(state.get("model_id"), state.get("capacity_label", ""),
-                                     state.get("part_number", ""), color)
-        if not row:
-            bot.send_message(chat_id, "⚠️ قیمتی برای این ترکیب هنوز در پنل ثبت نشده. با پشتیبانی هماهنگ کن.")
-            user_states.pop(uid, None)
-            return
-        state["capacity_id"] = row["id"]
-        _iv_advance_coeff(chat_id, uid, 0)
+        model = ivdb.get_model(state.get("model_id"))
+        # پارت فقط برای مدل‌هایی پرسیده می‌شه که واقعاً روی سیم‌کارت اثر داره (dual_sim_parts
+        # پر — از iPhone XS Max به بعد، به‌جز مینی‌ها/Air) — مستقل از اینکه توی پنل قیمت‌گذاری
+        # پارت فعال باشه یا نه؛ تشخیص نوع سیم همیشه به این سؤال نیاز داره.
+        if (model or {}).get("dual_sim_parts", ""):
+            _iv_ask_part(chat_id, uid)
+        else:
+            _iv_resolve_and_advance(chat_id, uid)
+        return
+
+    if data.startswith("ivw_part_"):
+        state["part_number"] = data.replace("ivw_part_", "")
+        _iv_resolve_and_advance(chat_id, uid)
         return
 
     if data.startswith("ivw_opt_"):

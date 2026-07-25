@@ -12030,9 +12030,21 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
         # ذخیره. ذخیره روی ترکیب (ظرفیت+پارت+رنگ) upsert می‌کنه — نه رد تکراری، نه خطای مبهم.
         cap_opts_model = "".join(f'<option value="{e(lbl)}">{html.escape(lbl)}</option>'
                                   for lbl in ivdb.list_capacity_labels(m["id"], active_only=False))
-        color_opts_model = "".join(f'<option value="{e(c["name"])}">{html.escape(c["name"])}</option>' for c in colors)
+        color_pricing_on = bool(m.get("color_pricing"))
+        part_pricing_on = part_relevant and bool(m.get("part_pricing"))
+        color_select_html = ""
+        if color_pricing_on:
+            color_opts_model = "".join(f'<option value="{e(c["name"])}">{html.escape(c["name"])}</option>' for c in colors)
+            color_select_html = f"""
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[9px] text-gray-400">رنگ</span>
+                <select name="color" class="border rounded p-1.5 text-xs">
+                  <option value="">— همهٔ رنگ‌ها —</option>
+                  {color_opts_model}
+                </select>
+              </div>"""
         part_select_html = ""
-        if part_relevant:
+        if part_pricing_on:
             part_opts_all = "".join(f'<option value="{code}">{lbl}</option>' for code, lbl in ivdb.PART_OPTIONS)
             part_select_html = f"""
               <div class="flex flex-col gap-0.5">
@@ -12057,13 +12069,7 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
                   </select>
                   <input type="text" name="capacity_label" class="border rounded p-1.5 text-xs mt-1" placeholder="مثلاً 128GB" required style="display:none">
                 </div>
-                <div class="flex flex-col gap-0.5">
-                  <span class="text-[9px] text-gray-400">رنگ</span>
-                  <select name="color" class="border rounded p-1.5 text-xs">
-                    <option value="">— همهٔ رنگ‌ها —</option>
-                    {color_opts_model}
-                  </select>
-                </div>
+                {color_select_html}
                 {part_select_html}
                 <input type="text" inputmode="numeric" dir="ltr" name="base_price" class="border rounded p-1.5 text-xs" placeholder="قیمت پایه" required>
                 <input type="text" inputmode="numeric" dir="ltr" name="buy_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت خرید" required>
@@ -12103,6 +12109,12 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
                   <span class="text-[9px] text-gray-400">سری</span>
                   <input type="text" name="series" value="{e(m['series'])}" class="border rounded p-1.5 text-xs w-24">
                 </div>
+                <label class="text-xs flex items-center gap-1 pb-1.5">
+                  <input type="checkbox" name="color_pricing" {"checked" if m.get("color_pricing") else ""}> رنگ روی قیمت اثر داره
+                </label>
+                {f'''<label class="text-xs flex items-center gap-1 pb-1.5">
+                  <input type="checkbox" name="part_pricing" {"checked" if m.get("part_pricing") else ""}> پارت روی قیمت اثر داره
+                </label>''' if part_relevant else ''}
                 <button class="text-indigo-600 text-xs pb-1.5">ذخیره</button>
               </form>
               <form method="post" action="/admin/iphone/models/{m['id']}/toggle" class="mr-2">
@@ -12163,7 +12175,8 @@ async def iphone_models_add(request: Request, name: str = Form(...), series: str
 
 
 @router.post("/iphone/models/{mid}/edit")
-async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form("")):
+async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form(""),
+                              color_pricing: str | None = Form(None), part_pricing: str | None = Form(None)):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
@@ -12171,7 +12184,8 @@ async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), 
     # dual_sim_parts/esim_only دیگه از این فرم ویرایش نمی‌شن — استاندارد تک‌سیم/دوسیم
     # به‌صورت خودکار طبق قاعدهٔ پروژه محاسبه می‌شه (_iv_sim_policy در iphone_valuation/db.py)
     # و نباید اینجا با یک مقدار خالی/پیش‌فرض بی‌صدا رونویسی بشه
-    ivdb.update_model(mid, name=name.strip(), series=series.strip())
+    ivdb.update_model(mid, name=name.strip(), series=series.strip(),
+                       color_pricing=1 if color_pricing else 0, part_pricing=1 if part_pricing else 0)
     return _redir(f"/admin/iphone/models?flash={e('✅ ذخیره شد')}&open={mid}")
 
 
@@ -12216,6 +12230,15 @@ async def iphone_capacities_upsert(request: Request, model_id: int = Form(...), 
     label = capacity_label.strip()
     part = part_number.strip().upper()
     clr = color.strip()
+    # حتی اگه فرم دستکاری بشه، اگه قیمت‌گذاری رنگ/پارت برای این مدل خاموش باشه، همیشه
+    # روی ردیف عمومی (بدون رنگ/پارت مشخص) ذخیره می‌شه — همون‌طور که resolve_capacity هم
+    # طبق همین دو فلگ رفتار می‌کنه، تا هیچ ردیف یتیمی که هیچ‌وقت استفاده نمی‌شه ساخته نشه.
+    m = ivdb.get_model(model_id)
+    if m:
+        if not m.get("color_pricing"):
+            clr = ""
+        if not m.get("part_pricing"):
+            part = ""
     bp, bpr, spr = _iv_parse_num(base_price), _iv_parse_num(buy_price_ref), _iv_parse_num(sell_price_ref)
     fx_rate = _iv_parse_num(fx_ref_rate) or ivfx.get_current_rate()
     ivdb.upsert_capacity(model_id, label, bp, bpr, spr, fx_rate, part_number=part, color=clr)
