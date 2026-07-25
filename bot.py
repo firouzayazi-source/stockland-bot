@@ -4261,6 +4261,23 @@ def _iv_ask_capacity(chat_id, uid):
     bot.send_message(chat_id, "💾 ظرفیت حافظه؟", reply_markup=kb)
 
 
+def _iv_ask_color(chat_id, uid):
+    """رنگ رو با گزینه‌های آمادهٔ همین مدل می‌پرسه (چون رنگ هم روی قیمت اثر داره —
+    resolve_capacity این ورودی رو هم در نظر می‌گیره). «سایر» رنگ عمومی (fallback) رو انتخاب می‌کنه."""
+    import iphone_valuation.db as ivdb
+    state = user_states.get(uid)
+    if not state:
+        return
+    colors = ivdb.list_colors(state.get("model_id"), active_only=True)
+    names = [c["name"] for c in colors]
+    state["colors"] = names
+    kb = types.InlineKeyboardMarkup()
+    for idx, name in enumerate(names):
+        kb.add(types.InlineKeyboardButton(name, callback_data=f"ivw_color_{idx}"))
+    kb.add(types.InlineKeyboardButton("سایر", callback_data="ivw_color_OTHER"))
+    bot.send_message(chat_id, "🎨 رنگ دستگاه؟", reply_markup=kb)
+
+
 def _iv_ask_seller_type(chat_id, uid):
     kb = types.InlineKeyboardMarkup()
     kb.row(types.InlineKeyboardButton("🏬 فروشگاه", callback_data="ivw_stype_store"),
@@ -4298,6 +4315,7 @@ def _iv_finalize(chat_id, uid):
             "model_id": state.get("model_id"),
             "capacity_id": state.get("capacity_id"),
             "part_number": state.get("part_number", ""),
+            "color": state.get("color", ""),
             "selections": state.get("selections", {}),
             "features_ok": state.get("features_ok"),
             "sim_type": sim_type,
@@ -4317,9 +4335,10 @@ def _iv_finalize(chat_id, uid):
     sim_label = sim_labels.get(result.get("sim_type", ""), "—")
     part_label_map = dict(ivdb.PART_OPTIONS)
     part_display = part_label_map.get(result.get("part_number") or "", result.get("part_number") or "—")
+    color_display = result.get("color") or "—"
     txt = (
         f"📱 <b>{result['model_name']} {result['capacity_label']}</b> "
-        f"({html.escape(part_display)} · 📡 {sim_label})\n\n"
+        f"({html.escape(part_display)} · 🎨 {html.escape(color_display)} · 📡 {sim_label})\n\n"
         f"💵 قیمت واقعی بازار: <b>{result['market_price']:,}</b> تومان\n"
         f"⚖️ قیمت منصفانه: <b>{result['fair_price']:,}</b> تومان\n"
         f"🏬 پیشنهاد خرید فروشگاه: <b>{result['buy_price']:,}</b> تومان\n"
@@ -4369,20 +4388,32 @@ def _iv_wizard_callback(call):
         return
 
     if data.startswith("ivw_caplbl_"):
-        import iphone_valuation.db as ivdb
         idx = int(data.replace("ivw_caplbl_", ""))
         labels = state.get("cap_labels") or []
         if idx >= len(labels):
             bot.send_message(chat_id, "⏳ این کارشناسی منقضی شده. دوباره از منو شروع کن.")
             return
-        label = labels[idx]
-        row = ivdb.resolve_capacity(state.get("model_id"), label, state.get("part_number", ""))
+        state["capacity_label"] = labels[idx]
+        _iv_ask_color(chat_id, uid)
+        return
+
+    if data.startswith("ivw_color_"):
+        import iphone_valuation.db as ivdb
+        raw = data.replace("ivw_color_", "")
+        if raw == "OTHER":
+            color = ""
+        else:
+            idx = int(raw)
+            names = state.get("colors") or []
+            color = names[idx] if idx < len(names) else ""
+        state["color"] = color
+        row = ivdb.resolve_capacity(state.get("model_id"), state.get("capacity_label", ""),
+                                     state.get("part_number", ""), color)
         if not row:
             bot.send_message(chat_id, "⚠️ قیمتی برای این ترکیب هنوز در پنل ثبت نشده. با پشتیبانی هماهنگ کن.")
             user_states.pop(uid, None)
             return
         state["capacity_id"] = row["id"]
-        state["capacity_label"] = label
         _iv_advance_coeff(chat_id, uid, 0)
         return
 

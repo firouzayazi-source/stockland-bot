@@ -185,6 +185,7 @@ def ensure_schema():
             model_id INTEGER NOT NULL,
             capacity_label TEXT NOT NULL,
             part_number TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT '',
             base_price INTEGER NOT NULL DEFAULT 0,
             buy_price_ref INTEGER NOT NULL DEFAULT 0,
             sell_price_ref INTEGER NOT NULL DEFAULT 0,
@@ -193,12 +194,18 @@ def ensure_schema():
             active INTEGER NOT NULL DEFAULT 1,
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );""")
-        # مهاجرت برای نصب‌های قبلی که iv_capacities رو بدون این ستون ساخته بودن — قیمت هر
-        # گوشی بسته به پارت (LL/ZA/CH/سایر) فرق می‌کنه، پس این ستون برای قیمت‌گذاری دقیق لازمه.
-        # ردیف‌های قدیمی part_number='' می‌مونن و به‌عنوان «قیمت پیش‌فرض بدون پارت مشخص»
-        # (fallback در resolve_capacity) همچنان کار می‌کنن — هیچ دیتایی از دست نمی‌ره.
+        # مهاجرت برای نصب‌های قبلی که iv_capacities رو بدون این ستون‌ها ساخته بودن — قیمت هر
+        # گوشی هم بسته به پارت (LL/ZA/CH/سایر) هم بسته به رنگ فرق می‌کنه، پس این دو ستون برای
+        # قیمت‌گذاری دقیق لازمن. ردیف‌های قدیمی part_number=''/color='' می‌مونن و به‌عنوان
+        # «قیمت پیش‌فرض بدون پارت/رنگ مشخص» (fallback در resolve_capacity) همچنان کار می‌کنن —
+        # هیچ دیتایی از دست نمی‌ره.
         try:
             conn.execute("ALTER TABLE iv_capacities ADD COLUMN part_number TEXT NOT NULL DEFAULT '';")
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE iv_capacities ADD COLUMN color TEXT NOT NULL DEFAULT '';")
             conn.commit()
         except Exception:
             pass
@@ -537,16 +544,17 @@ def get_capacity(cap_id: int) -> dict | None:
 
 def create_capacity(model_id: int, capacity_label: str, base_price: int,
                      buy_price_ref: int, sell_price_ref: int,
-                     fx_ref_rate: int = 0, demand_percent: float = 0, part_number: str = "") -> int:
+                     fx_ref_rate: int = 0, demand_percent: float = 0,
+                     part_number: str = "", color: str = "") -> int:
     ensure_schema()
     conn = _conn()
     try:
         cur = conn.execute(
             "INSERT INTO iv_capacities "
-            "(model_id, capacity_label, part_number, base_price, buy_price_ref, sell_price_ref, "
-            "fx_ref_rate, demand_percent) VALUES (?,?,?,?,?,?,?,?);",
-            (model_id, capacity_label.strip(), (part_number or "").strip().upper(), base_price,
-             buy_price_ref, sell_price_ref, fx_ref_rate, demand_percent))
+            "(model_id, capacity_label, part_number, color, base_price, buy_price_ref, sell_price_ref, "
+            "fx_ref_rate, demand_percent) VALUES (?,?,?,?,?,?,?,?,?);",
+            (model_id, capacity_label.strip(), (part_number or "").strip().upper(), (color or "").strip(),
+             base_price, buy_price_ref, sell_price_ref, fx_ref_rate, demand_percent))
         conn.commit()
         return cur.lastrowid
     finally:
@@ -557,7 +565,7 @@ def update_capacity(cap_id: int, **fields) -> None:
     ensure_schema()
     if not fields:
         return
-    allowed = {"capacity_label", "part_number", "base_price", "buy_price_ref", "sell_price_ref",
+    allowed = {"capacity_label", "part_number", "color", "base_price", "buy_price_ref", "sell_price_ref",
                "fx_ref_rate", "demand_percent", "active"}
     cols = [k for k in fields if k in allowed]
     if not cols:
@@ -582,36 +590,58 @@ def delete_capacity(cap_id: int) -> None:
         conn.close()
 
 
-def capacity_exists(model_id: int, capacity_label: str, part_number: str = "") -> bool:
-    """چک تکراری‌نبودن قبل از افزودن — یه (مدل، ظرفیت، پارت) نباید دوبار ثبت بشه، وگرنه
-    resolve_capacity نمی‌دونه کدوم ردیف رو انتخاب کنه."""
+def get_capacity_exact(model_id: int, capacity_label: str, part_number: str = "", color: str = "") -> dict | None:
+    """ردیف دقیقاً منطبق با (مدل، ظرفیت، پارت، رنگ) رو برمی‌گردونه (یا None) —
+    برای upsert_capacity استفاده می‌شه تا تشخیص بده باید ردیف موجود آپدیت بشه یا جدید ساخته بشه."""
     ensure_schema()
     conn = _conn()
     try:
         row = conn.execute(
-            "SELECT id FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number=? LIMIT 1;",
-            (model_id, capacity_label.strip(), (part_number or "").strip().upper())).fetchone()
-        return row is not None
+            "SELECT * FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number=? "
+            "AND color=? LIMIT 1;",
+            (model_id, capacity_label.strip(), (part_number or "").strip().upper(), (color or "").strip())
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
 
-def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "") -> dict | None:
-    """قیمت دقیق (مدل+ظرفیت+پارت) رو پیدا می‌کنه؛ اگه قیمت اختصاصی برای اون پارت ثبت
-    نشده باشه، به ردیف عمومی بدون‌پارت (part_number='') همون ظرفیت fallback می‌کنه —
-    این یعنی ادمین فقط جایی که قیمت واقعاً فرق داره لازمه پارت‌به‌پارت وارد کنه."""
+def upsert_capacity(model_id: int, capacity_label: str, base_price: int, buy_price_ref: int,
+                     sell_price_ref: int, fx_ref_rate: int = 0, demand_percent: float = 0,
+                     part_number: str = "", color: str = "") -> int:
+    """ثبت یا به‌روزرسانی قیمت یک ترکیب (ظرفیت+پارت+رنگ) — همون دکمهٔ «ذخیره»ی فرم واحد
+    تعریف مدل در پنل؛ اگه این ترکیب دقیق از قبل ثبت شده باشه آپدیت می‌شه (نه رد یا تکراری)،
+    وگرنه ردیف تازه ساخته می‌شه. کاربر هیچ‌وقت پیام «قبلاً ثبت شده» نمی‌بینه."""
+    existing = get_capacity_exact(model_id, capacity_label, part_number, color)
+    if existing:
+        update_capacity(existing["id"], base_price=base_price, buy_price_ref=buy_price_ref,
+                         sell_price_ref=sell_price_ref, fx_ref_rate=fx_ref_rate,
+                         demand_percent=demand_percent, active=1)
+        return existing["id"]
+    return create_capacity(model_id, capacity_label, base_price, buy_price_ref, sell_price_ref,
+                            fx_ref_rate, demand_percent, part_number=part_number, color=color)
+
+
+def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "", color: str = "") -> dict | None:
+    """قیمت دقیق (مدل+ظرفیت+پارت+رنگ) رو پیدا می‌کنه؛ اگه قیمت اختصاصی برای اون ترکیب ثبت
+    نشده باشه، به ترتیب اولویت fallback می‌کنه: (پارت دقیق+رنگ عمومی) → (پارت عمومی+رنگ دقیق)
+    → (پارت عمومی+رنگ عمومی) — یعنی ادمین فقط جایی که قیمت واقعاً فرق داره لازمه پارت/رنگ
+    مشخص وارد کنه، بقیه از قیمت عمومی‌تر استفاده می‌کنن."""
     ensure_schema()
     conn = _conn()
     try:
         part = (part_number or "").strip().upper()
+        clr = (color or "").strip()
         label = capacity_label.strip()
-        row = conn.execute(
-            "SELECT * FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number=? "
-            "AND active=1 LIMIT 1;", (model_id, label, part)).fetchone()
-        if not row and part:
-            row = conn.execute(
-                "SELECT * FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number='' "
-                "AND active=1 LIMIT 1;", (model_id, label)).fetchone()
+
+        def _q(p, c):
+            return conn.execute(
+                "SELECT * FROM iv_capacities WHERE model_id=? AND capacity_label=? AND part_number=? "
+                "AND color=? AND active=1 LIMIT 1;", (model_id, label, p, c)).fetchone()
+
+        row = _q(part, clr)
+        if not row and (part or clr):
+            row = _q(part, "") or _q("", clr) or _q("", "")
         return dict(row) if row else None
     finally:
         conn.close()
