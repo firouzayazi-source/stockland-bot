@@ -556,13 +556,13 @@ function loadMe(){if(_m)return;_m=1;
   }
   var un=(tgUser&&tgUser.first_name)||'کاربر',usr=(tgUser&&tgUser.username)||'';
   body.innerHTML='<div class="sl-me sl-me-c">'+
-    '<div class="sl-ava-wrap" id="me-ava-wrap">'+
+    '<label class="sl-ava-wrap" id="me-ava-wrap" for="me-ava-input">'+
       '<div class="sl-ava" id="me-ava">🥉</div>'+
       '<img class="sl-ava-img" id="me-ava-img" style="display:none" alt="">'+
       '<div class="sl-ava-spin" id="me-ava-spin" style="display:none"><div class="sl-spin"></div></div>'+
-      '<button class="sl-ava-edit" id="me-ava-edit" type="button" title="تغییر عکس پروفایل">📷</button>'+
+      '<span class="sl-ava-edit" id="me-ava-edit" title="تغییر عکس پروفایل">📷</span>'+
       '<input type="file" id="me-ava-input" accept="image/*" style="display:none">'+
-    '</div>'+
+    '</label>'+
     '<div class="sl-me-n">'+esc(un)+'</div>'+
     '<div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div>'+
     '</div>'+
@@ -634,32 +634,103 @@ function setAvatarImg(url){
   img.src=url;
 }
 function initAvatarUpload(){
-  var wrap=document.getElementById('me-ava-wrap'),input=document.getElementById('me-ava-input'),
-      spin=document.getElementById('me-ava-spin');
-  if(!wrap||!input)return;
-  function openPicker(e){if(e){e.preventDefault();e.stopPropagation()}input.click()}
-  wrap.addEventListener('click',openPicker);
+  var input=document.getElementById('me-ava-input');
+  if(!input)return;
+  // خودِ #me-ava-wrap یک <label for="me-ava-input"> است — دیگه نیازی به باز کردن دستی
+  // input.click() از یک هندلر جدا نیست (اون روش روی WKWebView تلگرام آی‌اواس غیرقابل‌اعتماد بود؛
+  // label با for، انتخابگر فایل رو به‌صورت بومی و همیشه‌قابل‌اعتماد در همهٔ مرورگرها باز می‌کنه)
   input.addEventListener('change',function(){
-    var file=input.files&&input.files[0];if(!file)return;
+    var file=input.files&&input.files[0];if(!file){return}
     if(!/^image\//.test(file.type)){window._slApp.dialog.alert('فقط فایل عکس قابل قبوله','خطا');input.value='';return}
-    if(file.size>5*1024*1024){window._slApp.dialog.alert('حجم عکس نباید بیشتر از ۵ مگابایت باشد','خطا');input.value='';return}
-    if(spin)spin.style.display='grid';
-    var fd=new FormData();fd.append('photo',file);
-    fetch('/api/v1/me/avatar',{method:'POST',headers:{'X-Telegram-Init-Data':initData},body:fd})
-      .then(function(r){return r.json()}).then(function(res){
-        if(spin)spin.style.display='none';
-        if(res&&res.ok&&res.avatar_url){
-          setAvatarImg(res.avatar_url);
-          if(window._slTg&&window._slTg.HapticFeedback)try{window._slTg.HapticFeedback.notificationOccurred('success')}catch(e){}
-        }else{
-          window._slApp.dialog.alert((res&&res.detail)||'آپلود عکس ناموفق بود','خطا');
-        }
-        input.value='';
-      }).catch(function(){
-        if(spin)spin.style.display='none';
-        window._slApp.dialog.alert('خطای شبکه در آپلود عکس','خطا');
-        input.value='';
-      });
+    if(file.size>15*1024*1024){window._slApp.dialog.alert('حجم عکس نباید بیشتر از ۱۵ مگابایت باشد','خطا');input.value='';return}
+    var reader=new FileReader();
+    reader.onload=function(){
+      openAvatarCropper(reader.result,function(blob){uploadAvatarBlob(blob)});
+      input.value='';
+    };
+    reader.onerror=function(){window._slApp.dialog.alert('خطا در خواندن فایل عکس','خطا');input.value=''};
+    reader.readAsDataURL(file);
+  });
+}
+function uploadAvatarBlob(blob){
+  var spin=document.getElementById('me-ava-spin');
+  if(spin)spin.style.display='grid';
+  var fd=new FormData();fd.append('photo',blob,'avatar.jpg');
+  fetch('/api/v1/me/avatar',{method:'POST',headers:{'X-Telegram-Init-Data':initData},body:fd})
+    .then(function(r){return r.json()}).then(function(res){
+      if(spin)spin.style.display='none';
+      if(res&&res.ok&&res.avatar_url){
+        setAvatarImg(res.avatar_url);
+        if(window._slTg&&window._slTg.HapticFeedback)try{window._slTg.HapticFeedback.notificationOccurred('success')}catch(e){}
+      }else{
+        window._slApp.dialog.alert((res&&res.detail)||'آپلود عکس ناموفق بود','خطا');
+      }
+    }).catch(function(){
+      if(spin)spin.style.display='none';
+      window._slApp.dialog.alert('خطای شبکه در آپلود عکس','خطا');
+    });
+}
+/* ─── پاپ‌آپ برش عکس (پن + زوم، خروجی مربع ۴۸۰×۴۸۰ روی canvas — بدون کتابخانهٔ خارجی) ─── */
+function openAvatarCropper(dataUrl,onDone){
+  _accPopup('برش عکس پروفایل',
+    '<div class="sl-crop-view" id="crop-view"><img class="sl-crop-img" id="crop-img" src="'+dataUrl+'" alt=""></div>'+
+    '<div class="sl-crop-zoom-row"><span class="sl-crop-zoom-i">－</span>'+
+    '<input type="range" id="crop-zoom" class="sl-crop-zoom" min="100" max="300" value="100">'+
+    '<span class="sl-crop-zoom-i">＋</span></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="crop-confirm-btn">تأیید و آپلود</button></div>'+
+    '<div class="sl-checkout-note">با کشیدن عکس جابه‌جا کنید و با اسلایدر بزرگ‌نمایی کنید</div>');
+  var view=document.getElementById('crop-view'),img=document.getElementById('crop-img'),
+      zoomInp=document.getElementById('crop-zoom'),confirmBtn=document.getElementById('crop-confirm-btn');
+  if(!view||!img)return;
+  var VP=240,nw=0,nh=0,baseScale=1,zoom=1,offX=0,offY=0,drag=null;
+  function clamp(){
+    var dw=nw*baseScale*zoom,dh=nh*baseScale*zoom;
+    var maxX=Math.max(0,(dw-VP)/2),maxY=Math.max(0,(dh-VP)/2);
+    if(offX>maxX)offX=maxX;if(offX<-maxX)offX=-maxX;
+    if(offY>maxY)offY=maxY;if(offY<-maxY)offY=-maxY;
+  }
+  function render(){
+    clamp();
+    var dw=nw*baseScale*zoom,dh=nh*baseScale*zoom;
+    img.style.width=dw+'px';img.style.height=dh+'px';
+    img.style.transform='translate3d(calc(-50% + '+offX+'px), calc(-50% + '+offY+'px), 0)';
+  }
+  function onImgReady(){
+    nw=img.naturalWidth;nh=img.naturalHeight;
+    if(!nw||!nh)return;
+    baseScale=VP/Math.min(nw,nh);zoom=1;offX=0;offY=0;
+    if(zoomInp)zoomInp.value=100;
+    render();
+  }
+  img.onload=onImgReady;
+  if(img.complete&&img.naturalWidth)onImgReady();
+  if(zoomInp)zoomInp.addEventListener('input',function(){zoom=(parseInt(zoomInp.value,10)||100)/100;render()});
+  view.addEventListener('pointerdown',function(e){
+    drag={sx:e.clientX,sy:e.clientY,ox:offX,oy:offY};
+    try{view.setPointerCapture(e.pointerId)}catch(_e){}
+  });
+  view.addEventListener('pointermove',function(e){
+    if(!drag)return;
+    offX=drag.ox+(e.clientX-drag.sx);offY=drag.oy+(e.clientY-drag.sy);
+    render();
+  });
+  function endDrag(){drag=null}
+  view.addEventListener('pointerup',endDrag);
+  view.addEventListener('pointercancel',endDrag);
+  if(confirmBtn)confirmBtn.addEventListener('click',function(){
+    if(!nw||!nh)return;
+    var effScale=baseScale*zoom;
+    var dw=nw*effScale,dh=nh*effScale;
+    var imgLeft=(VP/2+offX)-dw/2,imgTop=(VP/2+offY)-dh/2;
+    var sx=(-imgLeft)/effScale,sy=(-imgTop)/effScale,sSize=VP/effScale;
+    var OUT=480;
+    var cnv=document.createElement('canvas');cnv.width=OUT;cnv.height=OUT;
+    var ctx=cnv.getContext('2d');
+    ctx.drawImage(img,sx,sy,sSize,sSize,0,0,OUT,OUT);
+    cnv.toBlob(function(blob){
+      window._slApp.popup.close('#post-popup');
+      if(blob)onDone(blob);
+    },'image/jpeg',0.92);
   });
 }
 
@@ -1419,7 +1490,13 @@ document.addEventListener('click',function(e){
   var navTitle=document.getElementById('sl-nav-title');
   var hero=document.getElementById('sl-hero');
   var homeTab=document.getElementById('tab-home');
+  var meTab=document.getElementById('tab-me');
   if(!nav||!hero||!homeTab)return;
+  // تب‌هایی که مثل خانه یک هیرو/کارت‌رنگی دقیقاً زیر نوار شناور دارن (بدون padding-top روی
+  // خودِ تب) — رنگ هدر بومی تلگرام و شفافیت نوار برای همهٔ این‌ها یکسان محاسبه می‌شه، دقیقاً
+  // همون مکانیزم خانه؛ تب حساب (sl-me-c) هم به همین لیست اضافه شد
+  var HERO_TABS={'tab-home':homeTab};
+  if(meTab)HERO_TABS['tab-me']=meTab;
   var _dk=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
   var HERO_TOP=_dk?'#2838D8':'#4255FF';
   var BAR_SOLID=_dk?'#1C1C1E':'#FFFFFF';
@@ -1434,7 +1511,8 @@ document.addEventListener('click',function(e){
     requestAnimationFrame(function(){
       ticking=false;
       var activeTab=document.querySelector('.tab.tab-active');
-      if(!activeTab||activeTab.id!=='tab-home'){
+      var heroEl=activeTab&&HERO_TABS[activeTab.id];
+      if(!heroEl){
         nav.classList.remove('sl-nav--solid');
         setTgHeader(PAGE_BG);
         return;
@@ -1443,7 +1521,7 @@ document.addEventListener('click',function(e){
       // با _lastHex از ارسال تکراری جلوگیری می‌کنه؛ قبلاً یه مقایسهٔ state اینجا بود که باعث
       // می‌شد برگشتن به خانه (بدون اسکرول) رنگ هدر بومی تلگرام رو دوباره نفرسته و همون‌جوری
       // که تب قبلی گذاشته بود (سفید/PAGE_BG) بمونه
-      var solid=homeTab.scrollTop>SNAP_PX;
+      var solid=heroEl.scrollTop>SNAP_PX;
       if(solid){nav.classList.add('sl-nav--solid');setTgHeader(BAR_SOLID)}
       else{nav.classList.remove('sl-nav--solid');setTgHeader(HERO_TOP)}
     });
@@ -1455,6 +1533,7 @@ document.addEventListener('click',function(e){
     setTimeout(onScroll,350); // safety-net برای انیمیشن‌های کندتر
   }
   homeTab.addEventListener('scroll',onScroll,{passive:true});
+  if(meTab)meTab.addEventListener('scroll',onScroll,{passive:true});
   app.on('tabShow',onTabShow);
   onScroll();
 })();
