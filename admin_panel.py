@@ -11927,7 +11927,7 @@ async def iphone_toggle(request: Request):
 
 
 @router.get("/iphone/models", response_class=HTMLResponse)
-async def iphone_models_page(request: Request, flash: str = ""):
+async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
@@ -11949,6 +11949,7 @@ async def iphone_models_page(request: Request, flash: str = ""):
 
         cap_rows = "".join(f"""
           <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="flex flex-wrap gap-3 items-end border-b py-3 text-sm">
+            <input type="hidden" name="model_id" value="{m['id']}">
             <div class="flex flex-col gap-0.5">
               <span class="text-[9px] text-gray-400">ظرفیت</span>
               <span class="w-20 font-medium py-1">{html.escape(c['capacity_label'])}</span>
@@ -11964,13 +11965,15 @@ async def iphone_models_page(request: Request, flash: str = ""):
 
         color_chips = "".join(f"""
           <form method="post" action="/admin/iphone/colors/{c['id']}/delete" class="inline" onsubmit="return confirm('حذف بشه؟')">
+            <input type="hidden" name="model_id" value="{m['id']}">
             <button class="inline-flex items-center gap-1 bg-gray-100 text-gray-600 rounded-full px-2.5 py-1 text-xs {'opacity-40' if not c['active'] else ''}">
               {html.escape(c['name'])} <span class="text-red-400">×</span>
             </button>
           </form>""" for c in colors) or '<span class="text-xs text-gray-400">رنگی ثبت نشده.</span>'
 
+        is_open = str(m["id"]) == open
         blocks += f"""
-        <details class="bg-white rounded-xl shadow-sm mb-3 {'ring-1 ring-amber-300' if no_price else ''}">
+        <details id="iv-model-{m['id']}" {"open" if is_open else ""} class="bg-white rounded-xl shadow-sm mb-3 {'ring-1 ring-amber-300' if no_price else ''} {'ring-2 ring-indigo-400' if is_open else ''}">
           <summary class="p-4 cursor-pointer flex items-center justify-between flex-wrap gap-2">
             <span class="font-medium text-sm">{html.escape(m['name'])} <span class="text-gray-400 text-xs">({html.escape(m['series'])})</span>
               {' <span class="text-amber-500 text-xs">⚠️ قیمت پر نشده</span>' if no_price else ''}
@@ -11980,10 +11983,24 @@ async def iphone_models_page(request: Request, flash: str = ""):
           </summary>
           <div class="p-4 pt-0">
             <div class="flex items-center justify-between mb-2 pt-2 border-t">
-              <form method="post" action="/admin/iphone/models/{m['id']}/edit" class="flex gap-2 items-center flex-1">
-                <input type="text" name="name" value="{e(m['name'])}" class="border rounded p-1.5 text-sm font-medium flex-1 max-w-xs">
-                <input type="text" name="series" value="{e(m['series'])}" class="border rounded p-1.5 text-xs w-32" placeholder="سری">
-                <button class="text-indigo-600 text-xs">ذخیره</button>
+              <form method="post" action="/admin/iphone/models/{m['id']}/edit" class="flex flex-wrap gap-2 items-end flex-1">
+                <div class="flex flex-col gap-0.5">
+                  <span class="text-[9px] text-gray-400">نام</span>
+                  <input type="text" name="name" value="{e(m['name'])}" class="border rounded p-1.5 text-sm font-medium max-w-xs">
+                </div>
+                <div class="flex flex-col gap-0.5">
+                  <span class="text-[9px] text-gray-400">سری</span>
+                  <input type="text" name="series" value="{e(m['series'])}" class="border rounded p-1.5 text-xs w-24">
+                </div>
+                <div class="flex flex-col gap-0.5">
+                  <span class="text-[9px] text-gray-400">پارت‌های دوسیم (با کاما)</span>
+                  <input type="text" name="dual_sim_parts" value="{e(m['dual_sim_parts'])}" dir="ltr"
+                         class="border rounded p-1.5 text-xs w-28" placeholder="مثلاً ZA,CH">
+                </div>
+                <label class="text-xs flex items-center gap-1 pb-1.5">
+                  <input type="checkbox" name="esim_only" {"checked" if m['esim_only'] else ""}> فقط eSIM
+                </label>
+                <button class="text-indigo-600 text-xs pb-1.5">ذخیره</button>
               </form>
               <form method="post" action="/admin/iphone/models/{m['id']}/toggle" class="mr-2">
                 <button class="text-xs {'text-red-500' if m['active'] else 'text-emerald-600'}">{'غیرفعال کردن' if m['active'] else 'فعال کردن'}</button>
@@ -12021,6 +12038,7 @@ async def iphone_models_page(request: Request, flash: str = ""):
       <div class="text-xs text-gray-400 mt-2">هر مدل رو باز کن تا ظرفیت/رنگ/قیمتش رو ببینی و ویرایش کنی. مدل‌هایی که هنوز قیمت‌شون پر نشده با ⚠️ مشخص شدن.</div>
     </div>
     {blocks or '<div class="text-center text-gray-400 text-sm py-10">هنوز مدلی ثبت نشده.</div>'}
+    {f'<script>document.getElementById("iv-model-{e(open)}")?.scrollIntoView({{block:"center"}});</script>' if open else ''}
     """
     return _layout("مدل‌ها و قیمت‌های آیفون", body, adm, flash=flash)
 
@@ -12031,20 +12049,25 @@ async def iphone_models_add(request: Request, name: str = Form(...), series: str
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
+    new_id = None
     if name.strip():
-        ivdb.create_model(name.strip(), series.strip())
+        new_id = ivdb.create_model(name.strip(), series.strip())
         _log(request, "افزودن مدل آیفون", "کارشناسی آیفون", name.strip(), admin_info=adm)
-    return _redir("/admin/iphone/models")
+    open_q = f"&open={new_id}" if new_id else ""
+    return _redir(f"/admin/iphone/models?flash={e('✅ مدل اضافه شد')}{open_q}")
 
 
 @router.post("/iphone/models/{mid}/edit")
-async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form("")):
+async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form(""),
+                              dual_sim_parts: str = Form(""), esim_only: str | None = Form(None)):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    ivdb.update_model(mid, name=name.strip(), series=series.strip())
-    return _redir("/admin/iphone/models")
+    parts = ",".join(p.strip().upper() for p in dual_sim_parts.split(",") if p.strip())
+    ivdb.update_model(mid, name=name.strip(), series=series.strip(),
+                       dual_sim_parts=parts, esim_only=1 if esim_only else 0)
+    return _redir(f"/admin/iphone/models?flash={e('✅ ذخیره شد')}&open={mid}")
 
 
 @router.post("/iphone/models/{mid}/toggle")
@@ -12056,7 +12079,7 @@ async def iphone_models_toggle(request: Request, mid: int):
     m = ivdb.get_model(mid)
     if m:
         ivdb.update_model(mid, active=0 if m["active"] else 1)
-    return _redir("/admin/iphone/models")
+    return _redir(f"/admin/iphone/models?flash={e('✅ ذخیره شد')}&open={mid}")
 
 
 @router.post("/iphone/capacities/add")
@@ -12071,11 +12094,11 @@ async def iphone_capacities_add(request: Request, model_id: int = Form(...), cap
     fx_rate = fx_ref_rate or ivfx.get_current_rate()
     ivdb.create_capacity(model_id, capacity_label.strip(), base_price, buy_price_ref, sell_price_ref, fx_rate)
     _log(request, "افزودن ظرفیت آیفون", "کارشناسی آیفون", f"model={model_id} {capacity_label}", admin_info=adm)
-    return _redir("/admin/iphone/models")
+    return _redir(f"/admin/iphone/models?flash={e('✅ ظرفیت اضافه شد')}&open={model_id}")
 
 
 @router.post("/iphone/capacities/{cid}/edit")
-async def iphone_capacities_edit(request: Request, cid: int, base_price: int = Form(...),
+async def iphone_capacities_edit(request: Request, cid: int, model_id: int = Form(0), base_price: int = Form(...),
                                   buy_price_ref: int = Form(...), sell_price_ref: int = Form(...),
                                   fx_ref_rate: int = Form(0), demand_percent: float = Form(0),
                                   active: str | None = Form(None)):
@@ -12085,7 +12108,7 @@ async def iphone_capacities_edit(request: Request, cid: int, base_price: int = F
     import iphone_valuation.db as ivdb
     ivdb.update_capacity(cid, base_price=base_price, buy_price_ref=buy_price_ref, sell_price_ref=sell_price_ref,
                           fx_ref_rate=fx_ref_rate, demand_percent=demand_percent, active=1 if active else 0)
-    return _redir("/admin/iphone/models")
+    return _redir(f"/admin/iphone/models?flash={e('✅ قیمت ذخیره شد')}&open={model_id}")
 
 
 @router.post("/iphone/colors/add")
@@ -12097,17 +12120,17 @@ async def iphone_colors_add(request: Request, model_id: int = Form(...), name: s
     if name.strip():
         ivdb.create_color(model_id, name.strip())
         _log(request, "افزودن رنگ آیفون", "کارشناسی آیفون", f"model={model_id} {name.strip()}", admin_info=adm)
-    return _redir("/admin/iphone/models")
+    return _redir(f"/admin/iphone/models?flash={e('✅ رنگ اضافه شد')}&open={model_id}")
 
 
 @router.post("/iphone/colors/{cid}/delete")
-async def iphone_colors_delete(request: Request, cid: int):
+async def iphone_colors_delete(request: Request, cid: int, model_id: int = Form(0)):
     adm = _get_admin(request)
     guard = _require(adm, "settings")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.delete_color(cid)
-    return _redir("/admin/iphone/models")
+    return _redir(f"/admin/iphone/models?flash={e('✅ حذف شد')}&open={model_id}")
 
 
 @router.get("/iphone/coefficients", response_class=HTMLResponse)
