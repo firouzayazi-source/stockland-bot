@@ -167,9 +167,11 @@ def ensure_schema():
             active INTEGER NOT NULL DEFAULT 1,
             dual_sim_parts TEXT NOT NULL DEFAULT '',
             esim_only INTEGER NOT NULL DEFAULT 0,
+            color_pricing INTEGER NOT NULL DEFAULT 0,
+            part_pricing INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );""")
-        # مهاجرت برای نصب‌های قبلی که iv_models رو بدون این دو ستون ساخته بودن
+        # مهاجرت برای نصب‌های قبلی که iv_models رو بدون این ستون‌ها ساخته بودن
         try:
             conn.execute("ALTER TABLE iv_models ADD COLUMN dual_sim_parts TEXT NOT NULL DEFAULT '';")
             conn.commit()
@@ -177,6 +179,19 @@ def ensure_schema():
             pass
         try:
             conn.execute("ALTER TABLE iv_models ADD COLUMN esim_only INTEGER NOT NULL DEFAULT 0;")
+            conn.commit()
+        except Exception:
+            pass
+        # color_pricing/part_pricing: کلید روشن/خاموش برای اینکه رنگ/پارت واقعاً روی قیمت این
+        # مدل اثر داشته باشن یا نه — پیش‌فرض خاموش (قیمت یکسان)، ادمین آگاهانه روشنش می‌کنه
+        # فقط جایی که واقعاً لازمه (مثل iPhone 15 Pro که رنگ‌های مختلف قیمت متفاوت دارن).
+        try:
+            conn.execute("ALTER TABLE iv_models ADD COLUMN color_pricing INTEGER NOT NULL DEFAULT 0;")
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE iv_models ADD COLUMN part_pricing INTEGER NOT NULL DEFAULT 0;")
             conn.commit()
         except Exception:
             pass
@@ -355,9 +370,31 @@ def ensure_schema():
         _migrate_component_category_v1(conn)
         _migrate_battery_label_v1(conn)
         _migrate_condition_weight_v1(conn)
+        _migrate_pricing_toggles_v1(conn)
     finally:
         conn.close()
     _SCHEMA_DONE = True
+
+
+def _migrate_pricing_toggles_v1(conn):
+    """color_pricing/part_pricing تازه اضافه شدن و پیش‌فرضشون خاموشه. اگه ادمین از قبل
+    (قبل از وجود این فلگ‌ها) واقعاً برای یه مدل چند ردیف با رنگ/پارت متفاوت ثبت کرده بود،
+    یعنی عملاً می‌خواسته اثر داشته باشن — پس برای اون مدل‌ها فلگ رو روشن می‌کنیم تا رفتار
+    فعلی سیستم عوض نشه. یه‌بار اجرا می‌شه (فلگ در bot_config)."""
+    from db import get_cfg, set_cfg
+    if get_cfg("IV_PRICING_TOGGLES_MIGRATED", "0") == "1":
+        return
+    models = conn.execute("SELECT id FROM iv_models;").fetchall()
+    for m in models:
+        mid = m["id"]
+        rows = conn.execute(
+            "SELECT DISTINCT color, part_number FROM iv_capacities WHERE model_id=?;", (mid,)).fetchall()
+        has_color = any((r["color"] or "").strip() for r in rows)
+        has_part = any((r["part_number"] or "").strip() for r in rows)
+        conn.execute("UPDATE iv_models SET color_pricing=?, part_pricing=? WHERE id=?;",
+                     (1 if has_color else 0, 1 if has_part else 0, mid))
+    conn.commit()
+    set_cfg("IV_PRICING_TOGGLES_MIGRATED", "1")
 
 
 def _migrate_condition_weight_v1(conn):
@@ -484,7 +521,8 @@ def update_model(model_id: int, **fields) -> None:
     ensure_schema()
     if not fields:
         return
-    allowed = {"name", "series", "sort_order", "active", "dual_sim_parts", "esim_only"}
+    allowed = {"name", "series", "sort_order", "active", "dual_sim_parts", "esim_only",
+               "color_pricing", "part_pricing"}
     cols = [k for k in fields if k in allowed]
     if not cols:
         return
@@ -624,10 +662,20 @@ def upsert_capacity(model_id: int, capacity_label: str, base_price: int, buy_pri
 
 def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "", color: str = "") -> dict | None:
     """قیمت دقیق (مدل+ظرفیت+پارت+رنگ) رو پیدا می‌کنه؛ اگه قیمت اختصاصی برای اون ترکیب ثبت
-    نشده باشه، به ترتیب اولویت fallback می‌کنه: (پارت دقیق+رنگ عمومی) → (پارت عمومی+رنگ دقیق)
-    → (پارت عمومی+رنگ عمومی) — یعنی ادمین فقط جایی که قیمت واقعاً فرق داره لازمه پارت/رنگ
-    مشخص وارد کنه، بقیه از قیمت عمومی‌تر استفاده می‌کنن."""
+    نشده باشه، به ترتیب اولویت fallback می‌کنه: (پارت دقیق+رنگ دقیق) → (پارت دقیق+رنگ عمومی)
+    → (پارت عمومی+رنگ دقیق) → (پارت عمومی+رنگ عمومی) — یعنی ادمین فقط جایی که قیمت واقعاً
+    فرق داره لازمه پارت/رنگ مشخص وارد کنه، بقیه از قیمت عمومی‌تر استفاده می‌کنن.
+
+    اگه ادمین از `/admin/iphone/models` اثر رنگ/پارت روی قیمت این مدل رو خاموش کرده باشه
+    (iv_models.color_pricing/part_pricing)، همون بعد این‌جا قبل از جست‌وجو صفر می‌شه — یعنی
+    کاربر هرچی هم توی ربات انتخاب کرده باشه، قیمت از ردیف عمومی همون مدل خونده می‌شه."""
     ensure_schema()
+    model = get_model(model_id)
+    if model:
+        if not model.get("color_pricing"):
+            color = ""
+        if not model.get("part_pricing"):
+            part_number = ""
     conn = _conn()
     try:
         part = (part_number or "").strip().upper()
