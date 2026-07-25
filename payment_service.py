@@ -81,6 +81,14 @@ try:
 except Exception as _ex:
     logger.warning("API router not loaded: %s", _ex)
 
+# کارشناسی هوشمند قیمت آیفون — هستهٔ مستقل، اگه نبود کل اپ کرش نکنه
+try:
+    from iphone_valuation.router import router as _iv_router
+    app.include_router(_iv_router)
+    logger.info("✅ iPhone valuation router registered at /api/v1/iphone")
+except Exception as _ex:
+    logger.warning("iPhone valuation router not loaded: %s", _ex)
+
 # ── PWA استاتیک (/app) + مدیای آپلودی (/app-media) ─────────────────────────
 try:
     from fastapi.staticfiles import StaticFiles
