@@ -11937,6 +11937,8 @@ async def iphone_models_page(request: Request, flash: str = ""):
     blocks = ""
     for m in models:
         caps = ivdb.list_capacities(model_id=m["id"], active_only=False)
+        colors = ivdb.list_colors(model_id=m["id"], active_only=False)
+        no_price = any(not c["base_price"] for c in caps)
         cap_rows = "".join(f"""
           <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="flex flex-wrap gap-2 items-center border-b py-2 text-sm">
             <span class="w-20 font-medium">{html.escape(c['capacity_label'])}</span>
@@ -11949,29 +11951,53 @@ async def iphone_models_page(request: Request, flash: str = ""):
             <button class="text-indigo-600 text-xs">ذخیره</button>
           </form>""" for c in caps) or '<div class="text-xs text-gray-400 py-2">ظرفیتی ثبت نشده.</div>'
 
+        color_chips = "".join(f"""
+          <form method="post" action="/admin/iphone/colors/{c['id']}/delete" class="inline" onsubmit="return confirm('حذف بشه؟')">
+            <button class="inline-flex items-center gap-1 bg-gray-100 text-gray-600 rounded-full px-2.5 py-1 text-xs {'opacity-40' if not c['active'] else ''}">
+              {html.escape(c['name'])} <span class="text-red-400">×</span>
+            </button>
+          </form>""" for c in colors) or '<span class="text-xs text-gray-400">رنگی ثبت نشده.</span>'
+
         blocks += f"""
-        <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
-          <div class="flex items-center justify-between mb-2">
-            <form method="post" action="/admin/iphone/models/{m['id']}/edit" class="flex gap-2 items-center flex-1">
-              <input type="text" name="name" value="{e(m['name'])}" class="border rounded p-1.5 text-sm font-medium flex-1 max-w-xs">
-              <input type="text" name="series" value="{e(m['series'])}" class="border rounded p-1.5 text-xs w-32" placeholder="سری">
-              <button class="text-indigo-600 text-xs">ذخیره</button>
+        <details class="bg-white rounded-xl shadow-sm mb-3 {'ring-1 ring-amber-300' if no_price else ''}">
+          <summary class="p-4 cursor-pointer flex items-center justify-between flex-wrap gap-2">
+            <span class="font-medium text-sm">{html.escape(m['name'])} <span class="text-gray-400 text-xs">({html.escape(m['series'])})</span>
+              {' <span class="text-amber-500 text-xs">⚠️ قیمت پر نشده</span>' if no_price else ''}
+              {'' if m['active'] else ' <span class="text-red-400 text-xs">(غیرفعال)</span>'}
+            </span>
+            <span class="text-xs text-gray-400">{len(caps)} ظرفیت · {len(colors)} رنگ</span>
+          </summary>
+          <div class="p-4 pt-0">
+            <div class="flex items-center justify-between mb-2 pt-2 border-t">
+              <form method="post" action="/admin/iphone/models/{m['id']}/edit" class="flex gap-2 items-center flex-1">
+                <input type="text" name="name" value="{e(m['name'])}" class="border rounded p-1.5 text-sm font-medium flex-1 max-w-xs">
+                <input type="text" name="series" value="{e(m['series'])}" class="border rounded p-1.5 text-xs w-32" placeholder="سری">
+                <button class="text-indigo-600 text-xs">ذخیره</button>
+              </form>
+              <form method="post" action="/admin/iphone/models/{m['id']}/toggle" class="mr-2">
+                <button class="text-xs {'text-red-500' if m['active'] else 'text-emerald-600'}">{'غیرفعال کردن' if m['active'] else 'فعال کردن'}</button>
+              </form>
+            </div>
+            {cap_rows}
+            <form method="post" action="/admin/iphone/capacities/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+              <input type="hidden" name="model_id" value="{m['id']}">
+              <input type="text" name="capacity_label" class="border rounded p-1 w-24 text-xs" placeholder="ظرفیت مثلاً 128GB" required>
+              <input type="number" name="base_price" class="border rounded p-1 w-28 text-xs" placeholder="قیمت پایه" required>
+              <input type="number" name="buy_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت خرید" required>
+              <input type="number" name="sell_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت فروش" required>
+              <input type="number" name="fx_ref_rate" class="border rounded p-1 w-24 text-xs" placeholder="نرخ ارز مرجع (خالی=نرخ فعلی)">
+              <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن ظرفیت</button>
             </form>
-            <form method="post" action="/admin/iphone/models/{m['id']}/toggle" class="mr-2">
-              <button class="text-xs {'text-red-500' if m['active'] else 'text-emerald-600'}">{'غیرفعال کردن' if m['active'] else 'فعال کردن'}</button>
+            <div class="flex flex-wrap gap-1.5 items-center pt-3 mt-2 border-t">
+              {color_chips}
+            </div>
+            <form method="post" action="/admin/iphone/colors/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+              <input type="hidden" name="model_id" value="{m['id']}">
+              <input type="text" name="name" class="border rounded p-1 w-40 text-xs" placeholder="نام رنگ" required>
+              <button class="bg-gray-700 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن رنگ</button>
             </form>
           </div>
-          {cap_rows}
-          <form method="post" action="/admin/iphone/capacities/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
-            <input type="hidden" name="model_id" value="{m['id']}">
-            <input type="text" name="capacity_label" class="border rounded p-1 w-24 text-xs" placeholder="ظرفیت مثلاً 128GB" required>
-            <input type="number" name="base_price" class="border rounded p-1 w-28 text-xs" placeholder="قیمت پایه" required>
-            <input type="number" name="buy_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت خرید" required>
-            <input type="number" name="sell_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت فروش" required>
-            <input type="number" name="fx_ref_rate" class="border rounded p-1 w-24 text-xs" placeholder="نرخ ارز مرجع (خالی=نرخ فعلی)">
-            <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن ظرفیت</button>
-          </form>
-        </div>"""
+        </details>"""
 
     body = f"""
     <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
@@ -11981,6 +12007,7 @@ async def iphone_models_page(request: Request, flash: str = ""):
         <input type="text" name="series" class="border rounded-lg p-2 text-sm w-40" placeholder="سری (مثلاً iPhone 13)">
         <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">افزودن</button>
       </form>
+      <div class="text-xs text-gray-400 mt-2">هر مدل رو باز کن تا ظرفیت/رنگ/قیمتش رو ببینی و ویرایش کنی. مدل‌هایی که هنوز قیمت‌شون پر نشده با ⚠️ مشخص شدن.</div>
     </div>
     {blocks or '<div class="text-center text-gray-400 text-sm py-10">هنوز مدلی ثبت نشده.</div>'}
     """
@@ -12047,6 +12074,28 @@ async def iphone_capacities_edit(request: Request, cid: int, base_price: int = F
     import iphone_valuation.db as ivdb
     ivdb.update_capacity(cid, base_price=base_price, buy_price_ref=buy_price_ref, sell_price_ref=sell_price_ref,
                           fx_ref_rate=fx_ref_rate, demand_percent=demand_percent, active=1 if active else 0)
+    return _redir("/admin/iphone/models")
+
+
+@router.post("/iphone/colors/add")
+async def iphone_colors_add(request: Request, model_id: int = Form(...), name: str = Form(...)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    if name.strip():
+        ivdb.create_color(model_id, name.strip())
+        _log(request, "افزودن رنگ آیفون", "کارشناسی آیفون", f"model={model_id} {name.strip()}", admin_info=adm)
+    return _redir("/admin/iphone/models")
+
+
+@router.post("/iphone/colors/{cid}/delete")
+async def iphone_colors_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.delete_color(cid)
     return _redir("/admin/iphone/models")
 
 

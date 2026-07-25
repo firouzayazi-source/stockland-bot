@@ -9,6 +9,85 @@ import time as _time
 
 _SCHEMA_DONE = False
 
+# فهرست کامل مدل‌های آیفون (۲۰۰۷ تا ۲۰۲۵) — نام، سال، ظرفیت‌های استاندارد تولیدشده،
+# رنگ‌های استاندارد. فقط برای seed اولیهٔ کاتالوگ؛ قیمت‌ها صفر می‌مونن تا ادمین
+# از پنل پرشون کنه — این‌جا فقط مشخصات فنی دستگاهه، نه قیمت.
+_IPHONE_CATALOG = [
+    ("iPhone", "2007", ["4GB", "8GB", "16GB"], ["مشکی", "نقره‌ای"]),
+    ("iPhone 3G", "2008", ["8GB", "16GB"], ["مشکی", "سفید"]),
+    ("iPhone 3GS", "2009", ["8GB", "16GB", "32GB"], ["مشکی", "سفید"]),
+    ("iPhone 4", "2010", ["8GB", "16GB", "32GB"], ["مشکی", "سفید"]),
+    ("iPhone 4S", "2011", ["8GB", "16GB", "32GB", "64GB"], ["مشکی", "سفید"]),
+    ("iPhone 5", "2012", ["16GB", "32GB", "64GB"], ["مشکی و اسلیت", "سفید و نقره‌ای"]),
+    ("iPhone 5C", "2013", ["8GB", "16GB", "32GB"], ["سفید", "آبی", "سبز", "زرد", "صورتی"]),
+    ("iPhone 5S", "2013", ["16GB", "32GB", "64GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی"]),
+    ("iPhone 6", "2014", ["16GB", "32GB", "64GB", "128GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی"]),
+    ("iPhone 6 Plus", "2014", ["16GB", "32GB", "64GB", "128GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی"]),
+    ("iPhone 6s", "2015", ["16GB", "32GB", "64GB", "128GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی", "رزگلد"]),
+    ("iPhone 6s Plus", "2015", ["16GB", "32GB", "64GB", "128GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی", "رزگلد"]),
+    ("iPhone SE (نسل اول)", "2016", ["16GB", "32GB", "64GB", "128GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی", "رزگلد"]),
+    ("iPhone 7", "2016", ["32GB", "128GB", "256GB"],
+     ["مشکی مات", "مشکی براق", "نقره‌ای", "طلایی", "رزگلد", "قرمز (PRODUCT RED)"]),
+    ("iPhone 7 Plus", "2016", ["32GB", "128GB", "256GB"],
+     ["مشکی مات", "مشکی براق", "نقره‌ای", "طلایی", "رزگلد", "قرمز (PRODUCT RED)"]),
+    ("iPhone 8", "2017", ["64GB", "256GB"], ["نقره‌ای", "خاکستری فضایی", "طلایی", "قرمز (PRODUCT RED)"]),
+    ("iPhone 8 Plus", "2017", ["64GB", "256GB"], ["نقره‌ای", "خاکستری فضایی", "طلایی", "قرمز (PRODUCT RED)"]),
+    ("iPhone X", "2017", ["64GB", "256GB"], ["نقره‌ای", "خاکستری فضایی"]),
+    ("iPhone XS", "2018", ["64GB", "256GB", "512GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی"]),
+    ("iPhone XS Max", "2018", ["64GB", "256GB", "512GB"], ["خاکستری فضایی", "نقره‌ای", "طلایی"]),
+    ("iPhone XR", "2018", ["64GB", "128GB", "256GB"],
+     ["سفید", "مشکی", "آبی", "زرد", "مرجانی", "قرمز (PRODUCT RED)"]),
+    ("iPhone 11", "2019", ["64GB", "128GB", "256GB"],
+     ["مشکی", "سفید", "سبز", "زرد", "بنفش", "قرمز (PRODUCT RED)"]),
+    ("iPhone 11 Pro", "2019", ["64GB", "256GB", "512GB"], ["سبز نیمه‌شب", "خاکستری فضایی", "نقره‌ای", "طلایی"]),
+    ("iPhone 11 Pro Max", "2019", ["64GB", "256GB", "512GB"], ["سبز نیمه‌شب", "خاکستری فضایی", "نقره‌ای", "طلایی"]),
+    ("iPhone SE (نسل دوم)", "2020", ["64GB", "128GB", "256GB"], ["مشکی", "سفید", "قرمز (PRODUCT RED)"]),
+    ("iPhone 12", "2020", ["64GB", "128GB", "256GB"],
+     ["مشکی", "سفید", "آبی", "سبز", "قرمز (PRODUCT RED)", "بنفش"]),
+    ("iPhone 12 mini", "2020", ["64GB", "128GB", "256GB"],
+     ["مشکی", "سفید", "آبی", "سبز", "قرمز (PRODUCT RED)", "بنفش"]),
+    ("iPhone 12 Pro", "2020", ["128GB", "256GB", "512GB"], ["آبی اقیانوسی", "طلایی", "نقره‌ای", "گرافیتی"]),
+    ("iPhone 12 Pro Max", "2020", ["128GB", "256GB", "512GB"], ["آبی اقیانوسی", "طلایی", "نقره‌ای", "گرافیتی"]),
+    ("iPhone 13", "2021", ["128GB", "256GB", "512GB"],
+     ["صورتی", "آبی", "نیمه‌شب", "نور ستاره‌ای", "قرمز (PRODUCT RED)", "سبز"]),
+    ("iPhone 13 mini", "2021", ["128GB", "256GB", "512GB"],
+     ["صورتی", "آبی", "نیمه‌شب", "نور ستاره‌ای", "قرمز (PRODUCT RED)", "سبز"]),
+    ("iPhone 13 Pro", "2021", ["128GB", "256GB", "512GB", "1TB"],
+     ["گرافیت", "طلایی", "نقره‌ای", "آبی سیرا", "سبز آلپاین"]),
+    ("iPhone 13 Pro Max", "2021", ["128GB", "256GB", "512GB", "1TB"],
+     ["گرافیت", "طلایی", "نقره‌ای", "آبی سیرا", "سبز آلپاین"]),
+    ("iPhone SE (نسل سوم)", "2022", ["64GB", "128GB", "256GB"], ["نیمه‌شب", "نور ستاره‌ای", "قرمز (PRODUCT RED)"]),
+    ("iPhone 14", "2022", ["128GB", "256GB", "512GB"],
+     ["نیمه‌شب", "نور ستاره‌ای", "آبی", "بنفش", "قرمز (PRODUCT RED)", "زرد"]),
+    ("iPhone 14 Plus", "2022", ["128GB", "256GB", "512GB"],
+     ["نیمه‌شب", "نور ستاره‌ای", "آبی", "بنفش", "قرمز (PRODUCT RED)", "زرد"]),
+    ("iPhone 14 Pro", "2022", ["128GB", "256GB", "512GB", "1TB"],
+     ["مشکی فضایی", "نقره‌ای", "طلایی", "بنفش عمیق"]),
+    ("iPhone 14 Pro Max", "2022", ["128GB", "256GB", "512GB", "1TB"],
+     ["مشکی فضایی", "نقره‌ای", "طلایی", "بنفش عمیق"]),
+    ("iPhone 15", "2023", ["128GB", "256GB", "512GB"], ["مشکی", "آبی", "سبز", "زرد", "صورتی"]),
+    ("iPhone 15 Plus", "2023", ["128GB", "256GB", "512GB"], ["مشکی", "آبی", "سبز", "زرد", "صورتی"]),
+    ("iPhone 15 Pro", "2023", ["128GB", "256GB", "512GB", "1TB"],
+     ["تیتانیوم طبیعی", "تیتانیوم آبی", "تیتانیوم سفید", "تیتانیوم مشکی"]),
+    ("iPhone 15 Pro Max", "2023", ["256GB", "512GB", "1TB"],
+     ["تیتانیوم طبیعی", "تیتانیوم آبی", "تیتانیوم سفید", "تیتانیوم مشکی"]),
+    ("iPhone 16", "2024", ["128GB", "256GB", "512GB"],
+     ["مشکی", "سفید", "صورتی", "سبزآبی", "آبی اولترامارین"]),
+    ("iPhone 16 Plus", "2024", ["128GB", "256GB", "512GB"],
+     ["مشکی", "سفید", "صورتی", "سبزآبی", "آبی اولترامارین"]),
+    ("iPhone 16 Pro", "2024", ["128GB", "256GB", "512GB", "1TB"],
+     ["تیتانیوم مشکی", "تیتانیوم طبیعی", "تیتانیوم سفید", "تیتانیوم صحرایی"]),
+    ("iPhone 16 Pro Max", "2024", ["256GB", "512GB", "1TB"],
+     ["تیتانیوم مشکی", "تیتانیوم طبیعی", "تیتانیوم سفید", "تیتانیوم صحرایی"]),
+    ("iPhone 16e", "2025", ["128GB", "256GB", "512GB"], ["سفید", "مشکی"]),
+    ("iPhone 17", "2025", ["256GB", "512GB"],
+     ["مشکی", "سفید", "آبی مه‌آلود", "سبز مریم‌گلی", "اسطوخودوسی"]),
+    ("iPhone 17 Air", "2025", ["256GB", "512GB", "1TB"],
+     ["مشکی فضایی", "سفید ابری", "طلایی روشن", "آبی آسمانی"]),
+    ("iPhone 17 Pro", "2025", ["256GB", "512GB", "1TB"], ["نقره‌ای", "نارنجی کیهانی", "آبی عمیق"]),
+    ("iPhone 17 Pro Max", "2025", ["256GB", "512GB", "1TB", "2TB"], ["نقره‌ای", "نارنجی کیهانی", "آبی عمیق"]),
+]
+
 
 def _conn():
     from db import _get_connection
@@ -40,6 +119,13 @@ def ensure_schema():
             demand_percent REAL NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1,
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS iv_colors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1
         );""")
         conn.execute("""CREATE TABLE IF NOT EXISTS iv_coefficients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,6 +238,26 @@ def ensure_schema():
                 conn.execute(
                     "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
                     "VALUES (?,?,?,?,?);", (cat, key, label, pct, order))
+            conn.commit()
+
+        # سیدِ کاتالوگ کامل مدل‌های آیفون — فقط اگه جدول خالیه (اولین اجرا).
+        # قیمت‌ها صفر می‌مونن؛ این فقط مشخصات فنی (ظرفیت/رنگ استاندارد) رو وارد می‌کنه،
+        # ادمین باید بعداً از /admin/iphone/models قیمت هر ظرفیت رو پر کنه.
+        row = conn.execute("SELECT COUNT(*) c FROM iv_models;").fetchone()
+        if row and row["c"] == 0:
+            for order_idx, (name, year, caps, colors) in enumerate(_IPHONE_CATALOG, start=1):
+                cur = conn.execute(
+                    "INSERT INTO iv_models (name, series, sort_order) VALUES (?,?,?);",
+                    (name, year, order_idx))
+                model_id = cur.lastrowid
+                for cap_label in caps:
+                    conn.execute(
+                        "INSERT INTO iv_capacities (model_id, capacity_label, base_price, buy_price_ref, "
+                        "sell_price_ref) VALUES (?,?,0,0,0);", (model_id, cap_label))
+                for color_idx, color_name in enumerate(colors):
+                    conn.execute(
+                        "INSERT INTO iv_colors (model_id, name, sort_order) VALUES (?,?,?);",
+                        (model_id, color_name, color_idx))
             conn.commit()
     finally:
         conn.close()
@@ -275,6 +381,45 @@ def update_capacity(cap_id: int, **fields) -> None:
         conn.execute(
             f"UPDATE iv_capacities SET {', '.join(c+'=?' for c in cols)}, updated_at=datetime('now') WHERE id=?;",
             [fields[c] for c in cols] + [cap_id])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── رنگ‌ها ──────────────────────────────────────────────────────────────
+
+def list_colors(model_id: int, active_only: bool = True) -> list[dict]:
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = "SELECT * FROM iv_colors WHERE model_id=?"
+        params = [model_id]
+        if active_only:
+            q += " AND active=1"
+        q += " ORDER BY sort_order ASC, id ASC;"
+        return [dict(r) for r in conn.execute(q, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def create_color(model_id: int, name: str, sort_order: int = 0) -> int:
+    ensure_schema()
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO iv_colors (model_id, name, sort_order) VALUES (?,?,?);",
+            (model_id, name.strip(), sort_order))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_color(color_id: int) -> None:
+    ensure_schema()
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM iv_colors WHERE id=?;", (color_id,))
         conn.commit()
     finally:
         conn.close()
