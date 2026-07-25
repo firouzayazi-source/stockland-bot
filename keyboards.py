@@ -33,6 +33,11 @@ def main_menu(user_id: int = None) -> types.ReplyKeyboardMarkup:
     if sys_row1:
         kb.row(*sys_row1)
 
+    # 📱 کارشناسی هوشمند قیمت آیفون
+    if is_main_button_enabled("MAIN_BTN_IPHONE_VALUATION"):
+        kb.row(types.KeyboardButton(
+            t("MAIN_BTN_IPHONE_VALUATION", DEFAULT_UI_TEXTS.get("MAIN_BTN_IPHONE_VALUATION", "📱 کارشناسی قیمت آیفون"))))
+
     # 🛍 دکمه فروشگاه آنلاین (Mini App) — فقط اگر آدرس تنظیم شده باشد
     try:
         from db import get_cfg

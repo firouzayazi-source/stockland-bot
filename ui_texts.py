@@ -179,6 +179,7 @@ DEFAULT_UI_TEXTS = {
     "BTN_PARTNER_PROMO":         "📣 ابزار تبلیغ",
     "MAIN_BTN_WEBAPP":           "🛍 فروشگاه آنلاین",
     "MAIN_BTN_INVITE":           "🎁 دعوت دوستان",
+    "MAIN_BTN_IPHONE_VALUATION": "📱 کارشناسی قیمت آیفون",
 
     # ─── دکمه‌های پروفایل ────────────────────────────────────────────────
     "BTN_EDIT_NAME":            "✏️ نام",
@@ -290,6 +291,7 @@ MAIN_BUTTON_KEYS = [
     "MAIN_BTN_PARTNER_PANEL",
     "MAIN_BTN_SUPPORT",
     "MAIN_BTN_INVITE",
+    "MAIN_BTN_IPHONE_VALUATION",
 ]
 
 
@@ -321,6 +323,7 @@ EDITABLE_BUTTON_GROUPS: dict[str, list[str]] = {
         "MAIN_BTN_PARTNER_PANEL",
         "MAIN_BTN_SUPPORT",
         "MAIN_BTN_INVITE",
+        "MAIN_BTN_IPHONE_VALUATION",
     ],
     "دکمه‌های پنل همکار": [
         "BTN_PARTNER_MY_SELLERS",
@@ -361,6 +364,7 @@ BUTTON_ICONS: dict[str, str] = {
     "MAIN_BTN_PARTNER_PANEL":   "🤝",
     "MAIN_BTN_SUPPORT":         "👨‍💻",
     "MAIN_BTN_INVITE":          "🎁",
+    "MAIN_BTN_IPHONE_VALUATION":"📱",
     "BTN_PARTNER_MY_SELLERS":   "👥",
     "BTN_PARTNER_PROFILE":      "👤",
     "BTN_PARTNER_WALLET":       "💰",

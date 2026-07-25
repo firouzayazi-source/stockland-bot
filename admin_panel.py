@@ -516,6 +516,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
             {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
             {nav_item("/admin/engagement", "star", "امتیازها و پاداش روزانه", "settings")}
+            {nav_item("/admin/iphone", "smartphone", "کارشناسی آیفون", "settings")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "users")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
@@ -11827,3 +11828,510 @@ async def tutorial_categories_delete(request: Request, cid: int):
     delete_tutorial_category(cid)
     _log(request, "حذف دستهٔ آموزش", "آموزش", str(cid), admin_info=adm)
     return _redir("/admin/tutorials/categories")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── کارشناسی هوشمند قیمت آیفون ────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+_IV_CATEGORY_LABELS = {
+    "condition": "وضعیت کلی دستگاه",
+    "battery": "سلامت باتری",
+    "repair": "تعمیرات / بازشدگی",
+    "registry": "رجیستری",
+    "box": "جعبه و لوازم",
+    "cosmetic": "وضعیت ظاهری",
+    "cable": "کابل",
+}
+
+
+def _iv_num(v):
+    return f"{v:,}" if v else "—"
+
+
+@router.get("/iphone", response_class=HTMLResponse)
+async def iphone_dashboard(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from ui_texts import is_main_button_enabled
+    import iphone_valuation.db as ivdb
+    stats = ivdb.get_stats()
+    enabled = is_main_button_enabled("MAIN_BTN_IPHONE_VALUATION")
+
+    popular_rows = "".join(
+        f'<tr class="border-b"><td class="p-2 text-sm">{html.escape(p["name"] or "—")}</td>'
+        f'<td class="p-2 text-sm text-gray-500">{p["cnt"]}</td></tr>'
+        for p in stats["popular_models"]
+    ) or '<tr><td colspan="2" class="p-4 text-center text-gray-400 text-sm">هنوز کارشناسی‌ای ثبت نشده.</td></tr>'
+
+    body = f"""
+    <div class="bg-white rounded-xl shadow-sm p-5 mb-4 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <div class="text-sm font-medium mb-1">📱 کارشناس هوشمند قیمت آیفون</div>
+        <div class="text-xs text-gray-400">فعال/غیرفعال بودن دکمهٔ منوی اصلی ربات</div>
+      </div>
+      <form method="post" action="/admin/iphone/toggle">
+        <button class="px-4 py-2 rounded-lg text-sm font-medium {'bg-red-50 text-red-600' if enabled else 'bg-emerald-50 text-emerald-600'}">
+          {'⛔️ غیرفعال کردن' if enabled else '✅ فعال کردن'}
+        </button>
+      </form>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="bg-white rounded-xl shadow-sm p-4"><div class="text-xs text-gray-400 mb-1">کارشناسی امروز</div><div class="text-xl font-bold">{stats['today']}</div></div>
+      <div class="bg-white rounded-xl shadow-sm p-4"><div class="text-xs text-gray-400 mb-1">کل کارشناسی‌ها</div><div class="text-xl font-bold">{stats['total']}</div></div>
+      <div class="bg-white rounded-xl shadow-sm p-4"><div class="text-xs text-gray-400 mb-1">میانگین قیمت منصفانه</div><div class="text-xl font-bold">{_iv_num(stats['avg_fair_price'])}</div></div>
+      <div class="bg-white rounded-xl shadow-sm p-4"><div class="text-xs text-gray-400 mb-1">میانگین اختلاف با پیشنهاد کاربر</div><div class="text-xl font-bold">{stats['avg_price_gap_pct']}٪</div></div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-4">
+      <a href="/admin/iphone/models" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
+        <div class="font-medium text-sm mb-1">📦 مدل‌ها و قیمت‌ها</div>
+        <div class="text-xs text-gray-400">مدل، ظرفیت، قیمت پایه/خرید/فروش، عرضه و تقاضا</div>
+      </a>
+      <a href="/admin/iphone/coefficients" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
+        <div class="font-medium text-sm mb-1">⚖️ ضرایب قیمت و امتیاز</div>
+        <div class="text-xs text-gray-400">باتری، تعمیرات، رجیستری، پک، ظاهر، کابل + وزن امتیازدهی</div>
+      </a>
+      <a href="/admin/iphone/fx" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
+        <div class="font-medium text-sm mb-1">💵 نرخ ارز</div>
+        <div class="text-xs text-gray-400">منابع خودکار یا نرخ دستی + حساسیت نوسان</div>
+      </a>
+      <a href="/admin/iphone/history" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
+        <div class="font-medium text-sm mb-1">🕓 تاریخچهٔ کارشناسی‌ها</div>
+        <div class="text-xs text-gray-400">لیست کامل کارشناسی‌های انجام‌شده</div>
+      </a>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto max-w-lg">
+      <div class="px-4 py-3 border-b bg-gray-50"><h2 class="font-bold text-gray-700 text-sm">🔥 محبوب‌ترین مدل‌ها</h2></div>
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b"><th class="p-2">مدل</th><th class="p-2">تعداد کارشناسی</th></tr></thead>
+        <tbody>{popular_rows}</tbody>
+      </table>
+    </div>"""
+    return _layout("کارشناسی آیفون", body, adm, flash=flash)
+
+
+@router.post("/iphone/toggle")
+async def iphone_toggle(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from ui_texts import is_main_button_enabled, set_main_button_enabled
+    cur = is_main_button_enabled("MAIN_BTN_IPHONE_VALUATION")
+    set_main_button_enabled("MAIN_BTN_IPHONE_VALUATION", not cur)
+    _log(request, "فعال/غیرفعال‌سازی کارشناسی آیفون", "کارشناسی آیفون", "غیرفعال" if cur else "فعال", admin_info=adm)
+    return _redir("/admin/iphone")
+
+
+@router.get("/iphone/models", response_class=HTMLResponse)
+async def iphone_models_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    models = ivdb.list_models(active_only=False)
+
+    blocks = ""
+    for m in models:
+        caps = ivdb.list_capacities(model_id=m["id"], active_only=False)
+        cap_rows = "".join(f"""
+          <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="flex flex-wrap gap-2 items-center border-b py-2 text-sm">
+            <span class="w-20 font-medium">{html.escape(c['capacity_label'])}</span>
+            <input type="number" name="base_price" value="{c['base_price']}" class="border rounded p-1 w-28 text-xs" placeholder="پایه">
+            <input type="number" name="buy_price_ref" value="{c['buy_price_ref']}" class="border rounded p-1 w-28 text-xs" placeholder="خرید">
+            <input type="number" name="sell_price_ref" value="{c['sell_price_ref']}" class="border rounded p-1 w-28 text-xs" placeholder="فروش">
+            <input type="number" name="fx_ref_rate" value="{c['fx_ref_rate']}" class="border rounded p-1 w-24 text-xs" placeholder="نرخ ارز مرجع">
+            <input type="number" step="0.1" name="demand_percent" value="{c['demand_percent']}" class="border rounded p-1 w-16 text-xs" placeholder="عرضه٪">
+            <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
+            <button class="text-indigo-600 text-xs">ذخیره</button>
+          </form>""" for c in caps) or '<div class="text-xs text-gray-400 py-2">ظرفیتی ثبت نشده.</div>'
+
+        blocks += f"""
+        <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <form method="post" action="/admin/iphone/models/{m['id']}/edit" class="flex gap-2 items-center flex-1">
+              <input type="text" name="name" value="{e(m['name'])}" class="border rounded p-1.5 text-sm font-medium flex-1 max-w-xs">
+              <input type="text" name="series" value="{e(m['series'])}" class="border rounded p-1.5 text-xs w-32" placeholder="سری">
+              <button class="text-indigo-600 text-xs">ذخیره</button>
+            </form>
+            <form method="post" action="/admin/iphone/models/{m['id']}/toggle" class="mr-2">
+              <button class="text-xs {'text-red-500' if m['active'] else 'text-emerald-600'}">{'غیرفعال کردن' if m['active'] else 'فعال کردن'}</button>
+            </form>
+          </div>
+          {cap_rows}
+          <form method="post" action="/admin/iphone/capacities/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+            <input type="hidden" name="model_id" value="{m['id']}">
+            <input type="text" name="capacity_label" class="border rounded p-1 w-24 text-xs" placeholder="ظرفیت مثلاً 128GB" required>
+            <input type="number" name="base_price" class="border rounded p-1 w-28 text-xs" placeholder="قیمت پایه" required>
+            <input type="number" name="buy_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت خرید" required>
+            <input type="number" name="sell_price_ref" class="border rounded p-1 w-28 text-xs" placeholder="قیمت فروش" required>
+            <input type="number" name="fx_ref_rate" class="border rounded p-1 w-24 text-xs" placeholder="نرخ ارز مرجع (خالی=نرخ فعلی)">
+            <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن ظرفیت</button>
+          </form>
+        </div>"""
+
+    body = f"""
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+      <div class="text-sm font-medium mb-2">+ افزودن مدل جدید</div>
+      <form method="post" action="/admin/iphone/models/add" class="flex flex-wrap gap-2">
+        <input type="text" name="name" class="border rounded-lg p-2 text-sm flex-1 min-w-[180px]" placeholder="مثلاً iPhone 13 Pro Max" required>
+        <input type="text" name="series" class="border rounded-lg p-2 text-sm w-40" placeholder="سری (مثلاً iPhone 13)">
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm">افزودن</button>
+      </form>
+    </div>
+    {blocks or '<div class="text-center text-gray-400 text-sm py-10">هنوز مدلی ثبت نشده.</div>'}
+    """
+    return _layout("مدل‌ها و قیمت‌های آیفون", body, adm, flash=flash)
+
+
+@router.post("/iphone/models/add")
+async def iphone_models_add(request: Request, name: str = Form(...), series: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    if name.strip():
+        ivdb.create_model(name.strip(), series.strip())
+        _log(request, "افزودن مدل آیفون", "کارشناسی آیفون", name.strip(), admin_info=adm)
+    return _redir("/admin/iphone/models")
+
+
+@router.post("/iphone/models/{mid}/edit")
+async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.update_model(mid, name=name.strip(), series=series.strip())
+    return _redir("/admin/iphone/models")
+
+
+@router.post("/iphone/models/{mid}/toggle")
+async def iphone_models_toggle(request: Request, mid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    m = ivdb.get_model(mid)
+    if m:
+        ivdb.update_model(mid, active=0 if m["active"] else 1)
+    return _redir("/admin/iphone/models")
+
+
+@router.post("/iphone/capacities/add")
+async def iphone_capacities_add(request: Request, model_id: int = Form(...), capacity_label: str = Form(...),
+                                 base_price: int = Form(...), buy_price_ref: int = Form(...),
+                                 sell_price_ref: int = Form(...), fx_ref_rate: int = Form(0)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    import iphone_valuation.fx as ivfx
+    fx_rate = fx_ref_rate or ivfx.get_current_rate()
+    ivdb.create_capacity(model_id, capacity_label.strip(), base_price, buy_price_ref, sell_price_ref, fx_rate)
+    _log(request, "افزودن ظرفیت آیفون", "کارشناسی آیفون", f"model={model_id} {capacity_label}", admin_info=adm)
+    return _redir("/admin/iphone/models")
+
+
+@router.post("/iphone/capacities/{cid}/edit")
+async def iphone_capacities_edit(request: Request, cid: int, base_price: int = Form(...),
+                                  buy_price_ref: int = Form(...), sell_price_ref: int = Form(...),
+                                  fx_ref_rate: int = Form(0), demand_percent: float = Form(0),
+                                  active: str | None = Form(None)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.update_capacity(cid, base_price=base_price, buy_price_ref=buy_price_ref, sell_price_ref=sell_price_ref,
+                          fx_ref_rate=fx_ref_rate, demand_percent=demand_percent, active=1 if active else 0)
+    return _redir("/admin/iphone/models")
+
+
+@router.get("/iphone/coefficients", response_class=HTMLResponse)
+async def iphone_coefficients_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    coeffs = ivdb.list_coefficients(active_only=False)
+    weights = ivdb.list_score_weights()
+
+    by_cat = {}
+    for c in coeffs:
+        by_cat.setdefault(c["category"], []).append(c)
+
+    sections = ""
+    for cat in ivdb.COEFFICIENT_CATEGORIES:
+        rows = "".join(f"""
+          <div class="flex flex-wrap gap-2 items-center border-b py-1.5 text-sm">
+            <form method="post" action="/admin/iphone/coefficients/{c['id']}/edit" class="flex flex-wrap gap-2 items-center flex-1">
+              <span class="flex-1 min-w-[140px] {'text-gray-400 line-through' if not c['active'] else ''}">{html.escape(c['option_label'])}</span>
+              <input type="number" step="0.1" name="percent" value="{c['percent']}" class="border rounded p-1 w-20 text-xs">
+              <span class="text-xs text-gray-400">٪</span>
+              <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
+              <button class="text-indigo-600 text-xs">ذخیره</button>
+            </form>
+            <form method="post" action="/admin/iphone/coefficients/{c['id']}/delete" onsubmit="return confirm('حذف بشه؟')">
+              <button class="text-red-500 text-xs">حذف</button>
+            </form>
+          </div>""" for c in by_cat.get(cat, []))
+        weight = weights.get(cat, 0)
+        sections += f"""
+        <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <div class="font-medium text-sm">{_IV_CATEGORY_LABELS.get(cat, cat)}</div>
+            <form method="post" action="/admin/iphone/weights/save" class="flex items-center gap-1 text-xs text-gray-400">
+              <input type="hidden" name="category" value="{cat}">
+              وزن امتیاز: <input type="number" step="1" name="weight" value="{weight}" class="border rounded p-1 w-14 text-xs">
+              <button class="text-indigo-600">ذخیره</button>
+            </form>
+          </div>
+          {rows or '<div class="text-xs text-gray-400">گزینه‌ای ثبت نشده.</div>'}
+          <form method="post" action="/admin/iphone/coefficients/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+            <input type="hidden" name="category" value="{cat}">
+            <input type="text" name="option_key" class="border rounded p-1 w-32 text-xs" placeholder="کلید یکتا مثلاً opt_1" required>
+            <input type="text" name="option_label" class="border rounded p-1 flex-1 min-w-[160px] text-xs" placeholder="برچسب فارسی" required>
+            <input type="number" step="0.1" name="percent" class="border rounded p-1 w-20 text-xs" placeholder="درصد" required>
+            <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن گزینه</button>
+          </form>
+        </div>"""
+
+    feat_weight = weights.get("features", 0)
+    body = f"""
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+      <div class="flex items-center justify-between">
+        <div class="font-medium text-sm">تست امکانات دستگاه (سؤال کوتاه ربات)</div>
+        <form method="post" action="/admin/iphone/weights/save" class="flex items-center gap-1 text-xs text-gray-400">
+          <input type="hidden" name="category" value="features">
+          وزن امتیاز: <input type="number" step="1" name="weight" value="{feat_weight}" class="border rounded p-1 w-14 text-xs">
+          <button class="text-indigo-600">ذخیره</button>
+        </form>
+      </div>
+      <div class="text-xs text-gray-400 mt-1">اگه کاربر بگه یکی از امکانات (Face ID، دوربین، شارژ بی‌سیم و ...) مشکل داره، نصف این وزن از امتیاز کم می‌شه.</div>
+    </div>
+    {sections}"""
+    return _layout("ضرایب قیمت و امتیاز آیفون", body, adm, flash=flash)
+
+
+@router.post("/iphone/coefficients/add")
+async def iphone_coefficients_add(request: Request, category: str = Form(...), option_key: str = Form(...),
+                                   option_label: str = Form(...), percent: float = Form(...)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.create_coefficient(category, option_key.strip(), option_label.strip(), percent)
+    _log(request, "افزودن ضریب آیفون", "کارشناسی آیفون", f"{category}:{option_key}", admin_info=adm)
+    return _redir("/admin/iphone/coefficients")
+
+
+@router.post("/iphone/coefficients/{cid}/edit")
+async def iphone_coefficients_edit(request: Request, cid: int, percent: float = Form(...),
+                                    active: str | None = Form(None)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.update_coefficient(cid, percent=percent, active=1 if active else 0)
+    return _redir("/admin/iphone/coefficients")
+
+
+@router.post("/iphone/coefficients/{cid}/delete")
+async def iphone_coefficients_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.delete_coefficient(cid)
+    _log(request, "حذف ضریب آیفون", "کارشناسی آیفون", str(cid), admin_info=adm)
+    return _redir("/admin/iphone/coefficients")
+
+
+@router.post("/iphone/weights/save")
+async def iphone_weights_save(request: Request, category: str = Form(...), weight: float = Form(...)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.set_score_weight(category, weight)
+    return _redir("/admin/iphone/coefficients")
+
+
+@router.get("/iphone/fx", response_class=HTMLResponse)
+async def iphone_fx_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_cfg
+    import iphone_valuation.db as ivdb
+    sources = ivdb.list_fx_sources()
+    mode = get_cfg("IV_FX_MODE", "auto")
+    manual_rate = get_cfg("IV_FX_MANUAL_RATE", "0")
+    sensitivity = get_cfg("IV_FX_SENSITIVITY", "0.5")
+    market_weight = get_cfg("IV_MARKET_DATA_WEIGHT", "0.15")
+    last_good = get_cfg("IV_FX_LAST_GOOD", "0")
+
+    src_rows = "".join(f"""
+      <div class="border-b py-2">
+        <form method="post" action="/admin/iphone/fx/{s['id']}/edit" class="flex flex-wrap gap-2 items-center text-sm">
+          <input type="text" name="name" value="{e(s['name'])}" class="border rounded p-1 w-32 text-xs">
+          <input type="text" name="url" value="{e(s['url'])}" class="border rounded p-1 flex-1 min-w-[220px] text-xs" dir="ltr">
+          <input type="text" name="json_path" value="{e(s['json_path'])}" class="border rounded p-1 w-28 text-xs" dir="ltr" placeholder="usd.sell">
+          <input type="number" name="priority" value="{s['priority']}" class="border rounded p-1 w-14 text-xs">
+          <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if s['active'] else ""}> فعال</label>
+          <button class="text-indigo-600 text-xs">ذخیره</button>
+        </form>
+        <div class="text-xs text-gray-400 mt-1 flex items-center gap-3 flex-wrap">
+          <span>آخرین مقدار: {_iv_num(s['last_value'])}</span>
+          <span>آخرین فچ: {fa_date(s['last_fetched_at'], with_time=True) if s['last_fetched_at'] else '—'}</span>
+          {f'<span class="text-red-500">خطا: {html.escape(s["last_error"])}</span>' if s['last_error'] else ''}
+          <form method="post" action="/admin/iphone/fx/{s['id']}/test"><button class="text-indigo-600">تست فچ</button></form>
+          <form method="post" action="/admin/iphone/fx/{s['id']}/delete" onsubmit="return confirm('حذف بشه؟')"><button class="text-red-500">حذف</button></form>
+        </div>
+      </div>""" for s in sources) or '<div class="text-xs text-gray-400 py-2">هنوز منبعی ثبت نشده.</div>'
+
+    body = f"""
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4 max-w-2xl">
+      <div class="text-sm font-medium mb-2">تنظیمات نرخ ارز</div>
+      <form method="post" action="/admin/iphone/fx/settings" class="space-y-2 text-sm">
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-1"><input type="radio" name="mode" value="auto" {"checked" if mode!="manual" else ""}> خودکار از منابع</label>
+          <label class="flex items-center gap-1"><input type="radio" name="mode" value="manual" {"checked" if mode=="manual" else ""}> دستی</label>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 w-40">نرخ دستی (تومان)</span>
+          <input type="number" name="manual_rate" value="{manual_rate}" class="border rounded p-1.5 text-xs w-32">
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 w-40">حساسیت نوسان ارز</span>
+          <input type="number" step="0.05" name="sensitivity" value="{sensitivity}" class="border rounded p-1.5 text-xs w-32">
+          <span class="text-xs text-gray-400">۰ تا ۱ — چقدر قیمت آیفون از نوسان دلار تاثیر بگیره</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 w-40">وزن دادهٔ بازار StockLand</span>
+          <input type="number" step="0.05" name="market_weight" value="{market_weight}" class="border rounded p-1.5 text-xs w-32">
+        </div>
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs">ذخیره تنظیمات</button>
+      </form>
+      <div class="text-xs text-gray-400 mt-3">آخرین نرخ معتبر ثبت‌شده (فال‌بک اگه همهٔ منابع قطع باشن): {_iv_num(int(last_good) if str(last_good).isdigit() else 0)} تومان</div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-3 max-w-2xl">
+      <div class="text-sm font-medium mb-2">+ افزودن منبع نرخ ارز</div>
+      <form method="post" action="/admin/iphone/fx/add" class="flex flex-wrap gap-2 text-sm">
+        <input type="text" name="name" class="border rounded p-1.5 w-32 text-xs" placeholder="نام منبع" required>
+        <input type="text" name="url" class="border rounded p-1.5 flex-1 min-w-[220px] text-xs" dir="ltr" placeholder="https://..." required>
+        <input type="text" name="json_path" class="border rounded p-1.5 w-28 text-xs" dir="ltr" placeholder="مسیر فیلد مثلاً usd.sell">
+        <input type="number" name="priority" value="1" class="border rounded p-1.5 w-16 text-xs" placeholder="اولویت">
+        <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن</button>
+      </form>
+      <div class="text-xs text-gray-400 mt-2">مسیر فیلد یعنی کجای پاسخ JSON منبع، عدد نرخ رو نگه داشته — مثلاً اگه پاسخ شبیه usd → sell باشه، مسیر را به‌صورت usd.sell بنویس.</div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm p-4 max-w-2xl">
+      <div class="text-sm font-medium mb-2">منابع ثبت‌شده</div>
+      {src_rows}
+    </div>"""
+    return _layout("نرخ ارز کارشناسی آیفون", body, adm, flash=flash)
+
+
+@router.post("/iphone/fx/settings")
+async def iphone_fx_settings(request: Request, mode: str = Form("auto"), manual_rate: int = Form(0),
+                              sensitivity: float = Form(0.5), market_weight: float = Form(0.15)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import set_cfg
+    set_cfg("IV_FX_MODE", mode if mode in ("auto", "manual") else "auto")
+    set_cfg("IV_FX_MANUAL_RATE", str(max(0, manual_rate)))
+    set_cfg("IV_FX_SENSITIVITY", str(sensitivity))
+    set_cfg("IV_MARKET_DATA_WEIGHT", str(market_weight))
+    _log(request, "تنظیمات نرخ ارز کارشناسی آیفون", "کارشناسی آیفون", mode, admin_info=adm)
+    return _redir("/admin/iphone/fx")
+
+
+@router.post("/iphone/fx/add")
+async def iphone_fx_add(request: Request, name: str = Form(...), url: str = Form(...),
+                         json_path: str = Form("price"), priority: int = Form(1)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.create_fx_source(name, url, json_path or "price", priority)
+    _log(request, "افزودن منبع نرخ ارز", "کارشناسی آیفون", name, admin_info=adm)
+    return _redir("/admin/iphone/fx")
+
+
+@router.post("/iphone/fx/{sid}/edit")
+async def iphone_fx_edit(request: Request, sid: int, name: str = Form(...), url: str = Form(...),
+                          json_path: str = Form("price"), priority: int = Form(1),
+                          active: str | None = Form(None)):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.update_fx_source(sid, name=name, url=url, json_path=json_path or "price", priority=priority,
+                           active=1 if active else 0)
+    return _redir("/admin/iphone/fx")
+
+
+@router.post("/iphone/fx/{sid}/delete")
+async def iphone_fx_delete(request: Request, sid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    ivdb.delete_fx_source(sid)
+    _log(request, "حذف منبع نرخ ارز", "کارشناسی آیفون", str(sid), admin_info=adm)
+    return _redir("/admin/iphone/fx")
+
+
+@router.post("/iphone/fx/{sid}/test")
+async def iphone_fx_test(request: Request, sid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    import iphone_valuation.fx as ivfx
+    sources = {s["id"]: s for s in ivdb.list_fx_sources()}
+    src = sources.get(sid)
+    if src:
+        val = ivfx.fetch_source(src)
+        msg = ('✅ نتیجه: ' + str(val)) if val else '❌ فچ ناموفق بود، خطا رو زیر همون منبع ببین'
+        return _redir(f"/admin/iphone/fx?flash={e(msg)}")
+    return _redir("/admin/iphone/fx")
+
+
+@router.get("/iphone/history", response_class=HTMLResponse)
+async def iphone_history_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    import iphone_valuation.db as ivdb
+    items = ivdb.list_valuations(limit=100)
+
+    rows = "".join(f"""
+      <tr class="border-b">
+        <td class="p-2 text-sm">{html.escape(((r['model_name'] or '—') + ' ' + (r['capacity_label'] or '')).strip())}</td>
+        <td class="p-2 text-sm">{_iv_num(r['fair_price'])} تومان</td>
+        <td class="p-2 text-sm">{_iv_num(r['seller_price'])}</td>
+        <td class="p-2 text-sm">{r['score']}</td>
+        <td class="p-2 text-sm">{html.escape(r['verdict'] or '')}</td>
+        <td class="p-2 text-xs text-gray-400">{fa_date(r['created_at'], with_time=True)}</td>
+      </tr>""" for r in items) or '<tr><td colspan="6" class="p-6 text-center text-gray-400 text-sm">هنوز کارشناسی‌ای ثبت نشده.</td></tr>'
+
+    body = f"""
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+      <div class="px-4 py-3 border-b bg-gray-50"><h2 class="font-bold text-gray-700 text-sm">🕓 تاریخچهٔ کارشناسی‌ها ({len(items)})</h2></div>
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b">
+          <th class="p-2">دستگاه</th><th class="p-2">قیمت منصفانه</th><th class="p-2">پیشنهاد فروشنده</th>
+          <th class="p-2">امتیاز</th><th class="p-2">نتیجه</th><th class="p-2">تاریخ</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _layout("تاریخچهٔ کارشناسی آیفون", body, adm, flash=flash)
