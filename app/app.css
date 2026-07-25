@@ -213,7 +213,10 @@ html.dark .sl-pic{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-post-m{color:var(--mu);font-size:11px;margin-top:9px}
 .sl-me{padding:16px 20px 4px}
 .sl-me-c{display:flex;flex-direction:column;align-items:center;text-align:center;gap:2px;
- padding:36px 20px 28px;position:relative;overflow:hidden;
+ /* دقیقاً مثل .sl-hero: خودش فضای نوار شناور+safe-area رو رزرو می‌کنه چون parent (#tab-me)
+    دیگه padding-top نداره — تا زیر نوار شفاف قرار بگیره و رنگ با هدر بومی تلگرام یکی بشه */
+ padding:calc(env(safe-area-inset-top,0px) + 44px + 28px) 20px 28px;
+ position:relative;overflow:hidden;
  background:linear-gradient(180deg,
    #4255FF 0%,#4255FF 55%,#4A66F8 65%,#5C82F8 73%,#7CA2F8 80%,#A6C2F9 87%,#CCDCF8 93%,#E6EDF8 97%,var(--bg) 100%)}
 html.dark .sl-me-c{
@@ -224,7 +227,7 @@ html.dark .sl-me-c{
  opacity:.028;mix-blend-mode:overlay;
  -webkit-mask-image:linear-gradient(180deg,#000 0%,#000 62%,transparent 84%);
  mask-image:linear-gradient(180deg,#000 0%,#000 62%,transparent 84%)}
-.sl-ava-wrap{position:relative;width:96px;height:96px;margin-bottom:12px;z-index:1;cursor:pointer}
+.sl-ava-wrap{display:block;position:relative;width:96px;height:96px;margin-bottom:12px;z-index:1;cursor:pointer}
 .sl-ava{width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg,#C88A4A,#8B5A2B);
  display:grid;place-items:center;color:#fff;font-weight:800;font-size:38px;
  box-shadow:0 8px 22px rgba(0,0,0,.25);border:3px solid rgba(255,255,255,.85)}
@@ -494,10 +497,11 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
  -webkit-overflow-scrolling:touch;
  overscroll-behavior-y:contain;
 }
-/* تب‌های غیرخانه: فضای بالا دقیقاً به‌اندازهٔ خودِ نوار ناوبری شناور — بدون حتی یک پیکسل اضافه */
+/* تب‌های غیرخانه/غیرحساب: فضای بالا دقیقاً به‌اندازهٔ خودِ نوار ناوبری شناور — بدون حتی یک پیکسل اضافه.
+   tab-me مثل tab-home هیچ padding-top نداره چون هیرو/کارت‌رنگی‌ش (.sl-me-c) خودش این فضا رو
+   با padding-top خودش رزرو می‌کنه تا زیر نوار شناور شفاف قرار بگیره و رنگ پیوسته بشه (دقیقاً مثل خانه) */
 #tab-shop.page-content,
-#tab-learn.page-content,
-#tab-me.page-content{
+#tab-learn.page-content{
  padding-top:calc(env(safe-area-inset-top,0px) + 44px);
 }
 /* فاصله پایین کافی برای تب‌بار */
@@ -520,6 +524,14 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
 .sl-acc-page .sl-checkout-sec{padding:16px 0 6px}
 .sl-acc-page .sl-checkout-btns{margin:14px 0 0}
 .sl-acc-page .sl-checkout-note{margin:12px 0 0;padding:0 0 8px}
+/* ═══ برش عکس پروفایل ═══ */
+.sl-crop-view{width:240px;height:240px;border-radius:50%;overflow:hidden;position:relative;
+ margin:4px auto 0;background:#111;touch-action:none;box-shadow:0 0 0 4000px rgba(0,0,0,.5)}
+.sl-crop-img{position:absolute;top:50%;left:50%;transform-origin:center center;
+ will-change:transform;-webkit-user-drag:none;user-select:none;pointer-events:none}
+.sl-crop-zoom-row{display:flex;align-items:center;gap:10px;margin-top:22px;padding:0 4px}
+.sl-crop-zoom-i{font-size:16px;color:var(--mu);flex:none}
+.sl-crop-zoom{flex:1;accent-color:var(--br)}
 .sl-wal-big{font-size:30px;font-weight:800;text-align:center;padding:10px 0 18px;color:var(--br)}
 .sl-wal-big small{font-size:13px;color:var(--mu);font-weight:500}
 .sl-wal-acts{margin:14px 0}
