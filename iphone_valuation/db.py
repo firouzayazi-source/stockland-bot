@@ -211,10 +211,10 @@ def ensure_schema():
                 ("repair", "repair_battery", "تعویض باتری (توسط تعمیرکار غیرمجاز)", -6, 4),
                 ("repair", "repair_board", "تعمیر برد", -25, 5),
                 ("repair", "repair_water", "آب‌خوردگی", -35, 6),
-                ("registry", "registry_registered", "رجیستر شده", 0, 1),
-                ("registry", "registry_owner_transfer_needed", "نیازمند انتقال مالکیت", -3, 2),
-                ("registry", "registry_owner_transferred", "مالکیت منتقل‌شده", 0, 3),
-                ("registry", "registry_none", "بدون رجیستری", -15, 4),
+                ("registry", "registry_transferable", "رجیستر (مالکیت قابل انتقال)", 0, 1),
+                ("registry", "registry_non_transferable", "رجیستر (بدون امکان انتقال)", -5, 2),
+                ("registry", "registry_white", "وضعیت سفید", -10, 3),
+                ("registry", "registry_unregistered", "بدون رجیستر", -20, 4),
                 ("box", "box_original", "پک اصلی کارخانه", 3, 1),
                 ("box", "box_repack", "ریپک", -3, 2),
                 ("box", "box_none", "بدون کارتن", -6, 3),
@@ -259,9 +259,42 @@ def ensure_schema():
                         "INSERT INTO iv_colors (model_id, name, sort_order) VALUES (?,?,?);",
                         (model_id, color_name, color_idx))
             conn.commit()
+
+        _migrate_registry_options_v2(conn)
     finally:
         conn.close()
     _SCHEMA_DONE = True
+
+
+def _migrate_registry_options_v2(conn):
+    """مالک پروژه دستهٔ «رجیستری» رو به «وضعیت مالکیت» با گزینه‌های تازه تغییر داد.
+    این فقط روی دیتابیس‌هایی اجرا می‌شه که قبلاً با seed قدیمی (چهار گزینهٔ اول)
+    پر شده بودن — یه‌بار اجرا می‌شه (فلگ در bot_config)، و اگه ادمین گزینه‌های
+    پیش‌فرض رو از پنل حذف کرده باشه، دست‌نخورده می‌مونه."""
+    from db import get_cfg, set_cfg
+    if get_cfg("IV_REGISTRY_V2_MIGRATED", "0") == "1":
+        return
+    old_keys = ("registry_registered", "registry_owner_transfer_needed",
+                "registry_owner_transferred", "registry_none")
+    found = conn.execute(
+        "SELECT id FROM iv_coefficients WHERE category='registry' AND option_key IN (?,?,?,?);",
+        old_keys).fetchall()
+    if found:
+        conn.execute(
+            "DELETE FROM iv_coefficients WHERE category='registry' AND option_key IN (?,?,?,?);",
+            old_keys)
+        new_options = [
+            ("registry_transferable", "رجیستر (مالکیت قابل انتقال)", 0, 1),
+            ("registry_non_transferable", "رجیستر (بدون امکان انتقال)", -5, 2),
+            ("registry_white", "وضعیت سفید", -10, 3),
+            ("registry_unregistered", "بدون رجیستر", -20, 4),
+        ]
+        for key, label, pct, order in new_options:
+            conn.execute(
+                "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
+                "VALUES ('registry',?,?,?,?);", (key, label, pct, order))
+        conn.commit()
+    set_cfg("IV_REGISTRY_V2_MIGRATED", "1")
 
 
 # ─── مدل‌ها ──────────────────────────────────────────────────────────────
