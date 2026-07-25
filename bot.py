@@ -4233,12 +4233,32 @@ def _iv_ask_features(chat_id, uid):
 
 
 def _iv_ask_part(chat_id, uid):
+    import iphone_valuation.db as ivdb
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("LL/A", callback_data="ivw_part_LL"),
-           types.InlineKeyboardButton("ZA/A", callback_data="ivw_part_ZA"),
-           types.InlineKeyboardButton("CH/A", callback_data="ivw_part_CH"))
+    row = [types.InlineKeyboardButton(label, callback_data=f"ivw_part_{code}")
+           for code, label in ivdb.PART_OPTIONS if code != "OTHER"]
+    kb.row(*row)
     kb.row(types.InlineKeyboardButton("سایر", callback_data="ivw_part_OTHER"))
     bot.send_message(chat_id, "🔠 پارت نامبر دستگاه؟ (آخر پک یا زیر تنظیمات > عمومی > اطلاعات دستگاه)", reply_markup=kb)
+
+
+def _iv_ask_capacity(chat_id, uid):
+    """ظرفیت رو بعد از پارت (اگه اون مرحله لازم بود) می‌پرسه — قیمت نهایی از روی
+    (مدل، ظرفیت، پارت) با resolve_capacity پیدا می‌شه، نه از روی یه ردیف ثابت."""
+    import iphone_valuation.db as ivdb
+    state = user_states.get(uid)
+    if not state:
+        return
+    labels = ivdb.list_capacity_labels(state.get("model_id"))
+    if not labels:
+        bot.send_message(chat_id, "برای این مدل هنوز ظرفیتی در پنل تعریف نشده.")
+        user_states.pop(uid, None)
+        return
+    state["cap_labels"] = labels
+    kb = types.InlineKeyboardMarkup()
+    for idx, label in enumerate(labels):
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"ivw_caplbl_{idx}"))
+    bot.send_message(chat_id, "💾 ظرفیت حافظه؟", reply_markup=kb)
 
 
 def _iv_ask_seller_type(chat_id, uid):
@@ -4292,11 +4312,14 @@ def _iv_finalize(chat_id, uid):
         user_states.pop(uid, None)
         return
 
+    import iphone_valuation.db as ivdb
     sim_labels = {"single": "تک سیم", "dual": "دو سیم", "esim": "eSIM"}
     sim_label = sim_labels.get(result.get("sim_type", ""), "—")
+    part_label_map = dict(ivdb.PART_OPTIONS)
+    part_display = part_label_map.get(result.get("part_number") or "", result.get("part_number") or "—")
     txt = (
         f"📱 <b>{result['model_name']} {result['capacity_label']}</b> "
-        f"({html.escape(result.get('part_number') or '—')} · 📡 {sim_label})\n\n"
+        f"({html.escape(part_display)} · 📡 {sim_label})\n\n"
         f"💵 قیمت واقعی بازار: <b>{result['market_price']:,}</b> تومان\n"
         f"⚖️ قیمت منصفانه: <b>{result['fair_price']:,}</b> تومان\n"
         f"🏬 پیشنهاد خرید فروشگاه: <b>{result['buy_price']:,}</b> تومان\n"
@@ -4325,24 +4348,41 @@ def _iv_wizard_callback(call):
     if data.startswith("ivw_model_"):
         model_id = int(data.split("_")[-1])
         import iphone_valuation.db as ivdb
-        caps = ivdb.list_capacities(model_id=model_id, active_only=True)
-        if not caps:
-            bot.send_message(chat_id, "برای این مدل هنوز ظرفیتی در پنل تعریف نشده.")
+        model = ivdb.get_model(model_id)
+        if not model:
+            bot.send_message(chat_id, "⏳ این کارشناسی منقضی شده. دوباره از منو شروع کن.")
             return
         state["model_id"] = model_id
-        kb = types.InlineKeyboardMarkup()
-        for c in caps:
-            kb.add(types.InlineKeyboardButton(c["capacity_label"], callback_data=f"ivw_cap_{c['id']}"))
-        bot.send_message(chat_id, "💾 ظرفیت حافظه؟", reply_markup=kb)
-        return
-
-    if data.startswith("ivw_cap_"):
-        state["capacity_id"] = int(data.split("_")[-1])
-        _iv_ask_part(chat_id, uid)
+        # پارت فقط برای مدل‌هایی پرسیده می‌شه که واقعاً روی سیم‌کارت/قیمت اثر داره
+        # (dual_sim_parts پر — یعنی از iPhone XS Max به بعد، به‌جز مینی‌ها/Air که همیشه
+        # مستقلن)؛ برای بقیه (XS و پایین‌تر) بی‌معنیه و پرسیده نمی‌شه.
+        if (model.get("dual_sim_parts") or "").strip():
+            _iv_ask_part(chat_id, uid)
+        else:
+            state["part_number"] = ""
+            _iv_ask_capacity(chat_id, uid)
         return
 
     if data.startswith("ivw_part_"):
         state["part_number"] = data.replace("ivw_part_", "")
+        _iv_ask_capacity(chat_id, uid)
+        return
+
+    if data.startswith("ivw_caplbl_"):
+        import iphone_valuation.db as ivdb
+        idx = int(data.replace("ivw_caplbl_", ""))
+        labels = state.get("cap_labels") or []
+        if idx >= len(labels):
+            bot.send_message(chat_id, "⏳ این کارشناسی منقضی شده. دوباره از منو شروع کن.")
+            return
+        label = labels[idx]
+        row = ivdb.resolve_capacity(state.get("model_id"), label, state.get("part_number", ""))
+        if not row:
+            bot.send_message(chat_id, "⚠️ قیمتی برای این ترکیب هنوز در پنل ثبت نشده. با پشتیبانی هماهنگ کن.")
+            user_states.pop(uid, None)
+            return
+        state["capacity_id"] = row["id"]
+        state["capacity_label"] = label
         _iv_advance_coeff(chat_id, uid, 0)
         return
 
