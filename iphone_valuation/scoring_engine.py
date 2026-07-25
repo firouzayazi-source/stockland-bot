@@ -25,15 +25,20 @@ def compute_score(selections: dict[str, str], features_ok: bool | None = None) -
         if not options:
             continue
         worst = min((o["percent"] for o in options), default=0)
-        option_key = (selections or {}).get(category)
-        chosen = next((o for o in options if o["option_key"] == option_key), None)
-        pct = chosen["percent"] if chosen else 0
-        fraction = 0.0 if pct >= 0 or worst >= 0 else min(1.0, pct / worst)
+        raw = (selections or {}).get(category)
+        # دسته‌های چندانتخابی (مثل «component») لیست option_key می‌دن؛ بقیه یه رشتهٔ تکی
+        option_keys = raw if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
+        chosen_list = [o for o in options if o["option_key"] in option_keys]
+        fraction = 0.0
+        for chosen in chosen_list:
+            pct = chosen["percent"]
+            fraction += 0.0 if pct >= 0 or worst >= 0 else min(1.0, pct / worst)
+        fraction = min(1.0, fraction)
         deduction = fraction * weight
         total_deduction += deduction
         breakdown.append({
             "category": category,
-            "label": chosen["option_label"] if chosen else "—",
+            "label": "، ".join(c["option_label"] for c in chosen_list) if chosen_list else "—",
             "deduction": round(deduction, 1),
         })
 
