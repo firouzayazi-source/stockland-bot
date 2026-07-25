@@ -89,6 +89,23 @@ _IPHONE_CATALOG = [
 ]
 
 
+# دستهٔ «component» — کدوم قسمت دستگاه خرابه (چندانتخابی، فقط وقتی کاربر وضعیت کلی
+# دستگاه رو «نیازمند تعمیر» انتخاب کنه پرسیده می‌شه، چون اونجاست که واقعاً روی
+# قیمت اثر داره).
+COMPONENT_DEFAULTS = [
+    ("component", "comp_faceid", "Face ID", -15, 1),
+    ("component", "comp_screen", "صفحه نمایش / تاچ", -20, 2),
+    ("component", "comp_camera", "دوربین", -10, 3),
+    ("component", "comp_speaker", "اسپیکر", -5, 4),
+    ("component", "comp_mic", "میکروفون", -5, 5),
+    ("component", "comp_wifi", "وای‌فای", -8, 6),
+    ("component", "comp_bluetooth", "بلوتوث", -5, 7),
+    ("component", "comp_nfc", "NFC", -3, 8),
+    ("component", "comp_wireless_charge", "شارژ بی‌سیم", -5, 9),
+    ("component", "comp_buttons", "دکمه‌ها (پاور/صدا)", -5, 10),
+]
+
+
 def _iv_sim_policy(name: str, sort_order: int) -> tuple[str, int]:
     """(dual_sim_parts, esim_only) بر اساس قانون مالک پروژه:
     - مدل‌های Air: فقط eSIM
@@ -221,8 +238,8 @@ def ensure_schema():
         row = conn.execute("SELECT COUNT(*) c FROM iv_score_weights;").fetchone()
         if row and row["c"] == 0:
             defaults = [
-                ("battery", 20), ("repair", 25), ("registry", 15),
-                ("box", 10), ("cosmetic", 20), ("cable", 5), ("features", 5),
+                ("condition", 20), ("battery", 20), ("repair", 25), ("registry", 15),
+                ("box", 10), ("cosmetic", 20), ("cable", 5), ("features", 5), ("component", 15),
             ]
             for cat, w in defaults:
                 conn.execute("INSERT INTO iv_score_weights (category, weight) VALUES (?,?);", (cat, w))
@@ -240,7 +257,7 @@ def ensure_schema():
                 ("repair", "repair_none", "باز نشده", 0, 1),
                 ("repair", "repair_opened", "باز شده (بدون تعمیر خاص)", -5, 2),
                 ("repair", "repair_screen", "تعویض صفحه", -10, 3),
-                ("repair", "repair_battery", "تعویض باتری (توسط تعمیرکار غیرمجاز)", -6, 4),
+                ("repair", "repair_battery", "تعویض باتری", -6, 4),
                 ("repair", "repair_board", "تعمیر برد", -25, 5),
                 ("repair", "repair_water", "آب‌خوردگی", -35, 6),
                 ("registry", "registry_transferable", "رجیستر (مالکیت قابل انتقال)", 0, 1),
@@ -265,7 +282,7 @@ def ensure_schema():
                 ("condition", "cond_like_new", "در حد نو", 0, 3),
                 ("condition", "cond_used", "کارکرده", -10, 4),
                 ("condition", "cond_needs_repair", "نیازمند تعمیر", -30, 5),
-            ]
+            ] + COMPONENT_DEFAULTS
             for cat, key, label, pct, order in defaults:
                 conn.execute(
                     "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
@@ -295,9 +312,47 @@ def ensure_schema():
 
         _migrate_registry_options_v2(conn)
         _migrate_sim_policy_v1(conn)
+        _migrate_component_category_v1(conn)
+        _migrate_battery_label_v1(conn)
+        _migrate_condition_weight_v1(conn)
     finally:
         conn.close()
     _SCHEMA_DONE = True
+
+
+def _migrate_condition_weight_v1(conn):
+    """دستهٔ «condition» (وضعیت کلی دستگاه) هیچ‌وقت وزن امتیازدهی نداشت — یعنی انتخاب
+    «نیازمند تعمیر» روی قیمت اثر می‌ذاشت ولی روی StockLand Score هیچ اثری نداشت.
+    این باگ قدیمی رو رفع می‌کنه؛ فقط اگه هنوز وزنی برای این دسته ثبت نشده باشه."""
+    conn.execute(
+        "INSERT INTO iv_score_weights (category, weight) VALUES ('condition', 20) "
+        "ON CONFLICT(category) DO NOTHING;")
+    conn.commit()
+
+
+def _migrate_component_category_v1(conn):
+    """دستهٔ تازهٔ «component» (کدوم قسمت خرابه) رو برای دیتابیس‌هایی که قبل از این
+    تغییر seed شدن اضافه می‌کنه — فقط اگه این دسته هنوز هیچ گزینه‌ای نداره."""
+    row = conn.execute("SELECT COUNT(*) c FROM iv_coefficients WHERE category='component';").fetchone()
+    if row and row["c"] == 0:
+        for cat, key, label, pct, order in COMPONENT_DEFAULTS:
+            conn.execute(
+                "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
+                "VALUES (?,?,?,?,?);", (cat, key, label, pct, order))
+        conn.execute(
+            "INSERT INTO iv_score_weights (category, weight) VALUES ('component', 15) "
+            "ON CONFLICT(category) DO NOTHING;")
+        conn.commit()
+
+
+def _migrate_battery_label_v1(conn):
+    """برچسب «تعویض باتری (توسط تعمیرکار غیرمجاز)» به «تعویض باتری» ساده شد —
+    فقط اگه ادمین از قبل دستی تغییرش نداده باشه."""
+    conn.execute(
+        "UPDATE iv_coefficients SET option_label='تعویض باتری' "
+        "WHERE category='repair' AND option_key='repair_battery' "
+        "AND option_label='تعویض باتری (توسط تعمیرکار غیرمجاز)';")
+    conn.commit()
 
 
 def _migrate_sim_policy_v1(conn):
@@ -510,7 +565,7 @@ def delete_color(color_id: int) -> None:
 
 # ─── ضرایب ───────────────────────────────────────────────────────────────
 
-COEFFICIENT_CATEGORIES = ["condition", "battery", "repair", "registry", "box", "cosmetic", "cable"]
+COEFFICIENT_CATEGORIES = ["condition", "battery", "repair", "registry", "box", "cosmetic", "cable", "component"]
 
 
 def list_coefficients(category: str | None = None, active_only: bool = True) -> list[dict]:

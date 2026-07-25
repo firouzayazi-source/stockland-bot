@@ -52,15 +52,21 @@ def price(model_id: int, capacity_id: int, selections: dict[str, str]) -> dict:
     condition_pct_total = 0.0
     selected_coeffs = {}
     for category, option_key in (selections or {}).items():
-        c = coeff_by_key.get((category, option_key))
-        if not c:
-            continue
-        selected_coeffs[category] = c
-        condition_pct_total += c["percent"]
-        contributions.append({
-            "label": c["option_label"], "category": category,
-            "pct": c["percent"], "amount": _round1000(base_price * c["percent"] / 100),
-        })
+        # بعضی دسته‌ها (مثل «component» — کدوم قطعه خرابه) چندانتخابی‌ان: لیست option_key
+        option_keys = option_key if isinstance(option_key, (list, tuple)) else [option_key]
+        matched = []
+        for ok in option_keys:
+            c = coeff_by_key.get((category, ok))
+            if not c:
+                continue
+            matched.append(c)
+            condition_pct_total += c["percent"]
+            contributions.append({
+                "label": c["option_label"], "category": category,
+                "pct": c["percent"], "amount": _round1000(base_price * c["percent"] / 100),
+            })
+        if matched:
+            selected_coeffs[category] = matched if len(matched) > 1 else matched[0]
 
     market_wide_pct = fx_pct + market_pct + demand_pct
     total_pct = market_wide_pct + condition_pct_total
