@@ -4207,12 +4207,13 @@ def _iv_ask_features(chat_id, uid):
         reply_markup=kb)
 
 
-def _iv_ask_sim(chat_id, uid):
+def _iv_ask_part(chat_id, uid):
     kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("تک سیم", callback_data="ivw_sim_single"),
-           types.InlineKeyboardButton("دو سیم", callback_data="ivw_sim_dual"),
-           types.InlineKeyboardButton("eSIM", callback_data="ivw_sim_esim"))
-    bot.send_message(chat_id, "📡 نوع سیم‌کارت دستگاه؟", reply_markup=kb)
+    kb.row(types.InlineKeyboardButton("LL/A", callback_data="ivw_part_LL"),
+           types.InlineKeyboardButton("ZA/A", callback_data="ivw_part_ZA"),
+           types.InlineKeyboardButton("CH/A", callback_data="ivw_part_CH"))
+    kb.row(types.InlineKeyboardButton("سایر", callback_data="ivw_part_OTHER"))
+    bot.send_message(chat_id, "🔠 پارت نامبر دستگاه؟ (آخر پک یا زیر تنظیمات > عمومی > اطلاعات دستگاه)", reply_markup=kb)
 
 
 def _iv_ask_seller_type(chat_id, uid):
@@ -4243,14 +4244,18 @@ def _iv_finalize(chat_id, uid):
     if not state:
         return
     try:
+        import iphone_valuation.db as ivdb
         import iphone_valuation.service as ivservice
+        model = ivdb.get_model(state.get("model_id"))
+        sim_type = ivservice.compute_sim_type(model or {}, state.get("part_number", ""))
         payload = {
             "user_id": uid,
             "model_id": state.get("model_id"),
             "capacity_id": state.get("capacity_id"),
+            "part_number": state.get("part_number", ""),
             "selections": state.get("selections", {}),
             "features_ok": state.get("features_ok"),
-            "sim_type": state.get("sim_type", ""),
+            "sim_type": sim_type,
             "seller_type": state.get("seller_type", ""),
             "seller_price": state.get("seller_price"),
             "city": state.get("city", ""),
@@ -4262,8 +4267,11 @@ def _iv_finalize(chat_id, uid):
         user_states.pop(uid, None)
         return
 
+    sim_labels = {"single": "تک سیم", "dual": "دو سیم", "esim": "eSIM"}
+    sim_label = sim_labels.get(result.get("sim_type", ""), "—")
     txt = (
-        f"📱 <b>{result['model_name']} {result['capacity_label']}</b>\n\n"
+        f"📱 <b>{result['model_name']} {result['capacity_label']}</b> "
+        f"({html.escape(result.get('part_number') or '—')} · 📡 {sim_label})\n\n"
         f"💵 قیمت واقعی بازار: <b>{result['market_price']:,}</b> تومان\n"
         f"⚖️ قیمت منصفانه: <b>{result['fair_price']:,}</b> تومان\n"
         f"🏬 پیشنهاد خرید فروشگاه: <b>{result['buy_price']:,}</b> تومان\n"
@@ -4305,6 +4313,11 @@ def _iv_wizard_callback(call):
 
     if data.startswith("ivw_cap_"):
         state["capacity_id"] = int(data.split("_")[-1])
+        _iv_ask_part(chat_id, uid)
+        return
+
+    if data.startswith("ivw_part_"):
+        state["part_number"] = data.replace("ivw_part_", "")
         _iv_advance_coeff(chat_id, uid, 0)
         return
 
@@ -4322,11 +4335,6 @@ def _iv_wizard_callback(call):
 
     if data in ("ivw_feat_yes", "ivw_feat_no"):
         state["features_ok"] = data == "ivw_feat_yes"
-        _iv_ask_sim(chat_id, uid)
-        return
-
-    if data.startswith("ivw_sim_"):
-        state["sim_type"] = data.replace("ivw_sim_", "")
         _iv_ask_seller_type(chat_id, uid)
         return
 

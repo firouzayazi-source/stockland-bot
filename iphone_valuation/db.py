@@ -89,6 +89,25 @@ _IPHONE_CATALOG = [
 ]
 
 
+def _iv_sim_policy(name: str, sort_order: int) -> tuple[str, int]:
+    """(dual_sim_parts, esim_only) بر اساس قانون مالک پروژه:
+    - مدل‌های Air: فقط eSIM
+    - مینی‌ها: همیشه تک‌سیم، مستقل از پارت نامبر
+    - قبل از iPhone XS Max (sort_order زیر ۲۰): همیشه تک‌سیم
+    - iPhone XS Max تا iPhone 16e (۲۰ تا ۴۷): پارت ZA و CH دوسیم‌ان
+    - iPhone 17 به بعد (۴۸+، به‌جز Air که بالاتر مدیریت شد): فقط پارت CH دوسیمه
+    - در همهٔ موارد بالا، هر پارت دیگه (از جمله «سایر») تک‌سیمه."""
+    if "Air" in name:
+        return "", 1
+    if "mini" in name:
+        return "", 0
+    if sort_order < 20:
+        return "", 0
+    if sort_order >= 48:
+        return "CH", 0
+    return "ZA,CH", 0
+
+
 def _conn():
     from db import _get_connection
     return _get_connection()
@@ -106,8 +125,21 @@ def ensure_schema():
             series TEXT DEFAULT '',
             sort_order INTEGER NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1,
+            dual_sim_parts TEXT NOT NULL DEFAULT '',
+            esim_only INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );""")
+        # مهاجرت برای نصب‌های قبلی که iv_models رو بدون این دو ستون ساخته بودن
+        try:
+            conn.execute("ALTER TABLE iv_models ADD COLUMN dual_sim_parts TEXT NOT NULL DEFAULT '';")
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE iv_models ADD COLUMN esim_only INTEGER NOT NULL DEFAULT 0;")
+            conn.commit()
+        except Exception:
+            pass
         conn.execute("""CREATE TABLE IF NOT EXISTS iv_capacities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             model_id INTEGER NOT NULL,
@@ -246,9 +278,10 @@ def ensure_schema():
         row = conn.execute("SELECT COUNT(*) c FROM iv_models;").fetchone()
         if row and row["c"] == 0:
             for order_idx, (name, year, caps, colors) in enumerate(_IPHONE_CATALOG, start=1):
+                dual_parts, esim_only = _iv_sim_policy(name, order_idx)
                 cur = conn.execute(
-                    "INSERT INTO iv_models (name, series, sort_order) VALUES (?,?,?);",
-                    (name, year, order_idx))
+                    "INSERT INTO iv_models (name, series, sort_order, dual_sim_parts, esim_only) "
+                    "VALUES (?,?,?,?,?);", (name, year, order_idx, dual_parts, esim_only))
                 model_id = cur.lastrowid
                 for cap_label in caps:
                     conn.execute(
@@ -261,9 +294,26 @@ def ensure_schema():
             conn.commit()
 
         _migrate_registry_options_v2(conn)
+        _migrate_sim_policy_v1(conn)
     finally:
         conn.close()
     _SCHEMA_DONE = True
+
+
+def _migrate_sim_policy_v1(conn):
+    """پر کردن dual_sim_parts/esim_only برای مدل‌هایی که قبل از این تغییر seed شدن
+    (ستون‌ها تازه اضافه شدن). یه‌بار طبق sort_order+نام هر مدل اجرا می‌شه؛ بعدش هرچی
+    ادمین از پنل خودش تغییر بده دست‌نخورده می‌مونه."""
+    from db import get_cfg, set_cfg
+    if get_cfg("IV_SIM_POLICY_MIGRATED", "0") == "1":
+        return
+    rows = conn.execute("SELECT id, name, sort_order FROM iv_models;").fetchall()
+    for row in rows:
+        dual_parts, esim_only = _iv_sim_policy(row["name"], row["sort_order"])
+        conn.execute("UPDATE iv_models SET dual_sim_parts=?, esim_only=? WHERE id=?;",
+                     (dual_parts, esim_only, row["id"]))
+    conn.commit()
+    set_cfg("IV_SIM_POLICY_MIGRATED", "1")
 
 
 def _migrate_registry_options_v2(conn):
@@ -339,7 +389,7 @@ def update_model(model_id: int, **fields) -> None:
     ensure_schema()
     if not fields:
         return
-    allowed = {"name", "series", "sort_order", "active"}
+    allowed = {"name", "series", "sort_order", "active", "dual_sim_parts", "esim_only"}
     cols = [k for k in fields if k in allowed]
     if not cols:
         return

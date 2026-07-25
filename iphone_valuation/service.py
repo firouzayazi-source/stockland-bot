@@ -15,6 +15,18 @@ class ValuationError(Exception):
     pass
 
 
+def compute_sim_type(model: dict, part_code: str) -> str:
+    """نوع سیم‌کارت رو از روی مدل دستگاه + پارت نامبر انتخابی تعیین می‌کنه — طبق قانون
+    مالک پروژه دیگه از کاربر پرسیده نمی‌شه، فقط از قوانین seed‌شدهٔ هر مدل (dual_sim_parts/
+    esim_only در iv_models، بخش ۲۲ کارشناسی آیفون در CLAUDE.md) استخراج می‌شه."""
+    if model.get("esim_only"):
+        return "esim"
+    dual_parts = [p.strip().upper() for p in (model.get("dual_sim_parts") or "").split(",") if p.strip()]
+    if (part_code or "").strip().upper() in dual_parts:
+        return "dual"
+    return "single"
+
+
 def valuate(payload: dict) -> dict:
     model_id = payload.get("model_id")
     capacity_id = payload.get("capacity_id")
@@ -56,6 +68,8 @@ def valuate(payload: dict) -> dict:
         "report_text": report_text,
         "fx_rate": price_result["current_fx_rate"],
         "contributions": price_result["contributions"],
+        "sim_type": payload.get("sim_type") or "",
+        "part_number": payload.get("part_number") or "",
     }
 
     try:
