@@ -211,11 +211,26 @@ html.dark .sl-pic{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-post-x{color:var(--mu);font-size:13px;line-height:1.9;margin-top:3px;
  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .sl-post-m{color:var(--mu);font-size:11px;margin-top:9px}
-.sl-me{display:flex;gap:13px;align-items:center;padding:16px 20px 4px}
-.sl-ava{width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,var(--br),#7DA6FF);
- display:grid;place-items:center;color:#fff;font-weight:800;font-size:22px;flex:none}
-.sl-me-n{font-size:17px;font-weight:800}
-.sl-me-u{font-size:12.5px;color:var(--mu);direction:ltr;text-align:right}
+.sl-me{padding:16px 20px 4px}
+.sl-me-c{display:flex;flex-direction:column;align-items:center;text-align:center;gap:2px;
+ padding:30px 20px 16px;position:relative;overflow:hidden}
+.sl-me-c::before{content:'';position:absolute;top:0;left:0;right:0;height:130px;
+ background:linear-gradient(180deg,rgba(10,99,255,.10),transparent);pointer-events:none}
+.sl-ava-wrap{position:relative;width:96px;height:96px;margin-bottom:12px;z-index:1;cursor:pointer}
+.sl-ava{width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg,var(--br),#7DA6FF);
+ display:grid;place-items:center;color:#fff;font-weight:800;font-size:36px;
+ box-shadow:0 8px 22px rgba(10,99,255,.28);border:3px solid var(--card)}
+.sl-ava-img{position:absolute;inset:0;width:96px;height:96px;border-radius:50%;object-fit:cover;
+ box-shadow:0 8px 22px rgba(10,99,255,.2);border:3px solid var(--card)}
+.sl-ava-spin{position:absolute;inset:0;border-radius:50%;background:rgba(0,0,0,.45);display:none;place-items:center}
+.sl-spin{width:22px;height:22px;border-radius:50%;border:2.5px solid rgba(255,255,255,.35);
+ border-top-color:#fff;animation:sl-spin .7s linear infinite}
+@keyframes sl-spin{to{transform:rotate(360deg)}}
+.sl-ava-edit{position:absolute;bottom:0;right:0;width:30px;height:30px;border-radius:50%;
+ background:var(--br);color:#fff;border:3px solid var(--card);display:grid;place-items:center;
+ font-size:13px;cursor:pointer;padding:0;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.sl-me-n{font-size:19px;font-weight:800;z-index:1;position:relative}
+.sl-me-u{font-size:12.5px;color:var(--mu);direction:ltr;text-align:center;z-index:1;position:relative;margin-top:2px}
 .sl-wallet{margin:14px 20px 0;border-radius:22px;padding:18px;
  background:linear-gradient(140deg,#0B1B4A,#12318F 55%,#0A63FF);color:#fff;position:relative;overflow:hidden}
 .sl-wallet-glow{position:absolute;width:190px;height:190px;border-radius:50%;
@@ -236,8 +251,8 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
 .sl-checkin-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;overflow:hidden}
 .sl-checkin-txt b{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sl-checkin-txt span{font-size:10.5px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sl-checkin-btn{flex:none;background:#F59E0B;color:#fff;border:none;border-radius:9px;
- padding:6px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit}
+.sl-checkin-btn{flex:none;width:auto;background:#F59E0B;color:#fff;border:none;border-radius:9px;
+ padding:6px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap}
 .sl-group{margin:16px 20px 0;background:var(--card);border-radius:18px;overflow:hidden;box-shadow:var(--sh)}
 .sl-row{display:flex;align-items:center;gap:12px;padding:13px 15px;border-bottom:.5px solid var(--ln);
  font-size:14.5px;font-weight:600;cursor:pointer;color:var(--ink);text-decoration:none}
