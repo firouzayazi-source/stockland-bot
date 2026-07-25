@@ -11939,25 +11939,27 @@ async def iphone_models_page(request: Request, flash: str = ""):
         caps = ivdb.list_capacities(model_id=m["id"], active_only=False)
         colors = ivdb.list_colors(model_id=m["id"], active_only=False)
         no_price = any(not c["base_price"] for c in caps)
-        cap_header = """
-          <div class="flex flex-wrap gap-2 text-[10px] text-gray-400 px-0.5 pt-2">
-            <span class="w-20">ظرفیت</span>
-            <span class="w-28">قیمت پایه (بازار)</span>
-            <span class="w-28">قیمت خرید فروشگاه</span>
-            <span class="w-28">قیمت فروش فروشگاه</span>
-            <span class="w-24">نرخ ارز مرجع</span>
-            <span class="w-16">عرضه/تقاضا٪</span>
-          </div>""" if caps else ""
+
+        def _iv_field(label, name, value, width, step=None):
+            step_attr = f' step="{step}"' if step else ""
+            return (f'<div class="flex flex-col gap-0.5">'
+                    f'<span class="text-[9px] text-gray-400">{label}</span>'
+                    f'<input type="number"{step_attr} name="{name}" value="{value}" '
+                    f'class="border rounded p-1 {width} text-xs"></div>')
+
         cap_rows = "".join(f"""
-          <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="flex flex-wrap gap-2 items-center border-b py-2 text-sm">
-            <span class="w-20 font-medium">{html.escape(c['capacity_label'])}</span>
-            <input type="number" name="base_price" value="{c['base_price']}" class="border rounded p-1 w-28 text-xs">
-            <input type="number" name="buy_price_ref" value="{c['buy_price_ref']}" class="border rounded p-1 w-28 text-xs">
-            <input type="number" name="sell_price_ref" value="{c['sell_price_ref']}" class="border rounded p-1 w-28 text-xs">
-            <input type="number" name="fx_ref_rate" value="{c['fx_ref_rate']}" class="border rounded p-1 w-24 text-xs">
-            <input type="number" step="0.1" name="demand_percent" value="{c['demand_percent']}" class="border rounded p-1 w-16 text-xs">
-            <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
-            <button class="text-indigo-600 text-xs">ذخیره</button>
+          <form method="post" action="/admin/iphone/capacities/{c['id']}/edit" class="flex flex-wrap gap-3 items-end border-b py-3 text-sm">
+            <div class="flex flex-col gap-0.5">
+              <span class="text-[9px] text-gray-400">ظرفیت</span>
+              <span class="w-20 font-medium py-1">{html.escape(c['capacity_label'])}</span>
+            </div>
+            {_iv_field("قیمت پایه (بازار)", "base_price", c['base_price'], "w-28")}
+            {_iv_field("قیمت خرید فروشگاه", "buy_price_ref", c['buy_price_ref'], "w-28")}
+            {_iv_field("قیمت فروش فروشگاه", "sell_price_ref", c['sell_price_ref'], "w-28")}
+            {_iv_field("نرخ ارز مرجع", "fx_ref_rate", c['fx_ref_rate'], "w-24")}
+            {_iv_field("عرضه/تقاضا٪", "demand_percent", c['demand_percent'], "w-16", step="0.1")}
+            <label class="text-xs flex items-center gap-1 pb-1.5"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
+            <button class="text-indigo-600 text-xs pb-1.5">ذخیره</button>
           </form>""" for c in caps) or '<div class="text-xs text-gray-400 py-2">ظرفیتی ثبت نشده.</div>'
 
         color_chips = "".join(f"""
@@ -11987,7 +11989,6 @@ async def iphone_models_page(request: Request, flash: str = ""):
                 <button class="text-xs {'text-red-500' if m['active'] else 'text-emerald-600'}">{'غیرفعال کردن' if m['active'] else 'فعال کردن'}</button>
               </form>
             </div>
-            {cap_header}
             {cap_rows}
             <form method="post" action="/admin/iphone/capacities/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
               <input type="hidden" name="model_id" value="{m['id']}">
