@@ -4140,6 +4140,229 @@ def _pre_handle_user_invite(message):
     return handle_user_invite(message)
 
 
+# ─── کارشناسی هوشمند قیمت آیفون ─────────────────────────────────────────────
+# منطق قیمت‌گذاری/امتیازدهی این‌جا نیست — فقط ورودی جمع می‌کنیم و از همون
+# سرویس مشترکی استفاده می‌کنیم که API مینی‌اپ (فاز بعد) هم استفاده می‌کنه.
+
+_IV_COEFF_STEPS = [
+    ("condition", "🔧 وضعیت کلی دستگاه چطوره؟"),
+    ("battery", "🔋 سلامت باتری چقدره؟"),
+    ("repair", "🛠 وضعیت باز شدن/تعمیرات؟"),
+    ("registry", "📋 وضعیت رجیستری؟"),
+    ("box", "📦 جعبه و لوازم چطوره؟"),
+    ("cosmetic", "✨ وضعیت ظاهری دستگاه؟"),
+    ("cable", "🔌 کابل شارژ چطوره؟"),
+]
+
+
+@bot.message_handler(func=lambda m: m.text == t("MAIN_BTN_IPHONE_VALUATION"))
+def handle_iphone_valuation_start(message):
+    if not is_main_button_enabled("MAIN_BTN_IPHONE_VALUATION"):
+        bot.reply_to(message, t("MSG_BTN_DISABLED"))
+        return
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    try:
+        import iphone_valuation.db as ivdb
+    except Exception:
+        bot.reply_to(message, "⚠️ این قابلیت موقتاً در دسترس نیست.")
+        return
+    models = ivdb.list_models(active_only=True)
+    if not models:
+        bot.reply_to(message, "📱 هنوز مدلی برای کارشناسی در پنل ادمین تعریف نشده. بعداً امتحان کن.")
+        return
+    user_states[uid] = {"mode": "iphone_valuation", "step_idx": -1, "selections": {}}
+    kb = types.InlineKeyboardMarkup()
+    for m in models:
+        kb.add(types.InlineKeyboardButton(m["name"], callback_data=f"ivw_model_{m['id']}"))
+    bot.send_message(chat_id, "📱 <b>کارشناس هوشمند قیمت آیفون StockLand</b>\n\nمدل دستگاه رو انتخاب کن:",
+                      reply_markup=kb, parse_mode="HTML")
+
+
+def _iv_advance_coeff(chat_id, uid, idx):
+    state = user_states.get(uid)
+    if not state or state.get("mode") != "iphone_valuation":
+        return
+    state["step_idx"] = idx
+    if idx < len(_IV_COEFF_STEPS):
+        import iphone_valuation.db as ivdb
+        category, title = _IV_COEFF_STEPS[idx]
+        options = ivdb.list_coefficients(category=category, active_only=True)
+        if not options:
+            return _iv_advance_coeff(chat_id, uid, idx + 1)
+        kb = types.InlineKeyboardMarkup()
+        for o in options:
+            kb.add(types.InlineKeyboardButton(o["option_label"], callback_data=f"ivw_opt_{idx}_{o['id']}"))
+        bot.send_message(chat_id, title, reply_markup=kb)
+    else:
+        _iv_ask_features(chat_id, uid)
+
+
+def _iv_ask_features(chat_id, uid):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("✅ بله، همه سالمه", callback_data="ivw_feat_yes"),
+           types.InlineKeyboardButton("❌ خیر، مشکل دارم", callback_data="ivw_feat_no"))
+    bot.send_message(chat_id,
+        "📶 همهٔ امکانات دستگاه (Face ID، True Tone، دوربین، اسپیکر، میکروفون، وای‌فای، بلوتوث، NFC، MagSafe، شارژ بی‌سیم) سالمن؟",
+        reply_markup=kb)
+
+
+def _iv_ask_sim(chat_id, uid):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("تک سیم", callback_data="ivw_sim_single"),
+           types.InlineKeyboardButton("دو سیم", callback_data="ivw_sim_dual"),
+           types.InlineKeyboardButton("eSIM", callback_data="ivw_sim_esim"))
+    bot.send_message(chat_id, "📡 نوع سیم‌کارت دستگاه؟", reply_markup=kb)
+
+
+def _iv_ask_seller_type(chat_id, uid):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("🏬 فروشگاه", callback_data="ivw_stype_store"),
+           types.InlineKeyboardButton("🙋 شخصی", callback_data="ivw_stype_personal"))
+    bot.send_message(chat_id, "شما فروشگاهید یا فروشندهٔ شخصی؟", reply_markup=kb)
+
+
+def _iv_ask_price(chat_id, uid):
+    state = user_states.get(uid)
+    if not state:
+        return
+    state["mode"] = "iv_seller_price"
+    bot.send_message(chat_id, "💰 اگه قیمتی مدنظرته که می‌خوای بفروشی/بخری بنویس (تومان)، وگرنه بنویس «ندارم»")
+
+
+def _iv_ask_city(chat_id, uid):
+    state = user_states.get(uid)
+    if not state:
+        return
+    state["mode"] = "iv_city"
+    bot.send_message(chat_id, "🏙 شهرت رو بنویس، یا «ندارم» بزن")
+
+
+def _iv_finalize(chat_id, uid):
+    state = user_states.get(uid)
+    if not state:
+        return
+    try:
+        import iphone_valuation.service as ivservice
+        payload = {
+            "user_id": uid,
+            "model_id": state.get("model_id"),
+            "capacity_id": state.get("capacity_id"),
+            "selections": state.get("selections", {}),
+            "features_ok": state.get("features_ok"),
+            "sim_type": state.get("sim_type", ""),
+            "seller_type": state.get("seller_type", ""),
+            "seller_price": state.get("seller_price"),
+            "city": state.get("city", ""),
+        }
+        result = ivservice.valuate(payload)
+    except Exception:
+        logging.getLogger("stockland.bot").exception("iphone valuation failed for uid=%s", uid)
+        bot.send_message(chat_id, "⚠️ متاسفانه در محاسبهٔ قیمت خطایی رخ داد. دوباره امتحان کن.")
+        user_states.pop(uid, None)
+        return
+
+    txt = (
+        f"📱 <b>{result['model_name']} {result['capacity_label']}</b>\n\n"
+        f"💵 قیمت واقعی بازار: <b>{result['market_price']:,}</b> تومان\n"
+        f"⚖️ قیمت منصفانه: <b>{result['fair_price']:,}</b> تومان\n"
+        f"🏬 پیشنهاد خرید فروشگاه: <b>{result['buy_price']:,}</b> تومان\n"
+        f"🏷 پیشنهاد فروش فروشگاه: <b>{result['sell_price']:,}</b> تومان\n\n"
+        f"⭐️ امتیاز StockLand: <b>{result['score']} از ۱۰۰</b>\n\n"
+        f"{result['verdict_emoji']} <b>{result['verdict_text']}</b>\n\n"
+        f"📝 {result['report_text']}"
+    )
+    bot.send_message(chat_id, txt, parse_mode="HTML")
+    user_states.pop(uid, None)
+
+
+def _iv_wizard_callback(call):
+    """دیسپچر کالبک‌های ویزارد کارشناسی آیفون — از داخل catch-all اصلی صدا زده می‌شه
+    (طبق قانون Handler Ordering پروژه: بعد از catch-all ثبت کردن هندلر جدید = مرده)."""
+    uid = call.from_user.id
+    chat_id = call.message.chat.id
+    data = call.data
+    bot.answer_callback_query(call.id)
+
+    state = user_states.get(uid)
+    if not state or state.get("mode") not in ("iphone_valuation", "iv_seller_price", "iv_city"):
+        bot.send_message(chat_id, "⏳ این کارشناسی منقضی شده. دوباره از منو شروع کن.")
+        return
+
+    if data.startswith("ivw_model_"):
+        model_id = int(data.split("_")[-1])
+        import iphone_valuation.db as ivdb
+        caps = ivdb.list_capacities(model_id=model_id, active_only=True)
+        if not caps:
+            bot.send_message(chat_id, "برای این مدل هنوز ظرفیتی در پنل تعریف نشده.")
+            return
+        state["model_id"] = model_id
+        kb = types.InlineKeyboardMarkup()
+        for c in caps:
+            kb.add(types.InlineKeyboardButton(c["capacity_label"], callback_data=f"ivw_cap_{c['id']}"))
+        bot.send_message(chat_id, "💾 ظرفیت حافظه؟", reply_markup=kb)
+        return
+
+    if data.startswith("ivw_cap_"):
+        state["capacity_id"] = int(data.split("_")[-1])
+        _iv_advance_coeff(chat_id, uid, 0)
+        return
+
+    if data.startswith("ivw_opt_"):
+        parts = data.split("_")
+        idx, coef_id = int(parts[2]), int(parts[3])
+        import iphone_valuation.db as ivdb
+        category, _title = _IV_COEFF_STEPS[idx]
+        opts = ivdb.list_coefficients(category=category, active_only=True)
+        chosen = next((o for o in opts if o["id"] == coef_id), None)
+        if chosen:
+            state["selections"][category] = chosen["option_key"]
+        _iv_advance_coeff(chat_id, uid, idx + 1)
+        return
+
+    if data in ("ivw_feat_yes", "ivw_feat_no"):
+        state["features_ok"] = data == "ivw_feat_yes"
+        _iv_ask_sim(chat_id, uid)
+        return
+
+    if data.startswith("ivw_sim_"):
+        state["sim_type"] = data.replace("ivw_sim_", "")
+        _iv_ask_seller_type(chat_id, uid)
+        return
+
+    if data.startswith("ivw_stype_"):
+        state["seller_type"] = data.replace("ivw_stype_", "")
+        _iv_ask_price(chat_id, uid)
+        return
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "iv_seller_price")
+def handle_iv_seller_price(message):
+    uid = message.from_user.id
+    state = user_states.get(uid)
+    if not state:
+        return
+    txt = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "")
+    price = None
+    if txt not in ("ندارم", "-", ""):
+        digits = "".join(ch for ch in txt if ch.isdigit())
+        if digits:
+            price = int(digits)
+    state["seller_price"] = price
+    _iv_ask_city(message.chat.id, uid)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "iv_city")
+def handle_iv_city(message):
+    uid = message.from_user.id
+    state = user_states.get(uid)
+    if not state:
+        return
+    txt = (message.text or "").strip()
+    state["city"] = "" if txt in ("ندارم", "-", "") else txt
+    _iv_finalize(message.chat.id, uid)
+
+
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_amount")
 def _pre_handle_crypto_amount(message):
     return handle_crypto_amount(message)
@@ -4812,6 +5035,8 @@ def handle_callbacks(call: types.CallbackQuery):
         return cb_crypto_network(call)
     if data == "user_invite":
         return cb_user_invite(call)
+    if data.startswith("ivw_"):
+        return _iv_wizard_callback(call)
 
     # --- toggle active/inactive for other_services ---
     if data.startswith("toggle_other_"):
