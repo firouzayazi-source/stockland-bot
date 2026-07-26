@@ -275,10 +275,15 @@ def _dry_run_check(db_path: str, data: dict) -> list:
 
 
 def create_stbak(db_path: str, modules: list = None, progress_cb=None,
-                  include_media: bool = True) -> bytes:
+                  include_media: bool = True, validate: bool = True) -> bytes:
     """
     ساخت .stbak — اگه modules=None باشه کامله (و شامل جدول‌های تازه‌کشف‌شده هم می‌شه).
     progress_cb(pct: int) برای آپدیت پیشرفت.
+    validate=False فقط برای بکاپ ایمنی داخلی قبل از Restore استفاده می‌شه — چون اون
+    بکاپ از خودِ اسکیمای زندهٔ دیتابیس همون لحظه خونده می‌شه، امکان mismatch ستونی
+    اصلاً وجود نداره، پس dry-run (که خودش تقریباً دوبرابر کردن هزینهٔ بکاپه چون کل
+    داده رو دوباره توی یه دیتابیس آزمایشی درج می‌کنه) لازم نیست. برای بکاپ‌های
+    دانلودی/قابل‌بازیابیِ آینده (که ممکنه اسکیمای کد عوض شده باشه) همیشه True بمونه.
     """
     if modules is None:
         selected = list(MODULES.keys())
@@ -319,7 +324,7 @@ def create_stbak(db_path: str, modules: list = None, progress_cb=None,
     media_files = _collect_media_files() if include_media else []
     media_bytes_total = sum(os.path.getsize(p) for p, _ in media_files) if media_files else 0
 
-    warnings = _dry_run_check(db_path, data)
+    warnings = _dry_run_check(db_path, data) if validate else []
 
     manifest = {
         "type": "stockland_backup", "backup_format": "stbak",
@@ -343,7 +348,10 @@ def create_stbak(db_path: str, modules: list = None, progress_cb=None,
         zf.writestr("data.json", data_json)
         for abs_path, arc_path in media_files:
             try:
-                zf.write(abs_path, arc_path)
+                # عکس/ویدیو از قبل فرمت فشرده‌ست (JPEG/PNG/MP4) — DEFLATE کردنشون
+                # فقط CPU هدر می‌ده بدون کاهش حجم، و روی بکاپ‌های با مدیای زیاد
+                # (خصوصاً ویدیوی آموزشی) دقیقاً همون کندی گزارش‌شده رو ایجاد می‌کرد.
+                zf.write(abs_path, arc_path, compress_type=zipfile.ZIP_STORED)
             except Exception:
                 pass  # یک فایل مدیای خراب/غیرقابل‌خواندن نباید کل بکاپ رو متوقف کنه
 
@@ -442,7 +450,7 @@ def restore_stbak(raw: bytes, db_path: str, progress_cb=None,
         if safety_backup_dir:
             try:
                 os.makedirs(safety_backup_dir, exist_ok=True)
-                safety_raw = create_stbak(db_path, modules=None, include_media=False)
+                safety_raw = create_stbak(db_path, modules=None, include_media=False, validate=False)
                 safety_name = "pre_restore_safety_" + stbak_filename("auto")
                 safety_backup_path = os.path.join(safety_backup_dir, safety_name)
                 with open(safety_backup_path, "wb") as f:

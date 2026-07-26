@@ -1391,11 +1391,37 @@ def _layout(title: str, body: str, admin_info=None,
   search?.addEventListener('input',searchPanel);
   document.addEventListener('keydown',function(ev){{if((ev.metaKey||ev.ctrlKey)&&ev.key.toLowerCase()==='k'){{ev.preventDefault();search?.focus();}}if(ev.key==='Escape')results?.classList.remove('open');}});
 
-  // Convert legacy decorative emoji in rendered UI to Lucide without touching form data or scripts.
+  // Convert legacy decorative emoji to Lucide + Persian digits — ادغام‌شده در یک پیمایش DOM.
+  // قبلاً این دو تبدیل (اینجا + بلوک بعدی) هرکدوم جدا کل document.body رو پیمایش می‌کردن؛
+  // روی صفحات با جدول بزرگ (سفارش‌ها/محصولات/تیکت‌ها) یعنی دوبار پیمایش کامل قبل از
+  // این‌که صفحه قابل‌استفاده بشه. الان یک پیمایش برای هر دو کار کافیه.
   var emojiIcons={{'✅':'circle-check','❌':'circle-x','⚠️':'triangle-alert','⚠':'triangle-alert','📊':'bar-chart-2','🛒':'shopping-bag','🛍':'shopping-bag','📦':'package','🗂':'folders','🗃':'archive','💼':'briefcase','🧾':'receipt-text','💰':'wallet','💳':'credit-card','👥':'users','🤝':'handshake','🎫':'ticket','📢':'megaphone','⚙️':'settings','⚙':'settings','👤':'user-round','💾':'hard-drive-download','📈':'trending-up','📱':'smartphone','🔑':'key-round','🔴':'circle-alert','🟡':'circle-dot','🟢':'circle-check','🔄':'refresh-cw','👨‍💻':'user-round','🧩':'blocks','←':'arrow-left','↩':'log-out','☰':'menu','✕':'x','▲':'trending-up','▼':'trending-down'}};
   var emojiRe=/(✅|❌|⚠️|⚠|📊|🛒|🛍|📦|🗂|🗃|💼|🧾|💰|💳|👥|🤝|🎫|📢|⚙️|⚙|👤|💾|📈|📱|🔑|🔴|🟡|🟢|🔄|👨‍💻|🧩|←|↩|☰|✕|▲|▼)/g;
+  var FA_DIGITS=['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+  function faConv(s){{ return s.replace(/[0-9]/g,function(d){{return FA_DIGITS[+d];}}); }}
+  var FA_SKIP_TAGS={{SCRIPT:1,STYLE:1,TEXTAREA:1,INPUT:1,SELECT:1,OPTION:1,CODE:1,PRE:1,KBD:1}};
+  function faSkip(parent){{ return !parent||FA_SKIP_TAGS[parent.tagName]||(parent.closest&&parent.closest('code,pre,kbd,.no-fa')); }}
   var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT); var nodes=[]; while(walker.nextNode()) nodes.push(walker.currentNode);
-  nodes.forEach(function(node){{ var parent=node.parentElement;if(!parent||parent.closest('script,style,input,textarea,select,option,[data-no-icon]')||!emojiRe.test(node.nodeValue)){{emojiRe.lastIndex=0;return;}} emojiRe.lastIndex=0; var frag=document.createDocumentFragment(),last=0,m;while((m=emojiRe.exec(node.nodeValue))){{frag.append(document.createTextNode(node.nodeValue.slice(last,m.index)));var i=document.createElement('i');i.setAttribute('data-lucide',emojiIcons[m[0]]);i.className='legacy-lucide';frag.append(i);last=m.index+m[0].length;}}frag.append(document.createTextNode(node.nodeValue.slice(last)));node.replaceWith(frag);}});
+  nodes.forEach(function(node){{
+    var parent=node.parentElement;
+    var skipIcon=!parent||parent.closest('script,style,input,textarea,select,option,[data-no-icon]');
+    var skipFa=faSkip(parent);
+    var hasEmoji=!skipIcon&&emojiRe.test(node.nodeValue); emojiRe.lastIndex=0;
+    if(!hasEmoji){{
+      if(!skipFa&&/[0-9]/.test(node.nodeValue)) node.nodeValue=faConv(node.nodeValue);
+      return;
+    }}
+    var frag=document.createDocumentFragment(),last=0,m;
+    while((m=emojiRe.exec(node.nodeValue))){{
+      var piece=node.nodeValue.slice(last,m.index);
+      frag.append(document.createTextNode(skipFa?piece:faConv(piece)));
+      var i=document.createElement('i');i.setAttribute('data-lucide',emojiIcons[m[0]]);i.className='legacy-lucide';frag.append(i);
+      last=m.index+m[0].length;
+    }}
+    var tail=node.nodeValue.slice(last);
+    frag.append(document.createTextNode(skipFa?tail:faConv(tail)));
+    node.replaceWith(frag);
+  }});
 
   {"" if not admin_info else """
   // Idle logout
@@ -1440,7 +1466,8 @@ def _layout(title: str, body: str, admin_info=None,
     for(var i=0;i<node.childNodes.length;i++) walk(node.childNodes[i]);
   }}
   function run(){{ walk(document.body); }}
-  run();
+  // پیمایش اولیهٔ صفحه دیگه لازم نیست — بلوک بالا (تبدیل ایموجی) همین کار رو توی
+  // همون یک پیمایش انجام می‌ده؛ این IIFE فقط برای محتوای تازه (MutationObserver) لازمه.
   var mo=new MutationObserver(function(muts){{
     mo.disconnect();
     muts.forEach(function(m){{
@@ -2955,7 +2982,7 @@ async def database_page(request: Request, flash: str = ""):
         _rep = _j.loads(_gk("cloudbk_last_report", "") or "{}")
         _errs = [r for r in _rep.get("results", []) if not r.get("ok")]
         if _errs:
-            _cb_report_html = '<span class="text-red-500">آخرین خطا: ' + e(str(_errs[0].get("driver")) + " — " + str(_errs[0].get("error"))[:100]) + "</span>"
+            _cb_report_html = '<span class="text-red-500" style="unicode-bidi:plaintext">آخرین خطا: ' + e(str(_errs[0].get("driver")) + " — " + str(_errs[0].get("error"))[:100]) + "</span>"
     except Exception:
         pass
 
@@ -3385,7 +3412,7 @@ async def database_page(request: Request, flash: str = ""):
         try{{
           const r=await fetch('/admin/database/gdrive/start',{{method:'POST'}});
           const d=await r.json();
-          if(!d.ok){{box.innerHTML='<span class="text-red-600">❌ '+d.error+'</span>';return;}}
+          if(!d.ok){{box.innerHTML='<span class="text-red-600" style="unicode-bidi:plaintext">❌ '+d.error+'</span>';return;}}
           box.innerHTML=`
             <div class="text-center space-y-3">
               <p class="text-sm text-gray-700">لینک زیر را باز کنید و کد را وارد کنید:</p>
@@ -3394,7 +3421,7 @@ async def database_page(request: Request, flash: str = ""):
               <p class="text-xs text-gray-400">پس از تأیید در گوگل، دکمه زیر را بزنید</p>
               <button onclick="pollGdrive('${{d.device_code}}')" class="px-6 py-2 bg-green-600 text-white rounded-lg text-sm">✅ تأیید کردم</button>
             </div>`;
-        }}catch(e){{box.innerHTML='<span class="text-red-600">خطا: '+e.message+'</span>';}}
+        }}catch(e){{box.innerHTML='<span class="text-red-600" style="unicode-bidi:plaintext">خطا: '+e.message+'</span>';}}
       }}
       async function pollGdrive(dc){{
         const box=document.getElementById('gdrive_connect_box');
@@ -3405,7 +3432,7 @@ async def database_page(request: Request, flash: str = ""):
             const r=await fetch('/admin/database/gdrive/poll',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{device_code:dc}})}});
             const d=await r.json();
             if(d.ok){{box.innerHTML='<span class="text-green-600 font-bold">✅ اتصال موفق! صفحه را رفرش کنید.</span>';return;}}
-            if(!d.pending){{box.innerHTML='<span class="text-red-600">❌ '+(d.error||'خطا')+'</span>';return;}}
+            if(!d.pending){{box.innerHTML='<span class="text-red-600" style="unicode-bidi:plaintext">❌ '+(d.error||'خطا')+'</span>';return;}}
           }}catch(e){{}}
         }}
         box.innerHTML='<span class="text-red-600">⏱ زمان منقضی شد. دوباره تلاش کنید.</span>';
