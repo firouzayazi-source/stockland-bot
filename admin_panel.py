@@ -64,6 +64,11 @@ def _db() -> sqlite3.Connection:
 # ─── رجیستری مرکزی دسترسی‌ها ─────────────────────────────────────────────
 # قانون: هر قابلیت جدید = یک کلید اینجا؛ منو، صفحه ادمین‌ها و گاردها همه از همین می‌خوانند.
 ALL_PERMISSIONS = {
+    # ⚠️ «dashboard» عمداً هیچ‌جا با _require() گیت نمی‌شه — چون خود صفحهٔ اصلی
+    # (/admin/) مقصد استاندارد ریدایرکت هر _require دیگه‌ای در کل پنله (پیام
+    # «دسترسی کافی ندارید» دقیقاً همین‌جا نشون داده می‌شه)؛ گیت‌کردنش یعنی
+    # ادمینی که این دسترسی رو نداره وارد یه حلقهٔ ریدایرکت بی‌نهایت به خودِ همین
+    # صفحه می‌شه. کلید فقط برای کامل‌بودن لیست چک‌باکس‌ها نگه داشته شده.
     "dashboard":  "مشاهده داشبورد",
     "categories": "مدیریت دسته‌بندی‌ها",
     "products":   "مدیریت محصولات",
@@ -78,17 +83,41 @@ ALL_PERMISSIONS = {
     "accounting": "حسابداری",
     "notes":      "یادداشت مدیران",
     "settings":   "تنظیمات ربات",
-    "database":   "بکاپ و دیتابیس",
-    "admins":     "مدیریت ادمین‌ها",
-    "logs":       "گزارش فعالیت",
+    "database":   "بکاپ و دیتابیس (نمای کلی)",
+    "backup":     "پشتیبان‌گیری",
+    "restore":    "بازیابی از بکاپ",
+    "recovery":   "بازگردانی اضطراری",
+    "admins":     "مدیریت ادمین‌ها و نقش‌ها",
+    "logs":       "گزارش فعالیت (لاگ‌ها)",
     "broadcast":  "پیام همگانی",
+    "payment":    "مدیریت پرداخت (رسیدهای کارت‌به‌کارت)",
+    "reports":    "گزارش‌های مالی",
+    "news":       "اخبار و RSS",
+    "articles":   "مقالات و آموزش‌ها",
+    "ai_pricing": "هوش مصنوعی و قیمت‌گذاری آیفون",
+    "mini_app":   "مینی اپ",
+    "panel_appearance": "ظاهر و قالب پنل",
+    "notifications": "اعلان‌ها و تعامل کاربر (چک‌این/امتیازها)",
 }
 
-# سازگاری با ادمین‌های قدیمی: کلید جدید ← والد قدیمی
+# سازگاری با ادمین‌های قدیمی: کلید جدید ← والد قدیمی — یعنی ادمینی که قبلاً «والد» رو
+# داشته، بعد از این آپدیت خودکار به کلید تازهٔ دقیق‌تر هم دسترسی داره، بدون نیاز به
+# تنظیم مجدد دستی. هر دسترسی تازه‌ای که در آینده به پروژه اضافه می‌شه، فقط کافیه یک
+# سطر اینجا (اگه زیرمجموعهٔ منطقی یه دسترسی قدیمی‌تره) و یک سطر توی ALL_PERMISSIONS
+# اضافه بشه — نیازی به تغییر ساختار اصلی (_has/_require/صفحهٔ مدیریت ادمین‌ها) نیست.
 PERM_LEGACY = {
     "discounts": "orders", "growth": "orders",
     "users": "wallets", "accounting": "wallets", "notes": "wallets",
     "logs": "admins",
+    "categories": "products",
+    "backup": "database", "restore": "database", "recovery": "database",
+    "payment": "wallets",
+    "reports": "wallets",
+    "news": "settings", "articles": "settings",
+    "ai_pricing": "settings",
+    "mini_app": "settings",
+    "panel_appearance": "settings",
+    "notifications": "settings",
 }
 
 # ─────────────────────────── DB Schema for Admins ──────────────────────────
@@ -226,6 +255,18 @@ def _require(admin_info, perm: str):
     if not admin_info:
         return RedirectResponse("/admin/login", status_code=303)
     if not _has(admin_info, perm):
+        return RedirectResponse("/admin/?err=noperm", status_code=303)
+    return None
+
+
+def _require_any(admin_info, perms: list):
+    """مثل _require ولی کافیه فقط یکی از perms رو داشته باشه — برای صفحاتی که چند
+    زیردسترسی مجزا رو با هم نشون می‌دن (مثلاً /admin/database که دکمه‌های بکاپ/بازیابی/
+    بازگردانی هرکدوم permission جدای خودشون رو دارن، ولی خودِ صفحه باید برای هرکدوم که
+    حداقل یکی از این‌ها رو داشته باشه باز بشه، نه فقط کسی که همه‌شون رو داره)."""
+    if not admin_info:
+        return RedirectResponse("/admin/login", status_code=303)
+    if not any(_has(admin_info, p) for p in perms):
         return RedirectResponse("/admin/?err=noperm", status_code=303)
     return None
 
@@ -1865,7 +1906,7 @@ async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0")
 @router.get("/receipts", response_class=HTMLResponse)
 async def card_receipts_page(request: Request, status: str = "pending", flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "payment")
     if guard: return guard
     from db import get_card_receipts, ensure_card_receipts_schema
     ensure_card_receipts_schema()
@@ -1924,7 +1965,7 @@ async def card_receipts_page(request: Request, status: str = "pending", flash: s
 @router.get("/receipts/{rid}/view", response_class=HTMLResponse)
 async def receipt_view(request: Request, rid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "payment")
     if guard: return guard
     from db import get_card_receipts
     all_r = [r for r in get_card_receipts("") if r["id"] == rid]
@@ -1973,7 +2014,7 @@ async def receipt_view(request: Request, rid: int):
 @router.post("/receipts/delete-all")
 async def receipts_delete_all(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "payment")
     if guard: return guard
     from db import delete_all_card_receipts
     delete_all_card_receipts()
@@ -1984,7 +2025,7 @@ async def receipts_delete_all(request: Request):
 @router.post("/receipts/{rid}/delete")
 async def receipt_delete(request: Request, rid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "payment")
     if guard: return guard
     from db import delete_card_receipt
     delete_card_receipt(rid)
@@ -1995,7 +2036,7 @@ async def receipt_delete(request: Request, rid: int):
 @router.get("/receipts/{rid}/image")
 async def receipt_image(request: Request, rid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "payment")
     if guard: return guard
     from db import get_card_receipts
     all_r = [r for r in get_card_receipts("") if r["id"] == rid]
@@ -2019,7 +2060,7 @@ async def receipt_image(request: Request, rid: int):
 @router.post("/receipts/{rid}/approve")
 async def receipt_approve(request: Request, rid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "payment")
     if guard: return guard
     form = await request.form()
     confirmed_amount = int(form.get("confirmed_amount") or 0)
@@ -2045,7 +2086,7 @@ async def receipt_approve(request: Request, rid: int):
 @router.post("/receipts/{rid}/reject")
 async def receipt_reject(request: Request, rid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "payment")
     if guard: return guard
     from db import get_card_receipts, update_card_receipt
     all_r = [r for r in get_card_receipts("pending") if r["id"] == rid]
@@ -2429,7 +2470,7 @@ def _settings_action_bar():
 @router.post("/settings/theme")
 async def settings_theme_save(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "panel_appearance")
     if guard: return guard
     _ensure_theme_table()
     form = await request.form()
@@ -2451,7 +2492,7 @@ async def settings_theme_save(request: Request):
 @router.get("/settings/theme/reset")
 async def settings_theme_reset(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "panel_appearance")
     if guard: return guard
     conn = _db()
     try:
@@ -2822,7 +2863,7 @@ def _job_start(fn, *args, **kwargs) -> str:
 @router.get("/database", response_class=HTMLResponse)
 async def database_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require_any(adm, ["database", "backup", "restore", "recovery"])
     if guard: return guard
 
     # ☁️ داده‌های بکاپ ابری
@@ -3297,7 +3338,7 @@ async def database_page(request: Request, flash: str = ""):
 @router.post("/database/backup/full-sync")
 async def backup_full_sync(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require(adm, "backup")
     if guard: return guard
     from fastapi.responses import Response as FResponse, PlainTextResponse
     form = await request.form()
@@ -3319,7 +3360,7 @@ async def database_download_auto(request: Request, filename: str):
     """دانلود یک بکاپ خودکار (فایل .stbak)."""
     from fastapi.responses import FileResponse, PlainTextResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require(adm, "backup")
     if guard: return guard
     import os
     if ".." in filename or "/" in filename:
@@ -3335,7 +3376,7 @@ async def database_download_auto(request: Request, filename: str):
 async def restore_auto(request: Request):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require(adm, "restore")
     if guard: return JSONResponse({"error": "unauthorized"})
     form = await request.form()
     filename = str(form.get("filename","")).strip()
@@ -3370,7 +3411,7 @@ async def recover_latest(request: Request):
     بکاپ قبلی می‌ره، نه اینکه کل Recovery متوقف بشه."""
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require(adm, "recovery")
     if guard: return JSONResponse({"error": "unauthorized"})
     from stbak_engine import list_local_backups, validate_stbak, restore_stbak, StbakError
 
@@ -3410,7 +3451,7 @@ async def recover_latest(request: Request):
 async def restore_sync(request: Request, backup_file: UploadFile = None):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require(adm, "restore")
     if guard: return JSONResponse({"error": "unauthorized"})
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
@@ -3477,6 +3518,7 @@ async def backup_start(request: Request):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     if not adm: return JSONResponse({"error": "unauthorized"})
+    if not _has(adm, "backup"): return JSONResponse({"error": "unauthorized"})
     form = await request.form()
     is_full = form.get("full") == "1"
     sections = None if is_full else form.getlist("sections") or None
@@ -3491,7 +3533,7 @@ async def backup_start(request: Request):
 async def backup_download_job(request: Request, job_id: str):
     from fastapi.responses import Response as FResponse
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require(adm, "backup")
     if guard: return guard
     job = _job_read(job_id)
     if job.get("status") != "done":
@@ -3511,6 +3553,7 @@ async def restore_start(request: Request, backup_file: UploadFile = None):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     if not adm: return JSONResponse({"error": "unauthorized"})
+    if not _has(adm, "restore"): return JSONResponse({"error": "unauthorized"})
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
@@ -3968,7 +4011,7 @@ def _cat_select_options(cats_all: list, selected_id=None, exclude_id=None, paren
 @router.get("/categories", response_class=HTMLResponse)
 async def categories_list(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "products")
+    guard = _require(adm, "categories")
     if guard: return guard
 
     conn = _db()
@@ -4033,7 +4076,7 @@ async def categories_list(request: Request, flash: str = ""):
 async def categories_add(request: Request, name: str = Form(""), emoji: str = Form(""),
                           parent_id: str = Form(""), sort_order: str = Form("0")):
     adm = _get_admin(request)
-    guard = _require(adm, "products")
+    guard = _require(adm, "categories")
     if guard: return guard
 
     name = name.strip()
@@ -4061,7 +4104,7 @@ async def categories_add(request: Request, name: str = Form(""), emoji: str = Fo
 @router.get("/categories/{cid}/edit", response_class=HTMLResponse)
 async def categories_edit_get(request: Request, cid: int, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "products")
+    guard = _require(adm, "categories")
     if guard: return guard
 
     conn = _db()
@@ -4119,7 +4162,7 @@ async def categories_edit_post(request: Request, cid: int,
     name: str = Form(""), emoji: str = Form(""), parent_id: str = Form(""),
     sort_order: str = Form("0"), is_active: str = Form("")):
     adm = _get_admin(request)
-    guard = _require(adm, "products")
+    guard = _require(adm, "categories")
     if guard: return guard
 
     pid = int(parent_id) if parent_id.strip().isdigit() else None
@@ -4140,7 +4183,7 @@ async def categories_edit_post(request: Request, cid: int,
 @router.post("/categories/{cid}/toggle")
 async def categories_toggle(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "products")
+    guard = _require(adm, "categories")
     if guard: return guard
     conn = _db()
     try:
@@ -4154,7 +4197,7 @@ async def categories_toggle(request: Request, cid: int):
 @router.post("/categories/{cid}/delete")
 async def categories_delete(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "products")
+    guard = _require(adm, "categories")
     if guard: return guard
 
     def collect_ids(conn, cat_id):
@@ -6970,6 +7013,8 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
+    guard = _require(adm, "tickets")
+    if guard: return guard
 
     from db import ensure_ticket_archive_schema
     ensure_ticket_archive_schema()
@@ -7194,6 +7239,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
 async def ticket_archive(request: Request, tid: int):
     adm = _get_admin(request)
     if not adm: return JSONResponse({"ok": False})
+    if not _has(adm, "tickets"): return JSONResponse({"ok": False})
     from db import archive_ticket
     archive_ticket(tid)
     _log(request, "آرشیو تیکت", "تیکت‌ها", f"#{tid}")
@@ -7204,6 +7250,7 @@ async def ticket_archive(request: Request, tid: int):
 async def ticket_unarchive(request: Request, tid: int):
     adm = _get_admin(request)
     if not adm: return JSONResponse({"ok": False})
+    if not _has(adm, "tickets"): return JSONResponse({"ok": False})
     from db import unarchive_ticket
     unarchive_ticket(tid)
     _log(request, "بازگردانی تیکت از آرشیو", "تیکت‌ها", f"#{tid}")
@@ -7214,6 +7261,7 @@ async def ticket_unarchive(request: Request, tid: int):
 async def ticket_delete(request: Request, tid: int):
     adm = _get_admin(request)
     if not adm: return JSONResponse({"ok": False})
+    if not _has(adm, "tickets"): return JSONResponse({"ok": False})
     from db import delete_ticket
     delete_ticket(tid)
     _log(request, "حذف تیکت", "تیکت‌ها", f"#{tid}")
@@ -7225,6 +7273,8 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
+    guard = _require(adm, "tickets")
+    if guard: return guard
 
     conn = _db()
     try:
@@ -7555,6 +7605,8 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
 async def ticket_setup_status(request: Request, tid: int):
     adm = _get_admin(request)
     if not adm: return _redir("/admin/login")
+    guard = _require(adm, "tickets")
+    if guard: return guard
     form = await request.form()
     new_status = str(form.get("status", "reviewing"))
     conn = _db()
@@ -7572,6 +7624,8 @@ async def ticket_setup_status(request: Request, tid: int):
 async def ticket_deliver_product(request: Request, tid: int):
     adm = _get_admin(request)
     if not adm: return _redir("/admin/login")
+    guard = _require(adm, "tickets")
+    if guard: return guard
     conn = _db()
     try:
         ticket = conn.execute("SELECT * FROM tickets WHERE id=? LIMIT 1;", (tid,)).fetchone()
@@ -7622,6 +7676,8 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
+    guard = _require(adm, "tickets")
+    if guard: return guard
 
     text = text.strip()
     if not text:
@@ -7718,6 +7774,8 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
+    guard = _require(adm, "tickets")
+    if guard: return guard
 
     direct_msg = direct_msg.strip()
     if not direct_msg:
@@ -7772,6 +7830,8 @@ async def ticket_messages_json(request: Request, tid: int, after: int = 0):
     adm = _get_admin(request)
     if not adm:
         return JSONResponse({"messages": []}, status_code=401)
+    if not _has(adm, "tickets"):
+        return JSONResponse({"messages": []}, status_code=403)
     conn = _db()
     conn.row_factory = sqlite3.Row
     try:
@@ -7791,6 +7851,8 @@ async def ticket_media(request: Request, file_id: str):
     from fastapi.responses import Response
     adm = _get_admin(request)
     if not adm:
+        return Response(status_code=403)
+    if not _has(adm, "tickets"):
         return Response(status_code=403)
     token = _env("BOT_TOKEN")
     if not token:
@@ -7813,6 +7875,8 @@ async def ticket_status(request: Request, tid: int, status: str = Form("")):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
+    guard = _require(adm, "tickets")
+    if guard: return guard
 
     valid = {"waiting_admin", "waiting_user", "closed", "open", "in_progress"}
     if status not in valid:
@@ -8191,7 +8255,7 @@ def _start_auto_backup_thread() -> None:
 @router.get("/reports", response_class=HTMLResponse)
 async def financial_report(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "wallets")
+    guard = _require(adm, "reports")
     if guard: return guard
     from db import get_financial_report, ensure_feed_batch_schema
     ensure_feed_batch_schema()
@@ -10937,7 +11001,7 @@ async def database_cloud_save(request: Request):
 async def database_cloud_run(request: Request):
     """▶ بکاپ + آپلود فوری — در پس‌زمینه تا صفحه معطل نماند."""
     adm = _get_admin(request)
-    guard = _require(adm, "database")
+    guard = _require(adm, "backup")
     if guard: return guard
     try:
         import threading as _th
@@ -11111,7 +11175,7 @@ _KIND_LABELS = {"tutorial": "📚 آموزش", "feature": "✨ امکانات", 
 @router.get("/app-content", response_class=HTMLResponse)
 async def app_content_page(request: Request, kind: str = "", flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
     from db import get_app_content
     k = kind if kind in _KIND_LABELS else None
@@ -11222,7 +11286,7 @@ def _app_content_form(it=None):
 @router.get("/app-content/new", response_class=HTMLResponse)
 async def app_content_new(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
     return _layout("افزودن محتوا", _app_content_form(), adm)
 
@@ -11230,7 +11294,7 @@ async def app_content_new(request: Request):
 @router.get("/app-content/{cid}/edit", response_class=HTMLResponse)
 async def app_content_edit(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
     from db import get_app_content_item
     it = get_app_content_item(cid)
@@ -11245,7 +11309,7 @@ async def app_content_save(request: Request, cid: str = Form(""), kind: str = Fo
                            image_url: str = Form(""), link_url: str = Form(""), is_active: str = Form(""),
                            image: UploadFile = None):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
 
     # آپلود تصویر (در صورت انتخاب فایل)
@@ -11278,7 +11342,7 @@ async def app_content_save(request: Request, cid: str = Form(""), kind: str = Fo
 @router.get("/news-feed", response_class=HTMLResponse)
 async def news_feed_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
     from db import get_cfg
     from core.news import get_feed
@@ -11321,7 +11385,7 @@ async def news_feed_page(request: Request, flash: str = ""):
 @router.post("/news-feed/settings")
 async def news_feed_settings_save(request: Request, url: str = Form("")):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
     from db import set_cfg
     set_cfg("NEWS_FEED_URL", url.strip())
@@ -11332,7 +11396,7 @@ async def news_feed_settings_save(request: Request, url: str = Form("")):
 @router.post("/news-feed/refresh")
 async def news_feed_refresh(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
     from core.news import get_feed
     d = get_feed(force=True)
@@ -11345,7 +11409,7 @@ async def news_feed_refresh(request: Request):
 @router.post("/app-content/{cid}/delete")
 async def app_content_delete(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "news")
     if guard: return guard
     from db import delete_app_content
     delete_app_content(cid)
@@ -11359,7 +11423,7 @@ async def app_content_delete(request: Request, cid: int):
 @router.get("/engagement", response_class=HTMLResponse)
 async def engagement_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "notifications")
     if guard: return guard
     from db import get_cfg, get_all_ratings
     reward = get_cfg("DAILY_CHECKIN_REWARD", "500")
@@ -11408,7 +11472,7 @@ async def engagement_page(request: Request, flash: str = ""):
 @router.post("/engagement/settings")
 async def engagement_settings_save(request: Request, reward: str = Form("0")):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "notifications")
     if guard: return guard
     from db import set_cfg
     try:
@@ -11423,7 +11487,7 @@ async def engagement_settings_save(request: Request, reward: str = Form("0")):
 @router.post("/engagement/ratings/{rid}/delete")
 async def engagement_rating_delete(request: Request, rid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "notifications")
     if guard: return guard
     from db import delete_rating
     delete_rating(rid)
@@ -11480,7 +11544,7 @@ async def _save_tutorial_file(file, subdir: str, allowed_exts: tuple, prefix: st
 @router.get("/tutorials", response_class=HTMLResponse)
 async def tutorials_page(request: Request, status: str = "", category: str = "", q: str = "", flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import get_tutorials, get_tutorial_categories
     cats = get_tutorial_categories()
@@ -11695,7 +11759,7 @@ def _tutorial_form(it=None, categories=None):
 @router.get("/tutorials/new", response_class=HTMLResponse)
 async def tutorials_new(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import get_tutorial_categories
     return _layout("افزودن آموزش", _tutorial_form(categories=get_tutorial_categories()), adm)
@@ -11704,7 +11768,7 @@ async def tutorials_new(request: Request):
 @router.get("/tutorials/{tid}/edit", response_class=HTMLResponse)
 async def tutorials_edit(request: Request, tid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import get_tutorial, get_tutorial_categories
     it = get_tutorial(tid)
@@ -11716,7 +11780,7 @@ async def tutorials_edit(request: Request, tid: int):
 @router.get("/tutorials/{tid}/preview", response_class=HTMLResponse)
 async def tutorials_preview(request: Request, tid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import get_tutorial, get_tutorial_categories
     it = get_tutorial(tid)
@@ -11746,7 +11810,7 @@ async def tutorials_preview(request: Request, tid: int):
 @router.post("/tutorials/save")
 async def tutorials_save(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import add_tutorial, update_tutorial, get_tutorial, jalali_str_to_gregorian_iso
 
@@ -11836,7 +11900,7 @@ async def tutorials_save(request: Request):
 @router.post("/tutorials/{tid}/toggle")
 async def tutorials_toggle(request: Request, tid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import get_tutorial, set_tutorial_status
     it = get_tutorial(tid)
@@ -11850,7 +11914,7 @@ async def tutorials_toggle(request: Request, tid: int):
 @router.post("/tutorials/{tid}/delete")
 async def tutorials_delete(request: Request, tid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import delete_tutorial
     delete_tutorial(tid)
@@ -11861,7 +11925,7 @@ async def tutorials_delete(request: Request, tid: int):
 @router.get("/tutorials/categories", response_class=HTMLResponse)
 async def tutorial_categories_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import get_tutorial_categories
     cats = get_tutorial_categories()
@@ -11897,7 +11961,7 @@ async def tutorial_categories_page(request: Request, flash: str = ""):
 @router.post("/tutorials/categories/add")
 async def tutorial_categories_add(request: Request, name: str = Form(...)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import add_tutorial_category
     if name.strip():
@@ -11909,7 +11973,7 @@ async def tutorial_categories_add(request: Request, name: str = Form(...)):
 @router.post("/tutorials/categories/{cid}/delete")
 async def tutorial_categories_delete(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "articles")
     if guard: return guard
     from db import delete_tutorial_category
     delete_tutorial_category(cid)
@@ -11960,7 +12024,7 @@ def _iv_parse_num(raw, cast=int, default=0):
 @router.get("/iphone", response_class=HTMLResponse)
 async def iphone_dashboard(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     from ui_texts import is_main_button_enabled
     import iphone_valuation.db as ivdb
@@ -12029,7 +12093,7 @@ async def iphone_dashboard(request: Request, flash: str = ""):
 @router.post("/iphone/toggle")
 async def iphone_toggle(request: Request):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     from ui_texts import is_main_button_enabled, set_main_button_enabled
     cur = is_main_button_enabled("MAIN_BTN_IPHONE_VALUATION")
@@ -12043,7 +12107,7 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
     """این صفحه فقط کاتالوگ (نام/سری/ظرفیت‌ها/رنگ‌ها/کلید اثر رنگ‌وپارت روی قیمت) رو مدیریت
     می‌کنه — ثبت قیمت واقعی جای دیگه‌ست: /admin/iphone/prices."""
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     models = ivdb.list_models(active_only=False)
@@ -12156,7 +12220,7 @@ async def iphone_models_page(request: Request, flash: str = "", open: str = ""):
 @router.post("/iphone/models/add")
 async def iphone_models_add(request: Request, name: str = Form(...), series: str = Form("")):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     new_id = None
@@ -12171,7 +12235,7 @@ async def iphone_models_add(request: Request, name: str = Form(...), series: str
 async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), series: str = Form(""),
                               color_pricing: str | None = Form(None), part_pricing: str | None = Form(None)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     # dual_sim_parts/esim_only دیگه از این فرم ویرایش نمی‌شن — استاندارد تک‌سیم/دوسیم
@@ -12185,7 +12249,7 @@ async def iphone_models_edit(request: Request, mid: int, name: str = Form(...), 
 @router.post("/iphone/models/{mid}/toggle")
 async def iphone_models_toggle(request: Request, mid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     m = ivdb.get_model(mid)
@@ -12197,7 +12261,7 @@ async def iphone_models_toggle(request: Request, mid: int):
 @router.post("/iphone/models/{mid}/delete")
 async def iphone_models_delete(request: Request, mid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     m = ivdb.get_model(mid)
@@ -12210,7 +12274,7 @@ async def iphone_models_delete(request: Request, mid: int):
 @router.post("/iphone/storages/add")
 async def iphone_storages_add(request: Request, model_id: int = Form(...), label: str = Form(...)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     if label.strip():
@@ -12222,7 +12286,7 @@ async def iphone_storages_add(request: Request, model_id: int = Form(...), label
 @router.post("/iphone/storages/{sid}/delete")
 async def iphone_storages_delete(request: Request, sid: int, model_id: int = Form(0)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.delete_storage(sid)
@@ -12235,7 +12299,7 @@ async def iphone_prices_page(request: Request, flash: str = ""):
     آبشاری (مدل → ظرفیت → رنگ اگه لازم بود → پارت اگه لازم بود) بالای صفحه، و لیست تخت همهٔ
     قیمت‌های ثبت‌شده (شبیه لیست تیکت‌ها) پایینش — هر ردیف یعنی یک رکورد قیمت مستقل."""
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     models = ivdb.list_models(active_only=False)
@@ -12394,7 +12458,7 @@ async def iphone_prices_upsert(request: Request, model_id: int = Form(...), stor
     اگه از قبل بود آپدیت می‌شه، وگرنه ردیف تازه ساخته می‌شه — هیچ‌وقت رد/خطای «تکراریه»
     نشون نمی‌ده (که خودش می‌تونست مثل باگ قدیمی «ذخیره نمی‌شه» به نظر بیاد)."""
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     import iphone_valuation.fx as ivfx
@@ -12416,7 +12480,7 @@ async def iphone_prices_upsert(request: Request, model_id: int = Form(...), stor
 async def iphone_prices_edit(request: Request, cid: int, base_price: str = Form(...),
                               buy_price_ref: str = Form(...), sell_price_ref: str = Form(...)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.update_capacity(cid, base_price=_iv_parse_num(base_price), buy_price_ref=_iv_parse_num(buy_price_ref),
@@ -12427,7 +12491,7 @@ async def iphone_prices_edit(request: Request, cid: int, base_price: str = Form(
 @router.post("/iphone/prices/{cid}/delete")
 async def iphone_prices_delete(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.delete_capacity(cid)
@@ -12437,7 +12501,7 @@ async def iphone_prices_delete(request: Request, cid: int):
 @router.post("/iphone/colors/add")
 async def iphone_colors_add(request: Request, model_id: int = Form(...), name: str = Form(...)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     if name.strip():
@@ -12449,7 +12513,7 @@ async def iphone_colors_add(request: Request, model_id: int = Form(...), name: s
 @router.post("/iphone/colors/{cid}/delete")
 async def iphone_colors_delete(request: Request, cid: int, model_id: int = Form(0)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.delete_color(cid)
@@ -12459,7 +12523,7 @@ async def iphone_colors_delete(request: Request, cid: int, model_id: int = Form(
 @router.get("/iphone/coefficients", response_class=HTMLResponse)
 async def iphone_coefficients_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     coeffs = ivdb.list_coefficients(active_only=False)
@@ -12526,7 +12590,7 @@ async def iphone_coefficients_page(request: Request, flash: str = ""):
 async def iphone_coefficients_add(request: Request, category: str = Form(...), option_key: str = Form(...),
                                    option_label: str = Form(...), percent: float = Form(...)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.create_coefficient(category, option_key.strip(), option_label.strip(), percent)
@@ -12538,7 +12602,7 @@ async def iphone_coefficients_add(request: Request, category: str = Form(...), o
 async def iphone_coefficients_edit(request: Request, cid: int, percent: float = Form(...),
                                     active: str | None = Form(None)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.update_coefficient(cid, percent=percent, active=1 if active else 0)
@@ -12548,7 +12612,7 @@ async def iphone_coefficients_edit(request: Request, cid: int, percent: float = 
 @router.post("/iphone/coefficients/{cid}/delete")
 async def iphone_coefficients_delete(request: Request, cid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.delete_coefficient(cid)
@@ -12559,7 +12623,7 @@ async def iphone_coefficients_delete(request: Request, cid: int):
 @router.post("/iphone/weights/save")
 async def iphone_weights_save(request: Request, category: str = Form(...), weight: float = Form(...)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.set_score_weight(category, weight)
@@ -12569,7 +12633,7 @@ async def iphone_weights_save(request: Request, category: str = Form(...), weigh
 @router.get("/iphone/fx", response_class=HTMLResponse)
 async def iphone_fx_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     from db import get_cfg
     import iphone_valuation.db as ivdb
@@ -12648,7 +12712,7 @@ async def iphone_fx_page(request: Request, flash: str = ""):
 async def iphone_fx_settings(request: Request, mode: str = Form("auto"), manual_rate: int = Form(0),
                               sensitivity: float = Form(0.5), market_weight: float = Form(0.15)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     from db import set_cfg
     set_cfg("IV_FX_MODE", mode if mode in ("auto", "manual") else "auto")
@@ -12663,7 +12727,7 @@ async def iphone_fx_settings(request: Request, mode: str = Form("auto"), manual_
 async def iphone_fx_add(request: Request, name: str = Form(...), url: str = Form(...),
                          json_path: str = Form("price"), priority: int = Form(1)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.create_fx_source(name, url, json_path or "price", priority)
@@ -12676,7 +12740,7 @@ async def iphone_fx_edit(request: Request, sid: int, name: str = Form(...), url:
                           json_path: str = Form("price"), priority: int = Form(1),
                           active: str | None = Form(None)):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.update_fx_source(sid, name=name, url=url, json_path=json_path or "price", priority=priority,
@@ -12687,7 +12751,7 @@ async def iphone_fx_edit(request: Request, sid: int, name: str = Form(...), url:
 @router.post("/iphone/fx/{sid}/delete")
 async def iphone_fx_delete(request: Request, sid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     ivdb.delete_fx_source(sid)
@@ -12698,7 +12762,7 @@ async def iphone_fx_delete(request: Request, sid: int):
 @router.post("/iphone/fx/{sid}/test")
 async def iphone_fx_test(request: Request, sid: int):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     import iphone_valuation.fx as ivfx
@@ -12714,7 +12778,7 @@ async def iphone_fx_test(request: Request, sid: int):
 @router.get("/iphone/history", response_class=HTMLResponse)
 async def iphone_history_page(request: Request, flash: str = ""):
     adm = _get_admin(request)
-    guard = _require(adm, "settings")
+    guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     items = ivdb.list_valuations(limit=100)

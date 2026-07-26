@@ -511,7 +511,6 @@ function _fetchNewsPage(reset){
     var html=it.map(function(p,i){
       return '<a class="sl-post" href="'+esc(p.link)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'+
         '<div class="sl-post-cv" style="background:'+_newsColors[(startI+i)%_newsColors.length]+'">'+
-        '<span class="sl-post-tag">📰 اخبار</span>'+
         (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'')+
         '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
         '<div class="sl-post-x">'+esc(p.excerpt)+'</div><div class="sl-post-m">'+esc(p.pub_date)+'</div></div></a>';
