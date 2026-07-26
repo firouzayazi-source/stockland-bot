@@ -2845,10 +2845,11 @@ async def database_page(request: Request, flash: str = ""):
     from stbak_engine import MODULES, SECTION_LABELS
     import glob as _gl, os as _os
 
-    # لیست بکاپ‌های خودکار — از pg_backup (PostgreSQL)
+    # لیست بکاپ‌های خودکار — stbak_engine (SQLite، همون چیزی که تولید واقعاً روش کار می‌کنه؛
+    # pg_backup مخصوص Postgres است و روی نصب SQLite همیشه شکست می‌خورد)
     try:
-        from pg_backup import list_local_backups
-        _auto_list = list_local_backups()[:3]
+        from stbak_engine import list_local_backups as _list_stbak
+        _auto_list = _list_stbak(_BACKUP_DIR)[:5]
     except Exception:
         _auto_list = []
     _auto_files = [b["path"] for b in _auto_list]
@@ -2857,15 +2858,13 @@ async def database_page(request: Request, flash: str = ""):
         _fn  = _b["name"]
         _sz  = _b["size"]
         _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
-        _ts  = _fn.replace("pg_backup_","").replace(".stbak","")
         try:
             from datetime import datetime as _dt
             from db import fa_date as _fad
-            _dto = _dt.strptime(_ts, "%Y%m%d_%H%M%S")
-            _iso = _dto.strftime("%Y-%m-%d %H:%M:%S")
+            _iso = _dt.fromtimestamp(_b["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
             _tfa = _fad(_iso, with_time=True)  # شمسی + اعداد فارسی
         except Exception:
-            _tfa = _ts
+            _tfa = _fn
         _auto_rows += f"""<tr class="border-b hover:bg-gray-50">
           <td class="px-4 py-3 text-sm">{_tfa}</td>
           <td class="px-4 py-3 text-xs text-gray-400">خودکار</td>
@@ -2901,15 +2900,13 @@ async def database_page(request: Request, flash: str = ""):
     _restore_options = ""
     for _b in _auto_list:
         _fn = _b["name"]
-        _ts = _fn.replace("pg_backup_","").replace(".stbak","")
         try:
             from datetime import datetime as _dt2
             from db import fa_date as _fad2
-            _dto = _dt2.strptime(_ts, "%Y%m%d_%H%M%S")
-            _iso = _dto.strftime("%Y-%m-%d %H:%M:%S")
+            _iso = _dt2.fromtimestamp(_b["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
             _label = _fad2(_iso, with_time=True)  # شمسی + اعداد فارسی
         except Exception:
-            _label = _ts
+            _label = _fn
         _sz = _b["size"]
         _szs = f"{_sz//1024} KB"
         _restore_options += f'<option value="{e(_fn)}">{_label} ({_szs})</option>'
@@ -3015,6 +3012,18 @@ async def database_page(request: Request, flash: str = ""):
       }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
       finally{_busy=false;}
     }
+    async function runRecovery(){
+      if(_busy)return;
+      if(!confirm('⚠️ این عملیات جدیدترین بکاپ محلی سالم رو پیدا و جایگزین داده‌های فعلی می‌کنه. ادامه؟'))return;
+      _busy=true;ovShow('در حال بازگردانی اضطراری...','در حال جست‌وجوی آخرین بکاپ سالم...');
+      try{
+        var r=await fetch('/admin/database/recover-latest',{method:'POST'});
+        var d=await r.json();
+        if(d.error) throw new Error(d.error+(d.details?' — '+d.details.join('، '):''));
+        ovResult(true,'بازگردانی موفق','از «'+d.restored_from+'» — '+(d.total||0)+' رکورد بازیابی شد');
+      }catch(err){ovResult(false,'بازگردانی ناموفق',err.message||'خطا');}
+      finally{_busy=false;}
+    }
     """
 
     body = f"""
@@ -3081,6 +3090,19 @@ async def database_page(request: Request, flash: str = ""):
       <button onclick="runRestore()"
         class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">
         ♻️ بازیابی از فایل
+      </button>
+    </div>
+
+    <!-- بازگردانی اضطراری (Recovery) -->
+    <div class="card p-6 mb-4 border-2 border-amber-100">
+      <div class="flex items-center gap-3 mb-5">
+        <span class="w-10 h-10 bg-amber-100 text-amber-700 rounded-xl flex items-center justify-center text-xl">🆘</span>
+        <div><h2 class="font-bold text-gray-800 text-lg">بازگردانی اضطراری</h2>
+             <p class="text-xs text-gray-400">در صورت خرابی دیتابیس/تنظیمات — بدون نیاز به انتخاب فایل، خودکار جدیدترین بکاپ محلی سالم را پیدا و بازیابی می‌کند</p></div>
+      </div>
+      <button onclick="runRecovery()"
+        class="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold transition">
+        🆘 بازگردانی به آخرین بکاپ سالم
       </button>
     </div>
 
@@ -3277,15 +3299,17 @@ async def backup_full_sync(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "database")
     if guard: return guard
-    from fastapi.responses import FileResponse, PlainTextResponse
-    # بکاپ کامل PostgreSQL با pg_dump
+    from fastapi.responses import Response as FResponse, PlainTextResponse
+    form = await request.form()
+    is_full = form.get("full") == "1"
+    sections = None if is_full else (form.getlist("sections") or None)
     try:
-        from pg_backup import create_backup
-        import os
-        fpath = create_backup()
-        _log(request, "بکاپ کامل دستی", "دیتابیس", os.path.basename(fpath), admin_info=adm)
-        return FileResponse(fpath, filename=os.path.basename(fpath),
-                            media_type="application/octet-stream")
+        from stbak_engine import create_stbak, stbak_filename
+        raw = create_stbak(_DB_PATH(), modules=sections)
+        fname = stbak_filename("full" if is_full else "custom")
+        _log(request, "بکاپ کامل دستی", "دیتابیس", fname, admin_info=adm)
+        return FResponse(content=raw, media_type="application/octet-stream",
+                          headers={"Content-Disposition": f'attachment; filename="{fname}"'})
     except Exception as ex:
         return PlainTextResponse(f"خطا در بکاپ: {str(ex)[:150]}", status_code=500)
 
@@ -3300,8 +3324,7 @@ async def database_download_auto(request: Request, filename: str):
     import os
     if ".." in filename or "/" in filename:
         return PlainTextResponse("نام فایل نامعتبر", status_code=400)
-    from pg_backup import BACKUP_DIR
-    path = os.path.join(BACKUP_DIR, filename)
+    path = os.path.join(_BACKUP_DIR, filename)
     if not os.path.exists(path):
         return PlainTextResponse("فایل یافت نشد", status_code=404)
     _log(request, "دانلود بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
@@ -3319,18 +3342,68 @@ async def restore_auto(request: Request):
     if not filename or ".." in filename or "/" in filename:
         return JSONResponse({"error": "فایل نامعتبر"})
     import os
-    from pg_backup import BACKUP_DIR, restore_backup
-    path = os.path.join(BACKUP_DIR, filename)
+    from stbak_engine import restore_stbak, StbakError
+    path = os.path.join(_BACKUP_DIR, filename)
     if not os.path.exists(path):
         return JSONResponse({"error": "فایل یافت نشد"})
     try:
-        res = restore_backup(path)
-        if not res.get("ok"):
-            return JSONResponse({"error": res.get("error","خطا در بازیابی")})
+        with open(path, "rb") as f:
+            raw = f.read()
+        res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+        if res["errors"]:
+            _log(request, "بازیابی بکاپ خودکار (با هشدار)", "دیتابیس",
+                 f"{filename} — {len(res['errors'])} خطا", admin_info=adm)
+            return JSONResponse({"ok": True, "warnings": res["errors"], "total": res["total"]})
         _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, "total": res["total"]})
+    except StbakError as ex:
+        return JSONResponse({"error": str(ex)})
     except Exception as ex:
-        return JSONResponse({"error": str(ex)[:100]})
+        return JSONResponse({"error": str(ex)[:150]})
+
+
+@router.post("/database/recover-latest")
+async def recover_latest(request: Request):
+    """🆘 بازگردانی اضطراری یک‌کلیکی — بخش Recovery: بدون نیاز به انتخاب دستی فایل،
+    بین بکاپ‌های محلی (جدیدترین اول) هرکدوم که واقعاً سالم بود (validate_stbak پاس بشه)
+    رو پیدا می‌کنه و همون رو بازیابی می‌کنه — اگه جدیدترین فایل خراب بود، خودکار سراغ
+    بکاپ قبلی می‌ره، نه اینکه کل Recovery متوقف بشه."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "database")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    from stbak_engine import list_local_backups, validate_stbak, restore_stbak, StbakError
+
+    candidates = list_local_backups(_BACKUP_DIR)
+    if not candidates:
+        return JSONResponse({"error": "هیچ بکاپ محلی‌ای برای بازگردانی یافت نشد"})
+
+    tried = []
+    for cand in candidates:
+        try:
+            with open(cand["path"], "rb") as f:
+                raw = f.read()
+            validate_stbak(raw)  # فقط سالم‌بودن رو چک می‌کنه، هنوز چیزی رو دست نمی‌زنه
+        except StbakError as ex:
+            tried.append(f"{cand['name']}: {ex}")
+            continue
+        except Exception as ex:
+            tried.append(f"{cand['name']}: {ex}")
+            continue
+        try:
+            res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+            _log(request, "بازگردانی اضطراری (Recovery)", "دیتابیس",
+                 f"{cand['name']} — {len(res['errors'])} خطای جدولی", admin_info=adm)
+            return JSONResponse({
+                "ok": True, "restored_from": cand["name"],
+                "total": res["total"], "warnings": res["errors"],
+                "skipped": tried,
+            })
+        except Exception as ex:
+            tried.append(f"{cand['name']}: خطای بازیابی — {ex}")
+            continue
+
+    return JSONResponse({"error": "هیچ‌کدام از بکاپ‌های محلی سالم نبودند", "details": tried})
 
 
 @router.post("/database/restore/sync")
@@ -3342,21 +3415,19 @@ async def restore_sync(request: Request, backup_file: UploadFile = None):
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    import os, tempfile
-    from pg_backup import restore_backup
+    from stbak_engine import restore_stbak, StbakError
     try:
-        # ذخیره موقت و بازیابی با pg_restore
-        tmp = tempfile.NamedTemporaryFile(suffix=".stbak", delete=False)
-        tmp.write(raw); tmp.close()
-        res = restore_backup(tmp.name)
-        try: os.remove(tmp.name)
-        except Exception: pass
-        if not res.get("ok"):
-            return JSONResponse({"error": res.get("error", "خطا در بازیابی")})
+        res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+        if res["errors"]:
+            _log(request, "بازیابی از فایل (با هشدار)", "دیتابیس",
+                 f"{backup_file.filename} — {len(res['errors'])} خطا", admin_info=adm)
+            return JSONResponse({"ok": True, "warnings": res["errors"], "total": res["total"]})
         _log(request, "بازیابی از فایل", "دیتابیس", backup_file.filename, admin_info=adm)
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, "total": res["total"]})
+    except StbakError as ex:
+        return JSONResponse({"error": str(ex)})
     except Exception as ex:
-        return JSONResponse({"error": str(ex)[:100]})
+        return JSONResponse({"error": str(ex)[:150]})
 
 
 @router.post("/database/reset/sync")
@@ -3443,20 +3514,17 @@ async def restore_start(request: Request, backup_file: UploadFile = None):
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    import os, tempfile
-    from pg_backup import restore_backup
+    from stbak_engine import restore_stbak, StbakError
     try:
-        tmp = tempfile.NamedTemporaryFile(suffix=".stbak", delete=False)
-        tmp.write(raw); tmp.close()
-        res = restore_backup(tmp.name)
-        try: os.remove(tmp.name)
-        except Exception: pass
-        if not res.get("ok"):
-            return JSONResponse({"error": res.get("error", "خطا")})
+        res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+        if res["errors"]:
+            return JSONResponse({"ok": True, "warnings": res["errors"], "total": res["total"]})
         _log(request, "بازیابی از فایل", "دیتابیس", backup_file.filename, admin_info=adm)
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, "total": res["total"]})
+    except StbakError as ex:
+        return JSONResponse({"error": str(ex)})
     except Exception as ex:
-        return JSONResponse({"error": str(ex)[:100]})
+        return JSONResponse({"error": str(ex)[:150]})
 
 
 @router.post("/database/reset/start")
@@ -8032,17 +8100,19 @@ _auto_backup_started = False
 
 
 def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه با pg_dump (PostgreSQL) + آپلود به مقاصد فعال."""
+    """بکاپ خودکار روزانه با stbak_engine (SQLite — دیتابیس واقعی تولید) + آپلود به مقاصد فعال.
+    ⚠️ قبلاً این تابع pg_backup.create_backup() (مخصوص Postgres) رو صدا می‌زد که روی نصب
+    SQLite تولید همیشه با «DATABASE_URL تنظیم نشده» شکست می‌خورد — یعنی بکاپ خودکار روزانه
+    عملاً هیچ‌وقت موفق نمی‌شد، فقط بی‌صدا توی لاگ خطا می‌نوشت."""
     try:
-        import pg_backup
-        # retention از تنظیمات پنل
+        from stbak_engine import save_local_backup
         try:
             from backup_uploader import get_cloud_settings
             _cs = get_cloud_settings()
-            pg_backup.LOCAL_RETENTION = max(1, int(_cs.get("retention") or 3))
+            retention = max(1, int(_cs.get("retention") or _MAX_BACKUPS))
         except Exception:
-            pass
-        dst = pg_backup.create_backup()
+            retention = _MAX_BACKUPS
+        dst = save_local_backup(_DB_PATH(), _BACKUP_DIR, modules=None, retention=retention)
     except Exception as ex:
         _tg_logger.error("Auto-backup failed: %s", ex)
         return
@@ -10858,11 +10928,6 @@ async def database_cloud_save(request: Request):
         "tg_channel":     g("tg_channel"),
         "gdrive_enabled": onoff("gdrive_enabled"),
     })
-    # retention محلی را در pg_backup هم اعمال کن
-    try:
-        import pg_backup
-        pg_backup.LOCAL_RETENTION = int(cfg.get("retention") or 3)
-    except Exception: pass
     save_cloud_settings(cfg)
     _log(request, "تنظیمات بکاپ ابری", "دیتابیس", "cloud settings saved", admin_info=adm)
     return _redir("/admin/database?flash=✅+تنظیمات+بکاپ+ابری+ذخیره+شد#cloudbk")
