@@ -5,6 +5,7 @@
 فلگ ماژول‌سطح تا هر درخواست دوباره تلاش نکنه.
 """
 import json
+import re
 import time as _time
 
 _SCHEMA_DONE = False
@@ -144,6 +145,23 @@ def _iv_sim_policy(name: str, sort_order: int) -> tuple[str, int]:
     return "ZA,CH", 0
 
 
+def _iv_series_for_model_name(name: str) -> str:
+    """گروه نسل/سری رو از روی اسم مدل حدس می‌زنه — فقط برای classifier اولیهٔ مهاجرت
+    یک‌بارهٔ iv_series استفاده می‌شه (_migrate_iv_series_v1)؛ بعد از مهاجرت، تخصیص
+    مدل→سری کاملاً دیتای قابل‌ویرایش از پنله، نه قانون هاردکد همیشگی."""
+    name = name or ""
+    if "SE" in name:
+        return "iPhone SE"
+    if name.strip() == "iPhone":
+        return "iPhone (نسل اول)"
+    if name.startswith("iPhone X"):
+        return "iPhone X"
+    m = re.search(r"iPhone (\d+)", name)
+    if m:
+        return f"iPhone {m.group(1)}"
+    return "سایر"
+
+
 def _conn():
     from db import _get_connection
     return _get_connection()
@@ -191,6 +209,21 @@ def ensure_schema():
             conn.commit()
         except Exception:
             pass
+        # iv_series — گروه‌بندی نسل/سری مدل‌ها (مثل «آیفون ۱۱»، «آیفون X») برای اولین مرحلهٔ
+        # ویزارد ربات؛ کاملاً جدا از ستون قدیمی iv_models.series (که فقط سال انتشار رو نگه
+        # می‌داره و صرفاً برای نمایش «(سال)» در پنل استفاده می‌شه — دست‌نخورده می‌مونه).
+        conn.execute("""CREATE TABLE IF NOT EXISTS iv_series (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );""")
+        try:
+            conn.execute("ALTER TABLE iv_models ADD COLUMN series_id INTEGER;")
+            conn.commit()
+        except Exception:
+            pass
         # iv_storages/iv_parts — نرمال‌سازی: به‌جای متن آزاد روی خودِ ردیف قیمت، هر ظرفیت و
         # هر پارت یه ردیف مستقل با id هست و ردیف قیمت فقط شناسه رو نگه می‌داره.
         conn.execute("""CREATE TABLE IF NOT EXISTS iv_storages (
@@ -201,6 +234,17 @@ def ensure_schema():
             active INTEGER NOT NULL DEFAULT 1
         );""")
         conn.execute("""CREATE TABLE IF NOT EXISTS iv_parts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1
+        );""")
+        # iv_repair_parts — کاتالوگ مشترک قطعات برای دو دستهٔ ضریب موازی «component» (معیوب،
+        # از قبل موجود) و «replaced» (تعویض‌شده، تازه) — هر دو با option_key یکسان = این کد.
+        # این جدول فقط لایهٔ مدیریتیه (یک صفحهٔ ادمین برای هر دو درصد)؛ pricing_engine/
+        # scoring_engine مستقیم هیچ‌وقت ازش نمی‌خونن، فقط از iv_coefficients.
+        conn.execute("""CREATE TABLE IF NOT EXISTS iv_repair_parts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             code TEXT NOT NULL UNIQUE,
             label TEXT NOT NULL,
@@ -399,6 +443,10 @@ def ensure_schema():
         _migrate_condition_weight_v1(conn)
         _migrate_pricing_toggles_v1(conn)
         _migrate_normalize_pricing_v2(conn)
+        _migrate_iv_series_v1(conn)
+        _migrate_repair_parts_catalog_v1(conn)
+        _migrate_replaced_category_v1(conn)
+        _migrate_repair_vs_replaced_v1(conn)
     finally:
         conn.close()
     _SCHEMA_DONE = True
@@ -575,6 +623,92 @@ def _migrate_registry_options_v2(conn):
     set_cfg("IV_REGISTRY_V2_MIGRATED", "1")
 
 
+# درصد پیش‌فرض «تعویض‌شده» برای هر قطعه — تقریباً نصف درصد منفی همون قطعه در دستهٔ
+# «معیوب» (component)، چون قطعهٔ تعویض‌شدهٔ سالم بهتر از خراب ولی بدتر از اصلیه.
+_REPLACED_DEFAULT_PERCENT = {
+    "comp_faceid": -8, "comp_screen": -10, "comp_camera": -5, "comp_speaker": -3,
+    "comp_mic": -3, "comp_wifi": -4, "comp_bluetooth": -3, "comp_nfc": -2,
+    "comp_wireless_charge": -3, "comp_buttons": -3,
+}
+
+
+def _migrate_iv_series_v1(conn):
+    """گروه‌بندی نسل/سری مدل‌ها — یه‌بار اجرا می‌شه: ۱۶ سری (بر اساس _iv_series_for_model_name)
+    seed می‌شن و هر مدلی که هنوز series_id نداره بهشون وصل می‌شه. بعدش کاملاً از پنل
+    قابل‌ویرایش/جابه‌جاییه — این فقط یه classifier اولیه‌ست، نه قانون همیشگی."""
+    from db import get_cfg, set_cfg
+    if get_cfg("IV_SERIES_MIGRATED", "0") == "1":
+        return
+    models = conn.execute("SELECT id, name FROM iv_models WHERE series_id IS NULL;").fetchall()
+    series_cache: dict[str, int] = {
+        r["name"]: r["id"] for r in conn.execute("SELECT id, name FROM iv_series;").fetchall()
+    }
+    order_counter = len(series_cache)
+    for m in models:
+        sname = _iv_series_for_model_name(m["name"])
+        sid = series_cache.get(sname)
+        if sid is None:
+            cur = conn.execute("INSERT INTO iv_series (name, sort_order) VALUES (?,?);",
+                                (sname, order_counter))
+            sid = cur.lastrowid
+            series_cache[sname] = sid
+            order_counter += 1
+        conn.execute("UPDATE iv_models SET series_id=? WHERE id=?;", (sid, m["id"]))
+    conn.commit()
+    set_cfg("IV_SERIES_MIGRATED", "1")
+
+
+def _migrate_repair_parts_catalog_v1(conn):
+    """کاتالوگ مشترک قطعات (iv_repair_parts) رو فقط اگه خالیه، از گزینه‌های *فعلی* دستهٔ
+    «component» seed می‌کنه — نه فقط پیش‌فرض‌های هاردکد، تا گزینه‌هایی که ادمین قبلاً از
+    پنل اضافه کرده هم پوشش داده بشن. باید قبل از _migrate_replaced_category_v1 اجرا بشه."""
+    row = conn.execute("SELECT COUNT(*) c FROM iv_repair_parts;").fetchone()
+    if not row or row["c"] != 0:
+        return
+    comp_rows = conn.execute(
+        "SELECT option_key, option_label, sort_order FROM iv_coefficients "
+        "WHERE category='component' ORDER BY sort_order ASC, id ASC;").fetchall()
+    for r in comp_rows:
+        conn.execute(
+            "INSERT OR IGNORE INTO iv_repair_parts (code, label, sort_order) VALUES (?,?,?);",
+            (r["option_key"], r["option_label"], r["sort_order"]))
+    conn.commit()
+
+
+def _migrate_replaced_category_v1(conn):
+    """دستهٔ تازهٔ «replaced» (قطعات تعویض‌شده — جدا از «معیوب») رو فقط اگه هنوز هیچ
+    ردیفی نداره، به‌ازای هر ردیف iv_repair_parts می‌سازه (با درصد پیش‌فرض نصف‌شده) +
+    وزن امتیازدهی مخصوص خودش."""
+    row = conn.execute("SELECT COUNT(*) c FROM iv_coefficients WHERE category='replaced';").fetchone()
+    if row and row["c"] != 0:
+        return
+    parts = conn.execute("SELECT code, label, sort_order FROM iv_repair_parts;").fetchall()
+    for p in parts:
+        pct = _REPLACED_DEFAULT_PERCENT.get(p["code"], -5)
+        conn.execute(
+            "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
+            "VALUES ('replaced',?,?,?,?);", (p["code"], p["label"], pct, p["sort_order"]))
+    conn.execute(
+        "INSERT INTO iv_score_weights (category, weight) VALUES ('replaced', 10) "
+        "ON CONFLICT(category) DO NOTHING;")
+    conn.commit()
+
+
+def _migrate_repair_vs_replaced_v1(conn):
+    """قبل از وجود دستهٔ granular «replaced»، دو گزینهٔ repair_screen/repair_battery توی
+    دستهٔ «repair» به‌عنوان جایگزین خام «قطعه تعویض‌شده» عمل می‌کردن — الان با مولتی‌سلکت
+    replaced تداخل/دوبل‌شمارش دارن. soft-deactivate (نه حذف) می‌شن، یه‌بار، تا repair
+    فقط توصیف‌کنندهٔ شدت/تاریخچهٔ سرویس بمونه (باز شدن/تعمیر برد/آب‌خوردگی)، نه یک قطعهٔ خاص."""
+    from db import get_cfg, set_cfg
+    if get_cfg("IV_REPAIR_VS_REPLACED_MIGRATED", "0") == "1":
+        return
+    conn.execute(
+        "UPDATE iv_coefficients SET active=0 WHERE category='repair' "
+        "AND option_key IN ('repair_screen','repair_battery');")
+    conn.commit()
+    set_cfg("IV_REPAIR_VS_REPLACED_MIGRATED", "1")
+
+
 # ─── مدل‌ها ──────────────────────────────────────────────────────────────
 
 def list_models(active_only: bool = True) -> list[dict]:
@@ -617,7 +751,7 @@ def update_model(model_id: int, **fields) -> None:
     ensure_schema()
     if not fields:
         return
-    allowed = {"name", "series", "sort_order", "active", "dual_sim_parts", "esim_only",
+    allowed = {"name", "series", "series_id", "sort_order", "active", "dual_sim_parts", "esim_only",
                "color_pricing", "part_pricing"}
     cols = [k for k in fields if k in allowed]
     if not cols:
@@ -1019,9 +1153,206 @@ def delete_color(color_id: int) -> None:
         conn.close()
 
 
+# ─── سری/نسل‌ها (iv_series) — گروه‌بندی مدل‌ها برای مرحلهٔ اول ویزارد ربات ──
+
+def list_series(active_only: bool = True) -> list[dict]:
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = "SELECT * FROM iv_series"
+        if active_only:
+            q += " WHERE active=1"
+        q += " ORDER BY sort_order ASC, id ASC;"
+        return [dict(r) for r in conn.execute(q).fetchall()]
+    finally:
+        conn.close()
+
+
+def get_series(series_id: int) -> dict | None:
+    ensure_schema()
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM iv_series WHERE id=?;", (series_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_series(name: str, sort_order: int = 0) -> int:
+    ensure_schema()
+    conn = _conn()
+    try:
+        cur = conn.execute("INSERT INTO iv_series (name, sort_order) VALUES (?,?);",
+                            (name.strip(), sort_order))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_series(series_id: int, **fields) -> None:
+    ensure_schema()
+    if not fields:
+        return
+    allowed = {"name", "sort_order", "active"}
+    cols = [k for k in fields if k in allowed]
+    if not cols:
+        return
+    conn = _conn()
+    try:
+        conn.execute(f"UPDATE iv_series SET {', '.join(c+'=?' for c in cols)} WHERE id=?;",
+                     [fields[c] for c in cols] + [series_id])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_series(series_id: int) -> None:
+    """حذف نرم — مدل‌های وابسته سری‌شون NULL می‌شه (نه حذف مدل)، دقیقاً مثل delete_part/
+    delete_color: پاک‌کردن یه گزینهٔ گروه‌بندی نباید داده/قیمت مدل رو از بین ببره."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        conn.execute("UPDATE iv_models SET series_id=NULL WHERE series_id=?;", (series_id,))
+        conn.execute("DELETE FROM iv_series WHERE id=?;", (series_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_bot_visible_series() -> list[dict]:
+    """فقط سری‌هایی که حداقل یک مدل فعال با حداقل یک ردیف قیمت فعال دارن — تا ویزارد
+    ربات هیچ‌وقت گزینهٔ بن‌بست (سری بدون هیچ مدل/قیمتی) نشون نده."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = """SELECT DISTINCT s.* FROM iv_series s
+               JOIN iv_models m ON m.series_id = s.id AND m.active = 1
+               JOIN iv_capacities c ON c.model_id = m.id AND c.active = 1
+               WHERE s.active = 1
+               ORDER BY s.sort_order ASC, s.id ASC;"""
+        return [dict(r) for r in conn.execute(q).fetchall()]
+    finally:
+        conn.close()
+
+
+def list_bot_visible_models(series_id: int) -> list[dict]:
+    """مدل‌های فعال یک سری که حداقل یک ردیف قیمت فعال دارن — همون فیلتر «بدون بن‌بست»."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = """SELECT DISTINCT m.* FROM iv_models m
+               JOIN iv_capacities c ON c.model_id = m.id AND c.active = 1
+               WHERE m.series_id = ? AND m.active = 1
+               ORDER BY m.sort_order ASC, m.id ASC;"""
+        return [dict(r) for r in conn.execute(q, (series_id,)).fetchall()]
+    finally:
+        conn.close()
+
+
+# ─── کاتالوگ مشترک قطعات تعمیر (iv_repair_parts) ────────────────────────────
+# لایهٔ مدیریتیه برای مدیریت هم‌زمان دو دستهٔ ضریب موازی «component» (معیوب) و
+# «replaced» (تعویض‌شده) با یک صفحهٔ ادمین واحد. خودِ pricing_engine/scoring_engine
+# مستقیم از این جدول نمی‌خونن — فقط iv_coefficients.
+
+def list_repair_parts(active_only: bool = True) -> list[dict]:
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = "SELECT * FROM iv_repair_parts"
+        if active_only:
+            q += " WHERE active=1"
+        q += " ORDER BY sort_order ASC, id ASC;"
+        return [dict(r) for r in conn.execute(q).fetchall()]
+    finally:
+        conn.close()
+
+
+def create_repair_part(code: str, label: str, defective_percent: float = 0,
+                        replaced_percent: float = 0, sort_order: int = 0) -> int:
+    """یه ردیف iv_repair_parts + یه ردیف iv_coefficients توی هرکدوم از دو دستهٔ
+    component/replaced (با option_key یکسان = code) رو هم‌زمان می‌سازه."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        code = code.strip()
+        label = label.strip()
+        cur = conn.execute("INSERT INTO iv_repair_parts (code, label, sort_order) VALUES (?,?,?);",
+                            (code, label, sort_order))
+        part_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
+            "VALUES ('component',?,?,?,?);", (code, label, defective_percent, sort_order))
+        conn.execute(
+            "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
+            "VALUES ('replaced',?,?,?,?);", (code, label, replaced_percent, sort_order))
+        conn.commit()
+        return part_id
+    finally:
+        conn.close()
+
+
+def update_repair_part(part_id: int, label: str | None = None,
+                        defective_percent: float | None = None,
+                        replaced_percent: float | None = None,
+                        active: int | None = None) -> None:
+    """ویرایش یک قطعه — label/active روی خودِ iv_repair_parts و هر دو ردیف iv_coefficients
+    (component+replaced با option_key=code) اعمال می‌شه؛ هر درصد فقط روی دستهٔ خودش."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT code FROM iv_repair_parts WHERE id=?;", (part_id,)).fetchone()
+        if not row:
+            return
+        code = row["code"]
+        part_fields, part_params = [], []
+        if label is not None:
+            part_fields.append("label=?"); part_params.append(label)
+        if active is not None:
+            part_fields.append("active=?"); part_params.append(active)
+        if part_fields:
+            conn.execute(f"UPDATE iv_repair_parts SET {', '.join(part_fields)} WHERE id=?;",
+                         part_params + [part_id])
+        for category, pct in (("component", defective_percent), ("replaced", replaced_percent)):
+            coef_fields, coef_params = [], []
+            if label is not None:
+                coef_fields.append("option_label=?"); coef_params.append(label)
+            if pct is not None:
+                coef_fields.append("percent=?"); coef_params.append(pct)
+            if active is not None:
+                coef_fields.append("active=?"); coef_params.append(active)
+            if coef_fields:
+                conn.execute(
+                    f"UPDATE iv_coefficients SET {', '.join(coef_fields)} "
+                    "WHERE category=? AND option_key=?;", coef_params + [category, code])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_repair_part(part_id: int) -> None:
+    """soft-delete — خودِ قطعه + هر دو ردیف ضریب وابسته‌اش غیرفعال می‌شن (نه حذف کامل)،
+    مثل الگوی delete_coefficient موجود، تا تاریخچهٔ کارشناسی‌های قبلی معتبر بمونه."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT code FROM iv_repair_parts WHERE id=?;", (part_id,)).fetchone()
+        if not row:
+            return
+        code = row["code"]
+        conn.execute("UPDATE iv_repair_parts SET active=0 WHERE id=?;", (part_id,))
+        conn.execute(
+            "UPDATE iv_coefficients SET active=0 WHERE category IN ('component','replaced') "
+            "AND option_key=?;", (code,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ─── ضرایب ───────────────────────────────────────────────────────────────
 
-COEFFICIENT_CATEGORIES = ["condition", "battery", "repair", "registry", "box", "cosmetic", "cable", "component"]
+COEFFICIENT_CATEGORIES = ["condition", "battery", "repair", "registry", "box", "cosmetic", "cable",
+                           "component", "replaced"]
 
 
 def list_coefficients(category: str | None = None, active_only: bool = True) -> list[dict]:
