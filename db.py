@@ -188,18 +188,26 @@ def _get_connection():
         return conn
 
 
+_DB_INIT_DONE_PATH = None  # مسیر DBای که init_db قبلاً کامل برایش اجرا شده (فلگ per-process)
+
+
 def init_db(db_path=None):
     """
     ساخت / بهروزرسانی جداول دیتابیس.
     اگر قبلاً ساخته شده باشد، فقط مهاجرتهای لازم را انجام میدهد.
     """
-    global DB_FULL_PATH
+    global DB_FULL_PATH, _DB_INIT_DONE_PATH
     if db_path:
         if not os.path.isabs(db_path):
             DB_FULL_PATH = os.path.join(BASE_DIR, db_path)
         else:
             DB_FULL_PATH = db_path
 
+    # بدون این گارد، bot.py هر /start (از هر کاربر) کل ۱۲ CREATE TABLE + ۱۹ ALTER TABLE
+    # این تابع رو دوباره روی همون فایل دیتابیس اجرا می‌کرد — سربار واقعی روی هر پیام
+    # + قفل نوشتن روی فایل SQLیت مشترک با پنل. مهاجرت idempotent است، فقط یک‌بار در پروسه کافیه.
+    if _DB_INIT_DONE_PATH == DB_FULL_PATH:
+        return
     os.makedirs(os.path.dirname(DB_FULL_PATH), exist_ok=True)
 
     conn = _get_connection()
@@ -531,8 +539,11 @@ def init_db(db_path=None):
     # ⚡ ساخت ایندکس‌ها برای سرعت — حیاتی برای عملکرد در حجم بالا
     ensure_indexes()
 
+    _DB_INIT_DONE_PATH = DB_FULL_PATH
+
 
 _INDEXES_READY = False
+_INDEXES_DONE: set = set()  # نام ایندکس‌هایی که قبلاً با موفقیت ساخته شدن (فلگ per-process به‌ازای هر ایندکس)
 _ENSURE_PARTNER_TIERS_EXTENDED_DONE = False
 _ENSURE_PAYOUT_SETTINGS_EXTENDED_DONE = False
 _ENSURE_REFERRAL_SCHEMA_DONE = False
@@ -572,6 +583,9 @@ def ensure_indexes():
         ("idx_orders_user_id",       "orders(user_id)"),
         ("idx_orders_status",        "orders(status)"),
         ("idx_orders_product_id",    "orders(product_id)"),
+        # created_at — داشبورد پنل هر بار ۳ کوئری روی این ستون می‌زند (امروز/دیروز/نمودار ۳۰ روزه)؛
+        # بدون ایندکس، هر بار اسکن کامل جدول orders (بخش ۲۳ سند — رفع کندی داشبورد)
+        ("idx_orders_created_at",    "orders(created_at)"),
         # معرفی‌ها — محاسبه پورسانت و آمار
         ("idx_referrals_referrer",   "referrals(referrer_id)"),
         ("idx_referrals_referred",   "referrals(referred_id)"),
@@ -605,11 +619,19 @@ def ensure_indexes():
         # رسیدهای کارت‌به‌کارت — لیست/شمارندهٔ badge روی status
         ("idx_card_receipts_status", "card_receipts(status)"),
     ]
+    # این تابع از ticket_ensure_schema() هم صدا زده می‌شه که هر /start ربات اجراش می‌کنه؛
+    # هر ایندکسی که قبلاً با موفقیت ساخته شده رو دیگه دوباره امتحان نمی‌کنیم (فلگ per-process
+    # به‌ازای هر ایندکس، نه یک فلگ کلی — چون بعضی جدول‌ها مثل tickets موقع اولین صدازدن از
+    # داخل init_db هنوز ساخته نشدن، پس نباید کل حلقه رو یک‌بار-برای-همیشه قفل کرد).
+    remaining = [(n, t) for n, t in index_defs if n not in _INDEXES_DONE]
+    if not remaining:
+        return
     conn = _get_connection()
     try:
-        for name, target in index_defs:
+        for name, target in remaining:
             try:
                 conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target};")
+                _INDEXES_DONE.add(name)
             except Exception:
                 pass
         conn.commit()
