@@ -99,9 +99,18 @@ def get_feed(force: bool = False) -> dict:
         import requests
         sep = "&" if "?" in api_url else "?"
         all_posts = []
+        # User-Agent شبیه مرورگر واقعی — نه یه رشتهٔ خودمعرف «Bot»، چون خیلی از پلاگین‌های
+        # امنیتی وردپرس (Wordfence/Sucuri و امثالش) دقیقاً با pattern-match روی کلمهٔ
+        # «bot»/«crawler» در User-Agent، درخواست رو مسدود یا به یه صفحهٔ HTML (نه JSON
+        # واقعی API) ریدایرکت می‌کنن — دقیقاً همون خطای «پاسخ JSON نامعتبر» که اینجا می‌گیریم.
+        _headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
         for page in range(1, _MAX_PAGES + 1):
             fetch_url = f"{api_url}{sep}per_page={_PER_PAGE}&page={page}&_embed=wp:featuredmedia"
-            r = requests.get(fetch_url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (compatible; StockLandNewsBot/1.0)"})
+            r = requests.get(fetch_url, timeout=15, headers=_headers)
             # صفحهٔ آخر رد شده — یعنی دیگه پستی نیست، خطای طبیعی، نه واقعی
             if r.status_code == 400 and page > 1:
                 break
@@ -112,7 +121,15 @@ def get_feed(force: bool = False) -> dict:
                 posts = r.json()
             except Exception:
                 snippet = (r.text or "")[:150].strip().replace("\n", " ")
-                raise ValueError(f"پاسخ JSON نامعتبر (HTTP {r.status_code}) — احتمالاً آدرس wp-json اشتباهه یا صفحهٔ HTML/خطا برگشته. متن پاسخ: {snippet or '(خالی)'}")
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if "html" in ctype or snippet.lstrip().startswith("<"):
+                    raise ValueError(
+                        "سایت مقصد به‌جای JSON یک صفحهٔ HTML برگردوند (HTTP 200) — معمولاً یعنی "
+                        "فایروال/پلاگین امنیتی وردپرس (Wordfence, Sucuri و مشابه) یا CDN اون سایت "
+                        "درخواست‌های خودکار به wp-json رو مسدود/ریدایرکت می‌کنه. باید با مدیر همون "
+                        f"سایت هماهنگ بشه که IP سرور استوک‌لند یا مسیر wp-json رو استثنا بذاره. متن پاسخ: {snippet or '(خالی)'}"
+                    )
+                raise ValueError(f"پاسخ JSON نامعتبر (HTTP {r.status_code}) — احتمالاً آدرس wp-json اشتباهه. متن پاسخ: {snippet or '(خالی)'}")
             if not isinstance(posts, list):
                 raise ValueError((posts.get("message") if isinstance(posts, dict) else None) or "پاسخ نامعتبر از REST API وردپرس")
             if not posts:
