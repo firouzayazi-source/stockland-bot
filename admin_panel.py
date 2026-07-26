@@ -2992,15 +2992,11 @@ async def database_page(request: Request, flash: str = ""):
           </td>
         </tr>"""
 
-    _auto_section = ""
+    # این بخش همیشه رندر می‌شه (حتی وقتی لیست خالیه) — قبلاً وقتی هیچ بکاپی توی
+    # _BACKUP_DIR نبود، کل کارت اصلاً نمایش داده نمی‌شد؛ یعنی ادمین نمی‌تونست تشخیص
+    # بده که فیچر خرابه یا صرفاً هنوز بکاپی نساخته.
     if _auto_files:
-        _auto_section = f"""<div class="card overflow-hidden mb-4">
-          <button onclick="var d=this.nextElementSibling;d.classList.toggle('hidden');this.querySelector('.arr').textContent=d.classList.contains('hidden')?'▼':'▲'"
-            class="w-full px-5 py-4 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition text-sm font-medium text-gray-700">
-            <span>🕐 بکاپ‌های خودکار <span class="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">{len(_auto_files)}</span></span>
-            <span class="arr">▼</span>
-          </button>
-          <div class="hidden overflow-x-auto">
+        _auto_body = f"""<div class="overflow-x-auto">
             <table class="w-full text-right min-w-max">
               <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
                 <th class="px-4 py-3">تاریخ و ساعت</th>
@@ -3010,7 +3006,17 @@ async def database_page(request: Request, flash: str = ""):
               </tr></thead>
               <tbody>{_auto_rows}</tbody>
             </table>
+          </div>"""
+    else:
+        _auto_body = """<div class="px-5 py-6 text-center text-sm text-gray-400">
+            هنوز هیچ بکاپی ساخته نشده — دکمهٔ «ساخت بکاپ» رو از بخش پشتیبان‌گیری بزن تا اینجا لیست بشه.
+          </div>"""
+
+    _auto_section = f"""<div class="card overflow-hidden mb-4">
+          <div class="w-full px-5 py-4 flex items-center justify-between bg-gray-50 text-sm font-medium text-gray-700">
+            <span>🕐 بکاپ‌های خودکار <span class="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">{len(_auto_files)}</span></span>
           </div>
+          {_auto_body}
         </div>"""
 
     # لیست بکاپ‌های خودکار برای dropdown بازیابی
@@ -3420,7 +3426,7 @@ async def backup_full_sync(request: Request):
     form = await request.form()
     is_full = form.get("full") == "1"
     sections = None if is_full else (form.getlist("sections") or None)
-    try:
+    def _build_and_save():
         from stbak_engine import create_stbak, stbak_filename, _rotate_local
         raw = create_stbak(_DB_PATH(), modules=sections)
         fname = stbak_filename("full" if is_full else "custom")
@@ -3434,6 +3440,12 @@ async def backup_full_sync(request: Request):
             _rotate_local(_BACKUP_DIR, _MAX_BACKUPS)
         except Exception:
             pass  # اگه ذخیرهٔ محلی شکست خورد، حداقل دانلود مستقیم برای ادمین کار کنه
+        return raw, fname
+
+    try:
+        # ساخت بکاپ (زیپ‌کردن مدیا + dry-run اعتبارسنجی) کار سنگین synchronous است؛
+        # روی ترد جدا اجرا می‌شه تا در طول این مدت کل اپ (ربات + بقیهٔ ادمین‌ها) قفل نشه.
+        raw, fname = await run_in_threadpool(_build_and_save)
         _log(request, "بکاپ کامل دستی", "دیتابیس", fname, admin_info=adm)
         return FResponse(content=raw, media_type="application/octet-stream",
                           headers={"Content-Disposition": f'attachment; filename="{fname}"'})
@@ -3476,7 +3488,9 @@ async def restore_auto(request: Request):
     try:
         with open(path, "rb") as f:
             raw = f.read()
-        res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+        # بازیابی (اجرای مهاجرت‌های اسکیمای پروژه + درج کامل داده) کار سنگینیه — روی ترد
+        # جدا تا event loop مشترک (بقیهٔ پنل + ربات) در طول این مدت بلاک نشه.
+        res = await run_in_threadpool(restore_stbak, raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
         if res["errors"]:
             _log(request, "بازیابی بکاپ خودکار (با هشدار)", "دیتابیس",
                  f"{filename} — {len(res['errors'])} خطا", admin_info=adm)
@@ -3505,32 +3519,40 @@ async def recover_latest(request: Request):
     if not candidates:
         return JSONResponse({"error": "هیچ بکاپ محلی‌ای برای بازگردانی یافت نشد"})
 
-    tried = []
-    for cand in candidates:
-        try:
-            with open(cand["path"], "rb") as f:
-                raw = f.read()
-            validate_stbak(raw)  # فقط سالم‌بودن رو چک می‌کنه، هنوز چیزی رو دست نمی‌زنه
-        except StbakError as ex:
-            tried.append(f"{cand['name']}: {ex}")
-            continue
-        except Exception as ex:
-            tried.append(f"{cand['name']}: {ex}")
-            continue
-        try:
-            res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
-            _log(request, "بازگردانی اضطراری (Recovery)", "دیتابیس",
-                 f"{cand['name']} — {len(res['errors'])} خطای جدولی", admin_info=adm)
-            return JSONResponse({
-                "ok": True, "restored_from": cand["name"],
-                "total": res["total"], "warnings": res["errors"],
-                "skipped": tried,
-            })
-        except Exception as ex:
-            tried.append(f"{cand['name']}: خطای بازیابی — {ex}")
-            continue
+    def _find_and_restore():
+        tried = []
+        for cand in candidates:
+            try:
+                with open(cand["path"], "rb") as f:
+                    raw = f.read()
+                validate_stbak(raw)  # فقط سالم‌بودن رو چک می‌کنه، هنوز چیزی رو دست نمی‌زنه
+            except StbakError as ex:
+                tried.append(f"{cand['name']}: {ex}")
+                continue
+            except Exception as ex:
+                tried.append(f"{cand['name']}: {ex}")
+                continue
+            try:
+                res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+                return cand["name"], res, tried
+            except Exception as ex:
+                tried.append(f"{cand['name']}: خطای بازیابی — {ex}")
+                continue
+        return None, None, tried
 
-    return JSONResponse({"error": "هیچ‌کدام از بکاپ‌های محلی سالم نبودند", "details": tried})
+    # اعتبارسنجی + بازیابی هر دو سنگین‌ان (خواندن/باز کردن zip + درج کامل داده) —
+    # روی ترد جدا تا کل اپ در طول این مدت قفل نشه.
+    restored_name, res, tried = await run_in_threadpool(_find_and_restore)
+    if restored_name is None:
+        return JSONResponse({"error": "هیچ‌کدام از بکاپ‌های محلی سالم نبودند", "details": tried})
+
+    _log(request, "بازگردانی اضطراری (Recovery)", "دیتابیس",
+         f"{restored_name} — {len(res['errors'])} خطای جدولی", admin_info=adm)
+    return JSONResponse({
+        "ok": True, "restored_from": restored_name,
+        "total": res["total"], "warnings": res["errors"],
+        "skipped": tried,
+    })
 
 
 @router.post("/database/restore/sync")
@@ -3544,7 +3566,7 @@ async def restore_sync(request: Request, backup_file: UploadFile = None):
     raw = await backup_file.read()
     from stbak_engine import restore_stbak, StbakError
     try:
-        res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+        res = await run_in_threadpool(restore_stbak, raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
         if res["errors"]:
             _log(request, "بازیابی از فایل (با هشدار)", "دیتابیس",
                  f"{backup_file.filename} — {len(res['errors'])} خطا", admin_info=adm)
@@ -3572,8 +3594,9 @@ async def reset_sync(request: Request):
     secs = None if is_full else ([s for s in all_secs if s != "__accounting__"] or None)
 
     from stbak_engine import factory_reset
-    total_deleted = 0
-    try:
+
+    def _do_reset():
+        total_deleted = 0
         result = factory_reset(_DB_PATH(), modules=secs)
         total_deleted += result["total_deleted"]
         # ریست حسابداری
@@ -3587,6 +3610,10 @@ async def reset_sync(request: Request):
                 total_deleted += 1
             finally:
                 conn.close()
+        return total_deleted
+
+    try:
+        total_deleted = await run_in_threadpool(_do_reset)
         _log(request, "ریست", "دیتابیس", f"{total_deleted} رکورد")
         return JSONResponse({"ok": True, "total_deleted": total_deleted})
     except Exception as ex:
