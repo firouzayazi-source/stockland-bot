@@ -2966,7 +2966,7 @@ async def database_page(request: Request, flash: str = ""):
     # pg_backup مخصوص Postgres است و روی نصب SQLite همیشه شکست می‌خورد)
     try:
         from stbak_engine import list_local_backups as _list_stbak
-        _auto_list = _list_stbak(_BACKUP_DIR)[:5]
+        _auto_list = _list_stbak(_BACKUP_DIR)[:_MAX_BACKUPS]
     except Exception:
         _auto_list = []
     _auto_files = [b["path"] for b in _auto_list]
@@ -3421,9 +3421,19 @@ async def backup_full_sync(request: Request):
     is_full = form.get("full") == "1"
     sections = None if is_full else (form.getlist("sections") or None)
     try:
-        from stbak_engine import create_stbak, stbak_filename
+        from stbak_engine import create_stbak, stbak_filename, _rotate_local
         raw = create_stbak(_DB_PATH(), modules=sections)
         fname = stbak_filename("full" if is_full else "custom")
+        # ذخیرهٔ یک نسخه محلی هم — قبلاً این بکاپ فقط مستقیم دانلود می‌شد و هیچ ردی از
+        # خودش توی _BACKUP_DIR نمی‌ذاشت؛ یعنی نه توی لیست «بکاپ‌های خودکار» پنل دیده
+        # می‌شد نه «بازگردانی اضطراری» (که فقط _BACKUP_DIR رو می‌گرده) پیداش می‌کرد.
+        try:
+            os.makedirs(_BACKUP_DIR, exist_ok=True)
+            with open(os.path.join(_BACKUP_DIR, fname), "wb") as _f:
+                _f.write(raw)
+            _rotate_local(_BACKUP_DIR, _MAX_BACKUPS)
+        except Exception:
+            pass  # اگه ذخیرهٔ محلی شکست خورد، حداقل دانلود مستقیم برای ادمین کار کنه
         _log(request, "بکاپ کامل دستی", "دیتابیس", fname, admin_info=adm)
         return FResponse(content=raw, media_type="application/octet-stream",
                           headers={"Content-Disposition": f'attachment; filename="{fname}"'})
@@ -8255,7 +8265,7 @@ _BACKUP_DIR = "/tmp/stockland_backups"
 
 def _DB_PATH():
     return _env("DB_PATH", "/opt/stockland/app/stockland.db")
-_MAX_BACKUPS = 5
+_MAX_BACKUPS = 6
 _auto_backup_started = False
 
 
