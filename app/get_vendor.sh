@@ -14,10 +14,18 @@ curl -fL --retry 3 -o vendor/framework7-bundle-rtl.min.css \
 
 VZ="v33.003"
 echo "⬇️  Vazirmatn $VZ ..."
-for w in Regular Medium Bold; do
+for w in Light Regular Medium SemiBold Bold ExtraBold; do
   curl -fL --retry 3 -o "vendor/fonts/Vazirmatn-$w.woff2" \
     "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@$VZ/fonts/webfonts/Vazirmatn-$w.woff2"
 done
+
+echo "⬇️  Tailwind Play CDN (برای پنل ادمین، سلف‌هاست برای سرعت) ..."
+curl -fL --retry 3 -o vendor/admin-tailwind.js \
+  "https://cdn.tailwindcss.com"
+
+echo "⬇️  Lucide icons (برای پنل ادمین) ..."
+curl -fL --retry 3 -o vendor/admin-lucide.min.js \
+  "https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"
 
 echo "── فایل‌های دریافت‌شده ──"
 ls -lh vendor vendor/fonts
