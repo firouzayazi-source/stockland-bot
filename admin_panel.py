@@ -3088,8 +3088,23 @@ async def database_page(request: Request, flash: str = ""):
       document.getElementById('ov-msg').textContent=sub||'';
       document.getElementById('ov-close').style.display='none';
       var b=document.getElementById('ov-bar');
-      b.style.transition='none';b.style.width='3%';b.style.background='#6366f1';
-      setTimeout(function(){b.style.transition='width 2s ease';b.style.width='88%';},80);
+      b.style.transition='width .3s ease';b.style.width='3%';b.style.background='#6366f1';
+    }
+    // \u067e\u06cc\u0634\u0631\u0641\u062a \u0648\u0627\u0642\u0639\u06cc (\u0646\u0647 \u0627\u0646\u06cc\u0645\u06cc\u0634\u0646 \u0633\u0627\u062e\u062a\u06af\u06cc) \u2014 \u0627\u0632 polling \u0648\u0636\u0639\u06cc\u062a job \u067e\u0631 \u0645\u06cc\u200c\u0634\u0647
+    function ovProgress(pct,msg){
+      var b=document.getElementById('ov-bar');
+      b.style.width=Math.max(3,Math.min(99,pct))+'%';
+      if(msg) document.getElementById('ov-msg').textContent=msg;
+    }
+    async function pollJob(jobId){
+      for(let i=0;i<300;i++){ // \u062d\u062f\u0627\u06a9\u062b\u0631 ~\u06f5 \u062f\u0642\u06cc\u0642\u0647 (300\u00d71s)
+        await new Promise(r=>setTimeout(r,1000));
+        var r=await fetch('/admin/database/job/'+jobId);
+        var d=await r.json();
+        if(d.status==='running'){ovProgress(d.progress||3,'\u062f\u0631 \u062d\u0627\u0644 \u0627\u0646\u062c\u0627\u0645... '+(d.progress||0)+'\u066a');continue;}
+        return d;
+      }
+      throw new Error('\u0632\u0645\u0627\u0646\u200c\u0628\u0646\u062f\u06cc \u0639\u0645\u0644\u06cc\u0627\u062a \u062a\u0645\u0627\u0645 \u0634\u062f');
     }
     function ovResult(ok,t,msg){
       document.getElementById('ov-icon').textContent=ok?'\u2705':'\u274c';
@@ -3106,19 +3121,21 @@ async def database_page(request: Request, flash: str = ""):
       if(_busy)return;_busy=true;
       try{
         if(type==='backup'){
-          ovShow('در حال ساخت بکاپ...','لطفاً صبر کنید');
+          // الگوی استاندارد بکاپ‌گیری سنگین: شروع job در پس‌زمینه + poll پیشرفت واقعی
+          // (نه یه درخواست مسدودکننده با نوار پیشرفت ساختگی — قبلاً همین باعث می‌شد
+          // بکاپ‌های بزرگ حس «هنگ» بدن، حتی وقتی خودِ سرور داشت درست کار می‌کرد).
+          ovShow('در حال ساخت بکاپ...','شروع...');
           var fd=new FormData();
           if(document.getElementById('b-toggle').checked) getSelected('sections').forEach(function(v){fd.append('sections',v);});
           else fd.append('full','1');
-          var r=await fetch('/admin/database/backup/full-sync',{method:'POST',body:fd});
-          if(!r.ok) throw new Error('خطای سرور: '+r.status);
-          var blob=await r.blob();
-          var cd=r.headers.get('Content-Disposition')||'';
-          var m=cd.match(/filename="([^"]+)"/);
-          var url=URL.createObjectURL(blob);
-          var a=document.createElement('a');a.href=url;a.download=m?m[1]:'backup.stbak';
-          document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-          ovResult(true,'بکاپ آماده شد','فایل دانلود شد');
+          var r=await fetch('/admin/database/backup/start',{method:'POST',body:fd});
+          var start=await r.json();
+          if(start.error) throw new Error(start.error);
+          var jobResult=await pollJob(start.job_id);
+          if(jobResult.status!=='done') throw new Error(jobResult.message||'خطا در ساخت بکاپ');
+          ovProgress(100,'در حال دانلود...');
+          window.location.href='/admin/database/backup/download/'+start.job_id;
+          ovResult(true,'بکاپ آماده شد','فایل دانلود شد و یک نسخه هم روی سرور ذخیره شد');
         }else{
           ovShow('در حال ریست...','لطفاً صبر کنید');
           var fd2=new FormData();
@@ -3137,13 +3154,17 @@ async def database_page(request: Request, flash: str = ""):
       if(!sel||!sel.value){alert('یک بکاپ انتخاب کنید');return;}
       if(!confirm('⚠️ این عملیات داده‌های فعلی را با بکاپ جایگزین می‌کند. ادامه؟'))return;
       if(_busy)return;_busy=true;
-      ovShow('بازیابی بکاپ خودکار','در حال بازیابی...');
+      ovShow('بازیابی بکاپ خودکار','شروع...');
       try{
         var fd=new FormData(); fd.append('filename',sel.value);
         var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
-        var d=await r.json();
-        if(d.ok){ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');}
-        else{ovResult(false,'خطا',d.error||'مشکلی پیش آمد');}
+        var start=await r.json();
+        if(start.error){ovResult(false,'خطا',start.error);return;}
+        var job=await pollJob(start.job_id);
+        if(job.status!=='done'){ovResult(false,'خطا',job.message||'مشکلی پیش آمد');return;}
+        var d=job.result||{};
+        if(d.errors&&d.errors.length) ovResult(true,'بازیابی با هشدار',(d.total||0)+' رکورد — '+d.errors.length+' خطای جدولی');
+        else ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');
       }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
       finally{_busy=false;}
     }
@@ -3152,13 +3173,17 @@ async def database_page(request: Request, flash: str = ""):
       var file=document.getElementById('restore-file').files[0];
       if(!file){alert('فایل انتخاب نشده');return;}
       if(!file.name.endsWith('.stbak')){alert('فقط فایل .stbak مجاز است');return;}
-      _busy=true;ovShow('در حال بازیابی...','لطفاً صبر کنید');
+      _busy=true;ovShow('در حال بازیابی...','شروع...');
       try{
         var fd=new FormData();fd.append('backup_file',file);
-        var r=await fetch('/admin/database/restore/sync',{method:'POST',body:fd});
-        var d=await r.json();
-        if(d.error) throw new Error(d.error);
-        ovResult(true,'بازیابی موفق',(d.total||0)+' رکورد بازیابی شد');
+        var r=await fetch('/admin/database/restore/start',{method:'POST',body:fd});
+        var start=await r.json();
+        if(start.error) throw new Error(start.error);
+        var job=await pollJob(start.job_id);
+        if(job.status!=='done') throw new Error(job.message||'خطا در بازیابی');
+        var d=job.result||{};
+        if(d.errors&&d.errors.length) ovResult(true,'بازیابی با هشدار',(d.total||0)+' رکورد بازیابی شد — '+d.errors.length+' خطای جدولی');
+        else ovResult(true,'بازیابی موفق',(d.total||0)+' رکورد بازیابی شد');
       }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
       finally{_busy=false;}
     }
@@ -3499,6 +3524,7 @@ async def database_download_auto(request: Request, filename: str):
 
 @router.post("/database/restore-auto")
 async def restore_auto(request: Request):
+    """job-based — پاسخ فوری، پیشرفت واقعی از /database/job/{id} (همون الگوی backup/start)."""
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     guard = _require(adm, "restore")
@@ -3507,27 +3533,15 @@ async def restore_auto(request: Request):
     filename = str(form.get("filename","")).strip()
     if not filename or ".." in filename or "/" in filename:
         return JSONResponse({"error": "فایل نامعتبر"})
-    import os
-    from stbak_engine import restore_stbak, StbakError
     path = os.path.join(_BACKUP_DIR, filename)
     if not os.path.exists(path):
         return JSONResponse({"error": "فایل یافت نشد"})
-    try:
-        with open(path, "rb") as f:
-            raw = f.read()
-        # بازیابی (اجرای مهاجرت‌های اسکیمای پروژه + درج کامل داده) کار سنگینیه — روی ترد
-        # جدا تا event loop مشترک (بقیهٔ پنل + ربات) در طول این مدت بلاک نشه.
-        res = await run_in_threadpool(restore_stbak, raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
-        if res["errors"]:
-            _log(request, "بازیابی بکاپ خودکار (با هشدار)", "دیتابیس",
-                 f"{filename} — {len(res['errors'])} خطا", admin_info=adm)
-            return JSONResponse({"ok": True, "warnings": res["errors"], "total": res["total"]})
-        _log(request, "بازیابی بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
-        return JSONResponse({"ok": True, "total": res["total"]})
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:150]})
+    with open(path, "rb") as f:
+        raw = f.read()
+    from stbak_engine import restore_stbak
+    job_id = _job_start(restore_stbak, raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+    _log(request, "شروع بازیابی بکاپ خودکار", "دیتابیس", f"job:{job_id} — {filename}", admin_info=adm)
+    return JSONResponse({"job_id": job_id})
 
 
 @router.post("/database/recover-latest")
@@ -3682,14 +3696,25 @@ async def backup_download_job(request: Request, job_id: str):
     if not fpath or not os.path.exists(fpath):
         return _redir("/admin/database?flash=فایل+بکاپ+یافت+نشد")
     raw = open(fpath, "rb").read()
-    from stbak_engine import stbak_filename
+    from stbak_engine import stbak_filename, _rotate_local
     fname = stbak_filename("full")
+    # همون رفع مشترک با backup_full_sync — یه نسخه هم روی سرور ذخیره بشه تا توی
+    # لیست پنل دیده بشه و «بازگردانی اضطراری» بتونه پیداش کنه.
+    try:
+        os.makedirs(_BACKUP_DIR, exist_ok=True)
+        with open(os.path.join(_BACKUP_DIR, fname), "wb") as _f:
+            _f.write(raw)
+        _rotate_local(_BACKUP_DIR, _MAX_BACKUPS)
+    except Exception:
+        pass
     return FResponse(content=raw, media_type="application/octet-stream",
                      headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @router.post("/database/restore/start")
 async def restore_start(request: Request, backup_file: UploadFile = None):
+    """نسخهٔ job-based بازیابی از فایل — برخلاف restore/sync، پاسخ فوری می‌ده و
+    پیشرفت واقعی از /database/job/{id} قابل poll کردنه (همون الگوی backup/start)."""
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     if not adm: return JSONResponse({"error": "unauthorized"})
@@ -3697,17 +3722,10 @@ async def restore_start(request: Request, backup_file: UploadFile = None):
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
-    from stbak_engine import restore_stbak, StbakError
-    try:
-        res = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
-        if res["errors"]:
-            return JSONResponse({"ok": True, "warnings": res["errors"], "total": res["total"]})
-        _log(request, "بازیابی از فایل", "دیتابیس", backup_file.filename, admin_info=adm)
-        return JSONResponse({"ok": True, "total": res["total"]})
-    except StbakError as ex:
-        return JSONResponse({"error": str(ex)})
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:150]})
+    from stbak_engine import restore_stbak
+    job_id = _job_start(restore_stbak, raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+    _log(request, "شروع بازیابی از فایل", "دیتابیس", f"job:{job_id} — {backup_file.filename}", admin_info=adm)
+    return JSONResponse({"job_id": job_id})
 
 
 @router.post("/database/reset/start")
