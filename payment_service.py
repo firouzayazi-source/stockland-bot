@@ -872,21 +872,23 @@ def payment_finalize(payload: dict, request: Request):
                 )
             return {"ok": True, "type": "product", "order_id": order_id, "delivered": True}
         else:
-            enqueue_pending_delivery(conn, order_id, user_id, chat_id, product_id, title, total_amount)
+            # موجودی درست همین چند لحظه تموم شده — هیچ محصولی در آینده ارسال نمی‌شه،
+            # کل مبلغ به کیف‌پول برمی‌گرده.
+            conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;",
+                         (now_iso(), order_id))
+            mark_wallet_charge(conn, user_id, total_amount)
             conn.commit()
             send_telegram_message(
                 chat_id,
                 (
-                    "✅ سفارش شما ثبت شد.\n\n"
-                    f"شماره سفارش: #{order_id}\n"
-                    f"سرویس: {title}\n"
-                    f"مبلغ کل: {total_amount:,} تومان\n"
-                    "موجودی محصول تکمیل است، به‌محض شارژ ارسال خواهد شد."
+                    "❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
+                    f"مبلغ <b>{total_amount:,}</b> تومان به کیف‌پول شما بازگردانده شد."
                 ),
+                parse_mode="HTML",
             )
             if ADMIN_ID:
-                send_telegram_message(ADMIN_ID, f"⚠️ سفارش بدون موجودی\nOrder: #{order_id} | User: {user_id} | Product: {title}")
-            return {"ok": True, "type": "product", "order_id": order_id, "delivered": False}
+                send_telegram_message(ADMIN_ID, f"⚠️ سفارش بدون موجودی — مبلغ به کیف‌پول بازگشت\nOrder: #{order_id} | User: {user_id} | Product: {title}")
+            return {"ok": True, "type": "product", "order_id": order_id, "delivered": False, "refunded": True}
 
     except HTTPException:
         raise
@@ -1102,23 +1104,26 @@ def payment_callback(Authority: str | None = None, Status: str | None = None):
                     f"Product: {title} (#{product_id})\nFeed ID: {feed_id}",
                 )
         else:
-            # no stock -> queue for auto-delivery when admin refills
-            enqueue_pending_delivery(conn, order_id, user_id, chat_id, product_id, title, total_amount)
+            # موجودی درست همین چند لحظه (بین ساخت لینک پرداخت و بازگشت از درگاه) توسط خریدار
+            # دیگری تموم شده — استثنای نادر race condition. طبق سیاست پروژه هیچ محصولی در آینده
+            # ارسال نمی‌شه: کل مبلغ (سهم کیف‌پول + سهم درگاه) به کیف‌پول برمی‌گرده، نه صف انتظار.
+            conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;",
+                         (now_iso(), order_id))
+            mark_wallet_charge(conn, user_id, total_amount)
             conn.commit()
             send_telegram_message(
                 chat_id,
                 (
-                    "سفارش شما ثبت شد.\n\n"
-                    f"شماره سفارش: #{order_id}\n"
-                    f"سرویس: {title}\n"
-                    f"مبلغ کل: {total_amount:,} تومان\n"
-                    "موجودی این محصول فعلاً تکمیل است و به‌محض شارژ، خودکار ارسال می‌شود."
+                    "❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
+                    f"مبلغ <b>{total_amount:,}</b> تومان به کیف‌پول شما بازگردانده شد.\n"
+                    f"کد پیگیری: {ref_id}"
                 ),
+                parse_mode="HTML",
             )
             if ADMIN_ID:
                 send_telegram_message(
                     ADMIN_ID,
-                    f"سفارش پرداخت‌شده بدون موجودی ثبت شد.\n\n"
+                    f"⚠️ سفارش بدون موجودی — مبلغ به کیف‌پول کاربر بازگشت.\n\n"
                     f"Order ID: #{order_id}\nUser ID: {user_id}\n"
                     f"Product: {title} (#{product_id})",
                 )
