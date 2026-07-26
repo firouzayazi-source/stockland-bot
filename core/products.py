@@ -23,10 +23,11 @@ def list_products(category: str = "", active_only: bool = True, limit: int = 100
         w = ("WHERE " + " AND ".join(where)) if where else ""
         rows = conn.execute(
             f"SELECT id, category, title, price, description, is_active, "
-            f"COALESCE(partner_price,0) AS partner_price, COALESCE(image_url,'') AS image_url "
+            f"COALESCE(partner_price,0) AS partner_price, COALESCE(image_url,'') AS image_url, "
+            f"COALESCE(notify_on_restock,0) AS notify_on_restock "
             f"FROM products {w} ORDER BY id DESC LIMIT ?;",
             (*params, limit)).fetchall()
-        from db import get_product_rating
+        from db import get_product_rating, get_available_stock
         out = []
         for r in rows:
             base = int(r["price"] or 0)
@@ -45,6 +46,8 @@ def list_products(category: str = "", active_only: bool = True, limit: int = 100
                 "image_url": r["image_url"] or "",
                 "rating_avg": rating.get("avg", 0),
                 "rating_count": rating.get("count", 0),
+                "stock": get_available_stock(int(r["id"])),
+                "notify_on_restock": bool(r["notify_on_restock"]),
             })
         return out
     finally:
@@ -83,6 +86,7 @@ def get_product(pid: int) -> Optional[dict]:
         "description": p.get("description") or "",
         "is_active": bool(p.get("is_active", 1)),
         "stock": int(remaining),
+        "notify_on_restock": bool(p.get("notify_on_restock") or 0),
         "image_url": p.get("image_url") or "",
         "rating_avg": rating.get("avg", 0),
         "rating_count": rating.get("count", 0),

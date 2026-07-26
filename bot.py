@@ -1646,6 +1646,19 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             return
 
     # ----------------------------
+    # بررسی موجودی — قبل از هر کسر پولی (جلوگیری از رسیدن به این تابع وقتی بین
+    # نمایش خلاصهٔ سفارش و کلیک پرداخت، موجودی توسط خریدار دیگری تمام شده)
+    # ----------------------------
+    from db import get_available_stock
+    if get_available_stock(pid) <= 0:
+        bot.answer_callback_query(
+            call.id,
+            "❌ موجودی این محصول لحظاتی پیش به پایان رسید. پولی کسر نشد.",
+            show_alert=True
+        )
+        return
+
+    # ----------------------------
     # بررسی و کسر موجودی (نسخه قطعی)
     # ----------------------------
     conn = sqlite3.connect(DB_FULL_PATH)
@@ -1861,15 +1874,29 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             pass
 
     else:
-        # ثبت در صف pending
-        enqueue_pending_delivery(order_id, uid, call.message.chat.id, pid, title, eff_price)
+        # موجودی درست همین چند لحظه (بین چک اولیهٔ finalize_product_order و claim اتمیک) توسط
+        # خریدار دیگری تموم شده — استثنای نادر race condition. طبق سیاست پروژه، هیچ محصولی در
+        # آینده ارسال نمی‌شه: پول به کیف‌پول برمی‌گرده (نه صف انتظار) و سفارش لغو می‌شه.
+        from db import add_wallet_balance as _refund_wallet
+        _refund_wallet(uid, eff_price)
+        try:
+            # 'returned' چون طبق قانون پروژه از دید کاربر کاملاً مخفیه (فقط ادمین می‌بینه)
+            # — دقیقاً همون رفتاری که برای یک سفارش لغوشده/بازگشتی می‌خوایم.
+            _conn = sqlite3.connect(DB_FULL_PATH)
+            _conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;",
+                          (datetime.utcnow().isoformat(), order_id))
+            _conn.commit()
+            _conn.close()
+        except Exception:
+            pass
+        refunded_balance = new_balance + eff_price
 
         bot.send_message(
             call.message.chat.id,
-            f"سفارش ثبت شد ✅\n\n"
-            f"اما فعلاً موجودی این محصول تکمیل شده است.\n"
-            f"شکیبا باشید در اولین فرصت توسط ادمین ارسال خواهد شد.\n\n"
-            f"موجودی فعلی: {new_balance:,} تومان"
+            f"❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
+            f"مبلغ <b>{eff_price:,}</b> تومان به کیف‌پول شما بازگردانده شد.\n"
+            f"موجودی فعلی: {refunded_balance:,} تومان",
+            parse_mode="HTML"
         )
 
         try:
@@ -1947,7 +1974,27 @@ def _get_eff_price(product, uid):
 
 
 def _show_order_summary(chat_id, uid, product, category, pid):
-    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی و فروش فوری."""
+    """نمایش خلاصه سفارش — با پشتیبانی از پرداخت ترکیبی و فروش فوری.
+
+    نکتهٔ حیاتی: قبل از هر چیز موجودی چک می‌شه — اگه صفر باشه، اصلاً هیچ دکمهٔ خریدی
+    نشون داده نمی‌شه (نه اینجا، نه در هیچ مسیر دیگه‌ای که به این تابع برسه — کد تخفیف،
+    حذف کد و غیره — چون همه از همین یک نقطه رد می‌شن). این تنها گیت موجودی کل مسیر خریده،
+    عمداً همینجا گذاشته شده نه در send_product_detail، تا هیچ مسیر جایگزینی نتونه ازش رد بشه."""
+    from db import get_available_stock, get_product_notify_on_restock
+    if get_available_stock(int(pid)) <= 0:
+        title_only = product[2] if len(product) > 2 else ""
+        kb = types.InlineKeyboardMarkup()
+        if get_product_notify_on_restock(int(pid)):
+            kb.add(types.InlineKeyboardButton("🔔 موجود شد، اطلاع بده", callback_data=f"notify_stock_{pid}"))
+        kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_purchase"))
+        bot.send_message(
+            chat_id,
+            f"نام سرویس: <b>{title_only}</b>\n\n❌ موجودی این محصول در حال حاضر به پایان رسیده است.",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+        clear_user_state(uid)
+        return
     title     = product[2]
     # قیمت پایه (بدون فلش) برای نمایش خط‌خورده
     _p = product[3]
@@ -2224,6 +2271,20 @@ def _daily_limit_exceeded(uid, product, pid):
     return (cnt >= limit_val), limit_val
 
 
+def _reject_if_out_of_stock(call, pid) -> bool:
+    """قبل از شروع پرداخت درگاه (که برگشت‌ناپذیرتر و کندتر از کیف‌پوله) موجودی رو چک می‌کنه —
+    تا کاربر برای محصولی که همین الان تمام شده به زرین‌پال فرستاده نشه. True یعنی رد شد."""
+    from db import get_available_stock
+    if get_available_stock(int(pid)) <= 0:
+        bot.answer_callback_query(
+            call.id,
+            "❌ موجودی این محصول لحظاتی پیش به پایان رسید.",
+            show_alert=True
+        )
+        return True
+    return False
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_full_"))
 def handle_confirm_full(call):
 
@@ -2250,6 +2311,9 @@ def handle_confirm_full(call):
     exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
     if exceeded:
         bot.answer_callback_query(call.id, f"سقف خرید روزانه ({limit_val}) تکمیل شده است.", show_alert=True)
+        return
+
+    if _reject_if_out_of_stock(call, pid):
         return
 
     title  = product[2]
@@ -2300,6 +2364,9 @@ def handle_confirm_wallet(call):
     exceeded, limit_val = _daily_limit_exceeded(uid, product, pid)
     if exceeded:
         bot.answer_callback_query(call.id, f"سقف خرید روزانه ({limit_val}) تکمیل شده است.", show_alert=True)
+        return
+
+    if _reject_if_out_of_stock(call, pid):
         return
 
     title = product[2]

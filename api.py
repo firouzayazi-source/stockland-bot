@@ -237,6 +237,16 @@ async def api_favorites_list(request: Request):
     return {"ok": True, "products": favorite_products(uid)}
 
 
+@router.post("/products/{pid}/notify")
+async def api_product_notify_stock(pid: int, request: Request):
+    """معادل مینی‌اپیِ دکمهٔ «موجود شد اطلاع بده» ربات — همون stock_subscriptions.
+    وقتی محصول ناموجونه و notify_on_restock فعاله، به‌جای خرید این صدا زده می‌شه."""
+    uid = _auth(request)
+    from db import subscribe_stock
+    added = subscribe_stock(uid, pid)
+    return {"ok": True, "added": added}
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # ─── Endpoints: کاربر (نیازمند احراز هویت) ────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
@@ -1166,9 +1176,10 @@ async def api_discount_validate(request: Request):
 def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price: int) -> bool:
     """بعد از ثبت سفارشی که کامل از کیف‌پول پرداخت شده، محصول رو واقعاً تحویل می‌ده —
     همون مکانیزمی که مسیر خرید ربات و کال‌بک درگاه استفاده می‌کنن (claim_next_feed_item).
-    اگه موجودی نبود، سفارش رو برای تحویل خودکار موقع شارژ مجدد صف می‌کنه (enqueue_pending_delivery).
-    برمی‌گردونه: True اگه همون لحظه تحویل شد، False اگه صف شد."""
-    from db import claim_next_feed_item, order_set_feed_id
+    اگه موجودی درست همین چند لحظه (بین چک اولیهٔ /checkout و claim اتمیک) توسط خریدار دیگری
+    تموم شده باشه (race condition نادر)، طبق سیاست پروژه هیچ محصولی در آینده ارسال نمی‌شه:
+    پول به کیف‌پول برمی‌گرده، نه صف انتظار. برمی‌گردونه: True اگه همون لحظه تحویل شد."""
+    from db import claim_next_feed_item, order_set_feed_id, add_wallet_balance
     from config import BOT_TOKEN
     import requests
 
@@ -1191,18 +1202,21 @@ def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price
             logger.exception("Failed to send delivery message for order %s", order_id)
         return True
 
+    add_wallet_balance(uid, price)
     try:
-        from bot import enqueue_pending_delivery
-        enqueue_pending_delivery(order_id, uid, uid, pid, title, price)
+        from db import _get_connection as _gc
+        _c = _gc()
+        _c.execute("UPDATE orders SET status='returned', returned_at=datetime('now') WHERE id=?;", (order_id,))
+        _c.commit()
+        _c.close()
     except Exception:
-        logger.exception("Failed to enqueue pending delivery for order %s", order_id)
+        logger.exception("Failed to mark order %s returned", order_id)
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": uid,
-                  "text": ("سفارش شما ثبت شد.\n\n"
-                           f"شماره سفارش: #{order_id}\nسرویس: {title}\nمبلغ: {price:,} تومان\n\n"
-                           "موجودی این محصول فعلاً تکمیل است و به‌محض شارژ، به‌صورت خودکار ارسال می‌شود.")},
+            json={"chat_id": uid, "parse_mode": "HTML",
+                  "text": ("❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
+                           f"مبلغ <b>{price:,}</b> تومان به کیف‌پول شما بازگردانده شد.")},
             timeout=10,
         )
     except Exception:
@@ -1240,6 +1254,8 @@ async def api_checkout(request: Request):
     prod = get_product(pid)
     if not prod or not prod.get("is_active"):
         raise HTTPException(404, "محصول یافت نشد")
+    if int(prod.get("stock") or 0) <= 0:
+        raise HTTPException(400, "موجودی این محصول در حال حاضر به پایان رسیده است")
 
     # قیمت موثر (همکار یا عادی)
     is_partner = is_partner_approved(uid)
@@ -1270,7 +1286,7 @@ async def api_checkout(request: Request):
                            buyer_type="partner" if is_partner else "customer")
         delivered = _deliver_or_queue_order(uid, oid, pid, prod["title"], final_price)
         msg = f"✅ خرید موفق! سفارش #{oid} ثبت شد." if delivered else \
-              f"✅ سفارش #{oid} ثبت شد. موجودی این محصول فعلاً تکمیل است و به‌محض شارژ ارسال می‌شود."
+              "❌ موجودی این محصول لحظاتی پیش به پایان رسید. مبلغ به کیف‌پول شما بازگردانده شد."
         return {"ok": True, "method": "wallet", "order_id": oid, "delivered": delivered, "message": msg}
 
     gateway_amount = final_price
@@ -1288,7 +1304,7 @@ async def api_checkout(request: Request):
                                buyer_type="partner" if is_partner else "customer")
             delivered = _deliver_or_queue_order(uid, oid, pid, prod["title"], final_price)
             msg = f"✅ خرید از کیف‌پول موفق! سفارش #{oid}" if delivered else \
-                  f"✅ سفارش #{oid} ثبت شد. موجودی این محصول فعلاً تکمیل است و به‌محض شارژ ارسال می‌شود."
+                  "❌ موجودی این محصول لحظاتی پیش به پایان رسید. مبلغ به کیف‌پول شما بازگردانده شد."
             return {"ok": True, "method": "wallet", "order_id": oid, "delivered": delivered, "message": msg}
 
     # درگاه زرین‌پال
