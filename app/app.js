@@ -1584,8 +1584,15 @@ function _renderCheckoutBody(){
   var canCombined=walBal>0&&walBal<price;
   var emoji=p._e||'📦';
 
+  var outOfStock=Number(p.stock||0)<=0;
   var btns='';
-  if(price<=0){
+  if(outOfStock){
+    if(p.notify_on_restock){
+      btns='<button class="sl-checkout-btn sl-checkout-btn-wallet" onclick="_notifyStock('+p.id+')" id="notify-stock-btn">🔔 موجود شد، اطلاع بده</button>';
+    }else{
+      btns='<div class="sl-checkout-note" style="text-align:center;padding:12px;color:var(--mu)">❌ موجودی این محصول در حال حاضر به پایان رسیده است.</div>';
+    }
+  }else if(price<=0){
     btns='<button class="sl-checkout-btn sl-checkout-btn-wallet" onclick="_doPay(\'wallet\')">✅ دریافت رایگان</button>';
   }else{
     if(canWallet){
@@ -1609,7 +1616,14 @@ function _renderCheckoutBody(){
     '<a href="#" id="discount-apply" class="sl-checkout-wallet" style="display:flex;justify-content:space-between;align-items:center;text-decoration:none">'+
     '<span style="color:var(--mu)">🎟 کد تخفیف دارید؟</span><span style="color:var(--br);font-weight:700">وارد کنید ›</span></a>';
 
-  b.innerHTML=
+  // ناموجود = اصلاً وارد چرخهٔ خرید نمی‌شیم — نه کیف‌پول، نه کد تخفیف، فقط پیام/دکمهٔ اطلاع‌رسانی
+  b.innerHTML=outOfStock?
+    '<div class="sl-checkout-prod">'+
+      '<div class="sl-checkout-emoji">'+window._slEsc(emoji)+'</div>'+
+      '<div><div class="sl-checkout-title">'+window._slEsc(p.title)+'</div></div>'+
+    '</div>'+
+    '<div class="sl-checkout-btns" id="checkout-btns">'+btns+'</div>'
+    :
     '<div class="sl-checkout-prod">'+
       '<div class="sl-checkout-emoji">'+window._slEsc(emoji)+'</div>'+
       '<div><div class="sl-checkout-title">'+window._slEsc(p.title)+'</div>'+priceLine+'</div>'+
@@ -1629,6 +1643,17 @@ function _renderCheckoutBody(){
   var dr=document.getElementById('discount-remove');
   if(dr)dr.addEventListener('click',function(e){e.preventDefault();window._slCk.discountCode='';window._slCk.discountAmount=0;_renderCheckoutBody()});
 }
+
+window._notifyStock=function(pid){
+  var btn=document.getElementById('notify-stock-btn');
+  if(btn){btn.disabled=true;btn.textContent='در حال ثبت…'}
+  fetch('/api/v1/products/'+pid+'/notify',{method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData}})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(btn){btn.textContent=d&&d.added===false?'✅ قبلاً ثبت شده بود':'✅ ثبت شد — به‌محض موجود شدن اطلاع می‌دیم'}
+    })
+    .catch(function(){if(btn){btn.disabled=false;btn.textContent='🔔 موجود شد، اطلاع بده'}});
+};
 
 window._applyDiscount=function(){
   window._slApp.dialog.prompt('کد تخفیف را وارد کنید','کد تخفیف',function(code){

@@ -4265,6 +4265,16 @@ async def product_new_get(request: Request):
           {_textarea("setup_message","مثلاً: لطفاً ایمیل اپل، شماره موبایل و کد تأیید دو مرحله‌ای را ارسال کنید.",rows=3)}
         </div>
       </div>
+      <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
+        <label class="perm-label" style="font-size:13px">
+          <input type="checkbox" name="notify_on_restock" value="1"
+            style="width:16px;height:16px;min-height:16px;cursor:pointer">
+          <div>
+            <strong>اطلاع‌رسانی موجود شدن مجدد</strong>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">وقتی موجودی این محصول صفر بشه، به‌جای دکمهٔ خرید، دکمهٔ «موجود شد اطلاع بده» به کاربر نشون داده می‌شه (بدون امکان خرید/پیش‌خرید). اگه خاموش باشه، فقط پیام «ناموجود» دیده می‌شه.</div>
+          </div>
+        </label>
+      </div>
       <div class="flex gap-3">{_btn("ذخیره محصول", color="green")} {_btn("انصراف", "/admin/products", "slate")}</div>
     </form>"""
 
@@ -4280,6 +4290,7 @@ async def product_new_post(request: Request,
     if guard: return guard
     form = await request.form()
     support_after = 1 if form.get("support_after_purchase") == "1" else 0
+    notify_on_restock = 1 if form.get("notify_on_restock") == "1" else 0
 
     if not category_id.strip().isdigit():
         return _redir("/admin/products/new?flash=دسته‌بندی+انتخاب+کنید")
@@ -4306,11 +4317,11 @@ async def product_new_post(request: Request,
         cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
             INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url)
-            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?);""",
+                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url, notify_on_restock)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?);""",
             (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
              int(limit_c or 0), int(limit_p or 0), description.strip(), support_after,
-             str(form.get("setup_message","")).strip(), image_url))
+             str(form.get("setup_message","")).strip(), image_url, notify_on_restock))
         conn.commit()
     finally:
         conn.close()
@@ -4496,6 +4507,16 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
                          value=str(p["setup_message"] if "setup_message" in p.keys() else ""),rows=3)}
             </div>
           </div>
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" name="notify_on_restock" value="1"
+                {"checked" if int(p["notify_on_restock"] if "notify_on_restock" in p.keys() else 0) else ""}>
+              <div>
+                <div class="text-sm font-medium text-gray-800">اطلاع‌رسانی موجود شدن مجدد</div>
+                <div class="text-xs text-gray-400 mt-0.5">وقتی موجودی صفر بشه، دکمهٔ خرید به «🔔 موجود شد اطلاع بده» تبدیل می‌شه (بدون خرید/پیش‌خرید). اگه خاموش باشه، فقط پیام «ناموجود» دیده می‌شه.</div>
+              </div>
+            </label>
+          </div>
           {_btn("ذخیره", color="green")}
         </form>
       </div>
@@ -4532,6 +4553,7 @@ async def product_edit_post(request: Request, pid: int,
     if guard: return guard
     form = await request.form()
     support_after = 1 if form.get("support_after_purchase") == "1" else 0
+    notify_on_restock = 1 if form.get("notify_on_restock") == "1" else 0
     pp = int(partner_price or 0)
     # migration: اطمینان از وجود ستون
     try:
@@ -4552,16 +4574,16 @@ async def product_edit_post(request: Request, pid: int,
     try:
         if image_url is None:
             conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=? WHERE id=?;""",
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,notify_on_restock=? WHERE id=?;""",
                 (category,title.strip(),int(price or 0),pp if pp>0 else None,
                  int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-                 str(form.get("setup_message","")).strip(),pid))
+                 str(form.get("setup_message","")).strip(),notify_on_restock,pid))
         else:
             conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,image_url=? WHERE id=?;""",
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,image_url=?,notify_on_restock=? WHERE id=?;""",
                 (category,title.strip(),int(price or 0),pp if pp>0 else None,
                  int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-                 str(form.get("setup_message","")).strip(),image_url,pid))
+                 str(form.get("setup_message","")).strip(),image_url,notify_on_restock,pid))
         conn.commit()
     finally:
         conn.close()
