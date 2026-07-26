@@ -94,7 +94,7 @@ stockland-bot/
 4. **ربات تلگرام** — در `@app.on_event("startup")` (`on_startup`، payment_service.py:452-460)، تابع `maybe_start_bot_polling()` (466-509) ماژول `bot.py` را import می‌کند و `bot_module.bot.infinity_polling(...)` را در یک **thread پس‌زمینهٔ daemon جدا** اجرا می‌کند (نه پروسهٔ جدا). حالت webhook هم پشتیبانی می‌شود (`bot_run_mode` از `bot_config` یا env `USE_WEBHOOK`)؛ سوییچ بین حالت‌ها بدون ری‌استارت از طریق `/admin/webhook/switch` ممکن است.
 5. Static mounts: `/app` (PWA) و `/app-media` (فایل‌های آپلودی)
 
-**Middleware سراسری:** `_refresh_admin_session` (payment_service.py:101-115) روی هر request اجرا می‌شود و کوکی سشن ادمین را برای مسیرهای `/admin/*` تازه می‌کند (۳۰۰ ثانیه TTL) — همراه با یک مکانیزم مشابه در خود `admin_panel._refresh_session()`، یعنی دو مسیر موازی برای همین کار.
+**Middleware سراسری:** `_refresh_admin_session` (payment_service.py) روی هر request اجرا می‌شود و کوکی سشن ادمین را برای مسیرهای `/admin/*` تازه می‌کند (۳۰۰ ثانیه TTL). ⚠️ تا ۲۰۲۶-۰۷-۲۶ این میدل‌ور تابع کامل `_get_admin` (که یک کوئری دیتابیس داره) رو صدا می‌زد — دقیقاً همون کاری که خودِ هر route handler چند خط پایین‌تر دوباره انجام می‌داد؛ یعنی هر درخواست `/admin/*` دوبار از دیتابیس ادمین می‌خوند. رفع شد: میدل‌ور الان از `admin_panel._verify_session_cookie` (فقط HMAC+idle-timeout، بدون دیتابیس) استفاده می‌کنه؛ `_get_admin` هم بازنویسی شد تا خودش از همین تابع به‌عنوان جزء اول منطقش استفاده کنه (بدون تغییر رفتار بیرونی). `_layout()` هم جدا خودش `admin_panel._refresh_session()` (ارزون، بدون کوئری) رو برای صفحات HTML صدا می‌زنه — این دوتا دیگه کار تکراری نمی‌کنن، هرکدوم نقش مکملِ خودشون رو دارن (میدل‌ور برای مسیرهای غیر-HTML مثل JSON/redirect، `_layout` برای صفحات رندرشده).
 
 ---
 
@@ -309,7 +309,7 @@ except Exception:
 
 > این‌ها یافته‌های تحلیل کد فعلی‌اند، **هیچ‌کدام در این نشست تغییر داده نشده‌اند** — فقط مستندسازی شده‌اند. قبل از هر اقدام روی این موارد با مالک پروژه هماهنگ شود.
 
-1. **SQL Injection واقعی** — `db.py` تابع `get_card_receipts(status)` مقدار `status` را مستقیم در رشتهٔ SQL درج می‌کند (`f"WHERE r.status='{status}'"`) به‌جای پارامتری‌شده؛ ورودی از query string پنل ادمین می‌آید (`/admin/receipts?status=...`).
+1. ✅ **رفع‌شده (۲۰۲۶-۰۷-۲۶، PR #86)** — ~~SQL Injection واقعی~~ — `db.py` تابع `get_card_receipts(status)` مقدار `status` را مستقیم در رشتهٔ SQL درج می‌کرد؛ حالا پارامتری‌شده (`WHERE r.status=?`). تابع تازهٔ `count_card_receipts(status)` هم برای شمارش سبک (بدون fetch کامل) اضافه شد.
 2. **رمز سوپرادمین plaintext روی دیسک** — مسیر `POST /admin/admins/super/password` رمز جدید را بدون هش مستقیم داخل فایل `.env` می‌نویسد (و `/admins/super/telegram_id` همین الگو را برای `ADMIN_ID` دارد).
 3. **یوزرنیم‌های bypass هاردکد** — لاگین پنل با یوزرنیم `"admin"` یا `"super"` همیشه به‌عنوان سوپرادمین معتبر پذیرفته می‌شود، حتی اگر `ADMIN_WEB_USERNAME` چیز دیگری تنظیم شده باشد.
 4. **دو پیش‌فرض متفاوت برای `SESSION_SECRET`** — `_hash_pw` پیش‌فرض `"stockland"` دارد، `_make_session`/`_get_admin` پیش‌فرض `"stockland-panel"` دارند. اگر env ست نشود، سشن‌ها/هش پسورد با این رشته‌های هاردکدشدهٔ ضعیف قابل جعل‌اند.
@@ -374,7 +374,7 @@ except Exception:
 - خارج کردن `database/bot.db` از ردگیری گیت
 - هش کردن (نه plaintext) هنگام تغییر رمز سوپرادمین؛ یکسان‌سازی پیش‌فرض `SESSION_SECRET`
 - افزودن CSRF token به فرم‌های پنل ادمین
-- پارامتری‌کردن کوئری `get_card_receipts`
+- ✅ **رفع‌شده (۲۰۲۶-۰۷-۲۶):** پارامتری‌کردن کوئری `get_card_receipts`
 
 ---
 
