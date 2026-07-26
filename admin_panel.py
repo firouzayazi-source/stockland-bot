@@ -1636,7 +1636,7 @@ def _dashboard_fetch() -> dict:
         auto_backups = sorted(_g.glob("/tmp/stockland_backups/auto_*.sqlite"), reverse=True)
         last_backup = _o.path.basename(auto_backups[0]).replace("auto_","").replace(".sqlite","") if auto_backups else None
 
-        return dict(today_o=today_o, yest_o=yest_o, total_o=total_o, feed_avail=feed_avail,
+        return dict(today=today, today_o=today_o, yest_o=yest_o, total_o=total_o, feed_avail=feed_avail,
                     pending=pending, partners_pend=partners_pend, open_tix=open_tix, wallets=wallets,
                     products_cnt=products_cnt, chart_data=chart_data, low_stock=low_stock,
                     recent=recent, last_backup=last_backup)
@@ -1653,6 +1653,7 @@ async def dashboard(request: Request, err: str = ""):
     flash = "دسترسی کافی ندارید." if err == "noperm" else ""
 
     d = await run_in_threadpool(_dashboard_fetch)
+    today = d["today"]
     today_o, yest_o, total_o = d["today_o"], d["yest_o"], d["total_o"]
     feed_avail, pending, partners_pend = d["feed_avail"], d["pending"], d["partners_pend"]
     open_tix, wallets, products_cnt = d["open_tix"], d["wallets"], d["products_cnt"]
