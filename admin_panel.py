@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 import requests as _requests
 from fastapi import APIRouter, BackgroundTasks, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/admin")
 
@@ -166,12 +167,11 @@ def _make_session(admin_id: str) -> str:
     token = _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{token}:{admin_id}|{ts}"
 
-def _get_admin(request: Request):
-    """Returns (admin_id, is_super, permissions_list) or None.
-    اعتبارسنجی HMAC + بررسی idle timeout. Session لغزنده نیست — عمر ثابت ۳۰۰ ثانیه از آخرین صدور.
-    هر response باید با _refresh_session() کوکی رو تجدید کنه تا مدیر فعال kick نشه."""
+def _verify_session_cookie(request: Request) -> str | None:
+    """فقط HMAC + idle timeout رو چک می‌کنه و admin_id رو برمی‌گردونه — بدون هیچ کوئری
+    دیتابیس. برای جاهایی که فقط لازمه بدونیم «این یه سشن معتبره یا نه» (مثلاً تجدید
+    کوکی sliding-window)، نه واقعاً دسترسی‌ها/is_active که نیاز به DB داره."""
     import time as _t
-    ensure_admins_table()
     cookie = request.cookies.get("adm", "")
     if not cookie or ":" not in cookie:
         return None
@@ -199,6 +199,18 @@ def _get_admin(request: Request):
                 return None
         except Exception:
             return None
+
+    return admin_id
+
+
+def _get_admin(request: Request):
+    """Returns (admin_id, is_super, permissions_list) or None.
+    اعتبارسنجی HMAC + بررسی idle timeout. Session لغزنده نیست — عمر ثابت ۳۰۰ ثانیه از آخرین صدور.
+    هر response باید با _refresh_session() کوکی رو تجدید کنه تا مدیر فعال kick نشه."""
+    ensure_admins_table()
+    admin_id = _verify_session_cookie(request)
+    if not admin_id:
+        return None
 
     if admin_id == "super":
         return ("super", True, list(ALL_PERMISSIONS.keys()))
@@ -273,12 +285,32 @@ def _require_any(admin_info, perms: list):
 def _redir(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
 
+# ─────────────────────────── کش سبک درون‌پروسه‌ای ──────────────────────────
+# چند تا کوئری (تم پنل، شمارنده‌های badge سایدبار) توی _layout() روی *هر* صفحهٔ
+# پنل دوباره از دیتابیس خونده می‌شدن، با اینکه به‌ندرت تغییر می‌کنن. یه کش
+# TTL کوتاه (چند ثانیه) اینجا رو به یه کوئری واحد کاهش می‌ده و تازگی داده رو هم
+# عملاً حفظ می‌کنه (badge با چند ثانیه تأخیر آپدیت می‌شه، نه اینکه اشتباه باشه).
+_PANEL_CACHE: dict = {}
+_PANEL_CACHE_TTL = 5.0  # ثانیه — برای badgeهایی که هر ثانیه چندبار خونده می‌شن کافیه
+
+def _cached(key: str, ttl: float, fn):
+    now = time.time()
+    hit = _PANEL_CACHE.get(key)
+    if hit is not None and (now - hit[0]) < ttl:
+        return hit[1]
+    val = fn()
+    _PANEL_CACHE[key] = (now, val)
+    return val
+
+def _cache_invalidate(key: str) -> None:
+    _PANEL_CACHE.pop(key, None)
+
 # ─────────────────────────── HTML helpers ──────────────────────────────────
 
 def e(s) -> str:
     return html.escape(str(s or ""))
 
-def _open_ticket_count() -> int:
+def _open_ticket_count_uncached() -> int:
     try:
         conn = _db()
         n = conn.execute("SELECT COUNT(*) FROM tickets WHERE status='waiting_admin';").fetchone()[0]
@@ -286,6 +318,10 @@ def _open_ticket_count() -> int:
         return int(n)
     except Exception:
         return 0
+
+
+def _open_ticket_count() -> int:
+    return _cached("open_ticket_count", _PANEL_CACHE_TTL, _open_ticket_count_uncached)
 
 
 def _pending_payout_count() -> int:
@@ -300,19 +336,22 @@ def _pending_payout_count() -> int:
 
 def _pending_card2card_count() -> int:
     try:
-        from db import get_card_receipts, ensure_card_receipts_schema
-        ensure_card_receipts_schema()
-        return len(get_card_receipts("pending"))
+        from db import count_card_receipts
+        return count_card_receipts("pending")
     except Exception:
         return 0
 
 
-def _pending_financial_count() -> int:
+def _pending_financial_count_uncached() -> int:
     """تعداد کل درخواست‌های مالی در انتظار (کارت‌به‌کارت + تسویه)."""
     return _pending_payout_count() + _pending_card2card_count()
 
 
-def _pending_partner_count() -> int:
+def _pending_financial_count() -> int:
+    return _cached("pending_financial_count", _PANEL_CACHE_TTL, _pending_financial_count_uncached)
+
+
+def _pending_partner_count_uncached() -> int:
     try:
         conn = _db()
         n = conn.execute("SELECT COUNT(*) FROM partners WHERE status='pending';").fetchone()[0]
@@ -320,6 +359,10 @@ def _pending_partner_count() -> int:
         return int(n)
     except Exception:
         return 0
+
+
+def _pending_partner_count() -> int:
+    return _cached("pending_partner_count", _PANEL_CACHE_TTL, _pending_partner_count_uncached)
 
 
 # ─── Theme System ──────────────────────────────────────────────────────────
@@ -338,7 +381,7 @@ DEFAULT_THEME = {
     "border":         "#E5E7EB",
 }
 
-def _get_theme() -> dict:
+def _get_theme_uncached() -> dict:
     theme = dict(DEFAULT_THEME)
     try:
         conn = _db()
@@ -350,6 +393,14 @@ def _get_theme() -> dict:
     except Exception:
         pass
     return theme
+
+
+def _get_theme() -> dict:
+    # تم پنل تقریباً هیچ‌وقت عوض نمی‌شه ولی روی *هر* صفحه (توسط _layout) خونده می‌شد —
+    # TTL طولانی‌تر از badgeها چون تغییرش خیلی کمتر اتفاق می‌افته؛ محل ذخیره هم با
+    # _cache_invalidate("panel_theme") توی روت‌های ذخیرهٔ تم کاملاً پاک می‌شه، پس
+    # همون لحظه‌ای که ادمین تم رو عوض می‌کنه، خودش نتیجهٔ تازه رو می‌بینه.
+    return _cached("panel_theme", 60.0, _get_theme_uncached)
 
 def _ensure_theme_table():
     conn = _db()
@@ -2075,7 +2126,7 @@ async def receipt_approve(request: Request, rid: int):
     add_wallet_balance(r["user_id"], amount)
     _log(request, f"تأیید رسید #{rid}", "کیف‌پول", f"user:{r['user_id']} amount:{amount:,}")
     try:
-        _tg_send(r["user_id"],
+        await run_in_threadpool(_tg_send, r["user_id"],
             f"✅ پرداخت شما تأیید شد!\n"
             f"مبلغ <b>{amount:,}</b> تومان به کیف پول شما اضافه شد.")
     except Exception:
@@ -2096,7 +2147,7 @@ async def receipt_reject(request: Request, rid: int):
     update_card_receipt(rid, "rejected", "رد ادمین")
     _log(request, f"رد رسید #{rid}", "کیف‌پول", f"user:{r['user_id']}")
     try:
-        _tg_send(r["user_id"],
+        await run_in_threadpool(_tg_send, r["user_id"],
             "❌ متأسفانه رسید پرداخت شما تأیید نشد.\n"
             "لطفاً با پشتیبانی تماس بگیرید.")
     except Exception: pass
@@ -2486,6 +2537,7 @@ async def settings_theme_save(request: Request):
         conn.commit()
     finally:
         conn.close()
+    _cache_invalidate("panel_theme")
     return _redir("/admin/settings?flash=تنظیمات+رنگ+ذخیره+شد")
 
 
@@ -2500,6 +2552,7 @@ async def settings_theme_reset(request: Request):
         conn.commit()
     finally:
         conn.close()
+    _cache_invalidate("panel_theme")
     return _redir("/admin/settings?flash=رنگ‌های+پیش‌فرض+بازگردانده+شد")
 
 
@@ -5039,8 +5092,63 @@ async def feed_upload(request: Request, pid: int, items: str=Form(""),
     _log(request, f"افزودن {len(blocks)} آیتم به موجودی", "موجودی", f"product:{pid}")
     return _redir(f"/admin/feed/{pid}?flash={msg}")
 
+def _notify_restock_subscribers(pid: int, was_out_of_stock: bool) -> None:
+    """اطلاع‌رسانی «موجود شد» به مشترکان (ربات) + علاقه‌مندی‌کننده‌ها (مینی‌اپ) — از
+    feed_bulk_upload به‌عنوان BackgroundTask صدا زده می‌شه تا تماس‌های sync با تلگرام
+    (که می‌تونن برای هر مشترک یه بار تکرار بشن) جلوی جواب‌دادن به خودِ ادمین رو نگیرن."""
+    try:
+        from db import get_stock_subscribers, mark_subscriptions_notified, reset_subscriptions_on_restock
+        from db import get_product_by_id as _gpbi
+        subs = get_stock_subscribers(pid)
+        if subs:
+            _prod = _gpbi(pid)
+            _title = _prod[2] if _prod else f"محصول #{pid}"
+            bot_token = _env("BOT_TOKEN")
+            for sub_uid in subs:
+                try:
+                    _requests.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": sub_uid,
+                              "text": f"🔔 محصول <b>{_title}</b> موجود شد!\nهم‌اکنون می‌توانید خرید کنید.",
+                              "parse_mode": "HTML"},
+                        timeout=5
+                    )
+                except Exception:
+                    pass
+            mark_subscriptions_notified(pid)
+            reset_subscriptions_on_restock(pid)
+    except Exception:
+        pass
+
+    # اطلاع‌رسانی به علاقه‌مندی‌کننده‌های محصول (مینی‌اپ) — فقط وقتی واقعاً از ناموجود به موجود برگشته
+    try:
+        from db import get_product_favoriters, get_product_by_id as _gpbi2, add_notification
+        favoriters = get_product_favoriters(pid) if was_out_of_stock else []
+        if favoriters:
+            _prod2 = _gpbi2(pid)
+            _title2 = _prod2[2] if _prod2 else f"محصول #{pid}"
+            bot_token2 = _env("BOT_TOKEN")
+            for fav_uid in favoriters:
+                try:
+                    _requests.post(
+                        f"https://api.telegram.org/bot{bot_token2}/sendMessage",
+                        json={"chat_id": fav_uid,
+                              "text": f"💚 محصولی که به علاقه‌مندی‌هاتون اضافه کرده بودید موجود شد!\n<b>{_title2}</b>",
+                              "parse_mode": "HTML"},
+                        timeout=5
+                    )
+                except Exception:
+                    pass
+                try:
+                    add_notification(fav_uid, "موجود شد", f"«{_title2}» که به علاقه‌مندی‌هاتون اضافه کرده بودید موجود شد.", icon="💚")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 @router.post("/feed/{pid}/bulk-upload")
-async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
+async def feed_bulk_upload(request: Request, pid: int, background_tasks: BackgroundTasks, file: UploadFile = None):
     adm = _get_admin(request)
     guard = _require(adm, "feed")
     if guard: return guard
@@ -5121,56 +5229,10 @@ async def feed_bulk_upload(request: Request, pid: int, file: UploadFile = None):
     except Exception as _ex:
         _tg_logger.warning("pending dispatch error: %s", _ex)
 
-    # اطلاع‌رسانی به مشترکان
-    try:
-        from db import get_stock_subscribers, mark_subscriptions_notified, reset_subscriptions_on_restock
-        from db import get_product_by_id as _gpbi
-        subs = get_stock_subscribers(pid)
-        if subs:
-            _prod = _gpbi(pid)
-            _title = _prod[2] if _prod else f"محصول #{pid}"
-            bot_token = _env("BOT_TOKEN")
-            for sub_uid in subs:
-                try:
-                    _requests.post(
-                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                        json={"chat_id": sub_uid,
-                              "text": f"🔔 محصول <b>{_title}</b> موجود شد!\nهم‌اکنون می‌توانید خرید کنید.",
-                              "parse_mode": "HTML"},
-                        timeout=5
-                    )
-                except Exception:
-                    pass
-            mark_subscriptions_notified(pid)
-            reset_subscriptions_on_restock(pid)
-    except Exception:
-        pass
-
-    # اطلاع‌رسانی به علاقه‌مندی‌کننده‌های محصول (مینی‌اپ) — فقط وقتی واقعاً از ناموجود به موجود برگشته
-    try:
-        from db import get_product_favoriters, get_product_by_id as _gpbi2, add_notification
-        favoriters = get_product_favoriters(pid) if was_out_of_stock else []
-        if favoriters:
-            _prod2 = _gpbi2(pid)
-            _title2 = _prod2[2] if _prod2 else f"محصول #{pid}"
-            bot_token2 = _env("BOT_TOKEN")
-            for fav_uid in favoriters:
-                try:
-                    _requests.post(
-                        f"https://api.telegram.org/bot{bot_token2}/sendMessage",
-                        json={"chat_id": fav_uid,
-                              "text": f"💚 محصولی که به علاقه‌مندی‌هاتون اضافه کرده بودید موجود شد!\n<b>{_title2}</b>",
-                              "parse_mode": "HTML"},
-                        timeout=5
-                    )
-                except Exception:
-                    pass
-                try:
-                    add_notification(fav_uid, "موجود شد", f"«{_title2}» که به علاقه‌مندی‌هاتون اضافه کرده بودید موجود شد.", icon="💚")
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    # اطلاع‌رسانی مشترکان/علاقه‌مندی‌ها در پس‌زمینه — قبلاً این حلقه‌ها (که می‌تونن به ازای
+    # هر مشترک یه تماس sync با تلگرام بزنن) مستقیم توی درخواست ادمین اجرا می‌شدن و کل
+    # event loop (یعنی کل ربات+پنل+API، چون همه یه پروسه‌ان) رو تا پایانشون قفل می‌کردن.
+    background_tasks.add_task(_notify_restock_subscribers, pid, was_out_of_stock)
 
     flash_msg = f"✅+{len(items)}+آیتم+اضافه+شد"
     if dispatched > 0:
@@ -6037,7 +6099,7 @@ async def order_return(request: Request, oid: int):
 
     # حذف پیام تحویل
     if result.get("chat_id") and result.get("message_id"):
-        _tg_delete_message(result["chat_id"], result["message_id"])
+        await run_in_threadpool(_tg_delete_message, result["chat_id"], result["message_id"])
 
     # نوتیف به کاربر
     if notify_user and result.get("user_id"):
@@ -6046,7 +6108,7 @@ async def order_return(request: Request, oid: int):
             wallet_msg = f"\n💰 مبلغ {result.get('price',0):,} تومان به کیف‌پول شما افزوده شد."
         elif wallet_action == "custom_add" and custom_amount:
             wallet_msg = f"\n💰 مبلغ {custom_amount:,} تومان به کیف‌پول شما افزوده شد."
-        _tg_send(int(result["user_id"]),
+        await run_in_threadpool(_tg_send, int(result["user_id"]),
             f"⚠️ سفارش #{oid} (<b>{html.escape(str(result.get('title') or ''))}</b>) "
             f"توسط پشتیبانی برگشت داده شد.{wallet_msg}\n"
             "در صورت سوال با پشتیبانی در تماس باشید.")
@@ -6162,7 +6224,7 @@ async def order_resend_post(request: Request, oid: int):
     if notify:
         try:
             import html as _html
-            _tg_send(user_id,
+            await run_in_threadpool(_tg_send, user_id,
                 f"📦 محصول جدید برای سفارش #{oid} ارسال شد:\n\n"
                 f"<code>{_html.escape(str(data))}</code>")
         except Exception:
@@ -6634,7 +6696,8 @@ async def wallet_adjust(request: Request, uid: str=Form(""), amount: str=Form("0
     # اطلاع به کاربر
     op_label = {"add": "افزایش", "sub": "کاهش", "set": "تنظیم"}.get(op, op)
     try:
-        _tg_send(
+        await run_in_threadpool(
+            _tg_send,
             user_id,
             f"💰 موجودی کیف‌پول شما توسط پشتیبانی {op_label} یافت.\n"
             f"موجودی فعلی: <b>{new_bal:,}</b> تومان"
@@ -7050,12 +7113,16 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
                 FROM tickets t {where_sql}
                 ORDER BY id DESC LIMIT ?;
             """, params).fetchall()
-        stats = {}
-        for s in ("waiting_admin","waiting_user","closed","waiting_info","reviewing","ready_delivery"):
-            stats[s] = conn.execute("SELECT COUNT(*) FROM tickets WHERE status=?;",(s,)).fetchone()[0]
-        type_counts = {}
-        for t in ("support","product_setup","partner_support"):
-            type_counts[t] = conn.execute("SELECT COUNT(*) FROM tickets WHERE type=?;",(t,)).fetchone()[0]
+        # قبلاً ۹ کوئری COUNT جدا (۶ status + ۳ type) — با GROUP BY به ۲ کوئری کاهش
+        # پیدا کرد؛ با ایندکس‌های تازهٔ tickets(status)/tickets(type) هم سریع‌تره.
+        stats = {s: 0 for s in ("waiting_admin","waiting_user","closed","waiting_info","reviewing","ready_delivery")}
+        for row in conn.execute("SELECT status, COUNT(*) AS c FROM tickets GROUP BY status;").fetchall():
+            if row["status"] in stats:
+                stats[row["status"]] = row["c"]
+        type_counts = {t: 0 for t in ("support","product_setup","partner_support")}
+        for row in conn.execute("SELECT type, COUNT(*) AS c FROM tickets GROUP BY type;").fetchall():
+            if row["type"] in type_counts:
+                type_counts[row["type"]] = row["c"]
     finally:
         conn.close()
 
@@ -7651,7 +7718,8 @@ async def ticket_deliver_product(request: Request, tid: int):
                     f"محصول: {e(ptitle)}\n\n"
                     f"<code>{html.escape(str(feed_data))}</code>")
         try:
-            _requests.post(
+            await run_in_threadpool(
+                _requests.post,
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 json={"chat_id": user_id, "text": msg_text, "parse_mode": "HTML"},
                 timeout=10
@@ -7750,7 +7818,8 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
     ok = False
     if token:
         try:
-            r = _requests.post(
+            r = await run_in_threadpool(
+                _requests.post,
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": user_id, "text": msg_text,
                       "parse_mode": "HTML", "reply_markup": continue_kb},
@@ -7758,9 +7827,9 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
             )
             ok = r.json().get("ok", False)
         except Exception:
-            ok = _tg_send(user_id, msg_text)
+            ok = await run_in_threadpool(_tg_send, user_id, msg_text)
     else:
-        ok = _tg_send(user_id, msg_text)
+        ok = await run_in_threadpool(_tg_send, user_id, msg_text)
 
     if ok:
         _log(request, "پاسخ تیکت", "تیکت‌ها", f"ticket #{tid}")
@@ -7789,7 +7858,7 @@ async def ticket_direct(request: Request, tid: int, direct_msg: str = Form("")):
         conn.close()
 
     if user_id:
-        _tg_send(user_id, f"📩 <b>پیام مستقیم از پشتیبانی:</b>\n\n{html.escape(direct_msg)}")
+        await run_in_threadpool(_tg_send, user_id, f"📩 <b>پیام مستقیم از پشتیبانی:</b>\n\n{html.escape(direct_msg)}")
 
     return _redir(f"/admin/tickets/{tid}?flash=پیام+مستقیم+ارسال+شد")
 
@@ -7858,12 +7927,16 @@ async def ticket_media(request: Request, file_id: str):
     if not token:
         return Response(status_code=404)
     try:
-        # گرفتن file_path از Telegram
-        r1 = _requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}", timeout=10)
+        # گرفتن file_path از Telegram — این مسیر پرتکرارترین مصرف‌کنندهٔ تماس sync با
+        # تلگرام توی کل پنله (هر عکس ضمیمهٔ هر تیکت)، پس هر دو تماس حتماً باید توی
+        # threadpool باشن، وگرنه یه تلگرام کند = کل پنل/API/webhook برای همه یخ می‌زنه.
+        r1 = await run_in_threadpool(
+            _requests.get, f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}", timeout=10)
         fp = r1.json().get("result", {}).get("file_path", "")
         if not fp:
             return Response(status_code=404)
-        r2 = _requests.get(f"https://api.telegram.org/file/bot{token}/{fp}", timeout=15)
+        r2 = await run_in_threadpool(
+            _requests.get, f"https://api.telegram.org/file/bot{token}/{fp}", timeout=15)
         ct = r2.headers.get("content-type", "image/jpeg")
         return Response(content=r2.content, media_type=ct)
     except Exception:
@@ -9983,7 +10056,7 @@ async def partner_payout_approve(request: Request, pid: int):
         hours = ps.get("review_hours", 48)
         msg = ps.get("approval_message","") or f"✅ درخواست تسویه {amt:,} تومان تأیید شد و ظرف {hours} ساعت پرداخت می‌شود."
         _log(request, "تأیید تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
-        try: _tg_send(uid, msg)
+        try: await run_in_threadpool(_tg_send, uid, msg)
         except Exception: pass
     return _redir("/admin/tickets?flash=تسویه+تأیید+شد#financial")
 
@@ -10005,7 +10078,7 @@ async def partner_payout_reject(request: Request, pid: int):
         if note: msg += f"\n\nدلیل: {note}"
         msg += f"\n\nمبلغ به کیف‌پول همکاری برگشت داده شد."
         _log(request, "رد تسویه", "همکاران", f"payout:{pid} user:{uid} amount:{amt}")
-        try: _tg_send(uid, msg)
+        try: await run_in_threadpool(_tg_send, uid, msg)
         except Exception: pass
     return _redir("/admin/tickets?flash=تسویه+رد+شد#financial")
 
@@ -10322,9 +10395,9 @@ async def partner_approve(request: Request, uid: int):
             }
             if markup:
                 payload["reply_markup"] = markup
-            _rq.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
+            await run_in_threadpool(_rq.post, f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=8)
         else:
-            _tg_send(int(uid), "✅ درخواست نمایندگی تایید شد! برای فعال‌سازی منو /start بزنید.")
+            await run_in_threadpool(_tg_send, int(uid), "✅ درخواست نمایندگی تایید شد! برای فعال‌سازی منو /start بزنید.")
     except Exception:
         pass
     return _redir("/admin/partners?flash=همکار+تایید+شد")
@@ -10342,7 +10415,7 @@ async def partner_reject(request: Request, uid: int):
     finally:
         conn.close()
     try:
-        _tg_send(int(uid),
+        await run_in_threadpool(_tg_send, int(uid),
             "❌ متأسفانه درخواست نمایندگی شما در این مرحله تأیید نشد.\n"
             "در صورت سوال با پشتیبانی در تماس باشید.")
     except Exception:
@@ -10574,8 +10647,38 @@ async def growth_save(request: Request):
     return _redir("/admin/growth?flash=✅+تنظیمات+رشد+ذخیره+شد")
 
 
+def _notify_flash_sale_favoriters(pid: int, percent: int) -> None:
+    """اطلاع‌رسانی تخفیف فوری به علاقه‌مندی‌کننده‌های محصول — به‌عنوان BackgroundTask
+    صدا زده می‌شه (همون دلیل _notify_restock_subscribers: حلقهٔ تماس‌های sync با
+    تلگرام نباید جواب‌دادن به خودِ ادمین یا کل سرویس رو معطل کنه)."""
+    try:
+        from db import get_product_favoriters, get_product_by_id as _gpbi3, add_notification
+        favoriters = get_product_favoriters(pid)
+        if favoriters:
+            _prod3 = _gpbi3(pid)
+            _title3 = _prod3[2] if _prod3 else f"محصول #{pid}"
+            bot_token3 = _env("BOT_TOKEN")
+            for fav_uid in favoriters:
+                try:
+                    _requests.post(
+                        f"https://api.telegram.org/bot{bot_token3}/sendMessage",
+                        json={"chat_id": fav_uid,
+                              "text": f"⚡️ محصولی که به علاقه‌مندی‌هاتون اضافه کرده بودید {percent}٪ تخفیف خورد!\n<b>{_title3}</b>",
+                              "parse_mode": "HTML"},
+                        timeout=5
+                    )
+                except Exception:
+                    pass
+                try:
+                    add_notification(fav_uid, "تخفیف ویژه", f"«{_title3}» که به علاقه‌مندی‌هاتون اضافه کرده بودید {percent}٪ تخفیف خورد.", icon="⚡️")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 @router.post("/growth/flash/new")
-async def growth_flash_new(request: Request):
+async def growth_flash_new(request: Request, background_tasks: BackgroundTasks):
     adm = _get_admin(request)
     guard = _require(adm, "growth")
     if guard: return guard
@@ -10586,31 +10689,7 @@ async def growth_flash_new(request: Request):
     if pid:
         create_flash_sale(pid, percent, int(form.get("hours") or 24))
         _log(request, "فروش فوری", "رشد", f"محصول #{pid}", admin_info=adm)
-        # اطلاع‌رسانی به علاقه‌مندی‌کننده‌های محصول (مینی‌اپ)
-        try:
-            from db import get_product_favoriters, get_product_by_id as _gpbi3, add_notification
-            favoriters = get_product_favoriters(pid)
-            if favoriters:
-                _prod3 = _gpbi3(pid)
-                _title3 = _prod3[2] if _prod3 else f"محصول #{pid}"
-                bot_token3 = _env("BOT_TOKEN")
-                for fav_uid in favoriters:
-                    try:
-                        _requests.post(
-                            f"https://api.telegram.org/bot{bot_token3}/sendMessage",
-                            json={"chat_id": fav_uid,
-                                  "text": f"⚡️ محصولی که به علاقه‌مندی‌هاتون اضافه کرده بودید {percent}٪ تخفیف خورد!\n<b>{_title3}</b>",
-                                  "parse_mode": "HTML"},
-                            timeout=5
-                        )
-                    except Exception:
-                        pass
-                    try:
-                        add_notification(fav_uid, "تخفیف ویژه", f"«{_title3}» که به علاقه‌مندی‌هاتون اضافه کرده بودید {percent}٪ تخفیف خورد.", icon="⚡️")
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        background_tasks.add_task(_notify_flash_sale_favoriters, pid, percent)
     return _redir("/admin/growth?flash=🔥+فروش+فوری+شروع+شد")
 
 
@@ -10849,7 +10928,7 @@ async def shop_api_buy(request: Request):
     order_id = create_order(uid, "webapp", p["title"], price, product_id=pid, buyer_type="customer")
 
     # تحویل در چت ربات
-    _tg_api_send(uid,
+    await run_in_threadpool(_tg_api_send, uid,
         f"✅ <b>خرید از فروشگاه آنلاین</b>\n\n"
         f"🧾 سفارش #{order_id} — {p['title']}\n"
         f"💰 مبلغ: {price:,} تومان\n\n"
@@ -10860,7 +10939,7 @@ async def shop_api_buy(request: Request):
         cm = process_referral_commission(uid, order_id, price)
         if cm.get("paid"):
             _wl = "کیف‌پول همکاری" if cm.get("wallet") == "partner" else "کیف‌پول"
-            _tg_api_send(cm["referrer_id"],
+            await run_in_threadpool(_tg_api_send, cm["referrer_id"],
                 f"💸 <b>پورسانت جدید!</b>\nیکی از دعوت‌شده‌های شما خرید کرد و "
                 f"<b>{cm['amount']:,}</b> تومان (سطح {cm['tier_name']}) به {_wl} شما اضافه شد.")
     except Exception:
@@ -10871,7 +10950,7 @@ async def shop_api_buy(request: Request):
         soc = get_social_settings()
         ch = str(soc.get("channel_id") or "").strip()
         if ch and int(soc.get("sale_post") or 0):
-            _tg_api_send(ch, str(soc.get("sale_post_text") or "").format(title=p["title"]))
+            await run_in_threadpool(_tg_api_send, ch, str(soc.get("sale_post_text") or "").format(title=p["title"]))
     except Exception:
         pass
 
@@ -10906,7 +10985,7 @@ async def partners_manual_referral(request: Request):
             paid_txt = f"+و+{pr['amount']:,}+تومان+پاداش+پرداخت+شد"
             try:
                 _wl = "کیف‌پول همکاری" if pr.get("wallet") == "partner" else "کیف‌پول"
-                _tg_api_send(referrer_id,
+                await run_in_threadpool(_tg_api_send, referrer_id,
                     f"🎉 یک دعوت‌شده جدید برای شما ثبت شد!\n"
                     f"💰 پاداش عضویت: <b>{pr['amount']:,}</b> تومان به {_wl} شما اضافه شد.")
             except Exception:
