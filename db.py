@@ -805,6 +805,7 @@ def get_product_by_id(pid: int):
             'COALESCE(daily_limit_customer, 0) AS daily_limit_customer',
             'COALESCE(daily_limit_partner, 0) AS daily_limit_partner',
             "COALESCE(image_url, '') AS image_url",
+            "COALESCE(notify_on_restock, 0) AS notify_on_restock",
         ]
         cur.execute(
             f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
@@ -1257,6 +1258,11 @@ def count_feed_items(product_id: int, delivered: int | None = None) -> int:
     n = cur.fetchone()[0] or 0
     conn.close()
     return int(n)
+
+
+def get_available_stock(product_id: int) -> int:
+    """تعداد آیتم موجود (تحویل‌نشده) این محصول — منبع واحد تشخیص «ناموجود» در کل پروژه."""
+    return count_feed_items(product_id, delivered=0)
 
 
 def set_feed_item_delivered(feed_id: int, delivered: int):
@@ -2900,6 +2906,7 @@ def ensure_product_support_schema():
             ("support_after_purchase", "INTEGER DEFAULT 0"),
             ("setup_message", "TEXT DEFAULT ''"),
             ("image_url", "TEXT DEFAULT ''"),
+            ("notify_on_restock", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE products ADD COLUMN {col} {default};")
@@ -2929,6 +2936,19 @@ def get_product_setup_message(product_id: int) -> str:
         return (row[0] or "").strip() if row else ""
     except Exception:
         return ""
+    finally:
+        conn.close()
+
+
+def get_product_notify_on_restock(product_id: int) -> bool:
+    """آیا وقتی این محصول ناموجود است، دکمهٔ «موجود شد اطلاع بده» به‌جای خرید نشون داده بشه."""
+    ensure_product_support_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT notify_on_restock FROM products WHERE id=? LIMIT 1;", (product_id,)).fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
     finally:
         conn.close()
 
