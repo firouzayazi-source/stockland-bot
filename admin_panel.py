@@ -670,14 +670,23 @@ def _layout(title: str, body: str, admin_info=None,
     document.addEventListener('touchmove',function(e){{if(e.touches.length>1)e.preventDefault();}},{{passive:false}});
   </script>
   <title>{e(title)} — استوک لند</title>
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="/app/vendor/admin-tailwind.js"></script>
+  <script>window.tailwind || document.write('<script src="https://cdn.tailwindcss.com"><\\/script>');</script>
+  <script src="/app/vendor/admin-lucide.min.js"></script>
+  <script>window.lucide || document.write('<script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"><\\/script>');</script>
   <style>
     /* ═══════════════════════════════════════════════════════════
        STOCKLAND ADMIN — DESIGN SYSTEM v2
        Mobile-First · RTL-Native · Apple-Inspired
     ═══════════════════════════════════════════════════════════ */
+
+    /* ── فونت محلی (سلف‌هاست، بدون وابستگی به fonts.googleapis.com) ── */
+    @font-face {{ font-family:'Vazirmatn'; font-weight:300; font-display:swap; src:url('/app/vendor/fonts/Vazirmatn-Light.woff2') format('woff2'); }}
+    @font-face {{ font-family:'Vazirmatn'; font-weight:400; font-display:swap; src:url('/app/vendor/fonts/Vazirmatn-Regular.woff2') format('woff2'); }}
+    @font-face {{ font-family:'Vazirmatn'; font-weight:500; font-display:swap; src:url('/app/vendor/fonts/Vazirmatn-Medium.woff2') format('woff2'); }}
+    @font-face {{ font-family:'Vazirmatn'; font-weight:600; font-display:swap; src:url('/app/vendor/fonts/Vazirmatn-SemiBold.woff2') format('woff2'); }}
+    @font-face {{ font-family:'Vazirmatn'; font-weight:700; font-display:swap; src:url('/app/vendor/fonts/Vazirmatn-Bold.woff2') format('woff2'); }}
+    @font-face {{ font-family:'Vazirmatn'; font-weight:800; font-display:swap; src:url('/app/vendor/fonts/Vazirmatn-ExtraBold.woff2') format('woff2'); }}
 
     /* ── Design Tokens ────────────────────────────────────────── */
     :root {{
@@ -1585,14 +1594,8 @@ async def logout(request: Request):
 
 # ─────────────────────────── Dashboard ─────────────────────────────────────
 
-@router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, err: str = ""):
-    adm = _get_admin(request)
-    if not adm:
-        return _redir("/admin/login")
-
-    flash = "دسترسی کافی ندارید." if err == "noperm" else ""
-
+def _dashboard_fetch() -> dict:
+    """کوئری‌های داشبورد — روی ترد جدا (run_in_threadpool) اجرا می‌شود تا event loop مشترک بلاک نشود."""
     conn = _db()
     try:
         today = datetime.utcnow().date().isoformat()
@@ -1633,8 +1636,27 @@ async def dashboard(request: Request, err: str = ""):
         auto_backups = sorted(_g.glob("/tmp/stockland_backups/auto_*.sqlite"), reverse=True)
         last_backup = _o.path.basename(auto_backups[0]).replace("auto_","").replace(".sqlite","") if auto_backups else None
 
+        return dict(today_o=today_o, yest_o=yest_o, total_o=total_o, feed_avail=feed_avail,
+                    pending=pending, partners_pend=partners_pend, open_tix=open_tix, wallets=wallets,
+                    products_cnt=products_cnt, chart_data=chart_data, low_stock=low_stock,
+                    recent=recent, last_backup=last_backup)
     finally:
         conn.close()
+
+
+@router.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request, err: str = ""):
+    adm = _get_admin(request)
+    if not adm:
+        return _redir("/admin/login")
+
+    flash = "دسترسی کافی ندارید." if err == "noperm" else ""
+
+    d = await run_in_threadpool(_dashboard_fetch)
+    today_o, yest_o, total_o = d["today_o"], d["yest_o"], d["total_o"]
+    feed_avail, pending, partners_pend = d["feed_avail"], d["pending"], d["partners_pend"]
+    open_tix, wallets, products_cnt = d["open_tix"], d["wallets"], d["products_cnt"]
+    chart_data, low_stock, recent, last_backup = d["chart_data"], d["low_stock"], d["recent"], d["last_backup"]
 
     # محاسبه درصد تغییر نسبت به دیروز (فقط برای نمایش KPI)
     rev_change = 0
