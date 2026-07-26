@@ -596,6 +596,14 @@ def ensure_indexes():
         ("idx_flash_product",        "flash_sales(product_id, is_active)"),
         # امتیازها
         ("idx_ratings_product",      "product_ratings(product_id)"),
+        # تیکت‌ها — لیست/فیلتر/شمارندهٔ badge روی status و type، پیام‌ها با subquery
+        # همبسته به ازای هر ردیف تیکت (msg_count) — بدون این ایندکس‌ها صفحهٔ تیکت‌ها
+        # با رشد داده به‌طور فزاینده کند می‌شه (اسکن کامل جدول در هر بار)
+        ("idx_tickets_status",       "tickets(status)"),
+        ("idx_tickets_type",         "tickets(type)"),
+        ("idx_ticket_messages_tid",  "ticket_messages(ticket_id)"),
+        # رسیدهای کارت‌به‌کارت — لیست/شمارندهٔ badge روی status
+        ("idx_card_receipts_status", "card_receipts(status)"),
     ]
     conn = _get_connection()
     try:
@@ -2190,6 +2198,11 @@ def ticket_ensure_schema() -> None:
         conn.commit()
     finally:
         conn.close()
+    # ایندکس‌های tickets/ticket_messages پس از ساخت‌شان (همون الگوی ensure_growth_schema)
+    try:
+        ensure_indexes()
+    except Exception:
+        pass
 
 
 def ticket_create(user_id: int, type_: str = "support",
@@ -5297,6 +5310,10 @@ def ensure_card_receipts_schema():
         conn.commit()
     finally:
         conn.close()
+    try:
+        ensure_indexes()
+    except Exception:
+        pass
 
 
 def save_card_receipt(user_id: int, amount: int, file_id: str) -> int:
@@ -5328,13 +5345,36 @@ def get_card_receipts(status: str = "pending") -> list:
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
-        where = f"WHERE r.status='{status}'" if status else ""
-        return [dict(r) for r in conn.execute(f"""
-            SELECT r.*, u.full_name, u.username
-            FROM card_receipts r
-            LEFT JOIN users u ON u.user_id=r.user_id
-            {where} ORDER BY r.id DESC LIMIT 100;
-        """).fetchall()]
+        if status:
+            rows = conn.execute("""
+                SELECT r.*, u.full_name, u.username
+                FROM card_receipts r
+                LEFT JOIN users u ON u.user_id=r.user_id
+                WHERE r.status=? ORDER BY r.id DESC LIMIT 100;
+            """, (status,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT r.*, u.full_name, u.username
+                FROM card_receipts r
+                LEFT JOIN users u ON u.user_id=r.user_id
+                ORDER BY r.id DESC LIMIT 100;
+            """).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_card_receipts(status: str = "pending") -> int:
+    """معادل سبک get_card_receipts فقط برای شمارش (بدون JOIN/fetch کامل ردیف‌ها) —
+    برای badgeهایی که فقط تعداد لازم دارن، نه خودِ داده."""
+    ensure_card_receipts_schema()
+    conn = _get_connection()
+    try:
+        if status:
+            n = conn.execute("SELECT COUNT(*) FROM card_receipts WHERE status=?;", (status,)).fetchone()[0]
+        else:
+            n = conn.execute("SELECT COUNT(*) FROM card_receipts;").fetchone()[0]
+        return int(n or 0)
     finally:
         conn.close()
 

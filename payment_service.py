@@ -70,7 +70,8 @@ app = FastAPI(title="Stockland Payment Service")
 _bot_thread_started = False
 
 # ── Admin Panel ────────────────────────────────────────────────────────────
-from admin_panel import router as _admin_router, _get_admin as _panel_get_admin, _make_session as _panel_make_session
+from admin_panel import (router as _admin_router, _verify_session_cookie as _panel_verify_cookie,
+                          _make_session as _panel_make_session)
 app.include_router(_admin_router)
 
 # API رسمی برای PWA/اپ‌ها
@@ -130,15 +131,19 @@ async def _no_cache_pwa_shell(request, call_next):
 
 @app.middleware("http")
 async def _refresh_admin_session(request, call_next):
-    """با هر فعالیت ادمین، تایمر idle (۵ دقیقه) را ریست می‌کند."""
+    """با هر فعالیت ادمین، تایمر idle (۵ دقیقه) را ریست می‌کند.
+    ⚠️ عمداً از _verify_session_cookie (بدون کوئری دیتابیس) استفاده می‌کنه، نه
+    _get_admin کامل — چون تنها کاری که این میدل‌ور لازمه بکنه تجدید کوکیه، نه
+    گرفتن دسترسی‌های واقعی (که خودِ هندلر هر route جداگانه و با دادهٔ تازه چک
+    می‌کنه). قبلاً هر درخواست /admin/* دوبار از دیتابیس ادمین می‌خوند — یک‌بار
+    اینجا، یک‌بار توی خودِ هندلر — که روی حجم بالای ترافیک پنل قابل‌حس بود."""
     response = await call_next(request)
     try:
         path = request.url.path
         if path.startswith("/admin") and not path.endswith("/logout") and not path.endswith("/login"):
-            adm = _panel_get_admin(request)
-            if adm:
-                # cookie تازه با timestamp جدید
-                fresh = _panel_make_session(adm[0])
+            admin_id = _panel_verify_cookie(request)
+            if admin_id:
+                fresh = _panel_make_session(admin_id)
                 response.set_cookie("adm", fresh, max_age=300, httponly=True, samesite="lax")
     except Exception:
         pass
