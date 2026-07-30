@@ -289,8 +289,19 @@ def ensure_schema():
             model_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            price_percent REAL NOT NULL DEFAULT 0
         );""")
+        # price_percent: درصد اثر این رنگ روی قیمت پایه (مثلاً -10 یعنی ۱۰٪ کمتر) — لایهٔ
+        # سادهٔ تازه‌ای که ADD می‌شه، مستقل از مکانیزم قدیمی ردیف قیمت اختصاصی هر رنگ
+        # (iv_capacities.color_id) که دست‌نخورده می‌مونه؛ اگه ادمین برای مدلی از قبل قیمت
+        # دقیق جداگانه به‌ازای هر رنگ ثبت کرده، همون همچنان کار می‌کنه — این ستون فقط
+        # برای مدل‌هایی که ادمین می‌خواد ساده‌تر (یک قیمت پایه + درصد رنگ) مدیریت کنه اضافه شده.
+        try:
+            conn.execute("ALTER TABLE iv_colors ADD COLUMN price_percent REAL NOT NULL DEFAULT 0;")
+            conn.commit()
+        except Exception:
+            pass
         conn.execute("""CREATE TABLE IF NOT EXISTS iv_coefficients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT NOT NULL,
@@ -345,6 +356,23 @@ def ensure_schema():
             seller_price INTEGER,
             city TEXT DEFAULT '',
             seller_type TEXT DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );""")
+        # درخواست‌های «می‌خوام بفروشم» از ربات — چه بعد از محاسبهٔ قیمت عادی، چه از مسیر
+        # سری‌های توقف‌محاسبه (P/3/4) که قیمت توافقیه. صرفاً یه لید ساده برای ادمینه که
+        # باهاش تماس بگیره — نه یه سیستم تیکت/مکالمهٔ دوطرفه (اون از قبل جای دیگه‌ای هست).
+        conn.execute("""CREATE TABLE IF NOT EXISTS iv_sell_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            user_name TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            city TEXT DEFAULT '',
+            model_id INTEGER,
+            model_name TEXT DEFAULT '',
+            grade_key TEXT DEFAULT '',
+            summary_text TEXT DEFAULT '',
+            estimated_price INTEGER,
+            status TEXT NOT NULL DEFAULT 'new',
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );""")
         conn.commit()
@@ -447,6 +475,8 @@ def ensure_schema():
         _migrate_repair_parts_catalog_v1(conn)
         _migrate_replaced_category_v1(conn)
         _migrate_repair_vs_replaced_v1(conn)
+        _migrate_condition_merge_new_sealed_v1(conn)
+        _migrate_grade_category_v1(conn)
     finally:
         conn.close()
     _SCHEMA_DONE = True
@@ -707,6 +737,56 @@ def _migrate_repair_vs_replaced_v1(conn):
         "AND option_key IN ('repair_screen','repair_battery');")
     conn.commit()
     set_cfg("IV_REPAIR_VS_REPLACED_MIGRATED", "1")
+
+
+def _migrate_condition_merge_new_sealed_v1(conn):
+    """مالک پروژه خواست «نو» و «پلمپ» یک گزینهٔ واحد بشن (از دید کاربر یکیه) — این
+    مهاجرت دو گزینهٔ قدیمی رو soft-deactivate می‌کنه (نه حذف، تا اگه ادمین قبلاً روشون
+    دستی درصد عوض کرده بود داده گم نشه) و یه گزینهٔ ادغام‌شدهٔ تازه می‌سازه. درصد گزینهٔ
+    تازه = همون درصد «پلمپ» قدیم (بالاترین حالت، چون این گزینه بهترین وضعیت ممکنه)."""
+    from db import get_cfg, set_cfg
+    if get_cfg("IV_CONDITION_MERGE_NEW_SEALED_MIGRATED", "0") == "1":
+        return
+    conn.execute(
+        "UPDATE iv_coefficients SET active=0 WHERE category='condition' "
+        "AND option_key IN ('cond_new','cond_sealed');")
+    row = conn.execute(
+        "SELECT COUNT(*) c FROM iv_coefficients WHERE category='condition' AND option_key='cond_new_sealed';"
+    ).fetchone()
+    if row and row["c"] == 0:
+        conn.execute(
+            "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
+            "VALUES ('condition','cond_new_sealed','نو / پلمپ',8,1);")
+    conn.commit()
+    set_cfg("IV_CONDITION_MERGE_NEW_SEALED_MIGRATED", "1")
+
+
+def _migrate_grade_category_v1(conn):
+    """دستهٔ تازهٔ «grade» (سری اصالت دستگاه: M اصلی/N تعویضی اپل/F رفرش‌شده/P ادیت‌شده/
+    ۳ نمونهٔ تست اپل/۴ پارت نامشخص/۵ سایر) — دقیقاً مثل هر دستهٔ ضریب دیگه، فقط داده،
+    هیچ کد تازه‌ای توی pricing_engine/scoring_engine لازم نداره (قبلاً category-agnostic
+    هستن). گزینه‌های P/3/4 در ویزارد ربات محاسبهٔ قیمت رو کلاً متوقف می‌کنن (بخش bot.py)،
+    پس درصدشون عملاً بی‌اثره؛ همچنان یه مقدار پیش‌فرض دارن که اگه بعداً ادمین این
+    short-circuit رو خواست غیرفعال کنه، رفتار منطقی داشته باشه."""
+    row = conn.execute("SELECT COUNT(*) c FROM iv_coefficients WHERE category='grade';").fetchone()
+    if row and row["c"] == 0:
+        defaults = [
+            ("grade", "grade_m", "M — اصلی", 0, 1),
+            ("grade", "grade_n", "N — تعویضی اپل", -10, 2),
+            ("grade", "grade_f", "F — رفرش‌شده", -25, 3),
+            ("grade", "grade_p", "P — ادیت‌شده / ارتقایافته", 0, 4),
+            ("grade", "grade_3", "۳ — نمونهٔ تست اپل", 0, 5),
+            ("grade", "grade_4", "۴ — پارت نامشخص / بدون گارانتی", 0, 6),
+            ("grade", "grade_5", "۵ — سایر", -15, 7),
+        ]
+        for cat, key, label, pct, order in defaults:
+            conn.execute(
+                "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
+                "VALUES (?,?,?,?,?);", (cat, key, label, pct, order))
+        conn.execute(
+            "INSERT INTO iv_score_weights (category, weight) VALUES ('grade', 10) "
+            "ON CONFLICT(category) DO NOTHING;")
+        conn.commit()
 
 
 # ─── مدل‌ها ──────────────────────────────────────────────────────────────
@@ -1140,6 +1220,36 @@ def create_color(model_id: int, name: str, sort_order: int = 0) -> int:
         conn.close()
 
 
+def get_color(color_id: int) -> dict | None:
+    ensure_schema()
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM iv_colors WHERE id=?;", (color_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_color(color_id: int, **fields) -> None:
+    """ویرایش نام نمایشی رنگ (مثلاً «نور ستاره‌ای» → «سفید» چون بازار ایران به این اسم
+    می‌شناستش — رنگ جدید تعریف نمی‌شه، همون رنگ اصلی فقط اسمش عوض می‌شه) + ترتیب/فعال‌بودن
+    + درصد اثر روی قیمت (`price_percent`)."""
+    ensure_schema()
+    if not fields:
+        return
+    allowed = {"name", "sort_order", "active", "price_percent"}
+    cols = [k for k in fields if k in allowed]
+    if not cols:
+        return
+    conn = _conn()
+    try:
+        conn.execute(f"UPDATE iv_colors SET {', '.join(c+'=?' for c in cols)} WHERE id=?;",
+                     [fields[c] for c in cols] + [color_id])
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def delete_color(color_id: int) -> None:
     """حذف یه رنگ — ردیف‌های قیمتی وابسته NULL می‌شن (عمومی/بدون رنگ مشخص)، نه حذف کامل؛
     مثل delete_part، از دست رفتن قیمت ثبت‌شده به‌خاطر پاک‌کردن یه گزینهٔ کاتالوگ درست نیست."""
@@ -1352,7 +1462,12 @@ def delete_repair_part(part_id: int) -> None:
 # ─── ضرایب ───────────────────────────────────────────────────────────────
 
 COEFFICIENT_CATEGORIES = ["condition", "battery", "repair", "registry", "box", "cosmetic", "cable",
-                           "component", "replaced"]
+                           "component", "replaced", "grade"]
+
+# سه گزینهٔ سری اصالت که محاسبهٔ قیمت رو کلاً متوقف می‌کنن و به‌جاش پیام «توافقی» +
+# دکمهٔ «می‌خوام بفروشم» نشون داده می‌شه (bot.py) — یک‌جا تعریف شده تا ربات و پنل
+# هردو از همین منبع بخونن، نه هاردکد جدا.
+GRADE_STOP_CALC_KEYS = {"grade_p", "grade_3", "grade_4"}
 
 
 def list_coefficients(category: str | None = None, active_only: bool = True) -> list[dict]:
@@ -1612,5 +1727,73 @@ def get_stats() -> dict:
             "avg_fair_price": round(avg_fair) if avg_fair else 0,
             "avg_price_gap_pct": round(avg_gap, 1) if avg_gap else 0,
         }
+    finally:
+        conn.close()
+
+
+# ─── درخواست‌های «می‌خوام بفروشم» ────────────────────────────────────────
+
+def create_sell_request(**fields) -> int:
+    ensure_schema()
+    allowed = {"user_id", "user_name", "phone", "city", "model_id", "model_name",
+               "grade_key", "summary_text", "estimated_price", "status"}
+    cols = [k for k in fields if k in allowed]
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            f"INSERT INTO iv_sell_requests ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)});",
+            [fields[c] for c in cols])
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_sell_requests(status: str | None = None, limit: int = 100) -> list[dict]:
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = "SELECT * FROM iv_sell_requests WHERE 1=1"
+        params = []
+        if status:
+            q += " AND status=?"
+            params.append(status)
+        q += " ORDER BY id DESC LIMIT ?;"
+        params.append(limit)
+        return [dict(r) for r in conn.execute(q, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def get_sell_request(req_id: int) -> dict | None:
+    ensure_schema()
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM iv_sell_requests WHERE id=?;", (req_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_sell_request_status(req_id: int, status: str) -> None:
+    ensure_schema()
+    conn = _conn()
+    try:
+        conn.execute("UPDATE iv_sell_requests SET status=? WHERE id=?;", (status, req_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_sell_requests(status: str | None = None) -> int:
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = "SELECT COUNT(*) c FROM iv_sell_requests WHERE 1=1"
+        params = []
+        if status:
+            q += " AND status=?"
+            params.append(status)
+        return conn.execute(q, params).fetchone()["c"]
     finally:
         conn.close()

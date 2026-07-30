@@ -45,11 +45,28 @@ def price(model_id: int, capacity_id: int, selections: dict[str, str]) -> dict:
 
     contributions = [
         {"label": "نرخ ارز", "pct": round(fx_pct, 2), "amount": _round1000(base_price * fx_pct / 100)},
-        {"label": "دادهٔ بازار StockLand", "pct": round(market_pct, 2), "amount": _round1000(base_price * market_pct / 100)},
+        {"label": "دادهٔ بازار استوک‌لند", "pct": round(market_pct, 2), "amount": _round1000(base_price * market_pct / 100)},
         {"label": "عرضه و تقاضای مدل", "pct": round(demand_pct, 2), "amount": _round1000(base_price * demand_pct / 100)},
     ]
 
     condition_pct_total = 0.0
+    # اثر رنگ روی قیمت — برخلاف بقیهٔ خطوط بالا (شرایط دستگاه)، رنگ یک دستهٔ ضریب سراسری
+    # (iv_coefficients) نیست، چون گزینه‌های رنگ به‌ازای هر مدل فرق دارن (iv_colors، جدول
+    # کاتالوگ مدل، نه یک دستهٔ ثابت مثل battery). به همین دلیل این تنها نقطه‌ایه که مستقیم
+    # از iv_colors.price_percent می‌خونه، نه از coeff_by_key عمومی. مکانیزم قدیمی‌تر
+    # (ردیف قیمت اختصاصی هر رنگ در iv_capacities، از resolve_capacity) دست‌نخورده می‌مونه؛
+    # این فقط یک لایهٔ سادهٔ *اضافی* برای مدل‌هایی‌ست که ادمین می‌خواد به‌جای وارد کردن
+    # قیمت دقیق جدا برای هر رنگ، فقط یک درصد ساده تعریف کنه.
+    color_id = capacity.get("color_id")
+    if color_id:
+        color_row = ivdb.get_color(color_id)
+        if color_row and color_row.get("price_percent"):
+            cp = color_row["price_percent"]
+            condition_pct_total += cp
+            contributions.append({
+                "label": f"رنگ ({color_row['name']})", "category": "color",
+                "pct": cp, "amount": _round1000(base_price * cp / 100),
+            })
     selected_coeffs = {}
     for category, option_key in (selections or {}).items():
         # بعضی دسته‌ها (مثل «component» — کدوم قطعه خرابه) چندانتخابی‌ان: لیست option_key
