@@ -12852,43 +12852,48 @@ async def iphone_series_page(request: Request, flash: str = ""):
 
     series_rows = "".join(f"""
       <div class="flex flex-wrap gap-2 items-center border-b py-1.5 text-sm">
-        <form method="post" action="/admin/iphone/series/{s['id']}/edit" class="flex flex-wrap gap-2 items-center flex-1">
-          <input type="text" name="name" value="{html.escape(s['name'])}" class="border rounded p-1 flex-1 min-w-[140px] text-xs">
-          <input type="number" step="1" name="sort_order" value="{s['sort_order']}" class="border rounded p-1 w-16 text-xs">
-          <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if s['active'] else ""}> فعال</label>
-          <button class="text-indigo-600 text-xs">ذخیره</button>
-        </form>
-        <form method="post" action="/admin/iphone/series/{s['id']}/delete" onsubmit="return confirm('حذف بشه؟ مدل‌های این سری بدون‌سری می‌مونن، حذف نمی‌شن.')">
-          <button class="text-red-500 text-xs">حذف</button>
-        </form>
+        <input type="text" name="name_{s['id']}" value="{html.escape(s['name'])}" class="border rounded p-1 flex-1 min-w-[140px] text-xs">
+        <input type="number" step="1" name="sort_order_{s['id']}" value="{s['sort_order']}" class="border rounded p-1 w-16 text-xs">
+        <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active_{s['id']}" {"checked" if s['active'] else ""}> فعال</label>
+        <button type="submit" form="iv-series-del-{s['id']}" class="text-red-500 text-xs">حذف</button>
       </div>""" for s in series_list)
+    del_forms = "".join(
+        f'<form id="iv-series-del-{s["id"]}" method="post" action="/admin/iphone/series/{s["id"]}/delete" '
+        f'onsubmit="return confirm(\'حذف بشه؟ مدل‌های این سری بدون‌سری می‌مونن، حذف نمی‌شن.\')"></form>'
+        for s in series_list)
 
     assign_rows = "".join(f"""
       <div class="flex items-center gap-2 border-b py-1.5 text-sm">
         <span class="flex-1">{html.escape(m['name'])}</span>
-        <form method="post" action="/admin/iphone/series/assign" class="flex items-center gap-1">
-          <input type="hidden" name="model_id" value="{m['id']}">
-          <select name="series_id" onchange="this.form.submit()" class="border rounded p-1 text-xs">
-            {_iv_series_options(series_list, m.get("series_id"))}
-          </select>
-        </form>
+        <select name="series_{m['id']}" class="border rounded p-1 text-xs">
+          {_iv_series_options(series_list, m.get("series_id"))}
+        </select>
       </div>""" for m in models)
 
     body = f"""
+    <a href="/admin/iphone" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به کارشناسی آیفون</a>
+    <form method="post" action="/admin/iphone/series/bulk-save">
     <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
       <div class="font-medium text-sm mb-2">🗂 سری‌ها/نسل‌ها</div>
       {series_rows or '<div class="text-xs text-gray-400">سری‌ای ثبت نشده.</div>'}
-      <form method="post" action="/admin/iphone/series/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+    </div>
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+      <div class="font-medium text-sm mb-2">تخصیص مدل به سری</div>
+      <input type="text" id="iv-series-search" placeholder="🔍 جست‌وجوی مدل…" class="border rounded-lg p-2 text-xs w-full mb-2">
+      <div id="iv-series-assign-list">{assign_rows}</div>
+    </div>
+    <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium mb-4">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
+
+    <div class="bg-white rounded-xl shadow-sm p-4">
+      <div class="font-medium text-sm mb-2">+ افزودن سری تازه</div>
+      <form method="post" action="/admin/iphone/series/add" class="flex flex-wrap gap-2 items-center text-sm">
         <input type="text" name="name" class="border rounded p-1 flex-1 min-w-[160px] text-xs" placeholder="نام سری، مثلاً iPhone 11" required>
         <input type="number" step="1" name="sort_order" value="0" class="border rounded p-1 w-16 text-xs" placeholder="ترتیب">
         <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن سری</button>
       </form>
     </div>
-    <div class="bg-white rounded-xl shadow-sm p-4">
-      <div class="font-medium text-sm mb-2">تخصیص مدل به سری</div>
-      <input type="text" id="iv-series-search" placeholder="🔍 جست‌وجوی مدل…" class="border rounded-lg p-2 text-xs w-full mb-2">
-      <div id="iv-series-assign-list">{assign_rows}</div>
-    </div>
+    {del_forms}
     <script>
     document.getElementById('iv-series-search').addEventListener('input', function(){{
       var q = this.value.trim().toLowerCase();
@@ -12911,15 +12916,38 @@ async def iphone_series_add(request: Request, name: str = Form(...), sort_order:
     return _redir("/admin/iphone/series")
 
 
-@router.post("/iphone/series/{sid}/edit")
-async def iphone_series_edit(request: Request, sid: int, name: str = Form(...), sort_order: int = Form(0),
-                              active: str | None = Form(None)):
+@router.post("/iphone/series/bulk-save")
+async def iphone_series_bulk_save(request: Request):
+    """ذخیرهٔ یک‌جای همهٔ ردیف‌های سری + تخصیص مدل→سری با یک دکمهٔ واحد پایین صفحه —
+    جایگزین دکمه‌های ذخیرهٔ جداگانهٔ قبلی طبق درخواست صریح مالک پروژه."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    ivdb.update_series(sid, name=name.strip(), sort_order=sort_order, active=1 if active else 0)
-    return _redir("/admin/iphone/series")
+    form = await request.form()
+
+    for s in ivdb.list_series(active_only=False):
+        sid = s["id"]
+        name_key = f"name_{sid}"
+        if name_key not in form:
+            continue
+        name = (form.get(name_key) or "").strip() or s["name"]
+        try:
+            sort_order = int(form.get(f"sort_order_{sid}") or 0)
+        except (TypeError, ValueError):
+            sort_order = s["sort_order"]
+        active = 1 if form.get(f"active_{sid}") else 0
+        ivdb.update_series(sid, name=name, sort_order=sort_order, active=active)
+
+    for m in ivdb.list_models(active_only=False):
+        key = f"series_{m['id']}"
+        if key not in form:
+            continue
+        val = (form.get(key) or "").strip()
+        ivdb.update_model(m["id"], series_id=int(val) if val.isdigit() else None)
+
+    _log(request, "ذخیرهٔ گروهی سری‌ها/تخصیص مدل‌ها", "کارشناسی آیفون", "", admin_info=adm)
+    return _redir(f"/admin/iphone/series?flash={e('✅ تغییرات ذخیره شد')}")
 
 
 @router.post("/iphone/series/{sid}/delete")
@@ -12930,16 +12958,6 @@ async def iphone_series_delete(request: Request, sid: int):
     import iphone_valuation.db as ivdb
     ivdb.delete_series(sid)
     _log(request, "حذف سری آیفون", "کارشناسی آیفون", str(sid), admin_info=adm)
-    return _redir("/admin/iphone/series")
-
-
-@router.post("/iphone/series/assign")
-async def iphone_series_assign(request: Request, model_id: int = Form(...), series_id: str = Form("")):
-    adm = _get_admin(request)
-    guard = _require(adm, "ai_pricing")
-    if guard: return guard
-    import iphone_valuation.db as ivdb
-    ivdb.update_model(model_id, series_id=int(series_id) if series_id else None)
     return _redir("/admin/iphone/series")
 
 
@@ -12959,44 +12977,50 @@ async def iphone_repairs_page(request: Request, flash: str = ""):
     weights = ivdb.list_score_weights()
 
     rows = ""
-    hidden_forms = ""
+    del_forms = ""
     for p in parts:
         comp = comp_by_key.get(p["code"])
         repl = repl_by_key.get(p["code"])
         rows += f"""
         <tr class="border-b {'opacity-40' if not p['active'] else ''}">
-          <td class="px-2 py-2"><input form="iv-rp-{p['id']}" type="text" name="label" value="{html.escape(p['label'])}" class="border rounded p-1 w-40 text-xs"></td>
-          <td class="px-2 py-2"><input form="iv-rp-{p['id']}" type="number" step="0.1" name="defective_percent" value="{comp['percent'] if comp else 0}" class="border rounded p-1 w-20 text-xs"></td>
-          <td class="px-2 py-2"><input form="iv-rp-{p['id']}" type="number" step="0.1" name="replaced_percent" value="{repl['percent'] if repl else 0}" class="border rounded p-1 w-20 text-xs"></td>
-          <td class="px-2 py-2"><label class="text-xs flex items-center gap-1"><input form="iv-rp-{p['id']}" type="checkbox" name="active" {"checked" if p['active'] else ""}> فعال</label></td>
+          <td class="px-2 py-2"><input type="text" name="label_{p['id']}" value="{html.escape(p['label'])}" class="border rounded p-1 w-40 text-xs"></td>
+          <td class="px-2 py-2"><input type="number" step="0.1" name="defective_percent_{p['id']}" value="{comp['percent'] if comp else 0}" class="border rounded p-1 w-20 text-xs"></td>
+          <td class="px-2 py-2"><input type="number" step="0.1" name="replaced_percent_{p['id']}" value="{repl['percent'] if repl else 0}" class="border rounded p-1 w-20 text-xs"></td>
+          <td class="px-2 py-2"><label class="text-xs flex items-center gap-1"><input type="checkbox" name="active_{p['id']}" {"checked" if p['active'] else ""}> فعال</label></td>
           <td class="px-2 py-2 whitespace-nowrap">
-            <button type="submit" form="iv-rp-{p['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">💾 ذخیره</button>
-            <button type="submit" form="iv-rpd-{p['id']}" class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>
+            <button type="submit" form="iv-rpd-{p['id']}" class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded">🗑 حذف</button>
           </td>
         </tr>"""
-        hidden_forms += (
-            f'<form id="iv-rp-{p["id"]}" method="post" action="/admin/iphone/repairs/{p["id"]}/edit"></form>'
+        del_forms += (
             f'<form id="iv-rpd-{p["id"]}" method="post" action="/admin/iphone/repairs/{p["id"]}/delete" '
             f'onsubmit="return confirm(\'این قطعه حذف بشه؟\')"></form>')
 
     comp_w = weights.get("component", 0)
     repl_w = weights.get("replaced", 0)
     body = f"""
+    <a href="/admin/iphone" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به کارشناسی آیفون</a>
+    <form method="post" action="/admin/iphone/repairs/bulk-save">
     <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
       <div class="font-medium text-sm mb-2">⚖️ وزن امتیازدهی</div>
-      <div class="flex flex-wrap gap-4">
-        <form method="post" action="/admin/iphone/weights/save" class="flex items-center gap-1 text-xs">
-          <input type="hidden" name="category" value="component">
-          🩹 قطعات معیوب: <input type="number" step="1" name="weight" value="{comp_w}" class="border rounded p-1 w-14 text-xs">
-          <button class="text-indigo-600">ذخیره</button>
-        </form>
-        <form method="post" action="/admin/iphone/weights/save" class="flex items-center gap-1 text-xs">
-          <input type="hidden" name="category" value="replaced">
-          🔁 قطعات تعویض‌شده: <input type="number" step="1" name="weight" value="{repl_w}" class="border rounded p-1 w-14 text-xs">
-          <button class="text-indigo-600">ذخیره</button>
-        </form>
+      <div class="flex flex-wrap gap-4 text-xs">
+        <div class="flex items-center gap-1">🩹 قطعات معیوب: <input type="number" step="1" name="weight_component" value="{comp_w}" class="border rounded p-1 w-14 text-xs"></div>
+        <div class="flex items-center gap-1">🔁 قطعات تعویض‌شده: <input type="number" step="1" name="weight_replaced" value="{repl_w}" class="border rounded p-1 w-14 text-xs"></div>
       </div>
     </div>
+
+    <div class="card overflow-hidden mb-4">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+            <th class="px-2 py-3">قطعه</th><th class="px-2 py-3">٪ معیوب</th><th class="px-2 py-3">٪ تعویض‌شده</th>
+            <th class="px-2 py-3">فعال</th><th class="px-2 py-3"></th>
+          </tr></thead>
+          <tbody>{rows or '<tr><td colspan="5" class="text-center py-8 text-gray-400">هنوز قطعه‌ای ثبت نشده.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium mb-4">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
 
     <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
       <div class="font-medium text-sm mb-2">📝 افزودن قطعهٔ تازه</div>
@@ -13008,19 +13032,7 @@ async def iphone_repairs_page(request: Request, flash: str = ""):
         <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن</button>
       </form>
     </div>
-
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-right min-w-max">
-          <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-            <th class="px-2 py-3">قطعه</th><th class="px-2 py-3">٪ معیوب</th><th class="px-2 py-3">٪ تعویض‌شده</th>
-            <th class="px-2 py-3">فعال</th><th class="px-2 py-3"></th>
-          </tr></thead>
-          <tbody>{rows or '<tr><td colspan="5" class="text-center py-8 text-gray-400">هنوز قطعه‌ای ثبت نشده.</td></tr>'}</tbody>
-        </table>
-      </div>
-    </div>
-    {hidden_forms}
+    {del_forms}
     <div class="text-xs text-gray-400 mt-2">این لیست منبع دو مرحلهٔ مولتی‌سلکت جدای ویزارد رباته: «قطعات معیوب» (فقط وقتی وضعیت کلی = نیازمند تعمیر) و «قطعات تعویض‌شده» (همیشه پرسیده می‌شه) — هر قطعه یک درصد جدا برای هرکدوم داره.</div>
     """
     return _layout("مدیریت تعمیرات آیفون", body, adm, flash=flash)
@@ -13038,17 +13050,42 @@ async def iphone_repairs_add(request: Request, code: str = Form(...), label: str
     return _redir("/admin/iphone/repairs")
 
 
-@router.post("/iphone/repairs/{pid}/edit")
-async def iphone_repairs_edit(request: Request, pid: int, label: str = Form(...),
-                               defective_percent: float = Form(0), replaced_percent: float = Form(0),
-                               active: str | None = Form(None)):
+@router.post("/iphone/repairs/bulk-save")
+async def iphone_repairs_bulk_save(request: Request):
+    """ذخیرهٔ یک‌جای وزن امتیازدهی + همهٔ ردیف‌های قطعات با یک دکمهٔ واحد پایین صفحه."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    ivdb.update_repair_part(pid, label=label.strip(), defective_percent=defective_percent,
-                             replaced_percent=replaced_percent, active=1 if active else 0)
-    return _redir("/admin/iphone/repairs")
+    form = await request.form()
+
+    for cat, field in (("component", "weight_component"), ("replaced", "weight_replaced")):
+        if field in form:
+            try:
+                ivdb.set_score_weight(cat, float(form.get(field) or 0))
+            except (TypeError, ValueError):
+                pass
+
+    for p in ivdb.list_repair_parts(active_only=False):
+        pid = p["id"]
+        label_key = f"label_{pid}"
+        if label_key not in form:
+            continue
+        label = (form.get(label_key) or "").strip() or p["label"]
+        try:
+            defective_percent = float(form.get(f"defective_percent_{pid}") or 0)
+        except (TypeError, ValueError):
+            defective_percent = 0.0
+        try:
+            replaced_percent = float(form.get(f"replaced_percent_{pid}") or 0)
+        except (TypeError, ValueError):
+            replaced_percent = 0.0
+        active = 1 if form.get(f"active_{pid}") else 0
+        ivdb.update_repair_part(pid, label=label, defective_percent=defective_percent,
+                                 replaced_percent=replaced_percent, active=active)
+
+    _log(request, "ذخیرهٔ گروهی تعمیرات آیفون", "کارشناسی آیفون", "", admin_info=adm)
+    return _redir(f"/admin/iphone/repairs?flash={e('✅ تغییرات ذخیره شد')}")
 
 
 @router.post("/iphone/repairs/{pid}/delete")
@@ -13073,23 +13110,21 @@ async def iphone_colors_page(request: Request, flash: str = ""):
     import iphone_valuation.db as ivdb
     models = ivdb.list_models(active_only=False)
     rows = ""
-    hidden_forms = ""
+    del_forms = ""
     for m in models:
         colors = ivdb.list_colors(m["id"], active_only=False)
         for c in colors:
             rows += f"""
             <tr class="border-b hover:bg-gray-50 {'opacity-40' if not c['active'] else ''}" data-model="{e(m['name'].lower())}">
               <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(m['name'])}</td>
-              <td class="px-2 py-2"><input form="iv-col-{c['id']}" type="text" name="name" value="{html.escape(c['name'])}" class="border rounded p-1 w-32 text-xs"></td>
-              <td class="px-2 py-2"><input form="iv-col-{c['id']}" type="number" step="0.1" name="price_percent" value="{c['price_percent']}" class="border rounded p-1 w-20 text-xs"></td>
-              <td class="px-2 py-2"><label class="text-xs flex items-center gap-1"><input form="iv-col-{c['id']}" type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label></td>
+              <td class="px-2 py-2"><input type="text" name="name_{c['id']}" value="{html.escape(c['name'])}" class="border rounded p-1 w-32 text-xs"></td>
+              <td class="px-2 py-2"><input type="number" step="0.1" name="price_percent_{c['id']}" value="{c['price_percent']}" class="border rounded p-1 w-20 text-xs"></td>
+              <td class="px-2 py-2"><label class="text-xs flex items-center gap-1"><input type="checkbox" name="active_{c['id']}" {"checked" if c['active'] else ""}> فعال</label></td>
               <td class="px-2 py-2 whitespace-nowrap">
-                <button type="submit" form="iv-col-{c['id']}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">💾 ذخیره</button>
-                <button type="submit" form="iv-cold-{c['id']}" class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>
+                <button type="submit" form="iv-cold-{c['id']}" class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded">🗑 حذف</button>
               </td>
             </tr>"""
-            hidden_forms += (
-                f'<form id="iv-col-{c["id"]}" method="post" action="/admin/iphone/colors/{c["id"]}/edit"></form>'
+            del_forms += (
                 f'<form id="iv-cold-{c["id"]}" method="post" action="/admin/iphone/colors/{c["id"]}/delete" '
                 f'onsubmit="return confirm(\'این رنگ حذف بشه؟\')"></form>')
 
@@ -13099,7 +13134,8 @@ async def iphone_colors_page(request: Request, flash: str = ""):
     <div class="bg-white rounded-xl shadow-sm p-3 mb-3">
       <input type="text" id="iv-color-search" placeholder="🔍 جست‌وجو بر اساس نام مدل…" class="border rounded-lg p-2 text-sm w-full">
     </div>
-    <div class="card overflow-hidden">
+    <form method="post" action="/admin/iphone/colors/bulk-save">
+    <div class="card overflow-hidden mb-4">
       <div class="overflow-x-auto">
         <table class="w-full text-right min-w-max" id="iv-color-table">
           <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
@@ -13110,7 +13146,9 @@ async def iphone_colors_page(request: Request, flash: str = ""):
         </table>
       </div>
     </div>
-    {hidden_forms}
+    <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
+    {del_forms}
     <div class="text-xs text-gray-400 mt-2">این درصد جدا از قیمت اختصاصی هر رنگ (اگه برای مدلی ثبت شده) اضافه می‌شه — اگه برای این مدل قیمت دقیق جداگانه به‌ازای رنگ ثبت کردی، این درصد رو صفر نگه دار تا دوبار حساب نشه.</div>
     <script>
     document.getElementById('iv-color-search').addEventListener('input', function(){{
@@ -13124,16 +13162,26 @@ async def iphone_colors_page(request: Request, flash: str = ""):
     return _layout("مدیریت رنگ‌ها", body, adm, flash=flash)
 
 
-@router.post("/iphone/colors/{cid}/edit")
-async def iphone_colors_edit(request: Request, cid: int, name: str = Form(...),
-                              price_percent: str = Form("0"), active: str | None = Form(None)):
+@router.post("/iphone/colors/bulk-save")
+async def iphone_colors_bulk_save(request: Request):
+    """ذخیرهٔ یک‌جای همهٔ ردیف‌های رنگ (هر مدل) با یک دکمهٔ واحد پایین صفحه."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    ivdb.update_color(cid, name=name.strip(), price_percent=_iv_parse_num(price_percent, cast=float),
-                       active=1 if active else 0)
-    return _redir(f"/admin/iphone/colors?flash={e('✅ رنگ ذخیره شد')}")
+    form = await request.form()
+    for m in ivdb.list_models(active_only=False):
+        for c in ivdb.list_colors(m["id"], active_only=False):
+            cid = c["id"]
+            name_key = f"name_{cid}"
+            if name_key not in form:
+                continue
+            name = (form.get(name_key) or "").strip() or c["name"]
+            price_percent = _iv_parse_num(form.get(f"price_percent_{cid}") or "0", cast=float)
+            active = 1 if form.get(f"active_{cid}") else 0
+            ivdb.update_color(cid, name=name, price_percent=price_percent, active=active)
+    _log(request, "ذخیرهٔ گروهی رنگ‌های آیفون", "کارشناسی آیفون", "", admin_info=adm)
+    return _redir(f"/admin/iphone/colors?flash={e('✅ تغییرات ذخیره شد')}")
 
 
 @router.post("/iphone/colors/{cid}/delete")
@@ -13161,6 +13209,8 @@ async def iphone_coefficients_page(request: Request, flash: str = ""):
         by_cat.setdefault(c["category"], []).append(c)
 
     sections = ""
+    add_hidden_forms = ""
+    del_hidden_forms = ""
     for cat in ivdb.COEFFICIENT_CATEGORIES:
         if cat in ("component", "replaced"):
             # این دو دسته (قطعات معیوب/تعویض‌شده) یک صفحهٔ اختصاصی مشترک دارن
@@ -13168,52 +13218,54 @@ async def iphone_coefficients_page(request: Request, flash: str = ""):
             continue
         rows = "".join(f"""
           <div class="flex flex-wrap gap-2 items-center border-b py-1.5 text-sm">
-            <form method="post" action="/admin/iphone/coefficients/{c['id']}/edit" class="flex flex-wrap gap-2 items-center flex-1">
-              <span class="flex-1 min-w-[140px] {'text-gray-400 line-through' if not c['active'] else ''}">{html.escape(c['option_label'])}</span>
-              <input type="number" step="0.1" name="percent" value="{c['percent']}" class="border rounded p-1 w-20 text-xs">
-              <span class="text-xs text-gray-400">٪</span>
-              <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if c['active'] else ""}> فعال</label>
-              <button class="text-indigo-600 text-xs">ذخیره</button>
-            </form>
-            <form method="post" action="/admin/iphone/coefficients/{c['id']}/delete" onsubmit="return confirm('حذف بشه؟')">
-              <button class="text-red-500 text-xs">حذف</button>
-            </form>
+            <span class="flex-1 min-w-[140px] {'text-gray-400 line-through' if not c['active'] else ''}">{html.escape(c['option_label'])}</span>
+            <input type="number" step="0.1" name="percent_{c['id']}" value="{c['percent']}" class="border rounded p-1 w-20 text-xs">
+            <span class="text-xs text-gray-400">٪</span>
+            <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active_{c['id']}" {"checked" if c['active'] else ""}> فعال</label>
+            <button type="submit" form="iv-coef-del-{c['id']}" class="text-red-500 text-xs">حذف</button>
           </div>""" for c in by_cat.get(cat, []))
+        for c in by_cat.get(cat, []):
+            del_hidden_forms += (
+                f'<form id="iv-coef-del-{c["id"]}" method="post" '
+                f'action="/admin/iphone/coefficients/{c["id"]}/delete" onsubmit="return confirm(\'حذف بشه؟\')"></form>')
         weight = weights.get(cat, 0)
         sections += f"""
         <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
           <div class="flex items-center justify-between mb-2">
             <div class="font-medium text-sm">{_IV_CATEGORY_LABELS.get(cat, cat)}</div>
-            <form method="post" action="/admin/iphone/weights/save" class="flex items-center gap-1 text-xs text-gray-400">
-              <input type="hidden" name="category" value="{cat}">
-              وزن امتیاز: <input type="number" step="1" name="weight" value="{weight}" class="border rounded p-1 w-14 text-xs">
-              <button class="text-indigo-600">ذخیره</button>
-            </form>
+            <div class="flex items-center gap-1 text-xs text-gray-400">
+              وزن امتیاز: <input type="number" step="1" name="weight_{cat}" value="{weight}" class="border rounded p-1 w-14 text-xs">
+            </div>
           </div>
           {rows or '<div class="text-xs text-gray-400">گزینه‌ای ثبت نشده.</div>'}
-          <form method="post" action="/admin/iphone/coefficients/add" class="flex flex-wrap gap-2 items-center pt-2 text-sm">
-            <input type="hidden" name="category" value="{cat}">
-            <input type="text" name="option_key" class="border rounded p-1 w-32 text-xs" placeholder="کلید یکتا مثلاً opt_1" required>
-            <input type="text" name="option_label" class="border rounded p-1 flex-1 min-w-[160px] text-xs" placeholder="برچسب فارسی" required>
-            <input type="number" step="0.1" name="percent" class="border rounded p-1 w-20 text-xs" placeholder="درصد" required>
-            <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن گزینه</button>
-          </form>
+          <div class="flex flex-wrap gap-2 items-center pt-2 text-sm">
+            <input type="hidden" name="category" value="{cat}" form="iv-coef-add-{cat}">
+            <input type="text" name="option_key" form="iv-coef-add-{cat}" class="border rounded p-1 w-32 text-xs" placeholder="کلید یکتا مثلاً opt_1" required>
+            <input type="text" name="option_label" form="iv-coef-add-{cat}" class="border rounded p-1 flex-1 min-w-[160px] text-xs" placeholder="برچسب فارسی" required>
+            <input type="number" step="0.1" name="percent" form="iv-coef-add-{cat}" class="border rounded p-1 w-20 text-xs" placeholder="درصد" required>
+            <button type="submit" form="iv-coef-add-{cat}" class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن گزینه</button>
+          </div>
         </div>"""
+        add_hidden_forms += f'<form id="iv-coef-add-{cat}" method="post" action="/admin/iphone/coefficients/add"></form>'
 
     feat_weight = weights.get("features", 0)
     body = f"""
+    <a href="/admin/iphone" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به کارشناسی آیفون</a>
+    <form method="post" action="/admin/iphone/coefficients/bulk-save">
     <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
       <div class="flex items-center justify-between">
         <div class="font-medium text-sm">تست امکانات دستگاه (سؤال کوتاه ربات)</div>
-        <form method="post" action="/admin/iphone/weights/save" class="flex items-center gap-1 text-xs text-gray-400">
-          <input type="hidden" name="category" value="features">
-          وزن امتیاز: <input type="number" step="1" name="weight" value="{feat_weight}" class="border rounded p-1 w-14 text-xs">
-          <button class="text-indigo-600">ذخیره</button>
-        </form>
+        <div class="flex items-center gap-1 text-xs text-gray-400">
+          وزن امتیاز: <input type="number" step="1" name="weight_features" value="{feat_weight}" class="border rounded p-1 w-14 text-xs">
+        </div>
       </div>
       <div class="text-xs text-gray-400 mt-1">اگه کاربر بگه یکی از امکانات (Face ID، دوربین، شارژ بی‌سیم و ...) مشکل داره، نصف این وزن از امتیاز کم می‌شه.</div>
     </div>
-    {sections}"""
+    {sections}
+    <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium mb-4">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
+    {add_hidden_forms}
+    {del_hidden_forms}"""
     return _layout("ضرایب قیمت و امتیاز آیفون", body, adm, flash=flash)
 
 
@@ -13229,15 +13281,38 @@ async def iphone_coefficients_add(request: Request, category: str = Form(...), o
     return _redir("/admin/iphone/coefficients")
 
 
-@router.post("/iphone/coefficients/{cid}/edit")
-async def iphone_coefficients_edit(request: Request, cid: int, percent: float = Form(...),
-                                    active: str | None = Form(None)):
+@router.post("/iphone/coefficients/bulk-save")
+async def iphone_coefficients_bulk_save(request: Request):
+    """ذخیرهٔ یک‌جای وزن‌های امتیازدهی + همهٔ ردیف‌های ضریب همهٔ دسته‌ها با یک دکمهٔ
+    واحد پایین صفحه."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    ivdb.update_coefficient(cid, percent=percent, active=1 if active else 0)
-    return _redir("/admin/iphone/coefficients")
+    form = await request.form()
+
+    for cat in list(ivdb.COEFFICIENT_CATEGORIES) + ["features"]:
+        field = f"weight_{cat}"
+        if field in form:
+            try:
+                ivdb.set_score_weight(cat, float(form.get(field) or 0))
+            except (TypeError, ValueError):
+                pass
+
+    for c in ivdb.list_coefficients(active_only=False):
+        cid = c["id"]
+        percent_key = f"percent_{cid}"
+        if percent_key not in form:
+            continue
+        try:
+            percent = float(form.get(percent_key) or 0)
+        except (TypeError, ValueError):
+            percent = c["percent"]
+        active = 1 if form.get(f"active_{cid}") else 0
+        ivdb.update_coefficient(cid, percent=percent, active=active)
+
+    _log(request, "ذخیرهٔ گروهی ضرایب آیفون", "کارشناسی آیفون", "", admin_info=adm)
+    return _redir(f"/admin/iphone/coefficients?flash={e('✅ تغییرات ذخیره شد')}")
 
 
 @router.post("/iphone/coefficients/{cid}/delete")
@@ -13248,16 +13323,6 @@ async def iphone_coefficients_delete(request: Request, cid: int):
     import iphone_valuation.db as ivdb
     ivdb.delete_coefficient(cid)
     _log(request, "حذف ضریب آیفون", "کارشناسی آیفون", str(cid), admin_info=adm)
-    return _redir("/admin/iphone/coefficients")
-
-
-@router.post("/iphone/weights/save")
-async def iphone_weights_save(request: Request, category: str = Form(...), weight: float = Form(...)):
-    adm = _get_admin(request)
-    guard = _require(adm, "ai_pricing")
-    if guard: return guard
-    import iphone_valuation.db as ivdb
-    ivdb.set_score_weight(category, weight)
     return _redir("/admin/iphone/coefficients")
 
 
@@ -13277,24 +13342,28 @@ async def iphone_fx_page(request: Request, flash: str = ""):
 
     src_rows = "".join(f"""
       <div class="border-b py-2">
-        <form method="post" action="/admin/iphone/fx/{s['id']}/edit" class="flex flex-wrap gap-2 items-center text-sm">
-          <input type="text" name="name" value="{e(s['name'])}" class="border rounded p-1 w-32 text-xs">
-          <input type="text" name="url" value="{e(s['url'])}" class="border rounded p-1 flex-1 min-w-[220px] text-xs" dir="ltr">
-          <input type="text" name="json_path" value="{e(s['json_path'])}" class="border rounded p-1 w-28 text-xs" dir="ltr" placeholder="usd.sell">
-          <input type="number" name="priority" value="{s['priority']}" class="border rounded p-1 w-14 text-xs">
-          <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active" {"checked" if s['active'] else ""}> فعال</label>
-          <button class="text-indigo-600 text-xs">ذخیره</button>
-        </form>
+        <div class="flex flex-wrap gap-2 items-center text-sm">
+          <input type="text" name="name_{s['id']}" value="{e(s['name'])}" class="border rounded p-1 w-32 text-xs">
+          <input type="text" name="url_{s['id']}" value="{e(s['url'])}" class="border rounded p-1 flex-1 min-w-[220px] text-xs" dir="ltr">
+          <input type="text" name="json_path_{s['id']}" value="{e(s['json_path'])}" class="border rounded p-1 w-28 text-xs" dir="ltr" placeholder="usd.sell">
+          <input type="number" name="priority_{s['id']}" value="{s['priority']}" class="border rounded p-1 w-14 text-xs">
+          <label class="text-xs flex items-center gap-1"><input type="checkbox" name="active_{s['id']}" {"checked" if s['active'] else ""}> فعال</label>
+        </div>
         <div class="text-xs text-gray-400 mt-1 flex items-center gap-3 flex-wrap">
           <span>آخرین مقدار: {_iv_num(s['last_value'])}</span>
           <span>آخرین فچ: {fa_date(s['last_fetched_at'], with_time=True) if s['last_fetched_at'] else '—'}</span>
           {f'<span class="text-red-500">خطا: {html.escape(s["last_error"])}</span>' if s['last_error'] else ''}
-          <form method="post" action="/admin/iphone/fx/{s['id']}/test"><button class="text-indigo-600">تست فچ</button></form>
-          <form method="post" action="/admin/iphone/fx/{s['id']}/delete" onsubmit="return confirm('حذف بشه؟')"><button class="text-red-500">حذف</button></form>
+          <button type="submit" form="iv-fx-test-{s['id']}" class="text-indigo-600">تست فچ</button>
+          <button type="submit" form="iv-fx-del-{s['id']}" class="text-red-500">حذف</button>
         </div>
       </div>""" for s in sources) or '<div class="text-xs text-gray-400 py-2">هنوز منبعی ثبت نشده.</div>'
+    test_del_forms = "".join(
+        f'<form id="iv-fx-test-{s["id"]}" method="post" action="/admin/iphone/fx/{s["id"]}/test"></form>'
+        f'<form id="iv-fx-del-{s["id"]}" method="post" action="/admin/iphone/fx/{s["id"]}/delete" '
+        f'onsubmit="return confirm(\'حذف بشه؟\')"></form>' for s in sources)
 
     body = f"""
+    <a href="/admin/iphone" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به کارشناسی آیفون</a>
     <div class="bg-white rounded-xl shadow-sm p-4 mb-4 max-w-2xl">
       <div class="text-sm font-medium mb-2">تنظیمات نرخ ارز</div>
       <form method="post" action="/admin/iphone/fx/settings" class="space-y-2 text-sm">
@@ -13332,10 +13401,14 @@ async def iphone_fx_page(request: Request, flash: str = ""):
       <div class="text-xs text-gray-400 mt-2">مسیر فیلد یعنی کجای پاسخ JSON منبع، عدد نرخ رو نگه داشته — مثلاً اگه پاسخ شبیه usd → sell باشه، مسیر را به‌صورت usd.sell بنویس.</div>
     </div>
 
-    <div class="bg-white rounded-xl shadow-sm p-4 max-w-2xl">
+    <form method="post" action="/admin/iphone/fx/bulk-save">
+    <div class="bg-white rounded-xl shadow-sm p-4 max-w-2xl mb-4">
       <div class="text-sm font-medium mb-2">منابع ثبت‌شده</div>
       {src_rows}
-    </div>"""
+    </div>
+    <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium max-w-2xl">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
+    {test_del_forms}"""
     return _layout("نرخ ارز کارشناسی آیفون", body, adm, flash=flash)
 
 
@@ -13366,17 +13439,30 @@ async def iphone_fx_add(request: Request, name: str = Form(...), url: str = Form
     return _redir("/admin/iphone/fx")
 
 
-@router.post("/iphone/fx/{sid}/edit")
-async def iphone_fx_edit(request: Request, sid: int, name: str = Form(...), url: str = Form(...),
-                          json_path: str = Form("price"), priority: int = Form(1),
-                          active: str | None = Form(None)):
+@router.post("/iphone/fx/bulk-save")
+async def iphone_fx_bulk_save(request: Request):
+    """ذخیرهٔ یک‌جای همهٔ ردیف‌های منابع نرخ ارز با یک دکمهٔ واحد پایین لیست."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
-    ivdb.update_fx_source(sid, name=name, url=url, json_path=json_path or "price", priority=priority,
-                           active=1 if active else 0)
-    return _redir("/admin/iphone/fx")
+    form = await request.form()
+    for s in ivdb.list_fx_sources():
+        sid = s["id"]
+        name_key = f"name_{sid}"
+        if name_key not in form:
+            continue
+        name = (form.get(name_key) or "").strip() or s["name"]
+        url = (form.get(f"url_{sid}") or "").strip() or s["url"]
+        json_path = (form.get(f"json_path_{sid}") or "").strip() or "price"
+        try:
+            priority = int(form.get(f"priority_{sid}") or s["priority"])
+        except (TypeError, ValueError):
+            priority = s["priority"]
+        active = 1 if form.get(f"active_{sid}") else 0
+        ivdb.update_fx_source(sid, name=name, url=url, json_path=json_path, priority=priority, active=active)
+    _log(request, "ذخیرهٔ گروهی منابع نرخ ارز", "کارشناسی آیفون", "", admin_info=adm)
+    return _redir(f"/admin/iphone/fx?flash={e('✅ تغییرات ذخیره شد')}")
 
 
 @router.post("/iphone/fx/{sid}/delete")
@@ -13422,14 +13508,15 @@ async def iphone_ai_page(request: Request, flash: str = ""):
 
     enabled = get_cfg("IV_AI_ENABLED", "0") == "1"
     provider = get_cfg("IV_AI_PROVIDER", "claude") or "claude"
-    model_name = get_cfg("IV_AI_MODEL", "") or "claude-opus-5"
+    model_name = get_cfg("IV_AI_MODEL", "")
     max_adjust = get_cfg("IV_AI_MAX_ADJUST_PCT", "5") or "5"
     min_confidence = get_cfg("IV_AI_MIN_CONFIDENCE", "60") or "60"
     has_key = bool(get_cfg("IV_AI_API_KEY_ENC", ""))
     crypto_ready = ai_crypto.crypto_available()
 
+    from iphone_valuation.ai_providers import PROVIDER_LABELS
     provider_opts = "".join(
-        f'<option value="{e(p)}" {"selected" if p == provider else ""}>{e(p.capitalize())}</option>'
+        f'<option value="{e(p)}" {"selected" if p == provider else ""}>{e(PROVIDER_LABELS.get(p, p))}</option>'
         for p in AI_PROVIDERS.keys())
 
     warn_banner = "" if crypto_ready else """
@@ -13475,7 +13562,7 @@ async def iphone_ai_page(request: Request, flash: str = ""):
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs text-gray-400 w-40">مدل</span>
-          <input type="text" name="model_name" value="{e(model_name)}" dir="ltr" class="border rounded p-1.5 text-xs w-52">
+          <input type="text" name="model_name" value="{e(model_name)}" dir="ltr" class="border rounded p-1.5 text-xs w-52" placeholder="خالی = پیش‌فرض همون provider">
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs text-gray-400 w-40">حداکثر بازهٔ مجاز تعدیل قیمت</span>
@@ -13540,7 +13627,7 @@ async def iphone_ai_settings(request: Request, provider: str = Form("claude"), m
     from db import set_cfg
     from iphone_valuation.ai_providers import AI_PROVIDERS
     set_cfg("IV_AI_PROVIDER", provider if provider in AI_PROVIDERS else "claude")
-    set_cfg("IV_AI_MODEL", (model_name or "").strip() or "claude-opus-5")
+    set_cfg("IV_AI_MODEL", (model_name or "").strip())
     try:
         max_adjust = abs(float(max_adjust_pct))
     except (TypeError, ValueError):
@@ -13603,6 +13690,7 @@ async def iphone_history_page(request: Request, flash: str = ""):
       </tr>""" for r in items) or '<tr><td colspan="6" class="p-6 text-center text-gray-400 text-sm">هنوز کارشناسی‌ای ثبت نشده.</td></tr>'
 
     body = f"""
+    <a href="/admin/iphone" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به کارشناسی آیفون</a>
     <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
       <div class="px-4 py-3 border-b bg-gray-50"><h2 class="font-bold text-gray-700 text-sm">🕓 تاریخچهٔ کارشناسی‌ها ({len(items)})</h2></div>
       <table class="w-full text-right">
