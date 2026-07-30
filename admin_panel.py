@@ -12352,10 +12352,13 @@ async def iphone_toggle(request: Request):
 
 
 @router.get("/iphone/prices", response_class=HTMLResponse)
-async def iphone_prices_page(request: Request, flash: str = ""):
+async def iphone_prices_page(request: Request, flash: str = "", edit: str = ""):
     """صفحهٔ مستقل و ساده فقط برای ثبت/ویرایش/حذف قیمت — یک فرم واحد با دراپ‌داون‌های
-    آبشاری (مدل → ظرفیت → رنگ اگه لازم بود → پارت اگه لازم بود) بالای صفحه، و لیست تخت همهٔ
-    قیمت‌های ثبت‌شده (شبیه لیست تیکت‌ها) پایینش — هر ردیف یعنی یک رکورد قیمت مستقل."""
+    آبشاری (مدل → ظرفیت → رنگ/پارت/سری اصالت چند‌انتخابی) بالای صفحه، و لیست تخت همهٔ
+    قیمت‌های ثبت‌شده (شبیه لیست تیکت‌ها) پایینش — هر ردیف یعنی یک رکورد قیمت مستقل.
+    ادیت جدای صفحه نداره — طبق درخواست صریح مالک پروژه، زدن «✏️ ادیت» همین فرم بالا رو
+    با تمام تنظیمات اون ردیف (مدل/ظرفیت/رنگ/پارت/سری اصالت/قیمت) از پیش پر می‌کنه، دقیقاً
+    مثل زمان تعریف اولیه — با همون قابلیت چند‌انتخابی."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
@@ -12368,11 +12371,22 @@ async def iphone_prices_page(request: Request, flash: str = ""):
     grades = [g for g in ivdb.list_coefficients(category="grade", active_only=True)
               if g["option_key"] not in ivdb.GRADE_STOP_CALC_KEYS]
 
+    edit_cap = ivdb.get_capacity(int(edit)) if edit.isdigit() else None
+
     model_data = {}
     for m in models:
         storages = ivdb.list_storages(m["id"], active_only=True)
         colors = ivdb.list_colors(model_id=m["id"], active_only=True)
         part_relevant = bool((m.get("dual_sim_parts") or "").strip())
+        # ترکیب‌های (ظرفیت+پارت+رنگ+سری اصالت) که از قبل برای این مدل ثبت شدن — سمت کلاینت
+        # برای غیرفعال/خط‌خورده کردن چک‌باکسی که انتخابش دقیقاً یه ترکیب تکراری می‌سازه
+        # استفاده می‌شه (ردیفی که خودِ ادمین الان داره ادیت می‌کنه از قبل تیک‌خورده می‌مونه،
+        # پس این منطق مزاحمش نمی‌شه — چون چک‌باکس‌های تیک‌خورده هیچ‌وقت غیرفعال نمی‌شن).
+        existing_combos = [
+            {"storage_id": c["storage_id"], "part_id": c["part_id"],
+             "color_id": c["color_id"], "grade_id": c["grade_id"]}
+            for c in ivdb.list_capacities(model_id=m["id"], active_only=True)
+        ]
         model_data[str(m["id"])] = {
             # colors/parts/grades همیشه کامل می‌رن (نه فقط وقتی toggle روشنه) — چون خودِ
             # toggle هم همینجاست و اگه ادمین روشنش کنه، دراپ‌داون باید بی‌نیاز از رفرش صفحه پر بشه.
@@ -12387,6 +12401,7 @@ async def iphone_prices_page(request: Request, flash: str = ""):
             # capacity_pricing برخلاف سه توگل بالا پیش‌فرضش روشنه (۱) — اکثر مدل‌ها واقعاً
             # با ظرفیت قیمت‌شون فرق می‌کنه، بی‌اثر بودنش استثناست نه قاعده.
             "capacity_pricing": bool(m.get("capacity_pricing", 1)),
+            "existing_combos": existing_combos,
         }
 
     # مدل‌ها گروه‌بندی‌شده بر اساس سری/نسل (قدیمی‌ترین تا جدیدترین) — همون ترتیبی که
@@ -12412,9 +12427,13 @@ async def iphone_prices_page(request: Request, flash: str = ""):
         model_opts += f'<optgroup label="بدون سری">{opts}</optgroup>'
 
     add_form = f"""
-    <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4" id="iv-p-editform">
       <div class="text-sm font-medium mb-3">📝 ثبت قیمت تازه</div>
+      <div id="iv-p-editbanner" class="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg px-3 py-2 mb-3" style="display:none">
+        ✏️ در حال ویرایش یک ردیف قیمت ثبت‌شده — <a href="/admin/iphone/prices" class="underline">لغو ویرایش</a>
+      </div>
       <form method="post" action="/admin/iphone/prices/upsert" class="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+        <input type="hidden" name="edit_cap_id" id="iv-p-editcapid" value="">
         <div class="flex flex-col gap-0.5 col-span-2 sm:col-span-1">
           <span class="text-[9px] text-gray-400">مدل</span>
           <select name="model_id" id="iv-p-model" class="border rounded p-1.5 text-xs" required>
@@ -12436,18 +12455,17 @@ async def iphone_prices_page(request: Request, flash: str = ""):
           <span class="text-[9px] text-gray-400">سری اصالت (چند انتخابی — خالی=همهٔ سری‌ها، یک قیمت مشترک)</span>
           <div id="iv-p-grade-list" class="flex flex-wrap gap-1 border rounded p-1.5 text-xs max-h-20 overflow-y-auto"></div>
         </div>
-        <div class="flex flex-col gap-0.5" id="iv-p-part-wrap" style="display:none">
-          <span class="text-[9px] text-gray-400">پارت</span>
-          <select name="part_id" id="iv-p-part" class="border rounded p-1.5 text-xs">
-            <option value="">— همهٔ پارت‌ها —</option>
-          </select>
+        <div class="flex flex-col gap-0.5 col-span-2 sm:col-span-1" id="iv-p-part-wrap" style="display:none">
+          <span class="text-[9px] text-gray-400">پارت (چند انتخابی — خالی=همهٔ پارت‌ها، یک قیمت مشترک)</span>
+          <div id="iv-p-part-list" class="flex flex-wrap gap-1 border rounded p-1.5 text-xs max-h-20 overflow-y-auto"></div>
         </div>
         <input type="text" inputmode="numeric" dir="ltr" name="base_price" class="border rounded p-1.5 text-xs" placeholder="قیمت پایه" required>
         <input type="text" inputmode="numeric" dir="ltr" name="buy_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت خرید" required>
         <input type="text" inputmode="numeric" dir="ltr" name="sell_price_ref" class="border rounded p-1.5 text-xs" placeholder="قیمت فروش" required>
         <input type="text" inputmode="numeric" dir="ltr" name="fx_ref_rate" class="border rounded p-1.5 text-xs" placeholder="نرخ ارز مرجع (خالی=فعلی)">
-        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs">ثبت قیمت</button>
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs">💾 ذخیره</button>
       </form>
+      <p class="text-[10px] text-gray-400 mt-2">چک‌باکس‌های خاکستری/خط‌خورده یعنی این ترکیب دقیق قبلاً برای همین ظرفیت ثبت شده — برای ویرایشش از لیست پایین «✏️ ادیت» بزن.</p>
       <div class="flex flex-wrap gap-3 mt-4 pt-4 border-t" id="iv-p-toggles-row" style="display:none">
         <div class="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2 flex-1 min-w-[200px]" id="iv-p-colorpricing-wrap">
           <span class="text-xs text-gray-600 flex-1">🎨 اثر رنگ روی قیمت این مدل</span>
@@ -12493,6 +12511,12 @@ async def iphone_prices_page(request: Request, flash: str = ""):
     </div>
     <script>
     var IV_MODEL_DATA = {json.dumps(model_data, ensure_ascii=False)};
+    var IV_EDIT_CAP = {json.dumps({
+        "id": edit_cap["id"], "model_id": edit_cap["model_id"], "storage_id": edit_cap.get("storage_id"),
+        "color_id": edit_cap.get("color_id"), "part_id": edit_cap.get("part_id"), "grade_id": edit_cap.get("grade_id"),
+        "base_price": edit_cap["base_price"], "buy_price_ref": edit_cap["buy_price_ref"],
+        "sell_price_ref": edit_cap["sell_price_ref"],
+    }, ensure_ascii=False) if edit_cap else "null"};
     (function(){{
       var modelSel = document.getElementById('iv-p-model');
       var storWrap = document.getElementById('iv-p-storage-wrap');
@@ -12502,7 +12526,7 @@ async def iphone_prices_page(request: Request, flash: str = ""):
       var gradeWrap = document.getElementById('iv-p-grade-wrap');
       var gradeList = document.getElementById('iv-p-grade-list');
       var partWrap = document.getElementById('iv-p-part-wrap');
-      var partSel = document.getElementById('iv-p-part');
+      var partList = document.getElementById('iv-p-part-list');
       var togglesRow = document.getElementById('iv-p-toggles-row');
       var cpWrap = document.getElementById('iv-p-colorpricing-wrap');
       var cpCb = document.getElementById('iv-p-colorpricing-cb');
@@ -12535,10 +12559,54 @@ async def iphone_prices_page(request: Request, flash: str = ""):
         lbl.appendChild(document.createTextNode(label));
         container.appendChild(lbl);
       }}
+      function comboKey(s, p, c, g){{
+        return [s===null?'':s, p===null?'':p, c===null?'':c, g===null?'':g].join('|');
+      }}
+      function firstChecked(container){{
+        var cb = container.querySelector('input[type=checkbox]:checked');
+        return cb ? parseInt(cb.value, 10) : null;
+      }}
+      // ترکیب‌های از قبل ثبت‌شده رو نشون می‌ده — برای هر چک‌باکس، ترکیب کاندید رو با
+      // *اولین* گزینهٔ تیک‌خوردهٔ دو دستهٔ دیگه می‌سازه (نه کارتزین کامل — برای حالت رایج
+      // «یه پارت/سری ثابت + چند رنگ متغیر» دقیقه، برای موارد خیلی چندبعدی فقط یه راهنماست،
+      // بلاک واقعی سمت سرور اتفاق می‌افته). چک‌باکس‌های از قبل تیک‌خورده (مثلاً موقع ادیت)
+      // هیچ‌وقت غیرفعال نمی‌شن — کاربر همیشه می‌تونه انتخاب فعلیش رو تغییر بده.
+      function recomputeDuplicates(){{
+        var d = IV_MODEL_DATA[modelSel.value];
+        if(!d) return;
+        var existingSet = {{}};
+        (d.existing_combos || []).forEach(function(row){{
+          existingSet[comboKey(row.storage_id, row.part_id, row.color_id, row.grade_id)] = true;
+        }});
+        var curStorage = (d.capacity_pricing && storSel.value) ? parseInt(storSel.value, 10) : null;
+        function markDim(container, dim){{
+          if(!container) return;
+          container.querySelectorAll('label').forEach(function(lbl){{
+            var cb = lbl.querySelector('input');
+            var val = parseInt(cb.value, 10);
+            var p = dim === 'part' ? val : firstChecked(partList);
+            var c = dim === 'color' ? val : firstChecked(colorList);
+            var g = dim === 'grade' ? val : firstChecked(gradeList);
+            var dup = !!existingSet[comboKey(curStorage, p, c, g)];
+            if(dup && !cb.checked){{
+              cb.disabled = true;
+              lbl.classList.add('opacity-40', 'line-through');
+              lbl.title = 'قبلاً برای این ترکیب ثبت شده';
+            }} else {{
+              cb.disabled = false;
+              lbl.classList.remove('opacity-40', 'line-through');
+              lbl.title = '';
+            }}
+          }});
+        }}
+        markDim(colorList, 'color');
+        markDim(partList, 'part');
+        markDim(gradeList, 'grade');
+      }}
       modelSel.addEventListener('change', function(){{
         var d = IV_MODEL_DATA[modelSel.value];
         storSel.innerHTML = '';
-        partSel.innerHTML = '<option value="">— همهٔ پارت‌ها —</option>';
+        partList.innerHTML = '';
         colorList.innerHTML = '';
         gradeList.innerHTML = '';
         if(!d){{
@@ -12551,7 +12619,7 @@ async def iphone_prices_page(request: Request, flash: str = ""):
         if(!d.storages.length){{ storSel.innerHTML = '<option value="">این مدل ظرفیتی نداره</option>'; }}
         d.storages.forEach(function(s){{ var o=document.createElement('option'); o.value=s.id; o.textContent=s.label; storSel.appendChild(o); }});
         d.colors.forEach(function(c){{ mkCheckbox(colorList, 'color_ids', c.id, c.name); }});
-        d.parts.forEach(function(p){{ var o=document.createElement('option'); o.value=p.id; o.textContent=p.label; partSel.appendChild(o); }});
+        d.parts.forEach(function(p){{ mkCheckbox(partList, 'part_ids', p.id, p.label); }});
         d.grades.forEach(function(g){{ mkCheckbox(gradeList, 'grade_ids', g.id, g.label); }});
         refreshColorVisibility(d);
         refreshPartVisibility(d);
@@ -12563,7 +12631,12 @@ async def iphone_prices_page(request: Request, flash: str = ""):
         ppCb.checked = !!d.part_pricing;
         gpCb.checked = !!d.grade_pricing;
         capCb.checked = !!d.capacity_pricing;
+        recomputeDuplicates();
       }});
+      storSel.addEventListener('change', recomputeDuplicates);
+      colorList.addEventListener('change', recomputeDuplicates);
+      partList.addEventListener('change', recomputeDuplicates);
+      gradeList.addEventListener('change', recomputeDuplicates);
       cpCb.addEventListener('change', function(){{
         var mid = modelSel.value;
         var d = IV_MODEL_DATA[mid];
@@ -12624,6 +12697,32 @@ async def iphone_prices_page(request: Request, flash: str = ""):
           refreshStorageVisibility(d);
         }}).catch(function(){{ capCb.checked = !wanted; alert('خطا در ارتباط با سرور'); }});
       }});
+      // حالت ادیت: طبق درخواست صریح مالک پروژه، ادیت صفحهٔ جدا نداره — همین فرم بالا با
+      // تمام تنظیمات ردیف انتخابی (مدل/ظرفیت/رنگ/پارت/سری اصالت/قیمت) از پیش پر می‌شه،
+      // دقیقاً مثل زمان تعریف اولیه، با همون چک‌باکس‌های چند‌انتخابی.
+      if(IV_EDIT_CAP){{
+        var ec = IV_EDIT_CAP;
+        modelSel.value = String(ec.model_id);
+        modelSel.dispatchEvent(new Event('change'));
+        if(ec.storage_id){{ storSel.value = String(ec.storage_id); }}
+        function checkValue(container, val){{
+          if(val === null || val === undefined) return;
+          var cb = container.querySelector('input[value="' + val + '"]');
+          if(cb) cb.checked = true;
+        }}
+        checkValue(colorList, ec.color_id);
+        checkValue(partList, ec.part_id);
+        checkValue(gradeList, ec.grade_id);
+        document.querySelector('input[name=base_price]').value = ec.base_price;
+        document.querySelector('input[name=buy_price_ref]').value = ec.buy_price_ref;
+        document.querySelector('input[name=sell_price_ref]').value = ec.sell_price_ref;
+        document.getElementById('iv-p-editcapid').value = String(ec.id);
+        document.getElementById('iv-p-editbanner').style.display = '';
+        recomputeDuplicates();
+        setTimeout(function(){{
+          document.getElementById('iv-p-editform').scrollIntoView({{behavior: 'smooth', block: 'start'}});
+        }}, 50);
+      }}
     }})();
     </script>
     """
@@ -12646,7 +12745,7 @@ async def iphone_prices_page(request: Request, flash: str = ""):
           <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c.get('grade_label') or '') or '—'}</td>
           <td class="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{fa_date(c['updated_at'] or '', with_time=True)}</td>
           <td class="px-3 py-2 whitespace-nowrap">
-            <a href="/admin/iphone/prices/{c['id']}/edit-page" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded inline-block">✏️ ادیت</a>
+            <a href="/admin/iphone/prices?edit={c['id']}#iv-p-editform" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded inline-block">✏️ ادیت</a>
             <button type="submit" form="iv-pd-{c['id']}" class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>
           </td>
         </tr>"""
@@ -12687,79 +12786,20 @@ async def iphone_prices_page(request: Request, flash: str = ""):
     return _layout("قیمت‌های آیفون", body, adm, flash=flash)
 
 
-@router.get("/iphone/prices/{cid}/edit-page", response_class=HTMLResponse)
-async def iphone_prices_edit_page(request: Request, cid: int, flash: str = ""):
-    """صفحهٔ اصلاح یک رکورد قیمت — طبق درخواست صریح مالک پروژه، ویرایش قیمت/رنگ/پارت
-    از لیست تخت به این صفحهٔ جدا منتقل شد (لیست فقط دکمهٔ ادیت/حذف داره، نه اینپوت باز)."""
-    adm = _get_admin(request)
-    guard = _require(adm, "ai_pricing")
-    if guard: return guard
-    import iphone_valuation.db as ivdb
-    cap = ivdb.get_capacity(cid)
-    if not cap:
-        return _redir(f"/admin/iphone/prices?flash={e('رکورد پیدا نشد')}")
-    model = ivdb.get_model(cap["model_id"]) or {}
-    colors = ivdb.list_colors(cap["model_id"], active_only=True)
-    parts = ivdb.list_parts(active_only=True) if (model.get("dual_sim_parts") or "").strip() else []
-    grades = [g for g in ivdb.list_coefficients(category="grade", active_only=True)
-              if g["option_key"] not in ivdb.GRADE_STOP_CALC_KEYS or g["id"] == cap.get("grade_id")]
-
-    color_opts = '<option value="">— عمومی (بدون رنگ خاص) —</option>' + "".join(
-        f'<option value="{c["id"]}" {"selected" if c["id"]==cap.get("color_id") else ""}>{html.escape(c["name"])}</option>'
-        for c in colors)
-    part_opts = '<option value="">— عمومی (بدون پارت خاص) —</option>' + "".join(
-        f'<option value="{p["id"]}" {"selected" if p["id"]==cap.get("part_id") else ""}>{html.escape(p["label"])}</option>'
-        for p in parts)
-    grade_opts = '<option value="">— عمومی (بدون سری خاص) —</option>' + "".join(
-        f'<option value="{g["id"]}" {"selected" if g["id"]==cap.get("grade_id") else ""}>{html.escape(g["option_label"])}</option>'
-        for g in grades)
-
-    body = f"""
-    <a href="/admin/iphone/prices" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به لیست قیمت‌ها</a>
-    <h1 class="text-xl font-bold text-gray-800 mb-1">✏️ ویرایش قیمت</h1>
-    <div class="text-sm text-gray-500 mb-4">{html.escape(model.get('name') or '—')} — {html.escape(cap.get('capacity_label') or '—')}</div>
-    <div class="bg-white rounded-xl shadow-sm p-4 max-w-lg">
-      <form method="post" action="/admin/iphone/prices/{cid}/edit" class="grid grid-cols-2 gap-3">
-        {f'''<div class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">رنگ</span>
-          <select name="color_id" class="border rounded p-2 text-sm">{color_opts}</select>
-        </div>''' if model.get("color_pricing") and colors else ""}
-        {f'''<div class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">پارت</span>
-          <select name="part_id" class="border rounded p-2 text-sm">{part_opts}</select>
-        </div>''' if model.get("part_pricing") and parts else ""}
-        {f'''<div class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">سری اصالت</span>
-          <select name="grade_id" class="border rounded p-2 text-sm">{grade_opts}</select>
-        </div>''' if model.get("grade_pricing") and grades else ""}
-        <div class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">قیمت پایه</span>
-          <input type="text" inputmode="numeric" dir="ltr" name="base_price" value="{cap['base_price']}" class="border rounded p-2 text-sm" required>
-        </div>
-        <div class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">قیمت خرید فروشگاه</span>
-          <input type="text" inputmode="numeric" dir="ltr" name="buy_price_ref" value="{cap['buy_price_ref']}" class="border rounded p-2 text-sm" required>
-        </div>
-        <div class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">قیمت فروش فروشگاه</span>
-          <input type="text" inputmode="numeric" dir="ltr" name="sell_price_ref" value="{cap['sell_price_ref']}" class="border rounded p-2 text-sm" required>
-        </div>
-        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm col-span-2">💾 ذخیره</button>
-      </form>
-    </div>
-    """
-    return _layout("ویرایش قیمت آیفون", body, adm, flash=flash)
-
-
 @router.post("/iphone/prices/upsert")
 async def iphone_prices_upsert(request: Request):
-    """فرم واحد ثبت قیمت — روی هر ترکیب (ظرفیت+پارت+رنگ+سری اصالت، با شناسه) upsert
-    می‌کنه؛ اگه از قبل بود آپدیت می‌شه، وگرنه ردیف تازه ساخته می‌شه — هیچ‌وقت رد/خطای
-    «تکراریه» نشون نمی‌ده. رنگ و سری اصالت **چند‌انتخابی**‌ان (چک‌باکس، نه دراپ‌داون
-    تک‌تایی): وقتی ادمین چند رنگ/سری رو با هم تیک می‌زنه، همون یک قیمت وارد‌شده روی همهٔ
-    ترکیب‌های انتخابی (کارتزین رنگ×سری) upsert می‌شه — یعنی «۱۳ نرمال، همهٔ رنگ‌ها به‌جز
-    آبی یک قیمت» با یک بار ثبت ممکنه، بدون اینکه هیچ‌جا رکورد جدا-جدا برای هر رنگ لازم
-    باشه به‌صورت دستی."""
+    """فرم واحد ثبت/ویرایش قیمت — طبق درخواست صریح مالک پروژه، ادیت صفحهٔ جدا نداره،
+    همین روت هم برای ثبت تازه هم برای ویرایش (وقتی `edit_cap_id` توی فرم باشه) استفاده
+    می‌شه. رنگ/پارت/سری اصالت هرسه **چند‌انتخابی**‌ان (چک‌باکس) — روی کارتزین کامل سه بعد
+    حلقه می‌زنه و به‌ازای هر ترکیب upsert می‌کنه (مثلاً «۱۳ نرمال، پارت ZA/A و CH/A با هم،
+    همهٔ رنگ‌ها به‌جز آبی» با یک بار ثبت ممکنه).
+
+    قانون تازهٔ ضدتکرار: برخلاف رفتار قبلی (upsert بی‌صدا روی هر ترکیب تکراری)، حالا اگه
+    یه ترکیب دقیقاً از قبل برای یه ردیف *دیگه* (نه همون ردیفی که با edit_cap_id داریم
+    ویرایشش می‌کنیم) ثبت شده باشه، **رد می‌شه و توی پیام نهایی گزارش می‌شه** — تا ادمین
+    سهواً قیمت یه ترکیب موجود رو بدون اطلاع بازنویسی نکنه. برای عوض‌کردن قیمت یه ترکیب
+    از قبل ثبت‌شده، باید از دکمهٔ «✏️ ادیت» همون ردیف استفاده کرد (که edit_cap_id رو ست
+    می‌کنه و دقیقاً همون ترکیب رو مجاز به آپدیت می‌کنه، نه رد)."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
@@ -12781,7 +12821,9 @@ async def iphone_prices_upsert(request: Request):
         storage_id = int(storage_id_raw)
     else:
         return _redir(f"/admin/iphone/prices?flash={e('ظرفیت الزامی است')}")
-    part_id_raw = (form.get("part_id") or "").strip()
+    edit_cap_id_raw = (form.get("edit_cap_id") or "").strip()
+    edit_cap_id = int(edit_cap_id_raw) if edit_cap_id_raw.isdigit() else None
+    part_ids_raw = [v.strip() for v in form.getlist("part_ids") if v.strip()]
     color_ids_raw = [v.strip() for v in form.getlist("color_ids") if v.strip()]
     grade_ids_raw = [v.strip() for v in form.getlist("grade_ids") if v.strip()]
     base_price = form.get("base_price") or ""
@@ -12797,52 +12839,46 @@ async def iphone_prices_upsert(request: Request):
     # به‌عنوان بعد قیمت‌گذاری ذخیره نمی‌شه — این سه مسیر محاسبهٔ جدا دارن (بخش ۲۲.۷ CLAUDE.md).
     stop_grade_ids = {g["id"] for g in ivdb.list_coefficients(category="grade", active_only=False)
                        if g["option_key"] in ivdb.GRADE_STOP_CALC_KEYS}
-    pid_ = int(part_id_raw) if (part_id_raw and m and m.get("part_pricing")) else None
+    part_ids = [int(v) for v in part_ids_raw] if (m and m.get("part_pricing")) else []
     color_ids = [int(v) for v in color_ids_raw] if (m and m.get("color_pricing")) else []
     grade_ids = ([int(v) for v in grade_ids_raw if int(v) not in stop_grade_ids]
                  if (m and m.get("grade_pricing")) else [])
+    part_ids = part_ids or [None]
     color_ids = color_ids or [None]
     grade_ids = grade_ids or [None]
     bp, bpr, spr = _iv_parse_num(base_price), _iv_parse_num(buy_price_ref), _iv_parse_num(sell_price_ref)
     fx_rate = _iv_parse_num(fx_ref_rate) or ivfx.get_current_rate()
-    count = 0
-    for cid_ in color_ids:
-        for gid_ in grade_ids:
-            ivdb.upsert_capacity(model_id, storage_id, bp, bpr, spr, fx_rate,
-                                  part_id=pid_, color_id=cid_, grade_id=gid_)
-            count += 1
+
+    color_map = {c["id"]: c["name"] for c in ivdb.list_colors(model_id=model_id, active_only=False)}
+    part_map = {p["id"]: p["label"] for p in ivdb.list_parts(active_only=False)}
+    grade_map = {g["id"]: g["option_label"] for g in ivdb.list_coefficients(category="grade", active_only=False)}
+
+    def _combo_label(pid, cid_, gid):
+        bits = [x for x in (color_map.get(cid_), part_map.get(pid), grade_map.get(gid)) if x]
+        return "/".join(bits) if bits else "عمومی"
+
+    count, skipped = 0, []
+    for pid_ in part_ids:
+        for cid_ in color_ids:
+            for gid_ in grade_ids:
+                existing = ivdb.get_capacity_exact(model_id, storage_id, pid_, cid_, gid_)
+                if existing and existing["id"] != edit_cap_id:
+                    skipped.append(_combo_label(pid_, cid_, gid_))
+                    continue
+                ivdb.upsert_capacity(model_id, storage_id, bp, bpr, spr, fx_rate,
+                                      part_id=pid_, color_id=cid_, grade_id=gid_)
+                count += 1
+
     _log(request, "ثبت/به‌روزرسانی قیمت آیفون", "کارشناسی آیفون",
-         f"model={model_id} storage={storage_id} part={pid_} colors={color_ids} grades={grade_ids} ({count} ردیف)",
-         admin_info=adm)
+         f"model={model_id} storage={storage_id} parts={part_ids} colors={color_ids} grades={grade_ids} "
+         f"({count} ردیف ذخیره، {len(skipped)} تکراری رد شد)", admin_info=adm)
     msg = "✅ قیمت ذخیره شد" if count == 1 else f"✅ {count} ردیف قیمت ذخیره شد"
+    if count == 0 and skipped:
+        msg = "⚠️ هیچ ردیف تازه‌ای ذخیره نشد — همهٔ ترکیب‌های انتخابی قبلاً ثبت شده بودن"
+    if skipped:
+        shown = "، ".join(skipped[:5]) + ("، …" if len(skipped) > 5 else "")
+        msg += f" — ⚠️ {len(skipped)} ترکیب قبلاً ثبت شده بود و رد شد: {shown}"
     return _redir(f"/admin/iphone/prices?flash={e(msg)}")
-
-
-@router.post("/iphone/prices/{cid}/edit")
-async def iphone_prices_edit(request: Request, cid: int, base_price: str = Form(...),
-                              buy_price_ref: str = Form(...), sell_price_ref: str = Form(...),
-                              color_id: str = Form(""), part_id: str = Form(""), grade_id: str = Form("")):
-    """صفحهٔ ادیت اختصاصی (`/iphone/prices/{cid}/edit-page`) این روت رو صدا می‌زنه — علاوه
-    بر سه فیلد قیمت، رنگ/پارت/سری اصالت هم قابل تغییرن (دفاع در عمق مثل upsert: اگه toggle
-    مدل خاموش باشه، مقدار فرم نادیده گرفته می‌شه)."""
-    adm = _get_admin(request)
-    guard = _require(adm, "ai_pricing")
-    if guard: return guard
-    import iphone_valuation.db as ivdb
-    cap = ivdb.get_capacity(cid)
-    if not cap:
-        return _redir(f"/admin/iphone/prices?flash={e('رکورد پیدا نشد')}")
-    m = ivdb.get_model(cap["model_id"])
-    fields = {
-        "base_price": _iv_parse_num(base_price),
-        "buy_price_ref": _iv_parse_num(buy_price_ref),
-        "sell_price_ref": _iv_parse_num(sell_price_ref),
-        "color_id": int(color_id) if (color_id and m and m.get("color_pricing")) else None,
-        "part_id": int(part_id) if (part_id and m and m.get("part_pricing")) else None,
-        "grade_id": int(grade_id) if (grade_id and m and m.get("grade_pricing")) else None,
-    }
-    ivdb.update_capacity(cid, **fields)
-    return _redir(f"/admin/iphone/prices?flash={e('✅ قیمت ذخیره شد')}")
 
 
 @router.post("/iphone/prices/{cid}/delete")
