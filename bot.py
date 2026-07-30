@@ -4224,13 +4224,16 @@ def _pre_handle_user_invite(message):
 # catch-all در فایل قرار می‌گیره و هندلر جدا برایش هیچ‌وقت اجرا نمی‌شه.
 
 _IV_STEP_ORDER = [
-    "series", "model", "capacity", "color", "part",
-    "cond", "defms", "batt", "repms", "repair", "reg", "box", "cos", "cable",
-    "feat", "stype", "price", "city", "summary",
+    "series", "model", "capacity", "color", "part", "grade",
+    "cond", "batt", "cos", "cable", "box", "reg", "feat", "repair", "defms", "repms",
+    "city", "summary",
 ]
 _IV_DEVICE_STEPS = {"series", "model", "capacity", "color", "part"}
+_IV_REPAIR_STEPS = {"repair", "defms", "repms"}
+_IV_COND_CASCADE_STEPS = {"cond", "batt", "cos", "cable", "box", "reg", "feat", "repair", "defms", "repms"}
 
 _IV_COEFF_STEP_MAP = {
+    "grade": ("grade", "🏷 این آیفون کدوم سری اصالته؟"),
     "cond": ("condition", "🔧 وضعیت کلی دستگاه چطوره؟"),
     "batt": ("battery", "🔋 سلامت باتری چقدره؟"),
     "repair": ("repair", "🛠 وضعیت باز شدن/تعمیرات؟"),
@@ -4244,9 +4247,15 @@ _IV_MULTISELECT_STEP_MAP = {
     "repms": ("replaced", "🔁 کدوم قطعه(ها) قبلاً تعویض شده (غیراصلی ولی سالم)؟ (اگه موردی نیست، مستقیم «تایید و ادامه» رو بزن)"),
 }
 _IV_STEP_LABELS = {
-    "cond": "🔧 وضعیت کلی", "batt": "🔋 باتری", "repair": "🛠 تعمیرات/باز شدن",
-    "reg": "📋 وضعیت مالکیت", "box": "📦 جعبه و لوازم", "cos": "✨ وضعیت ظاهری",
-    "cable": "🔌 کابل شارژ", "defms": "🩹 قطعات معیوب", "repms": "🔁 قطعات تعویض‌شده",
+    "grade": "🏷 سری اصالت", "cond": "🔧 وضعیت کلی", "batt": "🔋 باتری",
+    "repair": "🛠 تعمیرات/باز شدن", "reg": "📋 وضعیت مالکیت", "box": "📦 جعبه و لوازم",
+    "cos": "✨ وضعیت ظاهری", "cable": "🔌 کابل شارژ",
+    "defms": "🩹 قطعات معیوب", "repms": "🔁 قطعات تعویض‌شده",
+}
+_IV_GRADE_STOP_MESSAGES = {
+    "grade_p": "📦 گوشی شما جزو گوشی‌های تغییر داده‌شده و ارتقایافته است.\nقیمت این‌گونه دستگاه‌ها توافقی است.",
+    "grade_3": "🧪 گوشی شما جزو دستگاه‌های نمونهٔ تست اپل است و امکان مکالمه ندارد.\nقیمت این‌گونه دستگاه‌ها توافقی است.",
+    "grade_4": "⚠️ گوشی شما از پارت‌های نامشخص و بدون گارانتی اپل است.\nقیمت این‌گونه دستگاه‌ها توافقی است.",
 }
 
 
@@ -4275,8 +4284,26 @@ def _iv_step_skip(step_id, state):
     if step_id == "part":
         model = ivdb.get_model(state.get("model_id")) or {}
         return not (model.get("dual_sim_parts") or "").strip()
+
+    sel = state.get("selections", {})
+    new_sealed = sel.get("condition") == "cond_new_sealed"
+    # «نو/پلمپ» یعنی دستگاه کاملاً نو یا هنوز پلمپه — کل ارزیابی جزئیات کیفیت
+    # (باتری/ظاهر/کابل/جعبه/امکانات/تعمیرات) بی‌معنیه؛ فقط وضعیت مالکیت (reg) پرسیده می‌شه.
+    if new_sealed and step_id in ("batt", "cos", "cable", "box", "feat", "repair", "defms", "repms"):
+        return True
+
+    if step_id == "repair":
+        # فقط وقتی کاربر گفته امکانات مشکل داره پرسیده می‌شه
+        return state.get("features_ok") is not False
     if step_id == "defms":
-        return state.get("selections", {}).get("condition") != "cond_needs_repair"
+        # «باز نشده» یعنی دستگاه دست‌نخورده‌ست ولی طبق پاسخ قبلی یه امکانی خرابه —
+        # پس قطعهٔ *معیوب* (نه تعویض‌شده) رو می‌پرسیم.
+        return state.get("features_ok") is not False or sel.get("repair") != "repair_none"
+    if step_id == "repms":
+        # «باز شده بدون تعمیر خاص» یا «تعمیر برد» یعنی دستگاه سرویس شده — احتمال قطعهٔ
+        # تعویض‌شدهٔ غیراصلی هست، می‌پرسیم کدوم.
+        return state.get("features_ok") is not False or sel.get("repair") not in ("repair_opened", "repair_board")
+
     if step_id in _IV_COEFF_STEP_MAP:
         category, _title = _IV_COEFF_STEP_MAP[step_id]
         return not ivdb.list_coefficients(category=category, active_only=True)
@@ -4284,6 +4311,22 @@ def _iv_step_skip(step_id, state):
         category, _title = _IV_MULTISELECT_STEP_MAP[step_id]
         return not ivdb.list_coefficients(category=category, active_only=True)
     return False
+
+
+def _iv_active_selections(state):
+    """selections رو فقط به دسته‌هایی فیلتر می‌کنه که مرحلهٔ متناظرشون الان واقعاً غیر-
+    رد-شونده‌ست — چون در جریان ویرایش ممکنه جواب قدیمیِ مرحله‌ای که الان دیگه مربوط نیست
+    (مثلاً امکانات از «خیر» به «بله» عوض شده، ولی جواب قبلیِ «وضعیت تعمیرات» هنوز توی
+    state مونده) بی‌جا روی قیمت اثر بذاره. فقط لحظهٔ محاسبهٔ نهایی صدا زده می‌شه."""
+    sel = state.get("selections", {})
+    out = {}
+    for step_id, (category, _t) in _IV_COEFF_STEP_MAP.items():
+        if category in sel and not _iv_step_skip(step_id, state):
+            out[category] = sel[category]
+    for step_id, (category, _t) in _IV_MULTISELECT_STEP_MAP.items():
+        if category in sel and not _iv_step_skip(step_id, state):
+            out[category] = sel[category]
+    return out
 
 
 def _iv_render_step(step_id, chat_id, uid):
@@ -4303,10 +4346,6 @@ def _iv_render_step(step_id, chat_id, uid):
         return _iv_ask_multiselect(chat_id, uid, step_id)
     if step_id == "feat":
         return _iv_ask_features(chat_id, uid)
-    if step_id == "stype":
-        return _iv_ask_seller_type(chat_id, uid)
-    if step_id == "price":
-        return _iv_ask_price(chat_id, uid)
     if step_id == "city":
         return _iv_ask_city(chat_id, uid)
     if step_id == "summary":
@@ -4362,14 +4401,27 @@ def _iv_goto(chat_id, uid, step_id):
     _iv_render_step(step_id, chat_id, uid)
 
 
+def _iv_edit_group_for(root_step):
+    """گروهی که ویرایش یک مرحله باید تا انتهاش ادامهٔ خطی بره، قبل از برگشت به خلاصه.
+    بر اساس مرحله‌ای که کاربر واقعاً روش ✏️ زده (root_step)، نه مرحلهٔ فعلی در وسط
+    cascade — چون مثلاً ویرایش «وضعیت کلی» (cond) ممکنه چند مرحلهٔ تازه رو باز کنه
+    (باتری/ظاهر/...) که باید همه‌شون پرسیده بشن، ولی ویرایش مستقیم «باتری» نباید
+    بقیهٔ زنجیره رو هم بکشونه — با ترتیب چک اول-تخصصی‌ترین اینجا حل شده."""
+    if root_step in _IV_DEVICE_STEPS:
+        return _IV_DEVICE_STEPS
+    if root_step in _IV_REPAIR_STEPS:
+        return _IV_REPAIR_STEPS
+    if root_step == "cond":
+        return _IV_COND_CASCADE_STEPS
+    return {root_step}
+
+
 def _iv_step_done(chat_id, uid):
     """بعد از ثبت جواب مرحلهٔ فعلی صدا زده می‌شه. حالت عادی: برو مرحلهٔ بعدِ ترتیب ثابت
     (با رد شدن خودکار از رد-شونده‌ها، داخل _iv_goto). حالت ویرایش از صفحهٔ خلاصه
-    (state["editing"]): تا وقتی داخل همون «گروه» مرحله‌ایم ادامهٔ خطی می‌ره (چون مثلاً
-    ویرایش مدل باید ظرفیت/رنگ/پارت وابسته رو هم دوباره بپرسه)، ولی همین که از گروه
-    خارج شدیم، بلافاصله برمی‌گرده به خلاصه — نه ادامهٔ کل زنجیره. تشخیص «خارج شدن از گروه»
-    از _iv_peek_next استفاده می‌کنه (نه همسایهٔ ثابت لیست)، وگرنه وقتی مرحلهٔ بعدیِ ثابت
-    خودش رد بشه و بپره به یه مرحلهٔ غیردستگاهی، این تشخیص اشتباه می‌رفت."""
+    (state["editing"] = مرحله‌ای که کاربر روش ✏️ زده): تا وقتی مرحلهٔ بعدی هنوز داخل
+    گروه همون ریشه‌ست (_iv_edit_group_for) ادامهٔ خطی می‌ره، وگرنه بلافاصله برمی‌گرده
+    به خلاصه — نه ادامهٔ کل زنجیره."""
     state = user_states.get(uid)
     if not state:
         return
@@ -4377,10 +4429,10 @@ def _iv_step_done(chat_id, uid):
     if cur not in _IV_STEP_ORDER:
         return
     nxt = _iv_peek_next(cur, state)
-    if state.get("editing"):
-        cur_grp = "device" if cur in _IV_DEVICE_STEPS else cur
-        nxt_grp = "device" if nxt in _IV_DEVICE_STEPS else nxt
-        if cur_grp != nxt_grp:
+    editing_root = state.get("editing")
+    if editing_root:
+        group = _iv_edit_group_for(editing_root)
+        if nxt not in group:
             state["editing"] = None
             return _iv_goto(chat_id, uid, "summary")
     _iv_goto(chat_id, uid, nxt)
@@ -4396,7 +4448,7 @@ def _iv_ask_series(chat_id, uid):
     kb = types.InlineKeyboardMarkup()
     for s in series_list:
         kb.add(types.InlineKeyboardButton(s["name"], callback_data=f"ivw_series_{s['id']}"))
-    bot.send_message(chat_id, "📱 <b>کارشناس هوشمند قیمت آیفون StockLand</b>\n\nنسل دستگاه رو انتخاب کن:",
+    bot.send_message(chat_id, "📱 <b>کارشناس هوشمند قیمت آیفون استوک‌لند</b>\n\nنسل دستگاه رو انتخاب کن:",
                       reply_markup=kb, parse_mode="HTML")
 
 
@@ -4509,21 +4561,6 @@ def _iv_ask_features(chat_id, uid):
         reply_markup=kb)
 
 
-def _iv_ask_seller_type(chat_id, uid):
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("🏬 فروشگاه", callback_data="ivw_stype_store"),
-           types.InlineKeyboardButton("🙋 شخصی", callback_data="ivw_stype_personal"))
-    bot.send_message(chat_id, "شما فروشگاهید یا فروشندهٔ شخصی؟", reply_markup=kb)
-
-
-def _iv_ask_price(chat_id, uid):
-    state = user_states.get(uid)
-    if not state:
-        return
-    state["mode"] = "iv_seller_price"
-    bot.send_message(chat_id, "💰 اگه قیمتی مدنظرته که می‌خوای بفروشی/بخری بنویس (تومان)، وگرنه بنویس «ندارم»")
-
-
 def _iv_ask_city(chat_id, uid):
     state = user_states.get(uid)
     if not state:
@@ -4571,7 +4608,19 @@ def _iv_ask_summary(chat_id, uid):
         lines.append(f"🔠 پارت: {html.escape(part_map.get(state.get('part_number') or '', 'سایر'))}")
 
     edit_targets = [("series", "✏️ مدل دستگاه (سری/مدل/ظرفیت/رنگ/پارت)")]
-    for step_id in ("cond", "batt", "defms", "repms", "repair", "reg", "box", "cos", "cable"):
+    for step_id in ("grade", "cond", "batt", "cos", "cable", "box", "reg"):
+        if _iv_step_skip(step_id, state):
+            continue
+        category, _t = _IV_COEFF_STEP_MAP[step_id]
+        val = _coeff_label(category, sel.get(category))
+        lines.append(f"{_IV_STEP_LABELS[step_id]}: {val}")
+        edit_targets.append((step_id, f"✏️ {_IV_STEP_LABELS[step_id]}"))
+
+    if not _iv_step_skip("feat", state):
+        lines.append(f"📶 امکانات سالم: {'بله' if state.get('features_ok') else 'خیر'}")
+        edit_targets.append(("feat", "✏️ تست امکانات"))
+
+    for step_id in ("repair", "defms", "repms"):
         if _iv_step_skip(step_id, state):
             continue
         if step_id in _IV_MULTISELECT_STEP_MAP:
@@ -4583,20 +4632,62 @@ def _iv_ask_summary(chat_id, uid):
         lines.append(f"{_IV_STEP_LABELS[step_id]}: {val}")
         edit_targets.append((step_id, f"✏️ {_IV_STEP_LABELS[step_id]}"))
 
-    stype_label = {"store": "فروشگاه", "personal": "شخصی"}.get(state.get("seller_type"), "—")
-    sp = state.get("seller_price")
-    lines.append(f"📶 امکانات سالم: {'بله' if state.get('features_ok') else 'خیر'}")
-    lines.append(f"👤 نوع فروشنده: {stype_label}")
-    lines.append(f"💰 قیمت پیشنهادی: {(f'{sp:,} تومان' if sp else 'ندارم')}")
     lines.append(f"🏙 شهر: {html.escape(state.get('city') or 'ندارم')}")
-    edit_targets += [("stype", "✏️ نوع فروشنده"), ("price", "✏️ قیمت پیشنهادی"), ("city", "✏️ شهر")]
+    edit_targets.append(("city", "✏️ شهر"))
 
     kb = types.InlineKeyboardMarkup()
     for step_id, label in edit_targets:
         kb.add(types.InlineKeyboardButton(label, callback_data=f"ivw_edit_{step_id}"))
-    kb.add(types.InlineKeyboardButton("✅ تایید و محاسبهٔ قیمت", callback_data="ivw_summary_confirm"))
+    kb.add(types.InlineKeyboardButton("✅💚 تایید و محاسبهٔ قیمت", callback_data="ivw_summary_confirm"))
     kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="ivw_summary_cancel"))
     bot.send_message(chat_id, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
+
+
+def _iv_strip_html(text):
+    return re.sub(r"<[^>]+>", "", text or "")
+
+
+def _iv_enter_post_result(chat_id, uid, model_name, estimated_price, summary_text, city):
+    """بعد از محاسبهٔ نهایی (یا پیام توقف‌محاسبهٔ سری P/۳/۴) صدا زده می‌شه — به‌جای
+    پاک‌کردن کامل state، یه state سبک تازه («iv_post_result») می‌سازه که فقط اطلاعات
+    لازم برای دکمه‌های بعدی (می‌خوام بفروشم/ذخیره/اشتراک‌گذاری) رو نگه می‌داره."""
+    state = user_states.get(uid) or {}
+    grade_key = (state.get("selections") or {}).get("grade", "")
+    model_id = state.get("model_id")
+    user_states[uid] = {
+        "mode": "iv_post_result",
+        "post_model_id": model_id,
+        "post_model_name": model_name,
+        "post_grade_key": grade_key,
+        "post_estimated_price": estimated_price,
+        "post_summary_text": summary_text,
+        "post_city": city,
+    }
+    from urllib.parse import quote
+    share_text = _iv_strip_html(summary_text)
+    bot_username = _bot_username()
+    share_url = "https://t.me/share/url?url=" + quote(f"https://t.me/{bot_username}") + "&text=" + quote(share_text)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🤝 می‌خوام بفروشم", callback_data="ivw_sell_start"))
+    kb.row(
+        types.InlineKeyboardButton("💾 ذخیره", callback_data="ivw_save"),
+        types.InlineKeyboardButton("🔗 اشتراک‌گذاری", url=share_url),
+    )
+    bot.send_message(chat_id, summary_text, reply_markup=kb, parse_mode="HTML")
+
+
+def _iv_grade_stop(chat_id, uid, grade_key):
+    """گزینه‌های P/۳/۴ محاسبهٔ قیمت رو کلاً متوقف می‌کنن — به‌جای عبور از بقیهٔ سؤالات،
+    مستقیم پیام «قیمت توافقی» + دکمهٔ «می‌خوام بفروشم» نشون داده می‌شه."""
+    import iphone_valuation.db as ivdb
+    state = user_states.get(uid)
+    if not state:
+        return
+    model = ivdb.get_model(state.get("model_id")) or {}
+    msg = _IV_GRADE_STOP_MESSAGES.get(grade_key, "قیمت این دستگاه توافقی است.")
+    text = f"📱 <b>{html.escape(model.get('name') or '')}</b>\n\n{msg}"
+    _iv_enter_post_result(chat_id, uid, model_name=model.get("name") or "", estimated_price=None,
+                           summary_text=text, city=state.get("city", ""))
 
 
 def _iv_finalize(chat_id, uid):
@@ -4614,11 +4705,11 @@ def _iv_finalize(chat_id, uid):
             "capacity_id": state.get("capacity_id"),
             "part_number": state.get("part_number", ""),
             "color": state.get("color", ""),
-            "selections": state.get("selections", {}),
+            "selections": _iv_active_selections(state),
             "features_ok": state.get("features_ok"),
             "sim_type": sim_type,
-            "seller_type": state.get("seller_type", ""),
-            "seller_price": state.get("seller_price"),
+            "seller_type": "",
+            "seller_price": None,
             "city": state.get("city", ""),
         }
         result = ivservice.valuate(payload)
@@ -4637,16 +4728,16 @@ def _iv_finalize(chat_id, uid):
     txt = (
         f"📱 <b>{result['model_name']} {result['capacity_label']}</b> "
         f"({html.escape(part_display)} · 🎨 {html.escape(color_display)} · 📡 {sim_label})\n\n"
-        f"💵 قیمت واقعی بازار: <b>{result['market_price']:,}</b> تومان\n"
-        f"⚖️ قیمت منصفانه: <b>{result['fair_price']:,}</b> تومان\n"
-        f"🏬 پیشنهاد خرید فروشگاه: <b>{result['buy_price']:,}</b> تومان\n"
-        f"🏷 پیشنهاد فروش فروشگاه: <b>{result['sell_price']:,}</b> تومان\n\n"
-        f"⭐️ امتیاز StockLand: <b>{result['score']} از ۱۰۰</b>\n\n"
+        f"💵 ارزش فروش کالا: <b>{result['market_price']:,}</b> تومان\n"
+        f"⚖️ قیمت منصفانه کالا: <b>{result['fair_price']:,}</b> تومان\n"
+        f"🏬 قیمت خرید فروشگاه از شما: <b>{result['buy_price']:,}</b> تومان\n\n"
+        f"⭐️ امتیاز استوک‌لند: <b>{result['score']} از ۱۰۰</b>\n\n"
         f"{result['verdict_emoji']} <b>{result['verdict_text']}</b>\n\n"
         f"📝 {result['report_text']}"
     )
-    bot.send_message(chat_id, txt, parse_mode="HTML")
-    user_states.pop(uid, None)
+    _iv_enter_post_result(chat_id, uid, model_name=result.get("model_name", ""),
+                           estimated_price=result.get("fair_price"), summary_text=txt,
+                           city=state.get("city", ""))
 
 
 def _iv_wizard_callback(call):
@@ -4658,11 +4749,26 @@ def _iv_wizard_callback(call):
     bot.answer_callback_query(call.id)
 
     state = user_states.get(uid)
-    if not state or state.get("mode") not in ("iphone_valuation", "iv_seller_price", "iv_city"):
+    if not state or state.get("mode") not in ("iphone_valuation", "iv_city", "iv_post_result"):
         bot.send_message(chat_id, "⏳ این کارشناسی منقضی شده. دوباره از منو شروع کن.")
         return
 
     import iphone_valuation.db as ivdb
+
+    if data == "ivw_sell_start":
+        if state.get("mode") != "iv_post_result":
+            return
+        if state.get("post_city"):
+            state["mode"] = "iv_sell_phone"
+            bot.send_message(chat_id, "📞 شمارهٔ تماستون رو بنویس (مثلاً 0912xxxxxxx):")
+        else:
+            state["mode"] = "iv_sell_city"
+            bot.send_message(chat_id, "🏙 شهرت رو بنویس:")
+        return
+
+    if data == "ivw_save":
+        bot.send_message(chat_id, "✅ این کارشناسی ذخیره شد و در تاریخچهٔ کارشناسی‌ها قابل‌مشاهده‌ست.")
+        return
 
     if data.startswith("ivw_series_"):
         state["series_id"] = int(data.split("_")[-1])
@@ -4721,6 +4827,8 @@ def _iv_wizard_callback(call):
         chosen = next((o for o in opts if o["id"] == int(coef_id_s)), None)
         if chosen:
             state["selections"][category] = chosen["option_key"]
+            if step_id == "grade" and chosen["option_key"] in ivdb.GRADE_STOP_CALC_KEYS:
+                return _iv_grade_stop(chat_id, uid, chosen["option_key"])
         _iv_step_done(chat_id, uid)
         return
 
@@ -4748,11 +4856,6 @@ def _iv_wizard_callback(call):
         _iv_step_done(chat_id, uid)
         return
 
-    if data.startswith("ivw_stype_"):
-        state["seller_type"] = data.replace("ivw_stype_", "")
-        _iv_step_done(chat_id, uid)
-        return
-
     if data.startswith("ivw_edit_"):
         step_id = data[len("ivw_edit_"):]
         if step_id not in _IV_STEP_ORDER:
@@ -4771,23 +4874,6 @@ def _iv_wizard_callback(call):
         return
 
 
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "iv_seller_price")
-def handle_iv_seller_price(message):
-    uid = message.from_user.id
-    state = user_states.get(uid)
-    if not state:
-        return
-    txt = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "")
-    price = None
-    if txt not in ("ندارم", "-", ""):
-        digits = "".join(ch for ch in txt if ch.isdigit())
-        if digits:
-            price = int(digits)
-    state["seller_price"] = price
-    state["mode"] = "iphone_valuation"
-    _iv_step_done(message.chat.id, uid)
-
-
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "iv_city")
 def handle_iv_city(message):
     uid = message.from_user.id
@@ -4798,6 +4884,59 @@ def handle_iv_city(message):
     state["city"] = "" if txt in ("ندارم", "-", "") else txt
     state["mode"] = "iphone_valuation"
     _iv_step_done(message.chat.id, uid)
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "iv_sell_city")
+def handle_iv_sell_city(message):
+    """شهر برای مسیر «می‌خوام بفروشم» — فقط برای گوشی‌هایی که شهر توی مسیر عادی
+    ویزارد پرسیده نشده (مسیر توقف‌محاسبهٔ سری P/۳/۴)."""
+    uid = message.from_user.id
+    state = user_states.get(uid)
+    if not state:
+        return
+    txt = (message.text or "").strip()
+    if not txt:
+        bot.reply_to(message, "لطفاً نام شهرت رو بنویس.")
+        return
+    state["post_city"] = txt
+    state["mode"] = "iv_sell_phone"
+    bot.send_message(message.chat.id, "📞 شمارهٔ تماستون رو بنویس (مثلاً 0912xxxxxxx):")
+
+
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "iv_sell_phone")
+def handle_iv_sell_phone(message):
+    uid = message.from_user.id
+    state = user_states.get(uid)
+    if not state:
+        return
+    txt = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    digits = "".join(ch for ch in txt if ch.isdigit() or ch == "+")
+    if len(digits) < 8:
+        bot.reply_to(message, "شمارهٔ تماس معتبر نیست، دوباره بنویس.")
+        return
+    import iphone_valuation.db as ivdb
+    u = message.from_user
+    user_name = " ".join(p for p in (u.first_name, u.last_name) if p) or (u.username or str(uid))
+    ivdb.create_sell_request(
+        user_id=uid, user_name=user_name, phone=digits, city=state.get("post_city", ""),
+        model_id=state.get("post_model_id"), model_name=state.get("post_model_name", ""),
+        grade_key=state.get("post_grade_key", ""), summary_text=state.get("post_summary_text", ""),
+        estimated_price=state.get("post_estimated_price"), status="new",
+    )
+    bot.send_message(message.chat.id, "✅ درخواست فروش شما ثبت شد. همکاران ما به‌زودی باهاتون تماس می‌گیرن.")
+    try:
+        ep = state.get("post_estimated_price")
+        price_line = f"💰 قیمت تخمینی: {ep:,} تومان" if ep else "💰 قیمت: توافقی"
+        bot.send_message(
+            ADMIN_ID,
+            f"🤝 <b>درخواست فروش جدید</b>\n\n"
+            f"👤 {html.escape(user_name)} (<code>{uid}</code>)\n"
+            f"📞 {html.escape(digits)}\n🏙 {html.escape(state.get('post_city') or '—')}\n"
+            f"📱 {html.escape(state.get('post_model_name') or '—')}\n{price_line}",
+            parse_mode="HTML")
+    except Exception:
+        pass
+    user_states.pop(uid, None)
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("mode") == "crypto_amount")
