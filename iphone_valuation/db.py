@@ -400,6 +400,25 @@ def ensure_schema():
             status TEXT NOT NULL DEFAULT 'new',
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );""")
+        # لاگ کامل هر تحلیل AI (بخش «کارشناس مکمل هوش مصنوعی») — برای ممیزی/پیگیری هزینه در
+        # پنل. request_context/response خام JSON هستن؛ adjustment_percent همون مقداریه که
+        # بعد از clamp+گیت اطمینان واقعاً اعمال شده، نه لزوماً چیزی که مدل خواسته بود.
+        conn.execute("""CREATE TABLE IF NOT EXISTS iv_ai_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            valuation_id INTEGER,
+            model_id INTEGER,
+            capacity_id INTEGER,
+            provider TEXT DEFAULT '',
+            model_name TEXT DEFAULT '',
+            request_context TEXT DEFAULT '{}',
+            response_json TEXT DEFAULT '{}',
+            adjustment_percent REAL NOT NULL DEFAULT 0,
+            confidence INTEGER NOT NULL DEFAULT 0,
+            final_price INTEGER,
+            warnings TEXT DEFAULT '[]',
+            error TEXT DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );""")
         conn.commit()
 
         # سیدِ پیش‌فرض ضرایب امتیازدهی — فقط اگه جدول خالیه (اولین اجرا)
@@ -1776,6 +1795,53 @@ def list_valuations(limit: int = 50, model_id: int | None = None) -> list[dict]:
         q += " ORDER BY v.id DESC LIMIT ?;"
         params.append(limit)
         return [dict(r) for r in conn.execute(q, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def recent_valuations_for_capacity(model_id: int, capacity_id: int, limit: int = 10) -> list[dict]:
+    """آخرین کارشناسی‌های واقعی همین مدل+ظرفیت — برای تشخیص روند قیمت توسط کارشناس AI
+    (بخش «کارشناس مکمل هوش مصنوعی»)، جدا از تراکنش‌های واقعی iv_transactions."""
+    ensure_schema()
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT fair_price, market_price, score, created_at FROM iv_valuations "
+            "WHERE model_id=? AND capacity_id=? ORDER BY id DESC LIMIT ?;",
+            (model_id, capacity_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ─── کارشناس مکمل هوش مصنوعی ──────────────────────────────────────────────
+
+def create_ai_analysis(**fields) -> int:
+    ensure_schema()
+    cols = ["valuation_id", "model_id", "capacity_id", "provider", "model_name",
+            "request_context", "response_json", "adjustment_percent", "confidence",
+            "final_price", "warnings", "error"]
+    values = [fields.get(c) for c in cols]
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            f"INSERT INTO iv_ai_analyses ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)});",
+            values)
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_ai_analyses(limit: int = 50) -> list[dict]:
+    ensure_schema()
+    conn = _conn()
+    try:
+        q = ("SELECT a.*, m.name AS model_name_join, c.capacity_label FROM iv_ai_analyses a "
+             "LEFT JOIN iv_models m ON m.id=a.model_id "
+             "LEFT JOIN iv_capacities c ON c.id=a.capacity_id "
+             "ORDER BY a.id DESC LIMIT ?;")
+        return [dict(r) for r in conn.execute(q, (limit,)).fetchall()]
     finally:
         conn.close()
 
