@@ -125,6 +125,18 @@ COMPONENT_DEFAULTS = [
     ("component", "comp_buttons", "دکمه‌ها (پاور/صدا)", -5, 10),
 ]
 
+# سری اصالت دستگاه — برچسب‌ها طبق متن دقیق مالک پروژه (۲۰۲۶-۰۷-۳۰)؛ ارقام ۳/۴/۵ عمداً
+# لاتین‌ان (نه فارسی) چون دکمهٔ اینلاین تلگرام از پچ اعداد فارسی سراسری بات عبور نمی‌کنه.
+_GRADE_DEFAULTS = [
+    ("grade", "grade_m", "سری اصلی M", 0, 1),
+    ("grade", "grade_n", "سری تعویض اپل N", -10, 2),
+    ("grade", "grade_f", "سری رفرش‌شده F", -25, 3),
+    ("grade", "grade_p", "سری ارتقایافته P", 0, 4),
+    ("grade", "grade_3", "سری 3 نمونه تست اپل", 0, 5),
+    ("grade", "grade_4", "سری 4 پارت نامشخص", 0, 6),
+    ("grade", "grade_5", "سری 5 اپل بدون گارانتی", -15, 7),
+]
+
 
 def _iv_sim_policy(name: str, sort_order: int) -> tuple[str, int]:
     """(dual_sim_parts, esim_only) بر اساس قانون مالک پروژه:
@@ -209,6 +221,16 @@ def ensure_schema():
             conn.commit()
         except Exception:
             pass
+        # grade_pricing: دقیقاً همون الگوی color_pricing/part_pricing — آیا سری اصالت
+        # (M/N/F/P/۳/۴/۵) روی قیمت *ردیفِ دقیق* این مدل اثر داره یا نه. این کاملاً جدا و
+        # موازی با دستهٔ سراسری «grade» در iv_coefficients هست (که همیشه به‌صورت درصدی
+        # روی هر مدلی اعمال می‌شه) — این فلگ فقط کنترل می‌کنه که آیا می‌شه برای یک مدل
+        # خاص، به‌ازای یک سری خاص، یک قیمت پایهٔ دقیقاً متفاوت (نه فقط درصدی) هم ثبت کرد.
+        try:
+            conn.execute("ALTER TABLE iv_models ADD COLUMN grade_pricing INTEGER NOT NULL DEFAULT 0;")
+            conn.commit()
+        except Exception:
+            pass
         # iv_series — گروه‌بندی نسل/سری مدل‌ها (مثل «آیفون ۱۱»، «آیفون X») برای اولین مرحلهٔ
         # ویزارد ربات؛ کاملاً جدا از ستون قدیمی iv_models.series (که فقط سال انتشار رو نگه
         # می‌داره و صرفاً برای نمایش «(سال)» در پنل استفاده می‌شه — دست‌نخورده می‌مونه).
@@ -278,6 +300,9 @@ def ensure_schema():
             ("storage_id", "storage_id INTEGER"),
             ("color_id", "color_id INTEGER"),
             ("part_id", "part_id INTEGER"),
+            # grade_id: بعد سوم fallback قیمت (کنار part_id/color_id) — اشاره به id ردیف
+            # iv_coefficients (category='grade')، نه یه جدول جدا؛ چون سری اصالت سراسریه.
+            ("grade_id", "grade_id INTEGER"),
         ):
             try:
                 conn.execute(f"ALTER TABLE iv_capacities ADD COLUMN {ddl};")
@@ -477,6 +502,7 @@ def ensure_schema():
         _migrate_repair_vs_replaced_v1(conn)
         _migrate_condition_merge_new_sealed_v1(conn)
         _migrate_grade_category_v1(conn)
+        _migrate_grade_labels_v1(conn)
     finally:
         conn.close()
     _SCHEMA_DONE = True
@@ -770,16 +796,7 @@ def _migrate_grade_category_v1(conn):
     short-circuit رو خواست غیرفعال کنه، رفتار منطقی داشته باشه."""
     row = conn.execute("SELECT COUNT(*) c FROM iv_coefficients WHERE category='grade';").fetchone()
     if row and row["c"] == 0:
-        defaults = [
-            ("grade", "grade_m", "M — اصلی", 0, 1),
-            ("grade", "grade_n", "N — تعویضی اپل", -10, 2),
-            ("grade", "grade_f", "F — رفرش‌شده", -25, 3),
-            ("grade", "grade_p", "P — ادیت‌شده / ارتقایافته", 0, 4),
-            ("grade", "grade_3", "۳ — نمونهٔ تست اپل", 0, 5),
-            ("grade", "grade_4", "۴ — پارت نامشخص / بدون گارانتی", 0, 6),
-            ("grade", "grade_5", "۵ — سایر", -15, 7),
-        ]
-        for cat, key, label, pct, order in defaults:
+        for cat, key, label, pct, order in _GRADE_DEFAULTS:
             conn.execute(
                 "INSERT INTO iv_coefficients (category, option_key, option_label, percent, sort_order) "
                 "VALUES (?,?,?,?,?);", (cat, key, label, pct, order))
@@ -787,6 +804,23 @@ def _migrate_grade_category_v1(conn):
             "INSERT INTO iv_score_weights (category, weight) VALUES ('grade', 10) "
             "ON CONFLICT(category) DO NOTHING;")
         conn.commit()
+
+
+def _migrate_grade_labels_v1(conn):
+    """مالک پروژه متن دقیق برچسب هر سری اصالت رو مشخص کرد (بخش زیر مهاجرت قبلی حدسی
+    بود) — این‌جا برچسب‌های ۷ گزینه یک‌بار به متن نهایی به‌روزرسانی می‌شن. طبق درخواست
+    صریح، ارقام سری‌های ۳/۴/۵ حتماً لاتین بمونن (نه فارسی) — چون دکمه‌های اینلاین ربات
+    اصلاً از پچ اعداد فارسی سراسری عبور نمی‌کنن (فقط متن پیام/کپشن پچ می‌شه، نه
+    reply_markup)، همین‌جا نوشتنشون با رقم لاتین کافیه."""
+    from db import get_cfg, set_cfg
+    if get_cfg("IV_GRADE_LABELS_MIGRATED", "0") == "1":
+        return
+    for cat, key, label, _pct, _order in _GRADE_DEFAULTS:
+        conn.execute(
+            "UPDATE iv_coefficients SET option_label=? WHERE category=? AND option_key=?;",
+            (label, cat, key))
+    conn.commit()
+    set_cfg("IV_GRADE_LABELS_MIGRATED", "1")
 
 
 # ─── مدل‌ها ──────────────────────────────────────────────────────────────
@@ -832,7 +866,7 @@ def update_model(model_id: int, **fields) -> None:
     if not fields:
         return
     allowed = {"name", "series", "series_id", "sort_order", "active", "dual_sim_parts", "esim_only",
-               "color_pricing", "part_pricing"}
+               "color_pricing", "part_pricing", "grade_pricing"}
     cols = [k for k in fields if k in allowed]
     if not cols:
         return
@@ -866,16 +900,19 @@ def delete_model(model_id: int) -> None:
 # ولی همهٔ توابع زیر رشته‌های خوانا (capacity_label/color/part_number) رو هم از طریق
 # JOIN برمی‌گردونن تا bot.py/service.py که این کلیدها رو مستقیم می‌خونن دست‌نخورده بمونن.
 
-_CAP_SELECT = """SELECT c.id, c.model_id, c.storage_id, c.color_id, c.part_id,
+_CAP_SELECT = """SELECT c.id, c.model_id, c.storage_id, c.color_id, c.part_id, c.grade_id,
     COALESCE(s.label, '') AS capacity_label,
     COALESCE(p.code, '') AS part_number,
     COALESCE(cl.name, '') AS color,
+    COALESCE(g.option_key, '') AS grade_key,
+    COALESCE(g.option_label, '') AS grade_label,
     c.base_price, c.buy_price_ref, c.sell_price_ref, c.fx_ref_rate, c.demand_percent,
     c.active, c.updated_at
 FROM iv_capacities c
 LEFT JOIN iv_storages s ON s.id = c.storage_id
 LEFT JOIN iv_parts p ON p.id = c.part_id
-LEFT JOIN iv_colors cl ON cl.id = c.color_id"""
+LEFT JOIN iv_colors cl ON cl.id = c.color_id
+LEFT JOIN iv_coefficients g ON g.id = c.grade_id"""
 
 
 def list_capacities(model_id: int | None = None, active_only: bool = True) -> list[dict]:
@@ -908,7 +945,8 @@ def get_capacity(cap_id: int) -> dict | None:
 def create_capacity(model_id: int, storage_id: int, base_price: int,
                      buy_price_ref: int, sell_price_ref: int,
                      fx_ref_rate: int = 0, demand_percent: float = 0,
-                     part_id: int | None = None, color_id: int | None = None) -> int:
+                     part_id: int | None = None, color_id: int | None = None,
+                     grade_id: int | None = None) -> int:
     ensure_schema()
     conn = _conn()
     try:
@@ -917,9 +955,9 @@ def create_capacity(model_id: int, storage_id: int, base_price: int,
         # (storage_id هست)، فقط برای رد نشدن از این constraint رشتهٔ خالی می‌فرستیم.
         cur = conn.execute(
             "INSERT INTO iv_capacities "
-            "(model_id, storage_id, part_id, color_id, capacity_label, base_price, buy_price_ref, "
-            "sell_price_ref, fx_ref_rate, demand_percent) VALUES (?,?,?,?,?,?,?,?,?,?);",
-            (model_id, storage_id, part_id, color_id, "", base_price, buy_price_ref, sell_price_ref,
+            "(model_id, storage_id, part_id, color_id, grade_id, capacity_label, base_price, buy_price_ref, "
+            "sell_price_ref, fx_ref_rate, demand_percent) VALUES (?,?,?,?,?,?,?,?,?,?,?);",
+            (model_id, storage_id, part_id, color_id, grade_id, "", base_price, buy_price_ref, sell_price_ref,
              fx_ref_rate, demand_percent))
         conn.commit()
         return cur.lastrowid
@@ -931,8 +969,8 @@ def update_capacity(cap_id: int, **fields) -> None:
     ensure_schema()
     if not fields:
         return
-    allowed = {"storage_id", "part_id", "color_id", "base_price", "buy_price_ref", "sell_price_ref",
-               "fx_ref_rate", "demand_percent", "active"}
+    allowed = {"storage_id", "part_id", "color_id", "grade_id", "base_price", "buy_price_ref",
+               "sell_price_ref", "fx_ref_rate", "demand_percent", "active"}
     cols = [k for k in fields if k in allowed]
     if not cols:
         return
@@ -957,16 +995,17 @@ def delete_capacity(cap_id: int) -> None:
 
 
 def get_capacity_exact(model_id: int, storage_id: int, part_id: int | None = None,
-                        color_id: int | None = None) -> dict | None:
-    """ردیف دقیقاً منطبق با (مدل، ظرفیت، پارت، رنگ — با شناسه) رو برمی‌گردونه (یا None) —
-    برای upsert_capacity استفاده می‌شه. مقایسهٔ NULL-safe با IS (نه =، چون NULL=NULL توی
-    SQL همیشه false برمی‌گرده)."""
+                        color_id: int | None = None, grade_id: int | None = None) -> dict | None:
+    """ردیف دقیقاً منطبق با (مدل، ظرفیت، پارت، رنگ، سری اصالت — با شناسه) رو برمی‌گردونه
+    (یا None) — برای upsert_capacity استفاده می‌شه. مقایسهٔ NULL-safe با IS (نه =، چون
+    NULL=NULL توی SQL همیشه false برمی‌گرده)."""
     ensure_schema()
     conn = _conn()
     try:
         row = conn.execute(
             "SELECT * FROM iv_capacities WHERE model_id=? AND storage_id=? AND part_id IS ? "
-            "AND color_id IS ? LIMIT 1;", (model_id, storage_id, part_id, color_id)).fetchone()
+            "AND color_id IS ? AND grade_id IS ? LIMIT 1;",
+            (model_id, storage_id, part_id, color_id, grade_id)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -974,18 +1013,20 @@ def get_capacity_exact(model_id: int, storage_id: int, part_id: int | None = Non
 
 def upsert_capacity(model_id: int, storage_id: int, base_price: int, buy_price_ref: int,
                      sell_price_ref: int, fx_ref_rate: int = 0, demand_percent: float = 0,
-                     part_id: int | None = None, color_id: int | None = None) -> int:
-    """ثبت یا به‌روزرسانی قیمت یک ترکیب (ظرفیت+پارت+رنگ) — اگه این ترکیب دقیق از قبل ثبت
-    شده باشه آپدیت می‌شه (نه رد یا تکراری)، وگرنه ردیف تازه ساخته می‌شه. کاربر هیچ‌وقت پیام
-    «قبلاً ثبت شده» نمی‌بینه."""
-    existing = get_capacity_exact(model_id, storage_id, part_id, color_id)
+                     part_id: int | None = None, color_id: int | None = None,
+                     grade_id: int | None = None) -> int:
+    """ثبت یا به‌روزرسانی قیمت یک ترکیب (ظرفیت+پارت+رنگ+سری اصالت) — اگه این ترکیب دقیق از
+    قبل ثبت شده باشه آپدیت می‌شه (نه رد یا تکراری)، وگرنه ردیف تازه ساخته می‌شه. کاربر
+    هیچ‌وقت پیام «قبلاً ثبت شده» نمی‌بینه."""
+    existing = get_capacity_exact(model_id, storage_id, part_id, color_id, grade_id)
     if existing:
         update_capacity(existing["id"], base_price=base_price, buy_price_ref=buy_price_ref,
                          sell_price_ref=sell_price_ref, fx_ref_rate=fx_ref_rate,
                          demand_percent=demand_percent, active=1)
         return existing["id"]
     return create_capacity(model_id, storage_id, base_price, buy_price_ref, sell_price_ref,
-                            fx_ref_rate, demand_percent, part_id=part_id, color_id=color_id)
+                            fx_ref_rate, demand_percent, part_id=part_id, color_id=color_id,
+                            grade_id=grade_id)
 
 
 def _find_storage_id(model_id: int, label: str) -> int | None:
@@ -1026,18 +1067,38 @@ def _find_part_id(code: str) -> int | None:
         conn.close()
 
 
-def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "", color: str = "") -> dict | None:
-    """قیمت دقیق (مدل+ظرفیت+پارت+رنگ) رو پیدا می‌کنه؛ اگه قیمت اختصاصی برای اون ترکیب ثبت
-    نشده باشه، به ترتیب اولویت fallback می‌کنه: (پارت دقیق+رنگ دقیق) → (پارت دقیق+رنگ عمومی)
-    → (پارت عمومی+رنگ دقیق) → (پارت عمومی+رنگ عمومی) — یعنی ادمین فقط جایی که قیمت واقعاً
-    فرق داره لازمه پارت/رنگ مشخص وارد کنه، بقیه از قیمت عمومی‌تر استفاده می‌کنن.
+def _find_coefficient_id(category: str, option_key: str) -> int | None:
+    """id ردیف iv_coefficients — برای سری اصالت (grade) که برخلاف رنگ/پارت یه جدول
+    کاتالوگ جدا نداره، همون ردیف دستهٔ سراسری `iv_coefficients` مرجع resolve_capacity هم
+    هست (بعد سوم fallback قیمت، کنار color_id/part_id)."""
+    option_key = (option_key or "").strip()
+    if not option_key:
+        return None
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT id FROM iv_coefficients WHERE category=? AND option_key=?;",
+                            (category, option_key)).fetchone()
+        return row["id"] if row else None
+    finally:
+        conn.close()
 
-    ورودی همچنان رشته‌ست (نه شناسه) چون ویزارد ربات با برچسب/نام کار می‌کنه، نه id — این تابع
-    خودش قبل از جست‌وجو رشته‌ها رو به شناسهٔ متناظر تبدیل می‌کنه.
 
-    اگه ادمین از `/admin/iphone/models` اثر رنگ/پارت روی قیمت این مدل رو خاموش کرده باشه
-    (iv_models.color_pricing/part_pricing)، همون بعد این‌جا قبل از جست‌وجو صفر می‌شه — یعنی
-    کاربر هرچی هم توی ربات انتخاب کرده باشه، قیمت از ردیف عمومی همون مدل خونده می‌شه."""
+def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "", color: str = "",
+                      grade: str = "") -> dict | None:
+    """قیمت دقیق (مدل+ظرفیت+پارت+رنگ+سری اصالت) رو پیدا می‌کنه؛ اگه قیمت اختصاصی برای اون
+    ترکیب ثبت نشده باشه، fallback می‌کنه از دقیق‌ترین ترکیب (کمترین بعدِ عمومی) به سمت
+    عمومی‌ترین (هر سه بعد NULL) — یعنی ادمین فقط جایی که قیمت واقعاً فرق داره لازمه
+    پارت/رنگ/سری مشخص وارد کنه، بقیه از قیمت عمومی‌تر استفاده می‌کنن.
+
+    ورودی‌ها همچنان رشته‌ن (نه شناسه) چون ویزارد ربات با برچسب/کلید کار می‌کنه، نه id —
+    این تابع خودش قبل از جست‌وجو رشته‌ها رو به شناسهٔ متناظر تبدیل می‌کنه. `grade` همون
+    option_key دستهٔ سراسری `iv_coefficients(category='grade')` هست (مثل 'grade_n')، نه
+    یه نام آزاد مثل رنگ.
+
+    اگه ادمین اثر رنگ/پارت/سری روی قیمت این مدل رو خاموش کرده باشه
+    (iv_models.color_pricing/part_pricing/grade_pricing)، همون بعد این‌جا قبل از جست‌وجو
+    صفر می‌شه — یعنی کاربر هرچی هم توی ربات انتخاب کرده باشه، قیمت از ردیف عمومی همون
+    مدل خونده می‌شه."""
     ensure_schema()
     model = get_model(model_id)
     if model:
@@ -1045,22 +1106,35 @@ def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "", 
             color = ""
         if not model.get("part_pricing"):
             part_number = ""
+        if not model.get("grade_pricing"):
+            grade = ""
     storage_id = _find_storage_id(model_id, capacity_label)
     if storage_id is None:
         return None
     part_id = _find_part_id(part_number) if part_number else None
     color_id = _find_color_id(model_id, color) if color else None
+    grade_id = _find_coefficient_id("grade", grade) if grade else None
     conn = _conn()
     try:
-        def _q(p, c):
+        def _q(p, c, g):
             return conn.execute(
                 _CAP_SELECT + " WHERE c.model_id=? AND c.storage_id=? AND c.part_id IS ? "
-                "AND c.color_id IS ? AND c.active=1 LIMIT 1;", (model_id, storage_id, p, c)).fetchone()
+                "AND c.color_id IS ? AND c.grade_id IS ? AND c.active=1 LIMIT 1;",
+                (model_id, storage_id, p, c, g)).fetchone()
 
-        row = _q(part_id, color_id)
-        if not row and (part_id is not None or color_id is not None):
-            row = _q(part_id, None) or _q(None, color_id) or _q(None, None)
-        return dict(row) if row else None
+        part_candidates = [part_id, None] if part_id is not None else [None]
+        color_candidates = [color_id, None] if color_id is not None else [None]
+        grade_candidates = [grade_id, None] if grade_id is not None else [None]
+        # ترکیب‌ها رو از دقیق‌ترین (کمترین None) به عمومی‌ترین مرتب می‌کنیم — یعنی ادمین
+        # فقط جایی که واقعاً قیمت فرق داره لازمه دقیق وارد کنه.
+        combos = sorted(
+            {(p, c, g) for p in part_candidates for c in color_candidates for g in grade_candidates},
+            key=lambda t: sum(1 for x in t if x is None))
+        for p, c, g in combos:
+            row = _q(p, c, g)
+            if row:
+                return dict(row)
+        return None
     finally:
         conn.close()
 
