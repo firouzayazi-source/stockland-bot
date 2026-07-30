@@ -218,11 +218,11 @@ except Exception:
 ### مسیرهای اصلی
 | مسیر | نقش |
 |---|---|
-| `POST /payment/create` | ساخت تراکنش (اعتبارسنجی مبلغ/نوع/محدودیت روزانه) → `zarinpal_create()` → درج ردیف `pending` در `zarinpal_transactions` → برمی‌گرداند `{authority, payment_url}` |
-| `GET /payment/callback` | ریدایرکت مرورگر بعد از پرداخت — idempotent (اگر از قبل `paid` بود، دوباره کاری نمی‌کند)؛ زیر `BEGIN IMMEDIATE` قفل می‌شود تا کال‌بک دوبل مشکل نسازد؛ بسته به `payment_type` یا کیف‌پول شارژ می‌شود یا سفارش کامل می‌شود (`create_order` + `claim_feed_item`/صف تحویل) |
-| `POST /payment/finalize` | پل PHP خارجی، auth با `X-Stockland-Secret`/`PHP_SECRET` — منطق مشابه callback (کد تکراری) |
+| `POST /payment/create` | ساخت تراکنش (اعتبارسنجی مبلغ/نوع/محدودیت روزانه) → **`_run_gateway_failover()`** (سیستم چند‌درگاهی، بخش ۲۵) → درج ردیف `pending` در `zarinpal_transactions` (با ستون `gateway`) → برمی‌گرداند `{authority, payment_url, gateway}` |
+| `GET /payment/callback` و `GET|POST /payment/callback/{gw}` | ریدایرکت مرورگر بعد از پرداخت — درگاه‌آگاه (بخش ۲۵)؛ idempotent (اگر از قبل `paid` بود، دوباره کاری نمی‌کند)؛ زیر `BEGIN IMMEDIATE` قفل می‌شود تا کال‌بک دوبل مشکل نسازد؛ بسته به `payment_type` یا کیف‌پول شارژ می‌شود یا سفارش کامل می‌شود (`create_order` + `claim_feed_item`/بازگشت وجه). مسیر بدون `/{gw}` برای سازگاری عقب‌رو (تراکنش‌های زرین‌پالِ در جریان قبل از فیچر چند‌درگاهی) نگه داشته شده |
+| `POST /payment/finalize` | پل PHP خارجی قدیمی — **دیگه در مسیر پرداخت نیست** (بخش ۲۵ پل PHP رو کامل حذف کرد)؛ خودِ endpoint (با auth secret) دست‌نخورده مونده ولی هیچ‌جا صدا زده نمی‌شه |
 | `POST /webhook` | دریافت‌کنندهٔ webhook تلگرام دوم، **بدون auth** — قدیمی/موازی با `/telegram/webhook/{BOT_TOKEN}` که secret-token دارد |
-| `GET /health` | سلامت سرویس + وضعیت polling ربات |
+| `GET /health` | سلامت سرویس + وضعیت polling ربات + `php_bridge` (که دیگه استفاده نمی‌شه) |
 
 ### پرداخت ترکیبی (کیف‌پول + درگاه)
 مدل‌سازی با `wallet_reserved` (بخش کیف‌پول، فقط بعد از موفقیت درگاه واقعاً کسر می‌شود — `deduct_wallet_reserved`) + `gateway_amount` (باقیمانده برای درگاه).
@@ -770,3 +770,55 @@ API (/api/v1/iphone/valuate) ──┼──> iphone_valuation.service.valuate(p
 - `db.py`: `init_db()` حالا یک فلگ per-process (`_DB_INIT_DONE_PATH`) داره — دیگه هر `/start` ربات کل ۳۱ دستور DDL رو دوباره اجرا نمی‌کنه. `ensure_indexes()` هم یک فلگ per-index-name (`_INDEXES_DONE`) داره — self-healing (ایندکسی که به‌خاطر نبودن جدولش شکست بخوره، دفعهٔ بعد دوباره امتحان می‌شه). **اگه تابع مهاجرت جدیدی (`ensure_*_schema`) اضافه می‌کنی که ممکنه از چند نقطهٔ hot-path (نه فقط استارتاپ) صدا زده بشه، همین الگوی فلگ per-process رو رعایت کن — وگرنه دقیقاً همین کلاس باگ تکرار می‌شه.**
 - `idx_orders_created_at` اضافه شد (داشبورد پنل ۳ کوئری روی این ستون می‌زنه، بدون ایندکس اسکن کامل جدول).
 - `dashboard()` (admin_panel.py) کوئری‌هاش رو به تابع sync جدا (`_dashboard_fetch`) استخراج کرده و با `run_in_threadpool` صدا می‌زنه — همون الگویی که PR #86 فقط برای تماس‌های تلگرام رعایت کرده بود، حالا برای سنگین‌ترین route هم اعمال شده. **بقیهٔ routeهای سنگین پنل (لیست سفارش‌ها، گزارش‌ها، ...) هنوز همین رفتار رو ندارن — کاندید فاز بعد اگه باز گزارش کندی اومد.**
+
+---
+
+## ۲۵. سیستم چند‌درگاهی پرداخت — `payment_gateways/` (از ۲۰۲۶-۰۷-۳۰)
+
+> مالک پروژه بعد از مهاجرت هاست وردپرسی، پرداخت از کار افتاد (خطای «خطا در ایجاد تراکنش درگاه»). تشخیص: `.env` آدرس API زرین‌پال (`ZARINPAL_REQUEST_URL`) رو به یه دامنهٔ واسطهٔ خودی `pay.stland.ir` وصل کرده بود که بعد از مهاجرت گواهی SSL نامعتبر داشت؛ به‌علاوه پل PHP واسط (`stland.ir/payment/stockland-pay.php`) هم بعد از مهاجرت ۵۰۲ می‌داد. ثابت شد VPS (با IP خارجی آلمان) **مستقیم** به `api.zarinpal.com` می‌رسه — پس واسطه اصلاً لازم نبود. رفع فوری با اصلاح `.env` انجام شد؛ بعد مالک پروژه خواست کل مسیر به یه سیستم چند‌درگاهی حرفه‌ای بازطراحی بشه.
+
+### معماری — دقیقاً همون الگوی `iphone_valuation/ai_providers/`
+```
+bot / mini-app → POST /payment/create → payment_service._run_gateway_failover()
+                   → درگاه‌های فعال به‌ترتیب اولویت: اولی خطا داد → بعدی (failover خودکار)
+                   → درج tx با ستون gateway → {authority, payment_url, gateway}
+بازگشت کاربر → /payment/callback/{gw} → parse_callback درگاه → verify_payment همون درگاه
+             → _finalize_paid_tx() (شارژ کیف‌پول/تحویل محصول، مشترک بین همهٔ درگاه‌ها)
+```
+
+### پکیج `payment_gateways/`
+- `base.py` — قرارداد مشترک (`PaymentGatewayError`, `RIAL_PER_TOMAN=10`) + مستند سه‌تابعیِ هر درگاه: `create_payment(amount_toman, callback_url, description, config) -> {ok, authority, payment_url, error}`، `parse_callback(query, form) -> {authority, success}`، `verify_payment(authority, amount_toman, config) -> {ok, ref_id, error}`.
+- **⚠️ واحد پول:** مبلغ داخلی همیشه **تومان**. هر درگاه خودش داخل ماژولش تبدیل می‌کنه — زرین‌پال/زیبال ریال (×۱۰)، **پی‌پینگ تومان (بدون تبدیل)**. هیچ تبدیلی بیرون از ماژول درگاه نیست.
+- `zarinpal_gateway.py` — پیاده‌سازی مرجع (منطق اثبات‌شدهٔ قبلی، فقط ماژولار شده). `sandbox` → `sandbox.zarinpal.com`.
+- `zibal_gateway.py` — تک‌شناسه (trackId)، ریال. `sandbox` → مرچنت رشتهٔ `"zibal"`.
+- `payping_gateway.py` — تک‌شناسه (code)، **تومان**، auth با Bearer token.
+- `__init__.py` — رجیستری `PAYMENT_GATEWAYS = {code: {module, label, fields, supports_sandbox}}` + `DEFAULT_GATEWAY="zarinpal"`. **افزودن درگاه تازه = یک فایل ماژول + یک خط این‌جا، بدون تغییر در payment_service.py یا admin_panel.py.** `fields` (لیست `(cred_key, label)`) فرم پنل رو خودکار می‌سازه.
+- **⚠️ فقط زرین‌پال با کلید واقعی تولید تست شده. زیبال/پی‌پینگ طبق مستندات عمومی نوشته شدن ولی با کلید واقعی تست نشدن — قبل از فعال‌سازی باید با دکمهٔ «تست اتصال» تأیید بشن. طراحی امنه: درگاه غیرفعال تا وقتی ادمین صریحاً فعالش نکنه در failover استفاده نمی‌شه، و اگه create_payment یکی خطا بده failover می‌ره بعدی.**
+
+### دیتابیس (`db.py`)
+- جدول تازهٔ `payment_gateways` (`gateway PK, enabled, priority, credentials JSON, sandbox, updated_at`) + توابع `ensure_payment_gateways_schema`/`list_payment_gateways`/`get_payment_gateway`/`save_payment_gateway`/`get_active_payment_gateways` (فعال‌ها مرتب بر اساس priority صعودی). **⚠️ credentials به‌صورت JSON متن ساده (بدون رمزنگاری) ذخیره می‌شه** — عمداً، چون در دسترس‌بودن پرداخت > رمزنگاری‌در‌سکون مرچنت‌آیدی (که به‌تنهایی امکان برداشت نمی‌ده)؛ همون سطح امنیتی رازهای موجود در `.env` (بخش ۱۳). کلید هیچ‌وقت به HTML پنل برنمی‌گرده (فقط وضعیت «ثبت‌شده/نشده»).
+- ستون تازهٔ `gateway TEXT DEFAULT 'zarinpal'` روی `zarinpal_transactions` (مهاجرت ALTER در **هردو** `db.py:init_db` و `payment_service.ensure_schema`) — تا کال‌بک بدونه با کدوم درگاه verify کنه.
+
+### `payment_service.py`
+- `_run_gateway_failover(amount_toman, description)` — حلقه روی `_gateways_for_create()` (فعال‌های پنل، یا fallback به زرین‌پالِ env اگه پنل خالیه)، اولین موفق رو برمی‌گردونه.
+- `_resolve_gateway_config(gateway)` — config از پنل، **یا** برای زرین‌پال از env (`ZARINPAL_MERCHANT_ID`) اگه پنل نداره یا ردیفش خالیه. **⚠️ نکتهٔ ظریفی که فقط با تست پیدا شد:** یه ردیف پنلِ خالی (درگاهی که ادمین ذخیره کرده ولی کلید نذاشته) نباید جلوی fallback به env رو بگیره — پس چک `has_cred` قبل از «برنده‌شدن» ردیف پنل هست.
+- `gateway_callback_url(gw)` = `{BASE_CALLBACK_URL}/{gw}` — نام درگاه در مسیر کال‌بکه.
+- `_finalize_paid_tx(conn, tx, ref_id, authority)` — بخش نهایی‌سازی (شارژ کیف‌پول/تحویل/بازگشت وجه در race موجودی) که از کال‌بک قدیمی استخراج و مشترک شد؛ منطقش **عیناً** رفتار قبلی زرین‌پاله.
+- `_handle_payment_callback(gw, query, form)` — کال‌بک عمومی درگاه‌آگاه؛ دو route نازک روش سوارن: `GET /payment/callback` (سازگاری عقب‌رو، gw=zarinpal) و `GET|POST /payment/callback/{gw}`.
+- توابع قدیمی `zarinpal_create`/`verify_zarinpal` هنوز در فایل هستن ولی **دیگه صدا زده نمی‌شن** (کد مرده بی‌خطر، عمداً حذف نشدن تا دیف کوچیک بمونه).
+
+### پنل ادمین `/admin/payment-gateways`
+- زیر گروه «فروش» سایدبار، permission تازهٔ `payment_gateways` (با `PERM_LEGACY → settings`). یک فرم واحد با یک کارت به‌ازای هر درگاه: توگل فعال، اولویت، فیلد(های) کلید (`type=password`، فقط‌نوشتنی — خالی‌گذاشتن یعنی «کلید قبلی حفظ بشه»، نه پاک‌شدن)، توگل sandbox (اگه درگاه پشتیبانی کنه)، دکمهٔ «تست اتصال» (فرم مخفی + `form=` مثل الگوی حذف صفحهٔ قیمت‌ها)، و یک دکمهٔ «💾 ذخیرهٔ همهٔ تغییرات» پایین. روت‌ها: `payment_gateways_page`/`payment_gateways_save`/`payment_gateways_test`.
+- «تست اتصال» یه `create_payment(10000, ...)` واقعی به درگاه می‌زنه (تراکنش در دیتابیس ما ثبت نمی‌شه، فقط چک اتصال+کلید) و نتیجه رو flash می‌کنه.
+
+### ربات (`services/payments.py`)
+- **شاخهٔ PHP کاملاً حذف شد** — همیشه مستقیم `{PAYMENT_API_BASE_URL}/payment/create` رو صدا می‌زنه (که خودش چند‌درگاهیه). ⚠️ **`PAYMENT_API_BASE_URL` باید در `.env` روی `http://127.0.0.1:8001` باشه** (سرویس روی ۸۰۰۱ گوش می‌ده؛ `PORT=5001` در env قدیمی اشتباه بود و اگه `PAYMENT_API_BASE_URL` خالی باشه، fallback به پورت غلط می‌ره).
+
+### `.env` (تغییرات لازم روی سرور — نه در گیت)
+- `ZARINPAL_REQUEST_URL`/`VERIFY_URL`/`STARTPAY_URL` → آدرس واقعی زرین‌پال (نه `pay.stland.ir`) یا اصلاً حذف بشن (کد پیش‌فرض درست داره).
+- `PHP_PAYMENT_URL=`/`PHP_SECRET=` خالی.
+- `PAYMENT_API_BASE_URL=http://127.0.0.1:8001`.
+- زرین‌پال از همین env کار می‌کنه تا وقتی ادمین از پنل درگاه‌ها رو تنظیم کنه؛ بعدش تنظیمات پنل اولویت داره.
+
+### تست انجام‌شده
+هارنس مستقیم (بدون تلگرام/HTTP/API واقعی، با `requests.post` جعلی و monkeypatch ماژول درگاه‌ها): توابع DB (ذخیره/لیست/فعال‌های مرتب)، هر سه ماژول درگاه (صحت تبدیل واحد ریال/تومان، parse_callback، verify)، failover (اولی خطا→دومی، ترتیب اولویت، همه‌خطا→None)، fallback به env وقتی پنل خالیه (+ اصلاح باگ ردیف خالی)، کال‌بک کامل (verify→نهایی‌سازی کیف‌پول، idempotency بدون کسر دوبل، مسیر لغو)، و هر سه روت پنل (رندر، ذخیره با حفظ کلید روی فیلد خالی، تست اتصال).
