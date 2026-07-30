@@ -4229,6 +4229,9 @@ _IV_STEP_ORDER = [
     "city", "summary",
 ]
 _IV_DEVICE_STEPS = {"series", "model", "capacity", "color", "part"}
+# سری اصالت (grade) هم می‌تونه ردیف قیمت رو عوض کنه (مثل رنگ/پارت، بخش ۲۲.۷ CLAUDE.md) —
+# پس resolve قیمت باید بعد از پرسیدن grade انجام بشه، نه بلافاصله بعد از فاز دستگاه.
+_IV_PRE_RESOLVE_STEPS = _IV_DEVICE_STEPS | {"grade"}
 _IV_REPAIR_STEPS = {"repair", "defms", "repms"}
 _IV_COND_CASCADE_STEPS = {"cond", "batt", "cos", "cable", "box", "reg", "feat", "repair", "defms", "repms"}
 
@@ -4353,15 +4356,16 @@ def _iv_render_step(step_id, chat_id, uid):
 
 
 def _iv_try_resolve_capacity(chat_id, uid):
-    """قیمت دقیق این ترکیب (مدل+ظرفیت+رنگ+پارت) رو resolve می‌کنه؛ اگه پیدا نشد، ویزارد
-    رو همین‌جا با پیام واضح متوقف می‌کنه — به‌جای اینکه کاربر هفت سؤال ضریب رو جواب بده
-    و آخر سر بفهمه قیمتی ثبت نشده."""
+    """قیمت دقیق این ترکیب (مدل+ظرفیت+رنگ+پارت+سری اصالت) رو resolve می‌کنه؛ اگه پیدا
+    نشد، ویزارد رو همین‌جا با پیام واضح متوقف می‌کنه — به‌جای اینکه کاربر هفت سؤال ضریب
+    رو جواب بده و آخر سر بفهمه قیمتی ثبت نشده."""
     import iphone_valuation.db as ivdb
     state = user_states.get(uid)
     if not state:
         return False
     row = ivdb.resolve_capacity(state.get("model_id"), state.get("capacity_label", ""),
-                                 state.get("part_number", ""), state.get("color", ""))
+                                 state.get("part_number", ""), state.get("color", ""),
+                                 grade=(state.get("selections") or {}).get("grade", ""))
     if not row:
         bot.send_message(chat_id, "⚠️ قیمتی برای این ترکیب هنوز در پنل ثبت نشده. با پشتیبانی هماهنگ کن.")
         user_states.pop(uid, None)
@@ -4394,7 +4398,7 @@ def _iv_goto(chat_id, uid, step_id):
         step_id = _IV_STEP_ORDER[i + 1] if i + 1 < len(_IV_STEP_ORDER) else None
     if step_id is None:
         return _iv_finalize(chat_id, uid)
-    if step_id not in _IV_DEVICE_STEPS and not state.get("capacity_id"):
+    if step_id not in _IV_PRE_RESOLVE_STEPS and not state.get("capacity_id"):
         if not _iv_try_resolve_capacity(chat_id, uid):
             return
     state["current_step"] = step_id
@@ -4613,6 +4617,11 @@ def _iv_ask_summary(chat_id, uid):
             continue
         category, _t = _IV_COEFF_STEP_MAP[step_id]
         val = _coeff_label(category, sel.get(category))
+        if step_id == "grade":
+            # ارقام لاتین سری‌های ۳/۴/۵ توی متن پیام (برخلاف دکمه‌ها که خودشون دست‌نخورده
+            # می‌مونن) باید از پچ اعداد فارسی سراسری در امان بمونن — با <code> که همون
+            # الگوی استثنای موجود پچه (bot.py: _FA_SKIP_RE).
+            val = re.sub(r"(\d+)", r"<code>\1</code>", html.escape(val))
         lines.append(f"{_IV_STEP_LABELS[step_id]}: {val}")
         edit_targets.append((step_id, f"✏️ {_IV_STEP_LABELS[step_id]}"))
 
@@ -4827,8 +4836,13 @@ def _iv_wizard_callback(call):
         chosen = next((o for o in opts if o["id"] == int(coef_id_s)), None)
         if chosen:
             state["selections"][category] = chosen["option_key"]
-            if step_id == "grade" and chosen["option_key"] in ivdb.GRADE_STOP_CALC_KEYS:
-                return _iv_grade_stop(chat_id, uid, chosen["option_key"])
+            if step_id == "grade":
+                # سری اصالت می‌تونه ردیف قیمت انتخاب‌شده رو عوض کنه (مثل رنگ/پارت) —
+                # capacity_id قبلی (اگه بود، مثلاً موقع ویرایش) باطل می‌شه تا با سری
+                # تازه دوباره resolve بشه.
+                state["capacity_id"] = None
+                if chosen["option_key"] in ivdb.GRADE_STOP_CALC_KEYS:
+                    return _iv_grade_stop(chat_id, uid, chosen["option_key"])
         _iv_step_done(chat_id, uid)
         return
 
