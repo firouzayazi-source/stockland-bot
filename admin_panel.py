@@ -12359,6 +12359,7 @@ async def iphone_prices_page(request: Request, flash: str = ""):
     models = ivdb.list_models(active_only=False)
     parts = ivdb.list_parts(active_only=True)
     series_list = ivdb.list_series(active_only=False)
+    grades = ivdb.list_coefficients(category="grade", active_only=True)
 
     model_data = {}
     for m in models:
@@ -12366,14 +12367,16 @@ async def iphone_prices_page(request: Request, flash: str = ""):
         colors = ivdb.list_colors(model_id=m["id"], active_only=True)
         part_relevant = bool((m.get("dual_sim_parts") or "").strip())
         model_data[str(m["id"])] = {
-            # colors/parts همیشه کامل می‌رن (نه فقط وقتی toggle روشنه) — چون خودِ toggle
-            # هم همینجاست و اگه ادمین روشنش کنه، دراپ‌داون باید بی‌نیاز از رفرش صفحه پر بشه.
+            # colors/parts/grades همیشه کامل می‌رن (نه فقط وقتی toggle روشنه) — چون خودِ
+            # toggle هم همینجاست و اگه ادمین روشنش کنه، دراپ‌داون باید بی‌نیاز از رفرش صفحه پر بشه.
             "storages": [{"id": s["id"], "label": s["label"]} for s in storages],
             "colors": [{"id": c["id"], "name": c["name"]} for c in colors],
             "color_pricing": bool(m.get("color_pricing")),
             "part_relevant": part_relevant,
             "part_pricing": bool(m.get("part_pricing")),
             "parts": [{"id": p["id"], "label": p["label"]} for p in parts] if part_relevant else [],
+            "grade_pricing": bool(m.get("grade_pricing")),
+            "grades": [{"id": g["id"], "label": g["option_label"]} for g in grades],
         }
 
     # مدل‌ها گروه‌بندی‌شده بر اساس سری/نسل (قدیمی‌ترین تا جدیدترین) — همون ترتیبی که
@@ -12421,6 +12424,12 @@ async def iphone_prices_page(request: Request, flash: str = ""):
             <option value="">— همهٔ رنگ‌ها —</option>
           </select>
         </div>
+        <div class="flex flex-col gap-0.5" id="iv-p-grade-wrap" style="display:none">
+          <span class="text-[9px] text-gray-400">سری اصالت</span>
+          <select name="grade_id" id="iv-p-grade" class="border rounded p-1.5 text-xs">
+            <option value="">— همهٔ سری‌ها —</option>
+          </select>
+        </div>
         <div class="flex flex-col gap-0.5" id="iv-p-part-wrap" style="display:none">
           <span class="text-[9px] text-gray-400">پارت</span>
           <select name="part_id" id="iv-p-part" class="border rounded p-1.5 text-xs">
@@ -12454,6 +12463,16 @@ async def iphone_prices_page(request: Request, flash: str = ""):
                         peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full"></div>
           </label>
         </div>
+        <div class="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2 flex-1 min-w-[200px]" id="iv-p-gradepricing-wrap">
+          <span class="text-xs text-gray-600 flex-1">🏷 اثر سری اصالت روی قیمت این مدل</span>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input type="checkbox" id="iv-p-gradepricing-cb" class="sr-only peer">
+            <div class="w-11 h-6 bg-gray-200 rounded-full peer transition-colors peer-checked:bg-indigo-600
+                        after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white
+                        after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow
+                        peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full"></div>
+          </label>
+        </div>
       </div>
     </div>
     <script>
@@ -12463,6 +12482,8 @@ async def iphone_prices_page(request: Request, flash: str = ""):
       var storSel = document.getElementById('iv-p-storage');
       var colorWrap = document.getElementById('iv-p-color-wrap');
       var colorSel = document.getElementById('iv-p-color');
+      var gradeWrap = document.getElementById('iv-p-grade-wrap');
+      var gradeSel = document.getElementById('iv-p-grade');
       var partWrap = document.getElementById('iv-p-part-wrap');
       var partSel = document.getElementById('iv-p-part');
       var togglesRow = document.getElementById('iv-p-toggles-row');
@@ -12470,21 +12491,26 @@ async def iphone_prices_page(request: Request, flash: str = ""):
       var cpCb = document.getElementById('iv-p-colorpricing-cb');
       var ppWrap = document.getElementById('iv-p-partpricing-wrap');
       var ppCb = document.getElementById('iv-p-partpricing-cb');
+      var gpCb = document.getElementById('iv-p-gradepricing-cb');
       function refreshColorVisibility(d){{
         colorWrap.style.display = (d.color_pricing && d.colors.length) ? '' : 'none';
       }}
       function refreshPartVisibility(d){{
         partWrap.style.display = (d.part_pricing && d.parts.length) ? '' : 'none';
       }}
+      function refreshGradeVisibility(d){{
+        gradeWrap.style.display = (d.grade_pricing && d.grades.length) ? '' : 'none';
+      }}
       modelSel.addEventListener('change', function(){{
         var d = IV_MODEL_DATA[modelSel.value];
         storSel.innerHTML = '';
         colorSel.innerHTML = '<option value="">— همهٔ رنگ‌ها —</option>';
         partSel.innerHTML = '<option value="">— همهٔ پارت‌ها —</option>';
+        gradeSel.innerHTML = '<option value="">— همهٔ سری‌ها —</option>';
         if(!d){{
           storSel.disabled = true;
           storSel.innerHTML = '<option value="">ابتدا مدل رو انتخاب کن</option>';
-          colorWrap.style.display = 'none'; partWrap.style.display = 'none'; togglesRow.style.display = 'none';
+          colorWrap.style.display = 'none'; partWrap.style.display = 'none'; gradeWrap.style.display = 'none'; togglesRow.style.display = 'none';
           return;
         }}
         storSel.disabled = false;
@@ -12492,12 +12518,15 @@ async def iphone_prices_page(request: Request, flash: str = ""):
         d.storages.forEach(function(s){{ var o=document.createElement('option'); o.value=s.id; o.textContent=s.label; storSel.appendChild(o); }});
         d.colors.forEach(function(c){{ var o=document.createElement('option'); o.value=c.id; o.textContent=c.name; colorSel.appendChild(o); }});
         d.parts.forEach(function(p){{ var o=document.createElement('option'); o.value=p.id; o.textContent=p.label; partSel.appendChild(o); }});
+        d.grades.forEach(function(g){{ var o=document.createElement('option'); o.value=g.id; o.textContent=g.label; gradeSel.appendChild(o); }});
         refreshColorVisibility(d);
         refreshPartVisibility(d);
+        refreshGradeVisibility(d);
         togglesRow.style.display = '';
         cpCb.checked = !!d.color_pricing;
         ppWrap.style.display = d.part_relevant ? '' : 'none';
         ppCb.checked = !!d.part_pricing;
+        gpCb.checked = !!d.grade_pricing;
       }});
       cpCb.addEventListener('change', function(){{
         var mid = modelSel.value;
@@ -12529,6 +12558,21 @@ async def iphone_prices_page(request: Request, flash: str = ""):
           refreshPartVisibility(d);
         }}).catch(function(){{ ppCb.checked = !wanted; alert('خطا در ارتباط با سرور'); }});
       }});
+      gpCb.addEventListener('change', function(){{
+        var mid = modelSel.value;
+        var d = IV_MODEL_DATA[mid];
+        if(!mid || !d) return;
+        var wanted = gpCb.checked;
+        fetch('/admin/iphone/prices/grade-pricing', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+          body: 'model_id=' + encodeURIComponent(mid) + '&enabled=' + (wanted ? '1' : '0')
+        }}).then(function(r){{ return r.json(); }}).then(function(res){{
+          if(!res.ok){{ gpCb.checked = !wanted; alert(res.error || 'خطا در ذخیره'); return; }}
+          d.grade_pricing = wanted;
+          refreshGradeVisibility(d);
+        }}).catch(function(){{ gpCb.checked = !wanted; alert('خطا در ارتباط با سرور'); }});
+      }});
     }})();
     </script>
     """
@@ -12548,6 +12592,7 @@ async def iphone_prices_page(request: Request, flash: str = ""):
           <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c['capacity_label'])}</td>
           <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c['color']) or '—'}</td>
           <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c['part_number']) or '—'}</td>
+          <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c.get('grade_label') or '') or '—'}</td>
           <td class="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{fa_date(c['updated_at'] or '', with_time=True)}</td>
           <td class="px-3 py-2 whitespace-nowrap">
             <a href="/admin/iphone/prices/{c['id']}/edit-page" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded inline-block">✏️ ادیت</a>
@@ -12572,9 +12617,9 @@ async def iphone_prices_page(request: Request, flash: str = ""):
         <table class="w-full text-right min-w-max" id="iv-price-table">
           <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
             <th class="px-3 py-3">مدل</th><th class="px-3 py-3">ظرفیت</th><th class="px-3 py-3">رنگ</th>
-            <th class="px-3 py-3">پارت</th><th class="px-3 py-3">بروزرسانی</th><th class="px-3 py-3"></th>
+            <th class="px-3 py-3">پارت</th><th class="px-3 py-3">سری اصالت</th><th class="px-3 py-3">بروزرسانی</th><th class="px-3 py-3"></th>
           </tr></thead>
-          <tbody>{rows_html or '<tr><td colspan="6" class="text-center py-8 text-gray-400">هنوز قیمتی ثبت نشده.</td></tr>'}</tbody>
+          <tbody>{rows_html or '<tr><td colspan="7" class="text-center py-8 text-gray-400">هنوز قیمتی ثبت نشده.</td></tr>'}</tbody>
         </table>
       </div>
     </div>
@@ -12605,6 +12650,7 @@ async def iphone_prices_edit_page(request: Request, cid: int, flash: str = ""):
     model = ivdb.get_model(cap["model_id"]) or {}
     colors = ivdb.list_colors(cap["model_id"], active_only=True)
     parts = ivdb.list_parts(active_only=True) if (model.get("dual_sim_parts") or "").strip() else []
+    grades = ivdb.list_coefficients(category="grade", active_only=True)
 
     color_opts = '<option value="">— عمومی (بدون رنگ خاص) —</option>' + "".join(
         f'<option value="{c["id"]}" {"selected" if c["id"]==cap.get("color_id") else ""}>{html.escape(c["name"])}</option>'
@@ -12612,6 +12658,9 @@ async def iphone_prices_edit_page(request: Request, cid: int, flash: str = ""):
     part_opts = '<option value="">— عمومی (بدون پارت خاص) —</option>' + "".join(
         f'<option value="{p["id"]}" {"selected" if p["id"]==cap.get("part_id") else ""}>{html.escape(p["label"])}</option>'
         for p in parts)
+    grade_opts = '<option value="">— عمومی (بدون سری خاص) —</option>' + "".join(
+        f'<option value="{g["id"]}" {"selected" if g["id"]==cap.get("grade_id") else ""}>{html.escape(g["option_label"])}</option>'
+        for g in grades)
 
     body = f"""
     <a href="/admin/iphone/prices" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به لیست قیمت‌ها</a>
@@ -12627,6 +12676,10 @@ async def iphone_prices_edit_page(request: Request, cid: int, flash: str = ""):
           <span class="text-xs text-gray-500">پارت</span>
           <select name="part_id" class="border rounded p-2 text-sm">{part_opts}</select>
         </div>''' if model.get("part_pricing") and parts else ""}
+        {f'''<div class="flex flex-col gap-1 col-span-2">
+          <span class="text-xs text-gray-500">سری اصالت</span>
+          <select name="grade_id" class="border rounded p-2 text-sm">{grade_opts}</select>
+        </div>''' if model.get("grade_pricing") and grades else ""}
         <div class="flex flex-col gap-1">
           <span class="text-xs text-gray-500">قیمت پایه</span>
           <input type="text" inputmode="numeric" dir="ltr" name="base_price" value="{cap['base_price']}" class="border rounded p-2 text-sm" required>
@@ -12648,38 +12701,40 @@ async def iphone_prices_edit_page(request: Request, cid: int, flash: str = ""):
 
 @router.post("/iphone/prices/upsert")
 async def iphone_prices_upsert(request: Request, model_id: int = Form(...), storage_id: int = Form(...),
-                                color_id: str = Form(""), part_id: str = Form(""),
+                                color_id: str = Form(""), part_id: str = Form(""), grade_id: str = Form(""),
                                 base_price: str = Form(...), buy_price_ref: str = Form(...),
                                 sell_price_ref: str = Form(...), fx_ref_rate: str = Form("")):
-    """فرم واحد ثبت قیمت — ذخیره روی ترکیب (ظرفیت+پارت+رنگ، با شناسه) upsert می‌کنه؛
-    اگه از قبل بود آپدیت می‌شه، وگرنه ردیف تازه ساخته می‌شه — هیچ‌وقت رد/خطای «تکراریه»
-    نشون نمی‌ده (که خودش می‌تونست مثل باگ قدیمی «ذخیره نمی‌شه» به نظر بیاد)."""
+    """فرم واحد ثبت قیمت — ذخیره روی ترکیب (ظرفیت+پارت+رنگ+سری اصالت، با شناسه) upsert
+    می‌کنه؛ اگه از قبل بود آپدیت می‌شه، وگرنه ردیف تازه ساخته می‌شه — هیچ‌وقت رد/خطای
+    «تکراریه» نشون نمی‌ده (که خودش می‌تونست مثل باگ قدیمی «ذخیره نمی‌شه» به نظر بیاد)."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
     import iphone_valuation.db as ivdb
     import iphone_valuation.fx as ivfx
-    # حتی اگه فرم دستکاری بشه، اگه قیمت‌گذاری رنگ/پارت برای این مدل خاموش باشه، همیشه
-    # روی ردیف عمومی (color_id/part_id=NULL) ذخیره می‌شه — همون‌طور که resolve_capacity هم
-    # طبق همین دو فلگ رفتار می‌کنه، تا هیچ ردیف یتیمی که هیچ‌وقت استفاده نمی‌شه ساخته نشه.
+    # حتی اگه فرم دستکاری بشه، اگه قیمت‌گذاری رنگ/پارت/سری‌اصالت برای این مدل خاموش باشه،
+    # همیشه روی ردیف عمومی (color_id/part_id/grade_id=NULL) ذخیره می‌شه — همون‌طور که
+    # resolve_capacity هم طبق همین سه فلگ رفتار می‌کنه، تا هیچ ردیف یتیمی که هیچ‌وقت
+    # استفاده نمی‌شه ساخته نشه.
     m = ivdb.get_model(model_id)
     cid_ = int(color_id) if (color_id and m and m.get("color_pricing")) else None
     pid_ = int(part_id) if (part_id and m and m.get("part_pricing")) else None
+    gid_ = int(grade_id) if (grade_id and m and m.get("grade_pricing")) else None
     bp, bpr, spr = _iv_parse_num(base_price), _iv_parse_num(buy_price_ref), _iv_parse_num(sell_price_ref)
     fx_rate = _iv_parse_num(fx_ref_rate) or ivfx.get_current_rate()
-    ivdb.upsert_capacity(model_id, storage_id, bp, bpr, spr, fx_rate, part_id=pid_, color_id=cid_)
+    ivdb.upsert_capacity(model_id, storage_id, bp, bpr, spr, fx_rate, part_id=pid_, color_id=cid_, grade_id=gid_)
     _log(request, "ثبت/به‌روزرسانی قیمت آیفون", "کارشناسی آیفون",
-         f"model={model_id} storage={storage_id} color={cid_} part={pid_}", admin_info=adm)
+         f"model={model_id} storage={storage_id} color={cid_} part={pid_} grade={gid_}", admin_info=adm)
     return _redir(f"/admin/iphone/prices?flash={e('✅ قیمت ذخیره شد')}")
 
 
 @router.post("/iphone/prices/{cid}/edit")
 async def iphone_prices_edit(request: Request, cid: int, base_price: str = Form(...),
                               buy_price_ref: str = Form(...), sell_price_ref: str = Form(...),
-                              color_id: str = Form(""), part_id: str = Form("")):
+                              color_id: str = Form(""), part_id: str = Form(""), grade_id: str = Form("")):
     """صفحهٔ ادیت اختصاصی (`/iphone/prices/{cid}/edit-page`) این روت رو صدا می‌زنه — علاوه
-    بر سه فیلد قیمت، رنگ/پارت هم قابل تغییرن (دفاع در عمق مثل upsert: اگه toggle مدل
-    خاموش باشه، مقدار فرم نادیده گرفته می‌شه)."""
+    بر سه فیلد قیمت، رنگ/پارت/سری اصالت هم قابل تغییرن (دفاع در عمق مثل upsert: اگه toggle
+    مدل خاموش باشه، مقدار فرم نادیده گرفته می‌شه)."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
     if guard: return guard
@@ -12694,6 +12749,7 @@ async def iphone_prices_edit(request: Request, cid: int, base_price: str = Form(
         "sell_price_ref": _iv_parse_num(sell_price_ref),
         "color_id": int(color_id) if (color_id and m and m.get("color_pricing")) else None,
         "part_id": int(part_id) if (part_id and m and m.get("part_pricing")) else None,
+        "grade_id": int(grade_id) if (grade_id and m and m.get("grade_pricing")) else None,
     }
     ivdb.update_capacity(cid, **fields)
     return _redir(f"/admin/iphone/prices?flash={e('✅ قیمت ذخیره شد')}")
@@ -12745,6 +12801,27 @@ async def iphone_prices_part_pricing_toggle(request: Request):
     import iphone_valuation.db as ivdb
     ivdb.update_model(int(model_id), part_pricing=1 if enabled else 0)
     _log(request, "تغییر اثر پارت روی قیمت", "قیمت‌های آیفون",
+         f"model:{model_id} -> {'روشن' if enabled else 'خاموش'}", admin_info=adm)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/iphone/prices/grade-pricing")
+async def iphone_prices_grade_pricing_toggle(request: Request):
+    """توگل «سری اصالت روی قیمت این مدل اثر داره یا نه» — دقیقاً همون الگوی توگل رنگ/پارت
+    بالا؛ این فلگ فقط تعیین‌کنندهٔ *بعد سوم ردیف قیمت دقیق* است، کاملاً جدا از دستهٔ سراسری
+    ضریب درصدی grade در iv_coefficients (بخش ۲۲.۷ CLAUDE.md)."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "ai_pricing")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    form = await request.form()
+    model_id = (form.get("model_id") or "").strip()
+    if not model_id.isdigit():
+        return JSONResponse({"error": "مدل نامعتبر"})
+    enabled = form.get("enabled") == "1"
+    import iphone_valuation.db as ivdb
+    ivdb.update_model(int(model_id), grade_pricing=1 if enabled else 0)
+    _log(request, "تغییر اثر سری اصالت روی قیمت", "قیمت‌های آیفون",
          f"model:{model_id} -> {'روشن' if enabled else 'خاموش'}", admin_info=adm)
     return JSONResponse({"ok": True})
 
