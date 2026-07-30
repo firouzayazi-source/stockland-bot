@@ -231,6 +231,19 @@ def ensure_schema():
             conn.commit()
         except Exception:
             pass
+        # capacity_pricing: همون الگوی سه توگل بالا، ولی پیش‌فرضش برعکسه — روشن (۱). دلیل:
+        # تقریباً همیشه ظرفیت روی قیمت اثر داره؛ بی‌اثر بودنش (مثلاً مدل‌های خیلی قدیمی/ارزون
+        # که ظرفیت دیگه فرقی نمی‌کنه) استثناست، نه قاعده — برخلاف رنگ/پارت/سری اصالت که
+        # پیش‌فرض بی‌اثرن و ادمین آگاهانه روشنشون می‌کنه. وقتی خاموش بشه، storage_id قبل از
+        # resolve به NULL صفر می‌شه (دقیقاً مثل رفتار رنگ/پارت/سری اصالت در resolve_capacity)
+        # — یعنی برای این مدل، صرف‌نظر از ظرفیتی که کاربر توی ویزارد انتخاب کرده، از ردیف
+        # قیمت عمومی (بدون ظرفیت خاص) استفاده می‌شه؛ خودِ سؤال ظرفیت در ویزارد برای
+        # نمایش/شناسایی دستگاه همچنان همیشه پرسیده می‌شه.
+        try:
+            conn.execute("ALTER TABLE iv_models ADD COLUMN capacity_pricing INTEGER NOT NULL DEFAULT 1;")
+            conn.commit()
+        except Exception:
+            pass
         # iv_series — گروه‌بندی نسل/سری مدل‌ها (مثل «آیفون ۱۱»، «آیفون X») برای اولین مرحلهٔ
         # ویزارد ربات؛ کاملاً جدا از ستون قدیمی iv_models.series (که فقط سال انتشار رو نگه
         # می‌داره و صرفاً برای نمایش «(سال)» در پنل استفاده می‌شه — دست‌نخورده می‌مونه).
@@ -885,7 +898,7 @@ def update_model(model_id: int, **fields) -> None:
     if not fields:
         return
     allowed = {"name", "series", "series_id", "sort_order", "active", "dual_sim_parts", "esim_only",
-               "color_pricing", "part_pricing", "grade_pricing"}
+               "color_pricing", "part_pricing", "grade_pricing", "capacity_pricing"}
     cols = [k for k in fields if k in allowed]
     if not cols:
         return
@@ -961,7 +974,7 @@ def get_capacity(cap_id: int) -> dict | None:
         conn.close()
 
 
-def create_capacity(model_id: int, storage_id: int, base_price: int,
+def create_capacity(model_id: int, storage_id: int | None, base_price: int,
                      buy_price_ref: int, sell_price_ref: int,
                      fx_ref_rate: int = 0, demand_percent: float = 0,
                      part_id: int | None = None, color_id: int | None = None,
@@ -1013,16 +1026,17 @@ def delete_capacity(cap_id: int) -> None:
         conn.close()
 
 
-def get_capacity_exact(model_id: int, storage_id: int, part_id: int | None = None,
+def get_capacity_exact(model_id: int, storage_id: int | None, part_id: int | None = None,
                         color_id: int | None = None, grade_id: int | None = None) -> dict | None:
     """ردیف دقیقاً منطبق با (مدل، ظرفیت، پارت، رنگ، سری اصالت — با شناسه) رو برمی‌گردونه
     (یا None) — برای upsert_capacity استفاده می‌شه. مقایسهٔ NULL-safe با IS (نه =، چون
-    NULL=NULL توی SQL همیشه false برمی‌گرده)."""
+    NULL=NULL توی SQL همیشه false برمی‌گرده) — storage_id هم از ۲۰۲۶-۰۷-۳۰ می‌تونه NULL باشه
+    (مدل‌هایی که ظرفیت روش قیمت رو عوض نمی‌کنه، iv_models.capacity_pricing)."""
     ensure_schema()
     conn = _conn()
     try:
         row = conn.execute(
-            "SELECT * FROM iv_capacities WHERE model_id=? AND storage_id=? AND part_id IS ? "
+            "SELECT * FROM iv_capacities WHERE model_id=? AND storage_id IS ? AND part_id IS ? "
             "AND color_id IS ? AND grade_id IS ? LIMIT 1;",
             (model_id, storage_id, part_id, color_id, grade_id)).fetchone()
         return dict(row) if row else None
@@ -1030,7 +1044,7 @@ def get_capacity_exact(model_id: int, storage_id: int, part_id: int | None = Non
         conn.close()
 
 
-def upsert_capacity(model_id: int, storage_id: int, base_price: int, buy_price_ref: int,
+def upsert_capacity(model_id: int, storage_id: int | None, base_price: int, buy_price_ref: int,
                      sell_price_ref: int, fx_ref_rate: int = 0, demand_percent: float = 0,
                      part_id: int | None = None, color_id: int | None = None,
                      grade_id: int | None = None) -> int:
@@ -1106,18 +1120,21 @@ def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "", 
                       grade: str = "") -> dict | None:
     """قیمت دقیق (مدل+ظرفیت+پارت+رنگ+سری اصالت) رو پیدا می‌کنه؛ اگه قیمت اختصاصی برای اون
     ترکیب ثبت نشده باشه، fallback می‌کنه از دقیق‌ترین ترکیب (کمترین بعدِ عمومی) به سمت
-    عمومی‌ترین (هر سه بعد NULL) — یعنی ادمین فقط جایی که قیمت واقعاً فرق داره لازمه
-    پارت/رنگ/سری مشخص وارد کنه، بقیه از قیمت عمومی‌تر استفاده می‌کنن.
+    عمومی‌ترین (هر چهار بعد NULL) — یعنی ادمین فقط جایی که قیمت واقعاً فرق داره لازمه
+    ظرفیت/پارت/رنگ/سری مشخص وارد کنه، بقیه از قیمت عمومی‌تر استفاده می‌کنن.
 
     ورودی‌ها همچنان رشته‌ن (نه شناسه) چون ویزارد ربات با برچسب/کلید کار می‌کنه، نه id —
     این تابع خودش قبل از جست‌وجو رشته‌ها رو به شناسهٔ متناظر تبدیل می‌کنه. `grade` همون
     option_key دستهٔ سراسری `iv_coefficients(category='grade')` هست (مثل 'grade_n')، نه
     یه نام آزاد مثل رنگ.
 
-    اگه ادمین اثر رنگ/پارت/سری روی قیمت این مدل رو خاموش کرده باشه
-    (iv_models.color_pricing/part_pricing/grade_pricing)، همون بعد این‌جا قبل از جست‌وجو
-    صفر می‌شه — یعنی کاربر هرچی هم توی ربات انتخاب کرده باشه، قیمت از ردیف عمومی همون
-    مدل خونده می‌شه."""
+    اگه ادمین اثر رنگ/پارت/سری/ظرفیت روی قیمت این مدل رو خاموش کرده باشه
+    (iv_models.color_pricing/part_pricing/grade_pricing/capacity_pricing)، همون بعد این‌جا
+    قبل از جست‌وجو صفر می‌شه — یعنی کاربر هرچی هم توی ویزارد انتخاب کرده باشه، قیمت از
+    ردیف عمومی همون مدل خونده می‌شه. capacity_label نامعتبر (که اصلاً به هیچ ظرفیت
+    ثبت‌شده‌ای برای این مدل نمی‌خوره) مستقل از این توگل همیشه None برمی‌گردونه — چون خودِ
+    سؤال ظرفیت در ویزارد همیشه پرسیده می‌شه (برای شناسایی دستگاه)، این حالت یعنی یه
+    برچسب واقعاً نامعتبر رسیده، نه اینکه ظرفیت بی‌اثره."""
     ensure_schema()
     model = get_model(model_id)
     if model:
@@ -1127,30 +1144,33 @@ def resolve_capacity(model_id: int, capacity_label: str, part_number: str = "", 
             part_number = ""
         if not model.get("grade_pricing"):
             grade = ""
-    storage_id = _find_storage_id(model_id, capacity_label)
-    if storage_id is None:
+    found_storage_id = _find_storage_id(model_id, capacity_label)
+    if found_storage_id is None:
         return None
+    storage_id = None if (model and not model.get("capacity_pricing", 1)) else found_storage_id
     part_id = _find_part_id(part_number) if part_number else None
     color_id = _find_color_id(model_id, color) if color else None
     grade_id = _find_coefficient_id("grade", grade) if grade else None
     conn = _conn()
     try:
-        def _q(p, c, g):
+        def _q(s, p, c, g):
             return conn.execute(
-                _CAP_SELECT + " WHERE c.model_id=? AND c.storage_id=? AND c.part_id IS ? "
+                _CAP_SELECT + " WHERE c.model_id=? AND c.storage_id IS ? AND c.part_id IS ? "
                 "AND c.color_id IS ? AND c.grade_id IS ? AND c.active=1 LIMIT 1;",
-                (model_id, storage_id, p, c, g)).fetchone()
+                (model_id, s, p, c, g)).fetchone()
 
+        storage_candidates = [storage_id, None] if storage_id is not None else [None]
         part_candidates = [part_id, None] if part_id is not None else [None]
         color_candidates = [color_id, None] if color_id is not None else [None]
         grade_candidates = [grade_id, None] if grade_id is not None else [None]
         # ترکیب‌ها رو از دقیق‌ترین (کمترین None) به عمومی‌ترین مرتب می‌کنیم — یعنی ادمین
         # فقط جایی که واقعاً قیمت فرق داره لازمه دقیق وارد کنه.
         combos = sorted(
-            {(p, c, g) for p in part_candidates for c in color_candidates for g in grade_candidates},
+            {(s, p, c, g) for s in storage_candidates for p in part_candidates
+             for c in color_candidates for g in grade_candidates},
             key=lambda t: sum(1 for x in t if x is None))
-        for p, c, g in combos:
-            row = _q(p, c, g)
+        for s, p, c, g in combos:
+            row = _q(s, p, c, g)
             if row:
                 return dict(row)
         return None
