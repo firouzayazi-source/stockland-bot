@@ -92,6 +92,7 @@ ALL_PERMISSIONS = {
     "logs":       "گزارش فعالیت (لاگ‌ها)",
     "broadcast":  "پیام همگانی",
     "payment":    "مدیریت پرداخت (رسیدهای کارت‌به‌کارت)",
+    "payment_gateways": "درگاه‌های پرداخت آنلاین",
     "reports":    "گزارش‌های مالی",
     "news":       "اخبار و RSS",
     "articles":   "مقالات و آموزش‌ها",
@@ -113,6 +114,7 @@ PERM_LEGACY = {
     "categories": "products",
     "backup": "database", "restore": "database", "recovery": "database",
     "payment": "wallets",
+    "payment_gateways": "settings",
     "reports": "wallets",
     "news": "settings", "articles": "settings",
     "ai_pricing": "settings",
@@ -604,6 +606,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
             {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
             {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
+            {nav_item("/admin/payment-gateways", "credit-card", "درگاه‌های پرداخت", "payment_gateways")}
             <div class="nav-divider"><span>مدیریت اپ</span></div>
             {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
             {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
@@ -13845,3 +13848,143 @@ async def iphone_history_page(request: Request, flash: str = ""):
       </table>
     </div>"""
     return _layout("تاریخچهٔ کارشناسی آیفون", body, adm, flash=flash)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# درگاه‌های پرداخت آنلاین (چند‌درگاهی، مدیریت از پنل، failover خودکار)
+# منطق هر درگاه در پکیج payment_gateways/ است. این‌جا فقط UI مدیریت + تست.
+# ═══════════════════════════════════════════════════════════════════════════
+@router.get("/payment-gateways", response_class=HTMLResponse)
+async def payment_gateways_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "payment_gateways")
+    if guard: return guard
+    import db as _db
+    from payment_gateways import PAYMENT_GATEWAYS
+    saved = {g["gateway"]: g for g in _db.list_payment_gateways()}
+
+    rows = ""
+    hidden_forms = ""
+    for code, meta in PAYMENT_GATEWAYS.items():
+        cfg = saved.get(code) or {"enabled": 0, "priority": 100, "credentials": {}, "sandbox": 0}
+        checked = "checked" if cfg["enabled"] else ""
+        sb_checked = "checked" if cfg["sandbox"] else ""
+        creds = cfg.get("credentials") or {}
+        cred_html = ""
+        for fkey, flabel in meta["fields"]:
+            has = bool(str(creds.get(fkey) or "").strip())
+            ph = "•••• ثبت شده (برای تغییر مقدار تازه وارد کن)" if has else "وارد کن"
+            cred_html += (
+                f'<div class="flex flex-col gap-1">'
+                f'<span class="text-xs text-gray-500">{html.escape(flabel)}</span>'
+                f'<input type="password" autocomplete="new-password" name="cred_{code}_{fkey}" '
+                f'placeholder="{ph}" class="border rounded p-2 text-sm" dir="ltr"></div>')
+        sandbox_html = ""
+        if meta.get("supports_sandbox"):
+            sandbox_html = (
+                f'<label class="flex items-center gap-2 text-xs text-gray-600 mt-2">'
+                f'<input type="checkbox" name="sandbox_{code}" {sb_checked}> حالت تست (Sandbox)</label>')
+        rows += f"""
+        <div class="bg-white rounded-xl shadow-sm p-4 border">
+          <div class="flex items-center justify-between mb-3">
+            <div class="font-bold text-gray-800">{html.escape(meta['label'])}</div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input type="checkbox" name="enabled_{code}" class="sr-only peer" {checked}>
+              <div class="w-11 h-6 bg-gray-200 rounded-full peer transition-colors peer-checked:bg-indigo-600
+                          after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white
+                          after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow
+                          peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full"></div>
+            </label>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1">
+              <span class="text-xs text-gray-500">اولویت (کوچک‌تر = زودتر امتحان می‌شه)</span>
+              <input type="text" inputmode="numeric" dir="ltr" name="priority_{code}" value="{cfg['priority']}" class="border rounded p-2 text-sm">
+            </div>
+            {cred_html}
+          </div>
+          {sandbox_html}
+          <div class="mt-3">
+            <button type="submit" form="pgtest-{code}" class="px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 rounded">🔌 تست اتصال</button>
+          </div>
+        </div>"""
+        hidden_forms += (
+            f'<form id="pgtest-{code}" method="post" action="/admin/payment-gateways/test">'
+            f'<input type="hidden" name="gateway" value="{code}"></form>')
+
+    body = f"""
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h1 class="text-xl font-bold text-gray-800">💳 درگاه‌های پرداخت</h1>
+    </div>
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-xs text-blue-800 leading-6">
+      درخواست پرداخت اول به درگاهِ فعالِ با <b>کمترین عدد اولویت</b> می‌ره؛ اگه خطا داد، خودکار سراغ درگاه بعدی می‌ره (failover).
+      برای failover واقعی حداقل دو درگاه فعال لازمه. کلیدها فقط ذخیره می‌شن و هیچ‌وقت دوباره نمایش داده نمی‌شن.
+      <br>⚠️ درگاه‌های غیر از زرین‌پال قبل از فعال‌سازی حتماً با دکمهٔ «تست اتصال» با کلید واقعی بررسی بشن.
+      اگه هیچ درگاهی این‌جا فعال نباشه، سیستم به‌صورت خودکار از زرین‌پالِ تنظیم‌شده در فایل env استفاده می‌کنه (رفتار قبلی).
+    </div>
+    <form method="post" action="/admin/payment-gateways/save" class="space-y-4">
+      {rows}
+      <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
+    {hidden_forms}
+    """
+    return _layout("درگاه‌های پرداخت", body, adm, flash=flash)
+
+
+@router.post("/payment-gateways/save")
+async def payment_gateways_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "payment_gateways")
+    if guard: return guard
+    import db as _db
+    from payment_gateways import PAYMENT_GATEWAYS
+    form = await request.form()
+    saved = {g["gateway"]: g for g in _db.list_payment_gateways()}
+    for code, meta in PAYMENT_GATEWAYS.items():
+        enabled = 1 if form.get(f"enabled_{code}") else 0
+        try:
+            priority = int(str(form.get(f"priority_{code}") or "100").strip() or "100")
+        except ValueError:
+            priority = 100
+        sandbox = 1 if (meta.get("supports_sandbox") and form.get(f"sandbox_{code}")) else 0
+        # کلیدها: فقط وقتی مقدار تازهٔ غیرخالی وارد شده باشه بازنویسی می‌شن — یعنی ادمین
+        # لازم نیست هر بار ذخیره، همهٔ کلیدها رو دوباره تایپ کنه (وگرنه با هر save پاک می‌شدن).
+        existing_creds = dict((saved.get(code) or {}).get("credentials") or {})
+        for fkey, _ in meta["fields"]:
+            val = str(form.get(f"cred_{code}_{fkey}") or "").strip()
+            if val:
+                existing_creds[fkey] = val
+        _db.save_payment_gateway(code, enabled, priority, existing_creds, sandbox)
+    _log(request, "ذخیرهٔ تنظیمات درگاه‌های پرداخت", "درگاه‌های پرداخت", "", admin_info=adm)
+    return _redir(f"/admin/payment-gateways?flash={e('✅ تنظیمات درگاه‌ها ذخیره شد')}")
+
+
+@router.post("/payment-gateways/test")
+async def payment_gateways_test(request: Request):
+    """تست اتصال یک درگاه — یه درخواست ساخت پرداخت آزمایشی می‌زنه (تراکنش واقعی در دیتابیس
+    ما ثبت نمی‌شه؛ فقط چک می‌کنه که با کلید فعلی، درگاه لینک پرداخت می‌سازه یا خطا می‌ده)."""
+    import os
+    adm = _get_admin(request)
+    guard = _require(adm, "payment_gateways")
+    if guard: return guard
+    import db as _db
+    from payment_gateways import get_gateway_module, gateway_label
+    form = await request.form()
+    code = str(form.get("gateway") or "").strip()
+    mod = get_gateway_module(code)
+    row = _db.get_payment_gateway(code)
+    if not mod or not row:
+        return _redir(f"/admin/payment-gateways?flash={e('ابتدا تنظیمات این درگاه را ذخیره کن')}")
+    cfg = dict(row.get("credentials") or {})
+    cfg["sandbox"] = bool(row.get("sandbox"))
+    base_cb = (os.getenv("BASE_CALLBACK_URL") or "https://panel.stland.ir/payment/callback").rstrip("/")
+    try:
+        res = mod.create_payment(10000, base_cb + "/" + code, "تست اتصال درگاه استوک‌لند", cfg)
+    except Exception as exc:
+        res = {"ok": False, "error": str(exc)}
+    if res.get("ok"):
+        msg = f"✅ {gateway_label(code)}: اتصال موفق بود (لینک پرداخت آزمایشی ساخته شد)"
+    else:
+        msg = f"❌ {gateway_label(code)}: {str(res.get('error') or 'خطای نامشخص')[:200]}"
+    _log(request, "تست اتصال درگاه پرداخت", "درگاه‌های پرداخت", f"{code}: {'ok' if res.get('ok') else 'fail'}", admin_info=adm)
+    return _redir(f"/admin/payment-gateways?flash={e(msg)}")
