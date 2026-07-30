@@ -29,7 +29,7 @@ def build_report(contributions: list[dict], score: int, verdict: dict, fair_pric
     if not negatives and not positives:
         lines.append("این دستگاه در شرایط استاندارد بازار قرار داره، بدون افت یا افزایش قابل‌توجه.")
 
-    lines.append(f"امتیاز StockLand این دستگاه {score} از ۱۰۰ است.")
+    lines.append(f"امتیاز استوک‌لند این دستگاه {score} از ۱۰۰ است.")
     if verdict.get("ratio") is not None:
         if verdict["ratio"] < 1:
             lines.append(f"قیمت پیشنهادی فروشنده حدود {round((1-verdict['ratio'])*100)}٪ پایین‌تر از ارزش واقعی بازاره.")
