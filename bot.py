@@ -4744,6 +4744,26 @@ def _iv_finalize(chat_id, uid):
         f"{result['verdict_emoji']} <b>{result['verdict_text']}</b>\n\n"
         f"📝 {result['report_text']}"
     )
+    # کارشناس مکمل هوش مصنوعی — اگه از پنل فعال بود و تحلیل موفق بود، یه بلوک اضافه
+    # زیر نتیجهٔ دیتامحور نشون داده می‌شه (بدون این‌که قیمت دیتامحور بالا دست بخوره).
+    ai = result.get("ai")
+    if ai:
+        trend_labels = {"bullish": "📈 صعودی", "bearish": "📉 نزولی", "stable": "➖ ثابت"}
+        risk_labels = {"low": "🟢 پایین", "medium": "🟡 متوسط", "high": "🔴 بالا"}
+        ai_lines = ["\n🤖 <b>تحلیل هوش مصنوعی</b>"]
+        if ai.get("adjustment_percent"):
+            ai_lines.append(f"💰 قیمت اصلاح‌شده: <b>{ai['final_price']:,}</b> تومان "
+                             f"({'+' if ai['adjustment_percent'] > 0 else ''}{ai['adjustment_percent']}٪)")
+        if ai.get("market_trend") in trend_labels:
+            ai_lines.append(f"روند بازار: {trend_labels[ai['market_trend']]}")
+        if ai.get("risk") in risk_labels:
+            ai_lines.append(f"ریسک: {risk_labels[ai['risk']]}")
+        if ai.get("reason"):
+            ai_lines.append(f"💬 {html.escape(ai['reason'])}")
+        for w in ai.get("warnings") or []:
+            ai_lines.append(f"⚠️ {html.escape(w)}")
+        txt += "\n" + "\n".join(ai_lines)
+
     _iv_enter_post_result(chat_id, uid, model_name=result.get("model_name", ""),
                            estimated_price=result.get("fair_price"), summary_text=txt,
                            city=state.get("city", ""))
