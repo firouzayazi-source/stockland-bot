@@ -366,6 +366,7 @@ def init_db(db_path=None):
             "ref_id": "TEXT",
             "paid_at": "TEXT",
             "error": "TEXT",
+            "gateway": "TEXT DEFAULT 'zarinpal'",
         }.items():
             try:
                 cur.execute(f"ALTER TABLE zarinpal_transactions ADD COLUMN {col} {decl};")
@@ -5534,6 +5535,107 @@ def get_cfg_json(key: str, default: dict) -> dict:
         return d
     except Exception:
         return dict(default)
+
+
+# ─── درگاه‌های پرداخت چند‌گانه (مدیریت از پنل) ────────────────────────────────
+# تنظیمات هر درگاه در این جدول ذخیره می‌شه، نه در .env — یعنی ادمین می‌تونه بدون
+# ری‌دیپلوی درگاه اضافه/حذف/فعال/غیرفعال کنه و ترتیب اولویت failover رو عوض کنه.
+# ⚠️ credentials به‌صورت JSON متنی (بدون رمزنگاری) ذخیره می‌شه — دقیقاً همون سطح امنیتی
+# که پروژه از قبل برای رازها در .env داره (بخش ۱۳ CLAUDE.md). چون در دسترس‌بودن پرداخت
+# مهم‌تر از رمزنگاری‌در‌سکون مرچنت‌آیدیه (که به‌تنهایی امکان برداشت پول نمی‌ده)، عمداً
+# fail-closed نشده. کلید هیچ‌وقت به HTML پنل برنمی‌گرده (فقط وضعیت «ثبت‌شده/نشده»).
+_PAYGW_SCHEMA_READY = False
+
+
+def ensure_payment_gateways_schema():
+    global _PAYGW_SCHEMA_READY
+    if _PAYGW_SCHEMA_READY:
+        return
+    _PAYGW_SCHEMA_READY = True
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS payment_gateways (
+                gateway     TEXT PRIMARY KEY,
+                enabled     INTEGER NOT NULL DEFAULT 0,
+                priority    INTEGER NOT NULL DEFAULT 100,
+                credentials TEXT NOT NULL DEFAULT '{}',
+                sandbox     INTEGER NOT NULL DEFAULT 0,
+                updated_at  TEXT
+            );""")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_payment_gateways() -> list:
+    """همهٔ ردیف‌های تنظیم درگاه (فقط اونهایی که ادمین یه‌بار ذخیره کرده) — برای پنل."""
+    ensure_payment_gateways_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT gateway, enabled, priority, credentials, sandbox, updated_at "
+            "FROM payment_gateways ORDER BY priority ASC, gateway ASC;").fetchall()
+        out = []
+        for r in rows:
+            try:
+                creds = _json.loads(r[3] or "{}")
+            except Exception:
+                creds = {}
+            out.append({"gateway": r[0], "enabled": int(r[1] or 0), "priority": int(r[2] or 100),
+                        "credentials": creds, "sandbox": int(r[4] or 0), "updated_at": r[5]})
+        return out
+    finally:
+        conn.close()
+
+
+def get_payment_gateway(gateway: str) -> dict | None:
+    ensure_payment_gateways_schema()
+    conn = _get_connection()
+    try:
+        r = conn.execute(
+            "SELECT gateway, enabled, priority, credentials, sandbox, updated_at "
+            "FROM payment_gateways WHERE gateway=?;", (gateway,)).fetchone()
+        if not r:
+            return None
+        try:
+            creds = _json.loads(r[3] or "{}")
+        except Exception:
+            creds = {}
+        return {"gateway": r[0], "enabled": int(r[1] or 0), "priority": int(r[2] or 100),
+                "credentials": creds, "sandbox": int(r[4] or 0), "updated_at": r[5]}
+    finally:
+        conn.close()
+
+
+def save_payment_gateway(gateway: str, enabled: int, priority: int,
+                          credentials: dict, sandbox: int = 0) -> None:
+    """upsert تنظیم یک درگاه. credentials یه دیکشنریه که JSON می‌شه."""
+    ensure_payment_gateways_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO payment_gateways (gateway, enabled, priority, credentials, sandbox, updated_at) "
+            "VALUES (?,?,?,?,?,datetime('now')) "
+            "ON CONFLICT(gateway) DO UPDATE SET enabled=excluded.enabled, priority=excluded.priority, "
+            "credentials=excluded.credentials, sandbox=excluded.sandbox, updated_at=excluded.updated_at;",
+            (gateway, int(enabled), int(priority), _json.dumps(credentials, ensure_ascii=False), int(sandbox)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_active_payment_gateways() -> list:
+    """درگاه‌های فعال، مرتب بر اساس اولویت صعودی — پایهٔ failover در payment_service.
+    فقط درگاه‌هایی که enabled=1 هستن و حداقل یه فیلد اعتبار غیرخالی دارن (یا sandbox روشنه)."""
+    active = []
+    for g in list_payment_gateways():
+        if not g["enabled"]:
+            continue
+        has_cred = bool(g["sandbox"]) or any((str(v).strip() for v in (g["credentials"] or {}).values()))
+        if has_cred:
+            active.append(g)
+    return active
 
 
 _GROWTH_SCHEMA_READY = False

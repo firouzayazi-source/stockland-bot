@@ -211,6 +211,7 @@ def ensure_schema() -> None:
             "ref_id": "TEXT",
             "paid_at": "TEXT",
             "error": "TEXT",
+            "gateway": "TEXT DEFAULT 'zarinpal'",
         }.items():
             if col not in tx_cols:
                 conn.execute(f"ALTER TABLE zarinpal_transactions ADD COLUMN {col} {decl};")
@@ -479,6 +480,79 @@ def payment_callback_url() -> str:
             public_base = "https://" + public_base
         return public_base.rstrip("/") + "/payment/callback"
     raise HTTPException(500, "BASE_CALLBACK_URL is not configured")
+
+
+# ---------------------------------------------------------------------------
+# چند‌درگاهی (پنل‌محور، با failover خودکار)
+# منطق هر درگاه در پکیج payment_gateways/ است (مثل iphone_valuation/ai_providers).
+# این‌جا فقط لایهٔ هماهنگی: انتخاب درگاه‌های فعال، ترتیب اولویت، و failover.
+# ---------------------------------------------------------------------------
+def gateway_callback_url(gateway: str) -> str:
+    """آدرس کال‌بک مخصوص هر درگاه: {base}/payment/callback/{gateway}. مسیر شامل نام درگاست
+    تا هنگام بازگشت کاربر بدونیم با کدوم درگاه verify کنیم (پارامتر بازگشتی هر درگاه اسم
+    متفاوتی داره)."""
+    return payment_callback_url().rstrip("/") + "/" + gateway
+
+
+def _resolve_gateway_config(gateway: str) -> dict | None:
+    """config یک درگاه — اول از پنل (جدول payment_gateways)، اگه نبود برای زرین‌پال از env
+    قدیمی (سازگاری عقب‌رو: تا وقتی ادمین پنل رو تنظیم نکرده، زرین‌پال از .env کار می‌کنه)."""
+    try:
+        import db as _db
+        row = _db.get_payment_gateway(gateway)
+    except Exception:
+        row = None
+    if row:
+        cfg = dict(row.get("credentials") or {})
+        # ردیف پنل فقط وقتی «برنده» است که واقعاً اعتبار داشته باشه (کلید غیرخالی یا sandbox
+        # روشن)؛ یه ردیف خالی (مثلاً درگاهی که ادمین ذخیره کرده ولی کلید نذاشته) نباید
+        # جلوی fallback به env رو بگیره — وگرنه زرین‌پالِ env بی‌دلیل غیرقابل‌استفاده می‌شه.
+        has_cred = bool(row.get("sandbox")) or any(str(v).strip() for v in cfg.values())
+        if has_cred:
+            cfg["sandbox"] = bool(row.get("sandbox"))
+            return cfg
+    if gateway == "zarinpal" and MERCHANT_ID:
+        return {"merchant_id": MERCHANT_ID,
+                "sandbox": os.getenv("ZARINPAL_SANDBOX", "") in ("1", "true", "True")}
+    return None
+
+
+def _gateways_for_create() -> list:
+    """ترتیب درگاه‌ها برای failover — درگاه‌های فعال پنل به‌ترتیب اولویت؛ اگه پنل خالی بود،
+    fallback به زرین‌پالِ env تا چیزی نشکنه (رفتار قبل از این فیچر حفظ می‌شه)."""
+    try:
+        import db as _db
+        active = _db.get_active_payment_gateways()
+    except Exception:
+        active = []
+    if active:
+        return [g["gateway"] for g in active]
+    return ["zarinpal"] if MERCHANT_ID else []
+
+
+def _run_gateway_failover(amount_toman: int, description: str):
+    """روی درگاه‌های فعال به‌ترتیب اولویت حلقه می‌زنه؛ اولین موفق رو برمی‌گردونه
+    (gateway_code, authority, payment_url)، یا None اگه همه شکست خوردن."""
+    from payment_gateways import get_gateway_module
+    last_error = ""
+    for gw in _gateways_for_create():
+        mod = get_gateway_module(gw)
+        cfg = _resolve_gateway_config(gw)
+        if not mod or not cfg:
+            continue
+        try:
+            res = mod.create_payment(amount_toman, gateway_callback_url(gw), description, cfg)
+        except Exception as exc:
+            last_error = str(exc)
+            logger.error("Gateway %s raised on create: %s", gw, exc)
+            continue
+        if res.get("ok") and res.get("payment_url"):
+            logger.info("Gateway %s created payment (authority=%s)", gw, res.get("authority"))
+            return (gw, res["authority"], res["payment_url"])
+        last_error = res.get("error", "")
+        logger.error("Gateway %s create failed: %s", gw, last_error)
+    logger.error("All payment gateways failed. last_error=%s", last_error)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -968,45 +1042,145 @@ def create_payment(payload: dict):
                 if cnt >= limit_val:
                     raise HTTPException(400, "Daily purchase limit reached")
 
-        ok, authority, detail = zarinpal_create(
-            amount_toman,
-            f"Stockland {payment_type} payment {product_title} user {user_id}".strip(),
-        )
-        if not ok:
-            logger.error("Zarinpal create failed: %s", detail)
-            raise HTTPException(400, "Zarinpal create failed")
+        description = f"Stockland {payment_type} payment {product_title} user {user_id}".strip()
+        chosen = _run_gateway_failover(amount_toman, description)
+        if not chosen:
+            raise HTTPException(400, "ایجاد تراکنش در همهٔ درگاه‌ها ناموفق بود")
+        gateway_code, authority, payment_url = chosen
 
         total_amount = amount_toman + wallet_reserved
         conn.execute(
             """
             INSERT INTO zarinpal_transactions
                 (user_id, amount, authority, status, created_at, payment_type,
-                 product_id, wallet_reserved, total_amount, buyer_type, chat_id)
-            VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?);
+                 product_id, wallet_reserved, total_amount, buyer_type, chat_id, gateway)
+            VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (user_id, amount_toman, authority, now_iso(), payment_type,
-             product_id, wallet_reserved, total_amount, buyer_type, chat_id),
+             product_id, wallet_reserved, total_amount, buyer_type, chat_id, gateway_code),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"authority": authority, "payment_url": STARTPAY_URL.rstrip("/") + "/" + authority}
+    return {"authority": authority, "payment_url": payment_url, "gateway": gateway_code}
 
 
 # ---------------------------------------------------------------------------
-# 2) Payment callback (user returns from Zarinpal)
+# 2) Payment callback (user returns from the gateway) — چند‌درگاهی
 # ---------------------------------------------------------------------------
-@app.get("/payment/callback", response_class=HTMLResponse)
-def payment_callback(Authority: str | None = None, Status: str | None = None):
+def _finalize_paid_tx(conn, tx, ref_id, authority):
+    """بخش نهایی‌سازی پرداخت موفق (شارژ کیف‌پول یا تحویل محصول) — مشترک بین کال‌بک همهٔ
+    درگاه‌ها. فرض: قفل BEGIN IMMEDIATE از قبل گرفته شده و status هنوز paid نیست. منطق
+    این بخش عیناً همون رفتار قبلی زرین‌پاله (شامل بازگشت وجه به کیف‌پول در race condition
+    موجودی) — فقط درگاه‌آگاه شده."""
+    user_id = int(tx["user_id"])
+    chat_id = int(tx["chat_id"]) if tx["chat_id"] is not None else user_id
+    amount = int(tx["amount"])
+    wallet_reserved = int(tx["wallet_reserved"] or 0)
+    total_amount = int(tx["total_amount"] or (amount + wallet_reserved))
+    payment_type = str(tx["payment_type"] or "wallet").lower()
+    buyer_type = str(tx["buyer_type"] or "customer")
+
+    # Mark paid first (the unique pending guard makes this safe)
+    conn.execute(
+        "UPDATE zarinpal_transactions SET status='paid', ref_id=?, paid_at=? "
+        "WHERE authority=? AND status='pending';",
+        (ref_id, now_iso(), authority),
+    )
+
+    # ---- wallet top-up ----
+    if payment_type == "wallet":
+        mark_wallet_charge(conn, user_id, amount)
+        conn.commit()
+        send_telegram_message(
+            chat_id,
+            f"کیف پول شما با موفقیت شارژ شد.\n"
+            f"مبلغ: {amount:,} تومان\n"
+            f"کد پیگیری: {ref_id}",
+        )
+        return success_page(amount, ref_id or "-")
+
+    # ---- product purchase ----
+    product_id = int(tx["product_id"])
+    product = get_product(conn, product_id)
+    if not product:
+        conn.rollback()
+        return error_page("محصول پیدا نشد. لطفاً با پشتیبانی تماس بگیرید.")
+
+    title = str(product["title"])
+    category = str(product["category"])
+
+    # consume the reserved wallet portion (combined payment)
+    deduct_wallet_reserved(conn, user_id, wallet_reserved)
+    order_id = create_order(conn, user_id, category, product_id, title, total_amount, buyer_type)
+    feed_item = claim_feed_item(conn, product_id)
+
+    if feed_item:
+        feed_id, feed_data = feed_item
+        conn.commit()
+        send_telegram_message(
+            chat_id,
+            (
+                "سفارش شما ثبت و تحویل شد.\n\n"
+                f"شماره سفارش: #{order_id}\n"
+                f"سرویس: {html.escape(title)}\n"
+                f"مبلغ کل: {total_amount:,} تومان\n"
+                f"کد پیگیری: {ref_id}\n\n"
+                f"<code>{html.escape(feed_data)}</code>"
+            ),
+            parse_mode="HTML",
+        )
+        if ADMIN_ID:
+            send_telegram_message(
+                ADMIN_ID,
+                f"تحویل خودکار محصول انجام شد.\n\n"
+                f"Order ID: #{order_id}\nUser ID: {user_id}\n"
+                f"Product: {title} (#{product_id})\nFeed ID: {feed_id}",
+            )
+    else:
+        # موجودی درست همین چند لحظه (بین ساخت لینک پرداخت و بازگشت از درگاه) توسط خریدار
+        # دیگری تموم شده — استثنای نادر race condition. طبق سیاست پروژه هیچ محصولی در آینده
+        # ارسال نمی‌شه: کل مبلغ (سهم کیف‌پول + سهم درگاه) به کیف‌پول برمی‌گرده، نه صف انتظار.
+        conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;",
+                     (now_iso(), order_id))
+        mark_wallet_charge(conn, user_id, total_amount)
+        conn.commit()
+        send_telegram_message(
+            chat_id,
+            (
+                "❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
+                f"مبلغ <b>{total_amount:,}</b> تومان به کیف‌پول شما بازگردانده شد.\n"
+                f"کد پیگیری: {ref_id}"
+            ),
+            parse_mode="HTML",
+        )
+        if ADMIN_ID:
+            send_telegram_message(
+                ADMIN_ID,
+                f"⚠️ سفارش بدون موجودی — مبلغ به کیف‌پول کاربر بازگشت.\n\n"
+                f"Order ID: #{order_id}\nUser ID: {user_id}\n"
+                f"Product: {title} (#{product_id})",
+            )
+
+    return success_page(total_amount, ref_id or "-")
+
+
+def _handle_payment_callback(gw: str, query: dict, form: dict):
+    """کال‌بک عمومی درگاه‌آگاه — پارامترهای بازگشتی رو با ماژول درگاه parse می‌کنه،
+    تراکنش رو پیدا و با همون درگاهی که باهاش ساخته شده verify می‌کنه، بعد نهایی‌سازی."""
     ensure_schema()
-    if not Authority:
-        return error_page("Authority نامعتبر است.")
+    from payment_gateways import get_gateway_module
+    mod = get_gateway_module(gw) or get_gateway_module("zarinpal")
+    parsed = mod.parse_callback(query or {}, form or {})
+    authority = (parsed.get("authority") or "").strip()
+    if not authority:
+        return error_page("شناسهٔ تراکنش نامعتبر است.")
 
     conn = db_connect()
     try:
         tx = conn.execute(
-            "SELECT * FROM zarinpal_transactions WHERE authority=? LIMIT 1;", (Authority,)
+            "SELECT * FROM zarinpal_transactions WHERE authority=? LIMIT 1;", (authority,)
         ).fetchone()
         if not tx:
             return error_page("تراکنش پیدا نشد.")
@@ -1015,125 +1189,43 @@ def payment_callback(Authority: str | None = None, Status: str | None = None):
         if str(tx["status"]).lower() == "paid":
             return success_page(int(tx["total_amount"] or tx["amount"]), tx["ref_id"] or "-")
 
-        # User canceled or gateway returned non-OK
-        if Status != "OK":
+        # کاربر لغو کرد یا درگاه نتیجهٔ ناموفق برگردوند
+        if not parsed.get("success"):
             conn.execute(
                 "UPDATE zarinpal_transactions SET status='canceled', error=? "
                 "WHERE authority=? AND status='pending';",
-                ("gateway returned non-OK status", Authority),
+                ("gateway returned non-success status", authority),
             )
             conn.commit()
             return cancel_page()
 
-        # Verify with Zarinpal
-        ok, ref_id, verify_detail = verify_zarinpal(Authority, int(tx["amount"]))
-        if not ok:
+        # verify با همون درگاهی که تراکنش باهاش ساخته شده (نه لزوماً gw مسیر)
+        tx_gw = str(tx["gateway"] or gw or "zarinpal")
+        vmod = get_gateway_module(tx_gw) or mod
+        vcfg = _resolve_gateway_config(tx_gw) or {}
+        try:
+            vres = vmod.verify_payment(authority, int(tx["amount"]), vcfg)
+        except Exception as exc:
+            vres = {"ok": False, "ref_id": "", "error": str(exc)}
+        if not vres.get("ok"):
             conn.execute(
                 "UPDATE zarinpal_transactions SET error=? WHERE authority=?;",
-                (verify_detail[:1000], Authority),
+                (str(vres.get("error") or "")[:1000], authority),
             )
             conn.commit()
             return error_page("پرداخت تایید نشد.")
+        ref_id = vres.get("ref_id", "")
 
         # Lock and re-check (idempotency under concurrent callbacks)
         conn.execute("BEGIN IMMEDIATE;")
         tx = conn.execute(
-            "SELECT * FROM zarinpal_transactions WHERE authority=? LIMIT 1;", (Authority,)
+            "SELECT * FROM zarinpal_transactions WHERE authority=? LIMIT 1;", (authority,)
         ).fetchone()
         if str(tx["status"]).lower() == "paid":
             conn.commit()
             return success_page(int(tx["total_amount"] or tx["amount"]), ref_id or "-")
 
-        user_id = int(tx["user_id"])
-        chat_id = int(tx["chat_id"]) if tx["chat_id"] is not None else user_id
-        amount = int(tx["amount"])
-        wallet_reserved = int(tx["wallet_reserved"] or 0)
-        total_amount = int(tx["total_amount"] or (amount + wallet_reserved))
-        payment_type = str(tx["payment_type"] or "wallet").lower()
-        buyer_type = str(tx["buyer_type"] or "customer")
-
-        # Mark paid first (the unique pending guard makes this safe)
-        conn.execute(
-            "UPDATE zarinpal_transactions SET status='paid', ref_id=?, paid_at=? "
-            "WHERE authority=? AND status='pending';",
-            (ref_id, now_iso(), Authority),
-        )
-
-        # ---- wallet top-up ----
-        if payment_type == "wallet":
-            mark_wallet_charge(conn, user_id, amount)
-            conn.commit()
-            send_telegram_message(
-                chat_id,
-                f"کیف پول شما با موفقیت شارژ شد.\n"
-                f"مبلغ: {amount:,} تومان\n"
-                f"کد پیگیری: {ref_id}",
-            )
-            return success_page(amount, ref_id or "-")
-
-        # ---- product purchase ----
-        product_id = int(tx["product_id"])
-        product = get_product(conn, product_id)
-        if not product:
-            conn.rollback()
-            return error_page("محصول پیدا نشد. لطفاً با پشتیبانی تماس بگیرید.")
-
-        title = str(product["title"])
-        category = str(product["category"])
-
-        # consume the reserved wallet portion (combined payment)
-        deduct_wallet_reserved(conn, user_id, wallet_reserved)
-        order_id = create_order(conn, user_id, category, product_id, title, total_amount, buyer_type)
-        feed_item = claim_feed_item(conn, product_id)
-
-        if feed_item:
-            feed_id, feed_data = feed_item
-            conn.commit()
-            send_telegram_message(
-                chat_id,
-                (
-                    "سفارش شما ثبت و تحویل شد.\n\n"
-                    f"شماره سفارش: #{order_id}\n"
-                    f"سرویس: {html.escape(title)}\n"
-                    f"مبلغ کل: {total_amount:,} تومان\n"
-                    f"کد پیگیری: {ref_id}\n\n"
-                    f"<code>{html.escape(feed_data)}</code>"
-                ),
-                parse_mode="HTML",
-            )
-            if ADMIN_ID:
-                send_telegram_message(
-                    ADMIN_ID,
-                    f"تحویل خودکار محصول انجام شد.\n\n"
-                    f"Order ID: #{order_id}\nUser ID: {user_id}\n"
-                    f"Product: {title} (#{product_id})\nFeed ID: {feed_id}",
-                )
-        else:
-            # موجودی درست همین چند لحظه (بین ساخت لینک پرداخت و بازگشت از درگاه) توسط خریدار
-            # دیگری تموم شده — استثنای نادر race condition. طبق سیاست پروژه هیچ محصولی در آینده
-            # ارسال نمی‌شه: کل مبلغ (سهم کیف‌پول + سهم درگاه) به کیف‌پول برمی‌گرده، نه صف انتظار.
-            conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;",
-                         (now_iso(), order_id))
-            mark_wallet_charge(conn, user_id, total_amount)
-            conn.commit()
-            send_telegram_message(
-                chat_id,
-                (
-                    "❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
-                    f"مبلغ <b>{total_amount:,}</b> تومان به کیف‌پول شما بازگردانده شد.\n"
-                    f"کد پیگیری: {ref_id}"
-                ),
-                parse_mode="HTML",
-            )
-            if ADMIN_ID:
-                send_telegram_message(
-                    ADMIN_ID,
-                    f"⚠️ سفارش بدون موجودی — مبلغ به کیف‌پول کاربر بازگشت.\n\n"
-                    f"Order ID: #{order_id}\nUser ID: {user_id}\n"
-                    f"Product: {title} (#{product_id})",
-                )
-
-        return success_page(total_amount, ref_id or "-")
+        return _finalize_paid_tx(conn, tx, ref_id, authority)
 
     except HTTPException:
         raise
@@ -1146,6 +1238,27 @@ def payment_callback(Authority: str | None = None, Status: str | None = None):
         return error_page("خطای داخلی در پردازش پرداخت. لطفاً با پشتیبانی تماس بگیرید.")
     finally:
         conn.close()
+
+
+@app.get("/payment/callback", response_class=HTMLResponse)
+def payment_callback(request: Request):
+    """کال‌بک قدیمی بدون /{gateway} — تراکنش‌های زرین‌پالِ در جریان که قبل از فیچر
+    چند‌درگاهی ساخته شدن، callback‌شون به این آدرس برمی‌گرده. سازگاری عقب‌رو."""
+    return _handle_payment_callback("zarinpal", dict(request.query_params), {})
+
+
+@app.api_route("/payment/callback/{gw}", methods=["GET", "POST"], response_class=HTMLResponse)
+async def payment_callback_gw(gw: str, request: Request):
+    """کال‌بک درگاه‌آگاه — نام درگاه در مسیره. هم GET (اکثر درگاه‌ها با ریدایرکت مرورگر)
+    هم POST (برخی درگاه‌ها فرم POST می‌فرستن) پشتیبانی می‌شه."""
+    query = dict(request.query_params)
+    form = {}
+    if request.method == "POST":
+        try:
+            form = dict(await request.form())
+        except Exception:
+            form = {}
+    return _handle_payment_callback(gw, query, form)
 
 
 # ---------------------------------------------------------------------------

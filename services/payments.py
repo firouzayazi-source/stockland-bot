@@ -20,8 +20,6 @@ def _default_payment_base_url() -> str:
 
 
 PAYMENT_API_BASE_URL = _default_payment_base_url()
-PHP_PAYMENT_URL = (os.getenv("PHP_PAYMENT_URL") or "").rstrip("/")
-PHP_SECRET      = os.getenv("PHP_SECRET") or ""
 PAYMENT_API_TIMEOUT = int(os.getenv("PAYMENT_API_TIMEOUT", "20"))
 
 
@@ -88,12 +86,10 @@ def start_wallet_charge_payment(
 
     logger.info("PAYMENT REQUEST -> %s", payload)
 
-    if PHP_PAYMENT_URL and PHP_SECRET:
-        _call_url = PHP_PAYMENT_URL
-        _headers  = {"Content-Type": "application/json", "X-Stockland-Secret": PHP_SECRET}
-    else:
-        _call_url = f"{PAYMENT_API_BASE_URL}/payment/create"
-        _headers  = {"Content-Type": "application/json"}
+    # پل PHP واسط حذف شد — ربات همیشه مستقیم مسیر داخلی /payment/create رو صدا می‌زنه که
+    # خودش سیستم چند‌درگاهی با failover رو اجرا می‌کنه (payment_service._run_gateway_failover).
+    _call_url = f"{PAYMENT_API_BASE_URL}/payment/create"
+    _headers  = {"Content-Type": "application/json"}
 
     try:
         resp = requests.post(_call_url, json=payload, headers=_headers, timeout=PAYMENT_API_TIMEOUT)
