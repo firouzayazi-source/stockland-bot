@@ -12320,6 +12320,10 @@ async def iphone_dashboard(request: Request, flash: str = ""):
         <div class="font-medium text-sm mb-1">🕓 تاریخچهٔ کارشناسی‌ها</div>
         <div class="text-xs text-gray-400">لیست کامل کارشناسی‌های انجام‌شده</div>
       </a>
+      <a href="/admin/iphone/ai" class="bg-white rounded-xl shadow-sm p-4 hover:shadow-md transition block">
+        <div class="font-medium text-sm mb-1">🤖 کارشناس مکمل هوش مصنوعی</div>
+        <div class="text-xs text-gray-400">اتصال AI، بازهٔ مجاز تعدیل قیمت، آستانهٔ اطمینان</div>
+      </a>
     </div>
 
     <div class="bg-white rounded-xl shadow-sm w-full">
@@ -13400,6 +13404,184 @@ async def iphone_fx_test(request: Request, sid: int):
         msg = ('✅ نتیجه: ' + str(val)) if val else '❌ فچ ناموفق بود، خطا رو زیر همون منبع ببین'
         return _redir(f"/admin/iphone/fx?flash={e(msg)}")
     return _redir("/admin/iphone/fx")
+
+
+@router.get("/iphone/ai", response_class=HTMLResponse)
+async def iphone_ai_page(request: Request, flash: str = ""):
+    """پنل کارشناس مکمل هوش مصنوعی (بخش ۲۲.۸ CLAUDE.md) — توگل روشن/خاموش، انتخاب
+    provider (فعلاً فقط Claude، ولی دراپ‌داون آمادهٔ افزودن بعدیه)، کلید API (فقط نوشتنی،
+    هیچ‌وقت مقدار واقعی نمایش داده نمی‌شه)، بازهٔ مجاز تعدیل و آستانهٔ اطمینان، و لاگ
+    آخرین تحلیل‌ها برای ممیزی/پیگیری هزینه."""
+    adm = _get_admin(request)
+    guard = _require(adm, "ai_pricing")
+    if guard: return guard
+    from db import get_cfg
+    import iphone_valuation.db as ivdb
+    import iphone_valuation.ai_crypto as ai_crypto
+    from iphone_valuation.ai_providers import AI_PROVIDERS
+
+    enabled = get_cfg("IV_AI_ENABLED", "0") == "1"
+    provider = get_cfg("IV_AI_PROVIDER", "claude") or "claude"
+    model_name = get_cfg("IV_AI_MODEL", "") or "claude-opus-5"
+    max_adjust = get_cfg("IV_AI_MAX_ADJUST_PCT", "5") or "5"
+    min_confidence = get_cfg("IV_AI_MIN_CONFIDENCE", "60") or "60"
+    has_key = bool(get_cfg("IV_AI_API_KEY_ENC", ""))
+    crypto_ready = ai_crypto.crypto_available()
+
+    provider_opts = "".join(
+        f'<option value="{e(p)}" {"selected" if p == provider else ""}>{e(p.capitalize())}</option>'
+        for p in AI_PROVIDERS.keys())
+
+    warn_banner = "" if crypto_ready else """
+    <div class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 mb-4 text-sm">
+      ⚠️ متغیر محیطی <code>IV_AI_ENC_KEY</code> روی سرور تنظیم نشده — بدون این متغیر، ذخیرهٔ
+      رمزنگاری‌شدهٔ کلید API ممکن نیست و کل قابلیت AI غیرفعال می‌مونه (fail closed).
+    </div>"""
+
+    key_status = ('✅ کلید API ثبت شده (مقدار واقعی هیچ‌وقت نمایش داده نمی‌شه)' if has_key
+                  else '❌ هنوز کلیدی ثبت نشده')
+
+    logs = ivdb.list_ai_analyses(limit=50)
+    log_rows = "".join(f"""
+      <tr class="border-b {'bg-red-50' if r['error'] else ''}">
+        <td class="p-2 text-xs whitespace-nowrap">{html.escape((r['model_name_join'] or '—') + ' ' + (r['capacity_label'] or ''))}</td>
+        <td class="p-2 text-xs">{r['confidence']}</td>
+        <td class="p-2 text-xs">{r['adjustment_percent']}٪</td>
+        <td class="p-2 text-xs">{_iv_num(r['final_price']) if r['final_price'] else '—'}</td>
+        <td class="p-2 text-xs text-amber-600">{html.escape(', '.join(json.loads(r['warnings'] or '[]')))}</td>
+        <td class="p-2 text-xs text-red-500">{html.escape(r['error'] or '')}</td>
+        <td class="p-2 text-xs text-gray-400 whitespace-nowrap">{fa_date(r['created_at'], with_time=True)}</td>
+      </tr>""" for r in logs) or '<tr><td colspan="7" class="p-6 text-center text-gray-400 text-sm">هنوز تحلیلی ثبت نشده.</td></tr>'
+
+    body = f"""
+    <a href="/admin/iphone" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به کارشناسی آیفون</a>
+    <h1 class="text-xl font-bold text-gray-800 mb-4">🤖 کارشناس مکمل هوش مصنوعی</h1>
+    {warn_banner}
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4 max-w-2xl">
+      <div class="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-3 mb-4">
+        <span class="text-sm text-gray-700 flex-1">فعال‌سازی کارشناس مکمل هوش مصنوعی — وقتی خاموشه،
+          سیستم قیمت‌گذاری دستی (موتور دیتامحور) دقیقاً مثل قبل و بدون هیچ تغییری کار می‌کنه.</span>
+        <form method="post" action="/admin/iphone/ai/toggle">
+          <button class="px-4 py-2 rounded-lg text-sm font-medium {'bg-red-50 text-red-600' if enabled else 'bg-emerald-50 text-emerald-600'}">
+            {'⛔️ غیرفعال کردن' if enabled else '✅ فعال کردن'}
+          </button>
+        </form>
+      </div>
+
+      <form method="post" action="/admin/iphone/ai/settings" class="space-y-3 text-sm">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 w-40">Provider</span>
+          <select name="provider" class="border rounded p-1.5 text-xs">{provider_opts}</select>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 w-40">مدل</span>
+          <input type="text" name="model_name" value="{e(model_name)}" dir="ltr" class="border rounded p-1.5 text-xs w-52">
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 w-40">حداکثر بازهٔ مجاز تعدیل قیمت</span>
+          <input type="text" inputmode="decimal" dir="ltr" name="max_adjust_pct" value="{e(str(max_adjust))}" class="border rounded p-1.5 text-xs w-24">
+          <span class="text-xs text-gray-400">٪ (مثلاً ۵ یعنی حداکثر ±۵٪)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 w-40">حداقل آستانهٔ اطمینان</span>
+          <input type="text" inputmode="numeric" dir="ltr" name="min_confidence" value="{e(str(min_confidence))}" class="border rounded p-1.5 text-xs w-24">
+          <span class="text-xs text-gray-400">٪ — پایین‌تر از این یعنی هیچ تعدیلی روی قیمت اعمال نشه</span>
+        </div>
+        <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs">ذخیره تنظیمات</button>
+      </form>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4 max-w-2xl">
+      <div class="text-sm font-medium mb-1">کلید API</div>
+      <div class="text-xs text-gray-500 mb-3">{key_status}</div>
+      <form method="post" action="/admin/iphone/ai/api-key" class="flex flex-wrap gap-2 text-sm">
+        <input type="password" name="api_key" dir="ltr" class="border rounded p-1.5 text-xs flex-1 min-w-[240px]" placeholder="sk-ant-api03-...">
+        <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">ذخیرهٔ رمزنگاری‌شده</button>
+      </form>
+      {'<form method="post" action="/admin/iphone/ai/api-key/clear" class="mt-2" onsubmit="return confirm(\'کلید حذف بشه؟\')"><button class="text-red-500 text-xs">🗑 حذف کلید</button></form>' if has_key else ''}
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm w-full">
+      <div class="px-4 py-3 border-b bg-gray-50"><h2 class="font-bold text-gray-700 text-sm">📋 آخرین تحلیل‌ها</h2></div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-right min-w-max">
+          <thead><tr class="text-xs text-gray-400 border-b bg-gray-50">
+            <th class="p-2">مدل/ظرفیت</th><th class="p-2">اطمینان</th><th class="p-2">تعدیل</th>
+            <th class="p-2">قیمت نهایی</th><th class="p-2">هشدارها</th><th class="p-2">خطا</th><th class="p-2">تاریخ</th>
+          </tr></thead>
+          <tbody>{log_rows}</tbody>
+        </table>
+      </div>
+    </div>"""
+    return _layout("کارشناس مکمل هوش مصنوعی", body, adm, flash=flash)
+
+
+@router.post("/iphone/ai/toggle")
+async def iphone_ai_toggle(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "ai_pricing")
+    if guard: return guard
+    from db import get_cfg, set_cfg
+    import iphone_valuation.ai_crypto as ai_crypto
+    cur = get_cfg("IV_AI_ENABLED", "0") == "1"
+    if not cur and not ai_crypto.crypto_available():
+        return _redir(f"/admin/iphone/ai?flash={e('⚠️ اول IV_AI_ENC_KEY رو روی سرور تنظیم کن')}")
+    set_cfg("IV_AI_ENABLED", "0" if cur else "1")
+    _log(request, "فعال/غیرفعال‌سازی کارشناس AI", "کارشناسی آیفون", "غیرفعال" if cur else "فعال", admin_info=adm)
+    return _redir("/admin/iphone/ai")
+
+
+@router.post("/iphone/ai/settings")
+async def iphone_ai_settings(request: Request, provider: str = Form("claude"), model_name: str = Form(""),
+                              max_adjust_pct: str = Form("5"), min_confidence: str = Form("60")):
+    adm = _get_admin(request)
+    guard = _require(adm, "ai_pricing")
+    if guard: return guard
+    from db import set_cfg
+    from iphone_valuation.ai_providers import AI_PROVIDERS
+    set_cfg("IV_AI_PROVIDER", provider if provider in AI_PROVIDERS else "claude")
+    set_cfg("IV_AI_MODEL", (model_name or "").strip() or "claude-opus-5")
+    try:
+        max_adjust = abs(float(max_adjust_pct))
+    except (TypeError, ValueError):
+        max_adjust = 5.0
+    try:
+        min_conf = max(0, min(100, int(float(min_confidence))))
+    except (TypeError, ValueError):
+        min_conf = 60
+    set_cfg("IV_AI_MAX_ADJUST_PCT", str(max_adjust))
+    set_cfg("IV_AI_MIN_CONFIDENCE", str(min_conf))
+    _log(request, "تنظیمات کارشناس AI", "کارشناسی آیفون",
+         f"provider={provider} max_adjust={max_adjust} min_conf={min_conf}", admin_info=adm)
+    return _redir("/admin/iphone/ai")
+
+
+@router.post("/iphone/ai/api-key")
+async def iphone_ai_api_key(request: Request, api_key: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "ai_pricing")
+    if guard: return guard
+    import iphone_valuation.ai_crypto as ai_crypto
+    if not ai_crypto.crypto_available():
+        return _redir(f"/admin/iphone/ai?flash={e('⚠️ اول IV_AI_ENC_KEY رو روی سرور تنظیم کن')}")
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return _redir(f"/admin/iphone/ai?flash={e('کلید خالی بود، ذخیره نشد')}")
+    from db import set_cfg
+    set_cfg("IV_AI_API_KEY_ENC", ai_crypto.encrypt_api_key(api_key))
+    _log(request, "ثبت کلید API کارشناس AI", "کارشناسی آیفون", "•••• (مقدار در لاگ ثبت نمی‌شه)", admin_info=adm)
+    return _redir(f"/admin/iphone/ai?flash={e('✅ کلید ذخیره شد')}")
+
+
+@router.post("/iphone/ai/api-key/clear")
+async def iphone_ai_api_key_clear(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "ai_pricing")
+    if guard: return guard
+    from db import set_cfg
+    set_cfg("IV_AI_API_KEY_ENC", "")
+    _log(request, "حذف کلید API کارشناس AI", "کارشناسی آیفون", "", admin_info=adm)
+    return _redir(f"/admin/iphone/ai?flash={e('🗑 کلید حذف شد')}")
 
 
 @router.get("/iphone/history", response_class=HTMLResponse)

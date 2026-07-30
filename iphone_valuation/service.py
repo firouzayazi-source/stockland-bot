@@ -97,6 +97,18 @@ def valuate(payload: dict) -> dict:
     except Exception:
         result["valuation_id"] = None
 
+    # کارشناس مکمل هوش مصنوعی (بخش ۲۲.۸ CLAUDE.md) — کاملاً اختیاری، فقط اگه از پنل
+    # فعال شده باشه. نقطهٔ ورود مشترک همین‌جاست تا هم ربات هم /api/v1 آیندهٔ مینی‌اپ
+    # بدون تکرار کد ازش بهره‌مند بشن. هر خطایی این‌جا فقط result["ai"]=None می‌کنه —
+    # هیچ‌وقت نتیجهٔ دیتامحور بالا رو تحت تأثیر قرار نمی‌ده.
+    try:
+        from . import ai_advisor
+        result["ai"] = ai_advisor.analyze(
+            payload, model, capacity, price_result, score_result, verdict,
+            valuation_id=result.get("valuation_id"))
+    except Exception:
+        result["ai"] = None
+
     return result
 
 
