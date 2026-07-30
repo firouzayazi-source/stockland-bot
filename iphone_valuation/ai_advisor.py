@@ -166,7 +166,10 @@ def analyze(payload: dict, model: dict, capacity: dict, price_result: dict,
         if not provider_mod:
             return None
 
-        model_name = get_cfg("IV_AI_MODEL", "") or "claude-opus-5"
+        # خالی بودن یعنی provider خودش پیش‌فرض مناسبش رو استفاده کنه (claude-opus-5 برای
+        # Claude، gpt-4o برای OpenAI، ...) — این‌جا هیچ پیش‌فرض عمومی وابسته به یه provider
+        # خاص هاردکد نمی‌شه.
+        model_name = get_cfg("IV_AI_MODEL", "")
         max_adjust = abs(_safe_float(get_cfg("IV_AI_MAX_ADJUST_PCT", "5"), 5.0))
         min_confidence = _safe_int(get_cfg("IV_AI_MIN_CONFIDENCE", "60"), 60)
 

@@ -667,6 +667,37 @@ API (/api/v1/iphone/valuate) ──┼──> iphone_valuation.service.valuate(p
 - **ربات:** `bot.py:_iv_finalize` بعد از نمایش نتیجهٔ دیتامحور، اگه `result["ai"]` غیر-`None` باشه، یه بلوک اضافه با «🤖 تحلیل هوش مصنوعی» (قیمت اصلاح‌شده، روند بازار، ریسک، دلیل، هشدارها) زیر همون پیام اضافه می‌کنه — پیام دیتامحور بالا هیچ تغییری نمی‌کنه.
 - **تست انجام‌شده:** هارنس مستقیم `ai_advisor.analyze()` با provider جعلی (۶ سناریو: غیرفعال، بدون کلید، حالت عادی، clamp روی مقدار بیرون‌بازه، گیت اطمینان زیر آستانه، خطای provider)، تست end-to-end `service.valuate()` (هم حالت خاموش هم روشن)، رندر پیام نهایی ربات با `_iv_finalize` (مانیتور مستقیم `bot.send_message` جعلی)، و همهٔ روت‌های پنل (`/admin/iphone/ai` GET/toggle/settings/api-key/api-key/clear، شامل تست fail-closed وقتی `IV_AI_ENC_KEY` ست نشده).
 
+### ۱۰) چند-Provider (از ۲۰۲۶-۰۷-۳۰، دور دوم همون روز) — OpenAI/Gemini/OpenRouter/DeepSeek
+
+طبق درخواست صریح مالک پروژه («امکان استفاده سایر هوش مصنوعی‌ها هم اضافه کن»)، ۴ provider دیگه به `iphone_valuation/ai_providers/` اضافه شد — همه از همون قرارداد `base.py` (`analyze(context, api_key, model) -> dict`) پیروی می‌کنن، بدون هیچ تغییری در `ai_advisor.py`:
+
+- **`SCHEMA`/`SYSTEM_PROMPT` مشترک** از `claude_provider.py` به خودِ `base.py` منتقل شد (یک منبع حقیقت، نه تکرار در هر provider) — رفتار خروجی مستقل از provider انتخابی یکسان می‌مونه.
+- **`_openai_compat.py`** (ماژول خصوصی، خودش provider ثبت‌شده نیست) — منطق مشترک سه provider سازگار با OpenAI Chat Completions API (`response_format={"type":"json_object"}`): `openai_provider.py` (پکیج `openai`، بدون `base_url`، پیش‌فرض `gpt-4o`)، `openrouter_provider.py` (`base_url="https://openrouter.ai/api/v1"`، پیش‌فرض `openai/gpt-4o`)، `deepseek_provider.py` (`base_url="https://api.deepseek.com"`، پیش‌فرض `deepseek-chat`).
+- **`gemini_provider.py`** — پکیج **`google-genai`** (نه `google-generativeai` قدیمی که در حین توسعه معلوم شد رسماً deprecated شده و دیگه بروزرسانی نمی‌گیره؛ تعویض شد قبل از merge). از `response_json_schema` (نه فقط `response_mime_type`) استفاده می‌کنه — یعنی خروجی Gemini هم مثل Claude با یه JSON Schema واقعی محدود می‌شه، نه فقط با پرامپت.
+- **import لeazی درون خودِ `analyze()`** (نه سطح ماژول) در همهٔ ۵ provider — یعنی نصب‌نبودن SDK یه provider (مثلاً `google-genai` روی سروری که فقط Claude استفاده می‌کنه) باعث شکست `import` کل پکیج `ai_providers` نمی‌شه؛ فقط همون provider خاص موقع صدازدن `AIProviderError` برمی‌گردونه (تست شده مستقیم).
+- **`PROVIDER_LABELS`** (دیکشنری تازه در `__init__.py`) — برچسب نمایشی خواناتر برای دراپ‌داون پنل (`Claude (Anthropic)`, `OpenAI (ChatGPT)`, `Google Gemini`, `OpenRouter`, `DeepSeek`) به‌جای `.capitalize()` خام.
+- **مدل پیش‌فرض دیگه سراسری نیست:** `ai_advisor.py` و روت‌های پنل دیگه fallback هاردکد `"claude-opus-5"` رو به فیلد خالی `IV_AI_MODEL` تحمیل نمی‌کنن — خالی‌بودن یعنی هر provider از پیش‌فرض خودش استفاده کنه (`model or default_model` داخل خودِ هر provider)، چون یه پیش‌فرض ثابت وابسته به Claude برای بقیه provider ها بی‌معنی بود.
+- **`requirements.txt`:** `openai>=1.30,<2` و `google-genai>=0.3,<1` اضافه شد.
+- **تست انجام‌شده:** هر ۵ provider مستقیم با client جعلی (نه API واقعی) — بررسی صحت پارامترهای ارسالی (`response_format`/`base_url`/`response_json_schema`/`system_instruction`) و parse صحیح خروجی؛ تست fail-safe نصب‌نبودن SDK.
+
+### ۱۱) بازطراحی UX صفحات مدیریت آیفون — «یک دکمهٔ ذخیره» به‌جای دکمهٔ جداگانه هر ردیف (از ۲۰۲۶-۰۷-۳۰)
+
+مالک پروژه گزارش داد داشتن یک دکمهٔ «ذخیره» جداگانه روی هر ردیف (هر رنگ، هر قطعهٔ تعمیر، هر ضریب، هر منبع نرخ ارز، هر سری) خستگی‌آوره. پنج صفحه بازطراحی شدن — همه با یک الگوی یکسان: **تمام ردیف‌های قابل‌ویرایش داخل یک `<form>` واحد**، فیلدهای هر ردیف با نام‌گذاری `{field}_{id}` (نه `Form(...)` استاتیک، چون تعداد ردیف پویاست — روت با `await request.form()` خام پردازش می‌شه)، و **یک دکمهٔ «💾 ذخیرهٔ همهٔ تغییرات» فقط یک‌بار پایین صفحه**. دکمه‌های حذف (destructive، باید فوری بمونن) با همون الگوی قدیمی «فرم مخفی + `form="id"` روی دکمه» جدا می‌مونن — چون `<form>` تو در تو در HTML معتبر نیست، این تکنیک (که از قبل توی پروژه برای صفحهٔ قیمت‌ها جاافتاده بود) رعایت شد.
+
+| صفحه | روت جدید bulk-save | روت‌های حذف‌شده |
+|---|---|---|
+| `/admin/iphone/series` | `POST /iphone/series/bulk-save` | `{sid}/edit`, `series/assign` |
+| `/admin/iphone/repairs` | `POST /iphone/repairs/bulk-save` | `{pid}/edit` (+ وزن‌های component/replaced از `/iphone/weights/save` مشترک جدا شدن، حالا بخشی از همین بولک‌سیو) |
+| `/admin/iphone/colors` | `POST /iphone/colors/bulk-save` | `{cid}/edit` |
+| `/admin/iphone/coefficients` | `POST /iphone/coefficients/bulk-save` | `{cid}/edit` + `/iphone/weights/save` (کاملاً حذف شد، چون فقط از دو صفحهٔ بالا صدا زده می‌شد) |
+| `/admin/iphone/fx` | `POST /iphone/fx/bulk-save` | `{sid}/edit` |
+
+استثناها که عمداً دست‌نخورده موندن: فرم‌های «افزودن آیتم تازه» (create یه اکشن جداست)، دکمه‌های حذف (destructive، فوری)، دکمهٔ «تست فچ» در صفحهٔ fx (فقط fetch زندهٔ نمایشی، چیزی رو persist نمی‌کنه)، و فرم تنظیمات نرخ ارز در همون صفحه (از قبل هم صفحه‌ای/تک‌دکمه بود، نه per-row).
+
+**دکمهٔ بازگشت یکسان‌سازی شد:** همون `<a href="/admin/iphone" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به کارشناسی آیفون</a>` (الگوی از قبل موجود در صفحات prices/colors/ai) به صفحات series، repairs، coefficients، fx، و history هم اضافه شد — الان همهٔ ۸ زیرصفحهٔ `/admin/iphone/*` این لینک رو دارن (فقط داشبورد اصلی `/admin/iphone` که خودش صفحهٔ ریشه‌ست، نداره).
+
+**تست انجام‌شده:** رندر مستقیم هر ۵ صفحه (بررسی وجود دکمهٔ ذخیرهٔ واحد + نبود دکمه‌های جداگانهٔ قدیمی)، فراخوانی مستقیم هر ۵ روت bulk-save با دادهٔ چندردیفی و تأیید ذخیرهٔ صحیح همهٔ فیلدها، و تأیید سالم‌ماندن روت‌های add/delete (بدون تغییر رفتار).
+
 ---
 
 ## ۲۳. Backup/Restore/Recovery، سیستم دسترسی ادمین، منطق خرید ناموجود (از ۲۰۲۶-۰۷-۲۶)
