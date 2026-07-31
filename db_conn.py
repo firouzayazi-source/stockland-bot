@@ -8,7 +8,11 @@ db_conn.py — Connection wrapper سازگار SQLite/PostgreSQL
 هدف: کد موجود db.py/admin_panel.py که conn.execute(sql, params) می‌زند،
 بدون تغییر روی هر دو دیتابیس کار کند.
 """
+import logging
 import os
+import threading
+
+logger = logging.getLogger("stockland.db_conn")
 
 
 def get_dialect() -> str:
@@ -19,11 +23,15 @@ def is_postgres() -> bool:
     return get_dialect() == "postgres"
 
 
+def _pool_enabled() -> bool:
+    return os.getenv("DB_CONNECTION_POOL", "0") == "1"
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # ─── SQLite (پیش‌فرض) ──────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
 
-def _sqlite_connection(db_path: str):
+def _open_sqlite_connection(db_path: str):
     import sqlite3
     conn = sqlite3.connect(db_path, timeout=30, check_same_thread=False)
     try:
@@ -39,6 +47,71 @@ def _sqlite_connection(db_path: str):
         pass
     conn.row_factory = sqlite3.Row
     return conn
+
+
+class _PooledSqliteConnection:
+    """رَپِر دور sqlite3.Connection برای connection pooling per-thread —
+    close() واقعاً اتصال رو نمی‌بنده، فقط برمی‌گردونه به pool (که همون خودشه،
+    چون هر ترد فقط یک اتصال مخصوص خودش داره). این طراحی عمداً محافظه‌کارانه‌ست
+    (بخش ۴ گزارش ممیزی این آیتم رو با «ریسک اجرا متوسط تا بالا» علامت زده بود):
+    قبل از تحویل یه اتصالِ cache‌شده به فراخوان تازه، اگه transaction بازِ
+    جامونده‌ای پیدا بشه (نشونهٔ یه باگ commit/rollback جای دیگه که هیچ‌وقت
+    نباید اتفاق بیفته، ولی این کد فرض نمی‌کنه صد در صد هیچ‌جا رخ نمی‌ده)،
+    به‌جای اینکه بی‌صدا اون transaction ناخواسته با کوئری بعدی merge بشه،
+    صریحاً rollback و لاگ هشدار می‌شه — fail-safe به‌جای fail-silent."""
+
+    def __init__(self, conn):
+        object.__setattr__(self, "_real", conn)
+
+    def close(self):
+        pass  # عمدی — بازگشت به pool، نه بستن واقعی
+
+    def real_close(self):
+        self._real.close()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._real, name, value)
+
+
+_thread_pool = threading.local()
+
+
+def _pooled_sqlite_connection(db_path: str):
+    cached = getattr(_thread_pool, "conn", None)
+    cached_path = getattr(_thread_pool, "path", None)
+    if cached is not None and cached_path == db_path:
+        if cached._real.in_transaction:
+            logger.warning(
+                "Pooled SQLite connection had a dangling open transaction — "
+                "rolling back defensively before reuse (thread=%s)",
+                threading.current_thread().name,
+            )
+            try:
+                cached._real.rollback()
+            except Exception:
+                logger.exception("Defensive rollback on pooled connection failed")
+        return cached
+    if cached is not None:
+        try:
+            cached.real_close()
+        except Exception:
+            pass
+    pooled = _PooledSqliteConnection(_open_sqlite_connection(db_path))
+    _thread_pool.conn = pooled
+    _thread_pool.path = db_path
+    return pooled
+
+
+def _sqlite_connection(db_path: str):
+    # پیش‌فرض خاموش — طبق توصیهٔ صریح گزارش ممیزی (بخش ۴)، این تغییر فقط با
+    # env var DB_CONNECTION_POOL=1 صریحاً فعال می‌شه، نه به‌صورت پیش‌فرض روشن.
+    # رفتار پیش‌فرض فعلی (اتصال تازه به‌ازای هر فراخوانی) دست‌نخورده می‌مونه.
+    if _pool_enabled():
+        return _pooled_sqlite_connection(db_path)
+    return _open_sqlite_connection(db_path)
 
 
 # ══════════════════════════════════════════════════════════════════════════
