@@ -2079,11 +2079,13 @@ def _show_order_summary(chat_id, uid, product, category, pid):
 
 def _show_terms_gate(chat_id, uid, product, category, pid):
     """صفحهٔ تأیید قوانین خرید — قبل از خلاصهٔ سفارش، فقط برای محصولاتی که ادمین این
-    قابلیت رو براشون فعال کرده (products.require_terms). متن از تنظیمات پنل (bot_config
-    کلید PURCHASE_TERMS_TEXT) می‌آد — همون متنی که در مینی‌اپ هم نشون داده می‌شه."""
-    from db import get_cfg
+    قابلیت رو براشون فعال کرده (products.require_terms). متن اختصاصی خودِ همین محصول
+    (products.terms_text) اگه ثبت شده باشه اولویت داره؛ وگرنه متن پیش‌فرض عمومی از
+    تنظیمات پنل (bot_config کلید PURCHASE_TERMS_TEXT) — همون منطقی که در مینی‌اپ هم
+    استفاده می‌شه (get_product_terms_text)."""
+    from db import get_product_terms_text
     title = product[2] if len(product) > 2 else ""
-    text = (get_cfg("PURCHASE_TERMS_TEXT", "") or "").strip()
+    text = get_product_terms_text(int(pid))
     if not text:
         text = "با ادامهٔ خرید، قوانین و مقررات فروشگاه را می‌پذیرید."
     kb = types.InlineKeyboardMarkup(row_width=1)

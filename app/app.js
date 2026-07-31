@@ -1803,14 +1803,11 @@ function openCheckout(pid){
     // حساب می‌کنه، اینجا فقط برای نمایش صحیحه)
     window._slCk.basePrice=window._slCk.prod.show_partner_price?window._slCk.prod.partner_price:
       (window._slCk.prod.effective_price||window._slCk.prod.price||0);
-    if(window._slCk.prod.require_terms){
-      window._slApi('/purchase-terms').then(function(d){
-        window._slCk.termsText=(d&&d.text)||'';
-        _renderCheckoutBody();
-      }).catch(function(){_renderCheckoutBody()});
-    }else{
-      _renderCheckoutBody();
-    }
+    // متن قوانین از قبل با GET /products/{id} اومده (core/products.get_product متن اختصاصی
+    // همین محصول رو resolve می‌کنه، با fallback به متن پیش‌فرض عمومی) — نیازی به یه
+    // فراخوانی جدا به /purchase-terms نیست.
+    window._slCk.termsText=window._slCk.prod.terms_text||'';
+    _renderCheckoutBody();
   }).catch(function(){
     b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📡</span>خطا در دریافت اطلاعات</div>';
   });

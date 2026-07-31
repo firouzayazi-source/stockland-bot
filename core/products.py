@@ -99,6 +99,7 @@ def get_product(pid: int, uid: int = None) -> Optional[dict]:
         "stock": int(remaining),
         "notify_on_restock": bool(p.get("notify_on_restock") or 0),
         "require_terms": bool(p.get("require_terms") or 0),
+        "terms_text": db.get_product_terms_text(pid) if p.get("require_terms") else "",
         "image_url": p.get("image_url") or "",
         "rating_avg": rating.get("avg", 0),
         "rating_count": rating.get("count", 0),
