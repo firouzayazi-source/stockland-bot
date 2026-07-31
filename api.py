@@ -345,11 +345,13 @@ async def api_me_avatar_upload(request: Request):
 
 
 @router.get("/me/orders")
-async def api_orders(request: Request, limit: int = 50):
+async def api_orders(request: Request, limit: int = 50, offset: int = 0):
     """سفارش‌های کاربر."""
     uid = _auth(request)
+    limit = min(max(int(limit or 50), 1), 100)
+    offset = max(int(offset or 0), 0)
     from core import orders
-    return {"ok": True, "orders": orders.user_orders(uid, limit)}
+    return {"ok": True, "orders": orders.user_orders(uid, limit, offset)}
 
 
 @router.post("/orders/{oid}/rate")
