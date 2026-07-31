@@ -510,6 +510,7 @@ client_body_timeout 300s;
 | اشتراک‌گذاری محصول | (فقط JS، `tg.openTelegramLink('t.me/share/url?...')` با دیپ‌لینک `?start=buy_{id}`) | — | — |
 | عکس محصول (با fallback به آیکون دسته) | `GET /categories`, `GET /products/{id}` (فیلد `image_url`) | `products.image_url` | فیلد آپلود در فرم افزودن/ویرایش محصول پنل (`_save_tutorial_file` مسیر `app_media/tutorials/products/...` — نام پوشه ظاهریه، اثر عملکردی نداره) |
 | تأیید قوانین خرید قبل از پرداخت (بخش ۷، از ۲۰۲۶-۰۷-۳۱) | `GET /purchase-terms` (متن سراسری)، `GET /products/{id}` (فیلد `require_terms`)، `POST /checkout` (بدنه‌اش `agreed_terms` می‌گیره، بدونش ۴۰۰ برمی‌گردونه) | `products.require_terms` (per-product toggle) + `bot_config.PURCHASE_TERMS_TEXT` (متن سراسری، نه per-product) | `/admin/settings/purchase-terms` (ویرایش متن) + چک‌باکس «نیاز به تأیید قوانین خرید» در فرم افزودن/ویرایش محصول (پیش‌فرض خاموش) |
+| تب «ابزار مفید» — هاب موزاییکی جایگزین تب مستقل «آموزش» (بخش ۶، از ۲۰۲۶-۰۷-۳۱) | (فقط JS/HTML، بدون API تازه — `#tab-tools` صرفاً کارت‌های ناوبری داره) | — | — (کارت‌های «کارشناسی قیمت آیفون»/«سلامت آیفون» فعلاً placeholder با برچسب «به‌زودی»‌ان، بدون لینک واقعی — طبق تصمیم موجود پروژه که انتقال کارشناسی آیفون به مینی‌اپ فاز بعده) |
 | عکس پروفایل کاربر (آپلود خودش، آواتار ۹۶px وسط تب حساب) | `GET /me/profile`, `POST /me/avatar` (روی دیسک `app_media/avatars/{uid}.ext`، نه تلگرام — بدون Pillow، برش دایره‌ای فقط CSS) | `users.avatar_url` | — (کاملاً خودمدیریتی کاربر، بدون نیاز به تأیید ادمین) |
 
 ### الگوهای JS قابل‌استفادهٔ مجدد در `app.js`
