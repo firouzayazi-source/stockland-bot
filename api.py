@@ -295,7 +295,8 @@ _AVATAR_MAX_BYTES = 5 * 1024 * 1024
 async def api_me_avatar_upload(request: Request):
     """آپلود عکس پروفایل کاربر — روی دیسک (app_media/avatars/{uid}.ext) ذخیره می‌شه، نه
     تلگرام، چون برخلاف عکس تیکت این‌جا به یه URL مستقیم قابل‌نمایش در <img> نیاز داریم.
-    برش دایره‌ای صرفاً با CSS (border-radius+object-fit) انجام می‌شه، بدون وابستگی به Pillow."""
+    برش دایره‌ای صرفاً با CSS (border-radius+object-fit) انجام می‌شه — بدون کراپ سمت سرور،
+    فقط resize/فشرده‌سازی خودکار با image_utils.compress_image_bytes (بخش ۲ فاز ۲ ممیزی)."""
     uid = _auth(request)
     form = await request.form()
     photo = form.get("photo")
@@ -327,9 +328,10 @@ async def api_me_avatar_upload(request: Request):
                 os.remove(old_path)
             except Exception:
                 pass
+    from image_utils import compress_image_bytes
     file_path = os.path.join(avatars_dir, f"{uid}{ext}")
     with open(file_path, "wb") as f:
-        f.write(data)
+        f.write(compress_image_bytes(data, ext))
 
     from db import set_user_avatar
     avatar_url = f"/app-media/avatars/{uid}{ext}?v={int(time.time())}"
@@ -1145,6 +1147,7 @@ async def api_tutorials_list(category: int = 0, tag: str = "", q: str = "",
 @router.get("/tutorials/{tid}")
 async def api_tutorial_detail(tid: int):
     from db import get_tutorial, increment_tutorial_views
+    from html_sanitize import sanitize_html
     it = get_tutorial(tid)
     if not it or it.get("status") != "published":
         raise HTTPException(404, "یافت نشد")
@@ -1155,7 +1158,9 @@ async def api_tutorial_detail(tid: int):
         "title": it.get("title") or "",
         "cover_image": it.get("cover_image") or "",
         "short_desc": it.get("short_desc") or "",
-        "body": it.get("body") or "",
+        # مینی‌اپ این فیلد رو مستقیم innerHTML می‌کنه (openTutorial در app.js) —
+        # sanitize سمت سرور اینجا تنها لایهٔ محافظتیه (بخش ۲۵ فاز ۲ ممیزی)
+        "body": sanitize_html(it.get("body") or ""),
         "gallery": json.loads(it.get("gallery") or "[]"),
         "video_upload": it.get("video_upload") or "",
         "video_link": it.get("video_link") or "",

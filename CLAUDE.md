@@ -302,7 +302,7 @@ except Exception:
 ## ۱۲. نیازمندی‌های سرور
 
 - Python 3 + venv (`/opt/stockland/venv`)
-- `pip install -r requirements.txt`: `pyTelegramBotAPI>=4.14,<5`, `requests`, `Flask>=3.0,<4` (احتمالاً بلااستفاده — کل استک روی FastAPI است، بررسی نشد کجا Flask واقعاً import می‌شود)، `fastapi>=0.110,<1`، `uvicorn[standard]>=0.27,<1`، `python-multipart`، `openpyxl>=3.1` (اکسپورت Excel در پنل حسابداری)، `cryptography>=41.0,<43` (رمزنگاری کلید API کارشناس AI، بخش ۲۲.۹)، `anthropic>=0.120,<1` (SDK رسمی Claude، provider فعلاً یگانهٔ کارشناس مکمل هوش مصنوعی)
+- `pip install -r requirements.txt`: `pyTelegramBotAPI>=4.14,<5`, `requests`, `Flask>=3.0,<4` (احتمالاً بلااستفاده — کل استک روی FastAPI است، بررسی نشد کجا Flask واقعاً import می‌شود)، `fastapi>=0.110,<1`، `uvicorn[standard]>=0.27,<1`، `python-multipart`، `openpyxl>=3.1` (اکسپورت Excel در پنل حسابداری)، `cryptography>=41.0,<43` (رمزنگاری کلید API کارشناس AI، بخش ۲۲.۹)، `anthropic>=0.120,<1` (SDK رسمی Claude، provider فعلاً یگانهٔ کارشناس مکمل هوش مصنوعی)، `Pillow>=10.0,<12` (فشرده‌سازی/resize خودکار عکس آپلودی — `image_utils.py`، از فاز ۲ ممیزی)
 - systemd برای مدیریت سرویس
 - برای مینی‌اپ: `app/get_vendor.sh` باید یک‌بار روی سرور اجرا شود (دانلود Framework7 + فونت‌ها به `app/vendor/`)
 
