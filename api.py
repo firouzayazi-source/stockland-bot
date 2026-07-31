@@ -110,7 +110,9 @@ def _auth(request: Request) -> int:
     # روش ۳: API key (برای تست/کلاینت‌های داخلی)
     api_key = request.headers.get("X-API-Key", "")
     valid_keys = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()]
-    if api_key and api_key in valid_keys:
+    # compare_digest به‌جای `in` ساده — مقایسهٔ ثابت‌زمان، هم‌راستا با بقیهٔ
+    # چک‌های راز/کلید پروژه (INTERNAL_API_SECRET، initData، سشن ادمین)
+    if api_key and any(hmac.compare_digest(api_key, k) for k in valid_keys):
         # user_id از query یا هدر
         uid = request.headers.get("X-User-Id", "")
         return int(uid) if uid.isdigit() else 0

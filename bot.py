@@ -6,7 +6,7 @@ import string
 import requests
 import logging
 
-logger = logging.getLogger("inox_bot")
+logger = logging.getLogger("stockland.bot")
 import requests
 import telebot
 from telebot import types
@@ -141,7 +141,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-logger = logging.getLogger("inox_bot")
+logger = logging.getLogger("stockland.bot")
 
 
 class _BotExceptionHandler(telebot.ExceptionHandler):
@@ -1068,48 +1068,13 @@ MAINTENANCE_MSG = (
     "از شکیبایی شما سپاسگزاریم. ❤️"
 )
 
-# ─── Rate Limiter ─────────────────────────────────────────────────────────────
-# جلوگیری از flood: حداکثر 15 پیام در 10 ثانیه برای هر کاربر
-import collections as _collections, time as _time
-
-_rate_limits: dict = {}  # {user_id: deque of timestamps}
-_RATE_MAX_MSGS = 15
-_RATE_WINDOW   = 10.0   # ثانیه
-_rate_last_cleanup = _time.monotonic()
-
-def _is_rate_limited(uid: int) -> bool:
-    """True اگه کاربر بیش از حد مجاز پیام بفرسته."""
-    global _rate_last_cleanup
-    if uid == ADMIN_ID:
-        return False
-    now = _time.monotonic()
-    # هر ۵ دقیقه یه‌بار کاربرهای قدیمی رو پاک کن
-    if now - _rate_last_cleanup > 300:
-        dead = [k for k, dq in _rate_limits.items()
-                if not dq or dq[-1] < now - _RATE_WINDOW * 3]
-        for k in dead:
-            del _rate_limits[k]
-        _rate_last_cleanup = now
-    dq = _rate_limits.setdefault(uid, _collections.deque())
-    while dq and dq[0] < now - _RATE_WINDOW:
-        dq.popleft()
-    if len(dq) >= _RATE_MAX_MSGS:
-        return True
-    dq.append(now)
-    return False
-
-@bot.message_handler(func=lambda m: _is_rate_limited(m.from_user.id),
-                     content_types=["text","photo","document","voice","video","sticker"])
-def rate_limit_blocker(message):
-    pass  # بدون پاسخ — جلوگیری از amplification attack
-
-@bot.callback_query_handler(func=lambda c: _is_rate_limited(c.from_user.id))
-def rate_limit_blocker_cb(call):
-    try:
-        bot.answer_callback_query(call.id)  # فقط dismiss می‌کنه، پیامی نمی‌ده
-    except Exception:
-        pass
-# ─────────────────────────────────────────────────────────────────────────────
+# توجه: سیستم Rate-Limit دوم قبلاً اینجا بود (_rate_limits/_is_rate_limited،
+# ۱۵ پیام/۱۰ثانیه، بودجهٔ مشترک پیام+کال‌بک) — با سیستم اول (بخش «Rate Limiting
+# ربات» بالای فایل، _rl_msg_store/_rl_cb_store) کاملاً همپوشان بود و چون
+# handlerهای اون سیستم زودتر ثبت می‌شن (تلگرام‌بات فقط اولین handler منطبق رو
+# اجرا می‌کنه)، آستانهٔ سخت‌گیرانه‌ترش (۱۰ پیام/۱۰ثانیه) همیشه قبل از این یکی
+# فعال می‌شد — یعنی این بلوک برای پیام‌ها عملاً هیچ‌وقت واقعاً تصمیم‌گیرنده
+# نبود، فقط حافظه/CPU مصرف می‌کرد. طبق بخش ۵ CLAUDE.md حذف شد (فاز ۳ ممیزی).
 
 @bot.message_handler(func=lambda m: _check_maintenance(m), content_types=["text","photo","document","voice","video"])
 def maintenance_blocker(message):
@@ -4754,7 +4719,7 @@ def _iv_finalize(chat_id, uid):
         }
         result = ivservice.valuate(payload)
     except Exception:
-        logging.getLogger("stockland.bot").exception("iphone valuation failed for uid=%s", uid)
+        logger.exception("iphone valuation failed for uid=%s", uid)
         bot.send_message(chat_id, "⚠️ متاسفانه در محاسبهٔ قیمت خطایی رخ داد. دوباره امتحان کن.")
         user_states.pop(uid, None)
         return
