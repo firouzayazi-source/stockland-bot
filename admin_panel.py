@@ -4481,7 +4481,7 @@ async def categories_delete(request: Request, cid: int):
 # ─────────────────────────── Products ──────────────────────────────────────
 
 @router.get("/products", response_class=HTMLResponse)
-async def products_list(request: Request, flash: str = ""):
+async def products_list(request: Request, page: int = 0, q: str = "", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "products")
     if guard: return guard
@@ -4492,16 +4492,24 @@ async def products_list(request: Request, flash: str = ""):
     except Exception:
         pass
 
+    PAGE = 50
     conn = _db()
     try:
-        products = conn.execute("""
+        where = "WHERE (p.title LIKE ? OR p.category LIKE ?)" if q else ""
+        params_q = (f"%{q}%", f"%{q}%") if q else ()
+        total = conn.execute(f"SELECT COUNT(*) FROM products p {where};", params_q).fetchone()[0]
+        products = conn.execute(f"""
             SELECT p.*, COUNT(CASE WHEN pf.delivered=0 THEN 1 END) as feed_avail,
                    COUNT(pf.id) as feed_total
             FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id
-            GROUP BY p.id ORDER BY p.category, p.id;
-        """).fetchall()
+            {where}
+            GROUP BY p.id ORDER BY p.category, p.id
+            LIMIT ? OFFSET ?;
+        """, params_q+(PAGE, page*PAGE)).fetchall()
     finally:
         conn.close()
+
+    pages = max((total+PAGE-1)//PAGE, 1)
 
     rows = ""
     for p in products:
@@ -4537,10 +4545,20 @@ async def products_list(request: Request, flash: str = ""):
           </td>
         </tr>"""
 
+    pager = '<div class="flex gap-2 mt-4 justify-center">' + "".join(
+        f'<a href="/admin/products?page={i}&q={e(q)}" class="px-3 py-1 rounded border text-sm {"bg-indigo-600 text-white" if i==page else "bg-white"}">{i+1}</a>'
+        for i in range(min(pages, 10))
+    ) + "</div>" if pages > 1 else ""
+
     body = f"""
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">📦 محصولات</h1>
-      {_btn("➕ محصول جدید", "/admin/products/new", "green")}
+    <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <h1 class="text-2xl font-bold text-gray-800">📦 محصولات ({total:,})</h1>
+      <div class="flex items-center gap-2 flex-wrap">
+        <form method="get" class="flex gap-2">
+          {_input("q","جستجو عنوان/دسته...",q)} {_btn("جستجو","","slate",True)}
+        </form>
+        {_btn("➕ محصول جدید", "/admin/products/new", "green")}
+      </div>
     </div>
     <div class="card overflow-hidden">
       <div class="overflow-x-auto">
@@ -4553,6 +4571,7 @@ async def products_list(request: Request, flash: str = ""):
           <tbody>{rows or "<tr><td colspan='7' class='text-center py-8 text-gray-400'>محصولی ثبت نشده</td></tr>"}</tbody>
         </table>
       </div>
+      {pager}
     </div>"""
 
     return _layout("محصولات", body, adm, flash=flash)
@@ -6706,16 +6725,18 @@ async def user_toggle_block(request: Request, uid: int):
 
 
 @router.get("/users", response_class=HTMLResponse)
-async def users_list(request: Request, q: str = "", sort: str = "last_seen", flash: str = ""):
+async def users_list(request: Request, page: int = 0, q: str = "", sort: str = "last_seen", flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "users")
     if guard: return guard
 
+    PAGE = 50
     conn = _db()
     try:
         sort_col = sort if sort in ("user_id","full_name","first_seen","last_seen","orders","balance") else "last_seen"
         where = "WHERE u.user_id=? OR u.username LIKE ? OR u.full_name LIKE ?" if q else ""
         params = (int(q) if q.isdigit() else 0, f"%{q}%", f"%{q}%") if q else ()
+        total = conn.execute(f"SELECT COUNT(*) FROM users u {where};", params).fetchone()[0]
         users = conn.execute(f"""
             SELECT u.*,
                    COALESCE(w.balance,0) AS balance,
@@ -6727,11 +6748,12 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
             {where}
             GROUP BY u.user_id
             ORDER BY {sort_col} DESC
-            LIMIT 500;
-        """, params).fetchall()
-        total = conn.execute(f"SELECT COUNT(*) FROM users;").fetchone()[0]
+            LIMIT ? OFFSET ?;
+        """, params+(PAGE, page*PAGE)).fetchall()
     finally:
         conn.close()
+
+    pages = max((total+PAGE-1)//PAGE, 1)
 
     def sort_link(col, label):
         active = sort == col
@@ -6792,6 +6814,10 @@ async def users_list(request: Request, q: str = "", sort: str = "last_seen", fla
           <tbody>{rows or "<tr><td colspan='9' class='text-center py-8 text-gray-400'>کاربری یافت نشد</td></tr>"}</tbody>
         </table>
       </div>
+      {'<div class="flex gap-2 mt-4 justify-center p-4">' + "".join(
+          f'<a href="/admin/users?page={i}&q={e(q)}&sort={sort}" class="px-3 py-1 rounded border text-sm {"bg-indigo-600 text-white" if i==page else "bg-white"}">{i+1}</a>'
+          for i in range(min(pages, 10))
+      ) + '</div>' if pages > 1 else ''}
     </div>"""
     return _layout("کاربران", body, adm, flash=flash)
 

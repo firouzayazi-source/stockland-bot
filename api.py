@@ -21,6 +21,7 @@ from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, Request, HTTPException, Header
 from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger("stockland.api")
@@ -129,11 +130,16 @@ _WEB_LOGIN_TOKEN_TTL = 300  # ۵ دقیقه — بعدش توکن منقضی ح�
 
 
 @router.post("/auth/start-login")
-async def api_auth_start_login():
+async def api_auth_start_login(request: Request):
     """شروع ورود وب‌سایت (PWA خارج از تلگرام) — یک توکن یک‌بارمصرف می‌سازه و
     دیپ‌لینک بازکردن اپ واقعی تلگرام رو برمی‌گردونه (نه ویجت/oauth.telegram.org
     که برای خیلی از کاربرها — به‌خصوص ایران — قابل‌اعتماد نیست).
     فرانت این لینک رو باز می‌کنه و بعد /auth/poll-login رو poll می‌کنه."""
+    from rate_limit import is_rate_limited, client_ip
+    _blocked, _wait = is_rate_limited("auth_start_login", client_ip(request), max_calls=10, window_seconds=300)
+    if _blocked:
+        raise HTTPException(429, f"تعداد درخواست بیش از حد مجاز است. {_wait} ثانیه دیگر تلاش کنید.")
+
     import secrets
     from db import create_web_login_token
     from bot import _bot_username
@@ -544,17 +550,20 @@ async def api_partner_apply(request: Request):
 
     from config import BOT_TOKEN, ADMIN_ID
     import requests
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": ADMIN_ID,
-                  "text": (f"🔔 درخواست فروشندگی جدید (از مینی‌اپ)\n"
-                           f"کاربر: {uid} — {full_name}\nشهر: {city} | فروشگاه: {shop_name}")},
-            timeout=10,
-        )
-    except Exception:
-        pass
 
+    def _notify():
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": ADMIN_ID,
+                      "text": (f"🔔 درخواست فروشندگی جدید (از مینی‌اپ)\n"
+                               f"کاربر: {uid} — {full_name}\nشهر: {city} | فروشگاه: {shop_name}")},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+    await run_in_threadpool(_notify)
     return {"ok": True}
 
 
@@ -1020,7 +1029,7 @@ async def api_support_message(request: Request):
                         media_file_id=media_file_id, source="miniapp")
     new_count = ticket_user_sent(tid)
     if new_count == 1:
-        _notify_admin_ticket(tid, uid, text or "📷 عکس", ttype)
+        await run_in_threadpool(_notify_admin_ticket, tid, uid, text or "📷 عکس", ttype)
 
     t2 = ticket_get(tid)
     return {"ok": True, "ticket": _ticket_to_dict(t2), "remaining": max(0, TICKET_MAX_USER_MSGS - new_count)}
@@ -1074,7 +1083,7 @@ async def api_content_list(kind: str = "", limit: int = 50):
 async def api_news_feed(limit: int = 20, offset: int = 0):
     """اخبار تکنولوژی — همهٔ پست‌های وبلاگ (بدون محدودیت تعداد)، صفحه‌بندی با limit/offset."""
     from core.news import get_feed
-    d = get_feed(force=False)
+    d = await run_in_threadpool(get_feed, force=False)
     all_items = d.get("items") or []
     limit = min(max(int(limit or 20), 1), 100)
     offset = max(int(offset or 0), 0)
@@ -1363,6 +1372,11 @@ async def api_checkout(request: Request):
     if not uid:
         raise HTTPException(401, "احراز هویت لازم است")
 
+    from rate_limit import is_rate_limited
+    _blocked, _wait = is_rate_limited("checkout", str(uid), max_calls=10, window_seconds=60)
+    if _blocked:
+        raise HTTPException(429, f"تعداد درخواست بیش از حد مجاز است. {_wait} ثانیه دیگر تلاش کنید.")
+
     body = await request.json()
     pid = int(body.get("product_id", 0))
     ptype = str(body.get("payment_type", "wallet")).lower()
@@ -1415,7 +1429,7 @@ async def api_checkout(request: Request):
         oid = create_order(uid, prod.get("category",""), prod["title"],
                            final_price, product_id=pid,
                            buyer_type="partner" if is_partner else "customer")
-        delivered = _deliver_or_queue_order(uid, oid, pid, prod["title"], final_price)
+        delivered = await run_in_threadpool(_deliver_or_queue_order, uid, oid, pid, prod["title"], final_price)
         msg = f"✅ خرید موفق! سفارش #{oid} ثبت شد." if delivered else \
               "❌ موجودی این محصول لحظاتی پیش به پایان رسید. مبلغ به کیف‌پول شما بازگردانده شد."
         return {"ok": True, "method": "wallet", "order_id": oid, "delivered": delivered, "message": msg}
@@ -1433,7 +1447,7 @@ async def api_checkout(request: Request):
             oid = create_order(uid, prod.get("category",""), prod["title"],
                                final_price, product_id=pid,
                                buyer_type="partner" if is_partner else "customer")
-            delivered = _deliver_or_queue_order(uid, oid, pid, prod["title"], final_price)
+            delivered = await run_in_threadpool(_deliver_or_queue_order, uid, oid, pid, prod["title"], final_price)
             msg = f"✅ خرید از کیف‌پول موفق! سفارش #{oid}" if delivered else \
                   "❌ موجودی این محصول لحظاتی پیش به پایان رسید. مبلغ به کیف‌پول شما بازگردانده شد."
             return {"ok": True, "method": "wallet", "order_id": oid, "delivered": delivered, "message": msg}

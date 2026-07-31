@@ -36,6 +36,11 @@ async def iphone_options():
 
 @router.post("/valuate")
 async def iphone_valuate(request: Request):
+    from rate_limit import is_rate_limited, client_ip
+    _blocked, _wait = is_rate_limited("iphone_valuate", client_ip(request), max_calls=15, window_seconds=60)
+    if _blocked:
+        raise HTTPException(status_code=429, detail=f"تعداد درخواست بیش از حد مجاز است. {_wait} ثانیه دیگر تلاش کنید.")
+
     try:
         payload = await request.json()
     except Exception:
