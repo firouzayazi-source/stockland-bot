@@ -220,9 +220,8 @@ except Exception:
 |---|---|
 | `POST /payment/create` | ساخت تراکنش (اعتبارسنجی مبلغ/نوع/محدودیت روزانه) → **`_run_gateway_failover()`** (سیستم چند‌درگاهی، بخش ۲۵) → درج ردیف `pending` در `zarinpal_transactions` (با ستون `gateway`) → برمی‌گرداند `{authority, payment_url, gateway}` |
 | `GET /payment/callback` و `GET|POST /payment/callback/{gw}` | ریدایرکت مرورگر بعد از پرداخت — درگاه‌آگاه (بخش ۲۵)؛ idempotent (اگر از قبل `paid` بود، دوباره کاری نمی‌کند)؛ زیر `BEGIN IMMEDIATE` قفل می‌شود تا کال‌بک دوبل مشکل نسازد؛ بسته به `payment_type` یا کیف‌پول شارژ می‌شود یا سفارش کامل می‌شود (`create_order` + `claim_feed_item`/بازگشت وجه). مسیر بدون `/{gw}` برای سازگاری عقب‌رو (تراکنش‌های زرین‌پالِ در جریان قبل از فیچر چند‌درگاهی) نگه داشته شده |
-| `POST /payment/finalize` | پل PHP خارجی قدیمی — **دیگه در مسیر پرداخت نیست** (بخش ۲۵ پل PHP رو کامل حذف کرد)؛ خودِ endpoint (با auth secret) دست‌نخورده مونده ولی هیچ‌جا صدا زده نمی‌شه |
 | `POST /webhook` | دریافت‌کنندهٔ webhook تلگرام دوم، **بدون auth** — قدیمی/موازی با `/telegram/webhook/{BOT_TOKEN}` که secret-token دارد |
-| `GET /health` | سلامت سرویس + وضعیت polling ربات + `php_bridge` (که دیگه استفاده نمی‌شه) |
+| `GET /health` | سلامت سرویس + وضعیت polling ربات |
 
 ### پرداخت ترکیبی (کیف‌پول + درگاه)
 مدل‌سازی با `wallet_reserved` (بخش کیف‌پول، فقط بعد از موفقیت درگاه واقعاً کسر می‌شود — `deduct_wallet_reserved`) + `gateway_amount` (باقیمانده برای درگاه).
@@ -833,3 +832,15 @@ bot / mini-app → POST /payment/create → payment_service._run_gateway_failove
 - `payment_service._finalize_paid_tx()` پارامتر تازهٔ `extra: dict` گرفت (پیش‌فرض `{}`) و این ۴ فیلد رو توی همون `UPDATE ... status='paid'` ذخیره می‌کنه — برای درگاه‌هایی که این فیلدها رو ندارن، مقدار خالی/`None` ذخیره می‌شه (بدون کرش).
 - لاگ کامل‌تر: `create_payment`/`verify_payment` زرین‌پال حالا کل پاسخ خام رو با `logger.info` هم ثبت می‌کنن (قبلاً فقط خطاها لاگ می‌شدن).
 - **تست انجام‌شده:** استخراج صحیح ۴ فیلد در `verify_payment`، مهاجرت ستون‌ها (هم `db.py` هم `payment_service.py`)، ذخیرهٔ کامل end-to-end در کال‌بک، و مهم‌تر — تأیید که درگاه‌های **بدون** این فیلدها (زیبال) کرش نمی‌کنن و مقدار خالی ذخیره می‌کنن.
+
+### دور سوم — پاک‌سازی کامل بقایای مسیر PHP قدیمی (از ۲۰۲۶-۰۷-۳۱)
+
+بعد از تأیید کامل کارکرد سیستم چند‌درگاهی (رفع مشکل زیردامنهٔ اختصاصی `pay.stland.ir` — CNAME باید به `zpc.zarinpal.com` اشاره کنه، نه IP خودِ VPS؛ این یه ویژگی رسمی زرین‌پال برای white-label checkout است، مستقل از این پروژه)، مالک پروژه صریح خواست بقایای کاملاً مردهٔ مسیر PHP حذف بشه (نه فقط بی‌اثر بمونه). حذف شد:
+- `payment_service.zarinpal_create()`/`verify_zarinpal()` — جایگزین‌شده با `payment_gateways/zarinpal_gateway.py`.
+- `payment_service.REQUEST_URL`/`VERIFY_URL`/`STARTPAY_URL` (مقادیر خونده‌شده از `ZARINPAL_REQUEST_URL`/`ZARINPAL_VERIFY_URL`/`ZARINPAL_STARTPAY_URL` در `.env`) — دیگه هیچ‌جا خونده نمی‌شن؛ `zarinpal_gateway.py` این آدرس‌ها رو خودش هاردکد داره (نه از env). یعنی این سه env var دیگه **کاملاً بی‌اثرن** حتی اگه در `.env` باقی بمونن — پاک‌کردنشون از `.env` اختیاریه (بی‌خطر چه بمونن چه نمونن).
+- `POST /payment/finalize` endpoint کامل (پل PHP خارجی) + متغیر `PHP_SECRET` + فیلد `php_bridge` در `/health`.
+- ایمپورت‌های بلااستفادهٔ `hashlib`/`hmac` (که فقط همین endpoint استفاده می‌کرد).
+
+فایل PHP خودِ `public_html/payment/stockland-pay.php` روی هاست وردپرسی (بیرون از این مخزن) هم توسط مالک پروژه حذف شد — چون از قبل هیچ مسیری در کد بهش وصل نبود، حذفش بی‌خطر بود.
+
+**تست انجام‌شده:** سینتکس کامل + هارنس رگرسیون کامل (failover، callback→finalize با فیلدهای card_pan/fee، `/health` بدون فیلد مرده) بعد از حذف — همه سالم.
