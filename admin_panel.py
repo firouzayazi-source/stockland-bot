@@ -611,6 +611,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
             {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
             {nav_item("/admin/engagement", "star", "امتیازها و پاداش روزانه", "settings")}
+            {nav_item("/admin/stock-requests", "bell-ring", "درخواست‌های موجودی", "settings")}
             {nav_item("/admin/iphone", "smartphone", "کارشناسی آیفون", "settings")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "users")}
@@ -11729,6 +11730,101 @@ async def engagement_rating_delete(request: Request, rid: int):
     delete_rating(rid)
     _log(request, "حذف نظر محصول", "امتیازها و پاداش روزانه", f"rating #{rid}", admin_info=adm)
     return _redir(f"/admin/engagement?flash={e('✅ حذف شد')}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── درخواست‌های «اطلاع‌رسانی موجود شدن» (بخش ۴ سند مینی‌اپ) ──────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/stock-requests", response_class=HTMLResponse)
+async def stock_requests_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "notifications")
+    if guard: return guard
+    from db import list_stock_requests
+    reqs = list_stock_requests()
+
+    groups = {}
+    order = []
+    for r in reqs:
+        pid = r["product_id"]
+        if pid not in groups:
+            groups[pid] = {"title": r.get("product_title") or f"محصول #{pid}",
+                            "stock": r.get("product_stock") or 0, "rows": []}
+            order.append(pid)
+        groups[pid]["rows"].append(r)
+
+    def _row_html(r):
+        who = html.escape((r.get("full_name") or "").strip() or f"کاربر {r['user_id']}")
+        status = ('<span class="text-emerald-600 text-xs font-medium">✅ اطلاع داده شد</span>' if r["notified"]
+                   else '<span class="text-amber-600 text-xs font-medium">⏳ در انتظار</span>')
+        return f"""
+          <tr class="border-b">
+            <td class="p-2 text-sm">{who}</td>
+            <td class="p-2 text-xs text-gray-400">{fa_date(r.get('created_at') or '')}</td>
+            <td class="p-2">{status}</td>
+            <td class="p-2">
+              <form method="post" action="/admin/stock-requests/{r['id']}/delete" onsubmit="return confirm('این درخواست حذف بشه؟')">
+                <button class="text-red-500 text-xs">🗑 حذف</button>
+              </form>
+            </td>
+          </tr>"""
+
+    if not order:
+        cards = '<div class="bg-white rounded-xl shadow-sm p-10 text-center text-gray-400 text-sm">فعلاً هیچ درخواست اطلاع‌رسانی‌ای ثبت نشده.</div>'
+    else:
+        cards = ""
+        for pid in order:
+            g = groups[pid]
+            pending = sum(1 for r in g["rows"] if not r["notified"])
+            notify_btn = ""
+            if pending:
+                notify_btn = f"""
+                  <form method="post" action="/admin/stock-requests/{pid}/notify-now" onsubmit="return confirm('پیام موجود شدن به {pending} کاربر منتظر ارسال بشه؟')">
+                    <button class="bg-indigo-600 text-white text-xs px-3 py-1.5 rounded-lg">🔔 اطلاع‌رسانی الان</button>
+                  </form>"""
+            cards += f"""
+            <div class="bg-white rounded-xl shadow-sm overflow-x-auto mb-4">
+              <div class="px-4 py-3 border-b bg-gray-50 flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <h2 class="font-bold text-gray-700 text-sm">{html.escape(g['title'])}</h2>
+                  <div class="text-xs text-gray-400 mt-0.5">موجودی فعلی: {g['stock']} — {len(g['rows'])} درخواست، {pending} در انتظار</div>
+                </div>
+                {notify_btn}
+              </div>
+              <table class="w-full text-right">
+                <thead><tr class="text-xs text-gray-400 border-b">
+                  <th class="p-2">کاربر</th><th class="p-2">تاریخ درخواست</th><th class="p-2">وضعیت</th><th class="p-2">عملیات</th>
+                </tr></thead>
+                <tbody>{"".join(_row_html(r) for r in g["rows"])}</tbody>
+              </table>
+            </div>"""
+
+    body = f"""
+    <div class="text-xs text-gray-400 mb-4">کاربرانی که روی محصول ناموجود دکمهٔ «اطلاع بده وقتی موجود شد» رو زدن (از ربات یا مینی‌اپ). با اضافه‌شدن موجودی از صفحهٔ «موجودی»، این کاربران خودکار مطلع می‌شن؛ از اینجا هم می‌شه دستی همین الان اطلاع‌رسانی کرد یا یک درخواست رو حذف کرد.</div>
+    {cards}"""
+    return _layout("درخواست‌های اطلاع‌رسانی موجودی", body, adm, flash=flash)
+
+
+@router.post("/stock-requests/{rid}/delete")
+async def stock_requests_delete(request: Request, rid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "notifications")
+    if guard: return guard
+    from db import delete_stock_request
+    delete_stock_request(rid)
+    _log(request, "حذف درخواست اطلاع‌رسانی موجودی", "درخواست‌های اطلاع‌رسانی موجودی", f"request #{rid}", admin_info=adm)
+    return _redir(f"/admin/stock-requests?flash={e('✅ حذف شد')}")
+
+
+@router.post("/stock-requests/{pid}/notify-now")
+async def stock_requests_notify_now(request: Request, pid: int, background_tasks: BackgroundTasks):
+    adm = _get_admin(request)
+    guard = _require(adm, "notifications")
+    if guard: return guard
+    background_tasks.add_task(_notify_restock_subscribers, pid, True)
+    _log(request, "اطلاع‌رسانی دستی موجودی", "درخواست‌های اطلاع‌رسانی موجودی", f"product:{pid}", admin_info=adm)
+    return _redir(f"/admin/stock-requests?flash={e('✅ در حال ارسال اطلاع‌رسانی…')}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
