@@ -854,6 +854,7 @@ def get_product_by_id(pid: int):
             "COALESCE(image_url, '') AS image_url",
             "COALESCE(notify_on_restock, 0) AS notify_on_restock",
             "COALESCE(require_terms, 0) AS require_terms",
+            "created_by", "created_at",
         ]
         cur.execute(
             f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
@@ -2991,6 +2992,8 @@ def ensure_product_support_schema():
             ("image_url", "TEXT DEFAULT ''"),
             ("notify_on_restock", "INTEGER DEFAULT 0"),
             ("require_terms", "INTEGER DEFAULT 0"),
+            ("created_by", "INTEGER"),
+            ("created_at", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE products ADD COLUMN {col} {default};")
@@ -3021,6 +3024,73 @@ def get_product_require_terms(product_id: int) -> bool:
         return bool(row and row[0])
     except Exception:
         return False
+    finally:
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── تاریخچهٔ تغییر قیمت محصول (بخش ۹.۱ سند مینی‌اپ) ──────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PRICE_HISTORY_SCHEMA_DONE = False
+
+def ensure_price_history_schema():
+    global _PRICE_HISTORY_SCHEMA_DONE
+    if _PRICE_HISTORY_SCHEMA_DONE:
+        return
+    _PRICE_HISTORY_SCHEMA_DONE = True
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_price_history (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id         INTEGER NOT NULL,
+                old_price          INTEGER,
+                new_price          INTEGER,
+                old_partner_price  INTEGER,
+                new_partner_price  INTEGER,
+                changed_by         INTEGER,
+                changed_at         TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def log_price_change(product_id: int, old_price, new_price,
+                      old_partner_price=None, new_partner_price=None,
+                      changed_by: int = None) -> None:
+    """فقط وقتی واقعاً قیمت فروش یا قیمت همکاری عوض شده باشه ثبت می‌شه — تغییر بقیهٔ
+    فیلدهای محصول (عنوان، توضیحات، ...) اینجا اثری نداره."""
+    old_price = int(old_price or 0)
+    new_price = int(new_price or 0)
+    old_partner_price = int(old_partner_price or 0)
+    new_partner_price = int(new_partner_price or 0)
+    if old_price == new_price and old_partner_price == new_partner_price:
+        return
+    ensure_price_history_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO product_price_history (product_id,old_price,new_price,old_partner_price,new_partner_price,changed_by) "
+            "VALUES (?,?,?,?,?,?);",
+            (product_id, old_price, new_price, old_partner_price, new_partner_price, changed_by)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_price_history(product_id: int, limit: int = 20) -> list:
+    ensure_price_history_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM product_price_history WHERE product_id=? ORDER BY id DESC LIMIT ?;",
+            (product_id, limit)
+        ).fetchall()]
     finally:
         conn.close()
 
@@ -4659,18 +4729,18 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
     conn = _get_connection()
     try:
         where_order = ""
-        where_batch = ""
-        params = []
+        order_params = []
         if date_from:
-            where_order += f" AND date(o.created_at) >= '{date_from}'"
-            where_batch  += f" AND date(fb.created_at) >= '{date_from}'"
+            where_order += " AND date(o.created_at) >= ?"
+            order_params.append(date_from)
         if date_to:
-            where_order += f" AND date(o.created_at) <= '{date_to}'"
-            where_batch  += f" AND date(fb.created_at) <= '{date_to}'"
+            where_order += " AND date(o.created_at) <= ?"
+            order_params.append(date_to)
 
         # فروش کل
         total_sales = conn.execute(
-            f"SELECT COALESCE(SUM(price),0) FROM orders o WHERE status='active'{where_order};"
+            f"SELECT COALESCE(SUM(price),0) FROM orders o WHERE status='active'{where_order};",
+            order_params
         ).fetchone()[0]
 
         # فروش امروز
@@ -4685,7 +4755,8 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
 
         # تعداد سفارش
         total_orders = conn.execute(
-            f"SELECT COUNT(*) FROM orders o WHERE status='active'{where_order};"
+            f"SELECT COUNT(*) FROM orders o WHERE status='active'{where_order};",
+            order_params
         ).fetchone()[0]
 
         # هزینه خرید — محصولات تحویل‌شده (با batch + بدون batch)
@@ -4718,17 +4789,20 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
         # پورسانت پرداختی
         try:
             commission_q = "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1"
+            commission_params = []
             if date_from:
-                commission_q += f" AND date(rewarded_at)>='{date_from}'"
-            total_commission = conn.execute(commission_q + ";").fetchone()[0]
+                commission_q += " AND date(rewarded_at)>=?"
+                commission_params.append(date_from)
+            total_commission = conn.execute(commission_q + ";", commission_params).fetchone()[0]
         except Exception:
             total_commission = 0
 
         # هزینههای ثبتشده
         exp_q = "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE 1=1"
-        if date_from: exp_q += f" AND expense_date>='{date_from}'"
-        if date_to:   exp_q += f" AND expense_date<='{date_to}'"
-        total_expenses = conn.execute(exp_q + ";").fetchone()[0]
+        exp_params = []
+        if date_from: exp_q += " AND expense_date>=?"; exp_params.append(date_from)
+        if date_to:   exp_q += " AND expense_date<=?"; exp_params.append(date_to)
+        total_expenses = conn.execute(exp_q + ";", exp_params).fetchone()[0]
 
         # تسویههای انجام شده
         try:
@@ -4844,8 +4918,10 @@ def get_cashflow(date_from: str = "", date_to: str = "", limit: int = 100) -> li
     conn.row_factory = sqlite3.Row
     try:
         where = "WHERE 1=1"
-        if date_from: where += f" AND date(created_at)>='{date_from}'"
-        if date_to:   where += f" AND date(created_at)<='{date_to}'"
+        params = []
+        if date_from: where += " AND date(created_at)>=?"; params.append(date_from)
+        if date_to:   where += " AND date(created_at)<=?"; params.append(date_to)
+        params.append(limit)
         rows = conn.execute(f"""
             SELECT * FROM (
                 SELECT created_at, 'فروش' as type, title as description,
@@ -4868,7 +4944,7 @@ def get_cashflow(date_from: str = "", date_to: str = "", limit: int = 100) -> li
                 FROM referrals WHERE rewarded=1
             ) {where}
             ORDER BY created_at DESC LIMIT ?;
-        """, (limit,)).fetchall()
+        """, params).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -4880,11 +4956,13 @@ def get_expenses(date_from="", date_to="", category="", limit=100) -> list:
     conn = _get_connection(); conn.row_factory = sqlite3.Row
     try:
         where = "WHERE 1=1"
-        if date_from: where += f" AND expense_date>='{date_from}'"
-        if date_to:   where += f" AND expense_date<='{date_to}'"
-        if category:  where += f" AND category='{category.replace(chr(39),'')}'"
+        params = []
+        if date_from: where += " AND expense_date>=?"; params.append(date_from)
+        if date_to:   where += " AND expense_date<=?"; params.append(date_to)
+        if category:  where += " AND category=?"; params.append(category)
+        params.append(limit)
         return [dict(r) for r in conn.execute(
-            f"SELECT * FROM expenses {where} ORDER BY expense_date DESC, id DESC LIMIT ?;", (limit,)
+            f"SELECT * FROM expenses {where} ORDER BY expense_date DESC, id DESC LIMIT ?;", params
         ).fetchall()]
     finally: conn.close()
 
