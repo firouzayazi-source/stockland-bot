@@ -1116,34 +1116,27 @@ function payCryptoForm(amount,net,note){
   });
 }
 
-/* ─── دعوت دوستان ─── */
+/* ─── دعوت دوستان — برای همهٔ کاربران (چه همکار باشند چه نه)، پاداش معرفی عمومیه ───
+   داخل پنل همکاری هم یه دکمهٔ اختصاصی برای همین لینک هست (renderInviteInline)،
+   ولی این مسیر مستقل هم می‌مونه چون پاداش دعوت مخصوص همکارها نیست. */
 function openInvite(){
   _accPopup('دعوت دوستان',skel(2));
   window._slApi('/me/invite',true).then(function(d){
     var b=_accBody();if(!b)return;
-    var link=d.referral_link||'';
     b.innerHTML='<div style="text-align:center;padding:8px 0 4px">'+
       '<span style="font-size:44px">🎁</span>'+
       '<p style="margin:10px 0 4px;font-size:14px;font-weight:700">لینک دعوت اختصاصی شما</p>'+
       '<p style="font-size:12px;color:var(--mu)">با هر دعوت موفق '+window._slFmt(d.reward_amount||0)+' تومان پاداش بگیرید</p></div>'+
-      '<div class="sl-checkout-wallet" style="direction:ltr;text-align:center;word-break:break-all;font-size:12px">'+window._slEsc(link)+'</div>'+
-      '<div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="inv-copy-btn">📋 کپی لینک</button></div>'+
-      '<div class="sl-checkout-sec">آمار دعوت‌ها</div>'+
-      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">تعداد دعوت‌های موفق</div>'+
-      '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.stats&&d.stats.rewarded)||0)+'</div></div>'+
-      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">جمع درآمد از دعوت</div>'+
-      '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.stats&&d.stats.earned)||0)+' تومان</div></div>';
-    var cb=document.getElementById('inv-copy-btn');
-    if(cb)cb.addEventListener('click',function(){
-      var done=function(){cb.textContent='✅ کپی شد';setTimeout(function(){cb.textContent='📋 کپی لینک'},1500)};
-      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(link).then(done).catch(done)}
-      else{done()}
-    });
+      '<div id="inv-slot"></div>';
+    renderInviteInline(document.getElementById('inv-slot'),d);
   }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات دعوت')});
 }
 window.openInvite=openInvite;
 
-/* ─── پنل همکاری ─── */
+/* ─── پنل همکاری ───
+   مطابق داشبورد بات (_show_partner_dashboard): سطح+پیشرفت، کیف‌پول همکاری،
+   آمار سفارش/دعوت، دکمهٔ تسویه، و لینک دعوت اختصاصی (اینجا به‌جای دکمهٔ جدا
+   در بات، مستقیم داخل همین پنل قابل‌نمایشه — طبق بخش ۵ سند مینی‌اپ). */
 function openPartner(){
   _accPopup('پنل همکاری',skel(2));
   window._slApi('/me/partner',true).then(function(d){
@@ -1183,10 +1176,36 @@ function openPartner(){
       '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">تعداد دعوت‌های موفق</div>'+
       '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.referrals&&d.referrals.rewarded)||0)+'</div></div>'+
       '<div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="pt-payout-btn">💸 درخواست تسویه</button></div>'+
-      '<div class="sl-checkout-note">برای مشاهدهٔ لینک دعوت اختصاصی همکاری، با پشتیبانی در تماس باشید.</div>';
+      '<div class="sl-checkout-sec">🎁 دعوت دوستان</div>'+
+      '<div id="pt-invite-slot"><div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-combined" id="pt-invite-btn">🔗 نمایش لینک دعوت من</button></div></div>';
     var pb=document.getElementById('pt-payout-btn');
     if(pb)pb.addEventListener('click',function(){openPayoutRequest()});
+    var ib=document.getElementById('pt-invite-btn');
+    if(ib)ib.addEventListener('click',function(){renderInviteInline(document.getElementById('pt-invite-slot'))});
   }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات همکاری')});
+}
+
+/* رندر لینک دعوت + آمار، داخل یه ظرف مشخص — هم از پنل همکاری استفاده می‌شه هم از
+   openInvite. اگه d از قبل fetch شده باشه (مثلاً openInvite که برای متن بالای صفحه
+   هم بهش نیاز داره) پاس داده می‌شه تا دوباره fetch نشه؛ وگرنه خودش می‌گیرتش. */
+function renderInviteInline(slot,d){
+  if(!slot)return;
+  var render=function(d){
+    var link=d.referral_link||'';
+    slot.innerHTML='<div class="sl-checkout-wallet" style="direction:ltr;text-align:center;word-break:break-all;font-size:12px">'+window._slEsc(link)+'</div>'+
+      '<div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="inv-copy-btn-2">📋 کپی لینک</button></div>'+
+      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">جمع درآمد از دعوت</div>'+
+      '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.stats&&d.stats.earned)||0)+' تومان</div></div>';
+    var cb=document.getElementById('inv-copy-btn-2');
+    if(cb)cb.addEventListener('click',function(){
+      var done=function(){cb.textContent='✅ کپی شد';setTimeout(function(){cb.textContent='📋 کپی لینک'},1500)};
+      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(link).then(done).catch(done)}
+      else{done()}
+    });
+  };
+  if(d){render(d);return}
+  slot.innerHTML='<div class="sl-skel" style="margin:12px 0"><div class="b w90"></div><div class="b w40"></div></div>';
+  window._slApi('/me/invite',true).then(render).catch(function(){slot.innerHTML=err('خطا در دریافت لینک دعوت')});
 }
 
 /* ─── درخواست تسویهٔ موجودی همکاری ─── */
