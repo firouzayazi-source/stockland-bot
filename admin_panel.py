@@ -10800,10 +10800,11 @@ async def growth_page(request: Request, flash: str = ""):
 
     from db import (ensure_growth_schema, list_flash_sales, get_winback_settings,
                     get_leaderboard_settings, get_social_settings, get_crypto_settings,
-                    get_promo_settings, get_cfg)
+                    get_promo_settings, get_cfg, get_card2card_settings)
     ensure_growth_schema()
     wb, lb = get_winback_settings(), get_leaderboard_settings()
     soc, cr, pr = get_social_settings(), get_crypto_settings(), get_promo_settings()
+    c2c = get_card2card_settings()
     webapp_url = get_cfg("webapp_url", "")
 
     conn = _db()
@@ -10926,6 +10927,20 @@ async def growth_page(request: Request, flash: str = ""):
       <p class="text-xs text-amber-500 mt-2">⚠️ ربات باید ادمین کانال باشد تا بتواند پست بگذارد.</p>
     </div>
 
+    <!-- کارت‌به‌کارت -->
+    <div class="card p-5 mb-5">
+      <h2 class="font-bold text-gray-700 mb-4">💳 کارت مقصد کارت‌به‌کارت</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="text-xs text-gray-500 block mb-1">شماره کارت (۱۶ رقم)</label>
+          <input type="text" name="c2c_number" value="{e(c2c.get('card_number',''))}" maxlength="19"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="ltr"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">به نام</label>
+          <input type="text" name="c2c_name" value="{e(c2c.get('card_name',''))}"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl"></div>
+      </div>
+      <p class="text-xs text-gray-400 mt-2">این کارت هم در ربات (شارژ کارت‌به‌کارت) هم در مینی‌اپ نمایش داده می‌شود — یک منبع واحد.</p>
+    </div>
+
     <!-- ۷) رمزارز -->
     <div class="card p-5 mb-5">
       <div class="flex items-center justify-between mb-4">
@@ -11006,6 +11021,9 @@ async def growth_save(request: Request):
     set_cfg("crypto", _j.dumps({
         "enabled": onoff("cr_enabled"), "usdt_trc20": g("cr_usdt"),
         "trx": g("cr_trx"), "note": g("cr_note"),
+    }, ensure_ascii=False))
+    set_cfg("card2card", _j.dumps({
+        "card_number": g("c2c_number"), "card_name": g("c2c_name"),
     }, ensure_ascii=False))
     set_cfg("promo", _j.dumps({"text": g("pr_text")}, ensure_ascii=False))
     set_cfg("webapp_url", g("webapp_url"))
