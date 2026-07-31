@@ -1995,6 +1995,17 @@ def _show_order_summary(chat_id, uid, product, category, pid):
         )
         clear_user_state(uid)
         return
+
+    # تأیید قوانین خرید (بخش ۷ سند مینی‌اپ) — اگه این محصول نیازمنده و کاربر توی همین
+    # سشن هنوز تأیید نکرده، به‌جای خلاصهٔ سفارش، صفحهٔ قوانین نشون داده می‌شه. همون‌طور که
+    # گیت موجودی بالا توضیح داده، این تنها نقطهٔ ورود به خلاصهٔ سفارشه، پس همه‌جا رو پوشش می‌ده.
+    from db import get_product_require_terms
+    if get_product_require_terms(int(pid)):
+        agreed = user_states.get(uid, {}).get("terms_agreed_pids") or set()
+        if int(pid) not in agreed:
+            _show_terms_gate(chat_id, uid, product, category, pid)
+            return
+
     title     = product[2]
     # قیمت پایه (بدون فلش) برای نمایش خط‌خورده
     _p = product[3]
@@ -2086,6 +2097,42 @@ def _show_order_summary(chat_id, uid, product, category, pid):
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
+def _show_terms_gate(chat_id, uid, product, category, pid):
+    """صفحهٔ تأیید قوانین خرید — قبل از خلاصهٔ سفارش، فقط برای محصولاتی که ادمین این
+    قابلیت رو براشون فعال کرده (products.require_terms). متن از تنظیمات پنل (bot_config
+    کلید PURCHASE_TERMS_TEXT) می‌آد — همون متنی که در مینی‌اپ هم نشون داده می‌شه."""
+    from db import get_cfg
+    title = product[2] if len(product) > 2 else ""
+    text = (get_cfg("PURCHASE_TERMS_TEXT", "") or "").strip()
+    if not text:
+        text = "با ادامهٔ خرید، قوانین و مقررات فروشگاه را می‌پذیرید."
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("✅ قوانین را می‌پذیرم و ادامه می‌دهم", callback_data=f"terms_agree_{category}_{pid}"))
+    kb.add(types.InlineKeyboardButton("🔙 انصراف", callback_data="cancel_purchase"))
+    bot.send_message(
+        chat_id,
+        f"📜 <b>قوانین خرید — {title}</b>\n\n{text}\n\nبرای ادامهٔ خرید، لطفاً قوانین بالا را تأیید کنید.",
+        parse_mode="HTML", reply_markup=kb,
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("terms_agree_"))
+def handle_terms_agree(call):
+    uid = call.from_user.id
+    suf = call.data[len("terms_agree_"):]
+    parts = suf.rsplit("_", 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.answer_callback_query(call.id, "❌ خطا")
+        return
+    category, pid = parts[0], int(parts[1])
+    product = get_product_by_id(pid)
+    if not product:
+        bot.answer_callback_query(call.id, "❌ محصول یافت نشد")
+        return
+    state = user_states.setdefault(uid, {})
+    state.setdefault("terms_agreed_pids", set()).add(pid)
+    bot.answer_callback_query(call.id)
+    _show_order_summary(call.message.chat.id, uid, product, category, pid)
 
 
 # ─── ورود کد تخفیف ──────────────────────────────────────────────────────────

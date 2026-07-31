@@ -843,6 +843,7 @@ def get_product_by_id(pid: int):
             'COALESCE(daily_limit_partner, 0) AS daily_limit_partner',
             "COALESCE(image_url, '') AS image_url",
             "COALESCE(notify_on_restock, 0) AS notify_on_restock",
+            "COALESCE(require_terms, 0) AS require_terms",
         ]
         cur.execute(
             f"SELECT {', '.join(select_cols)} FROM products WHERE id = ?;",
@@ -2979,6 +2980,7 @@ def ensure_product_support_schema():
             ("setup_message", "TEXT DEFAULT ''"),
             ("image_url", "TEXT DEFAULT ''"),
             ("notify_on_restock", "INTEGER DEFAULT 0"),
+            ("require_terms", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE products ADD COLUMN {col} {default};")
@@ -2993,6 +2995,19 @@ def get_product_support_flag(product_id: int) -> bool:
     conn = _get_connection()
     try:
         row = conn.execute("SELECT support_after_purchase FROM products WHERE id=? LIMIT 1;", (product_id,)).fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def get_product_require_terms(product_id: int) -> bool:
+    """آیا این محصول نیاز به تأیید قوانین خرید قبل از پرداخت داره؟ (بخش ۷ سند مینی‌اپ)."""
+    ensure_product_support_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT require_terms FROM products WHERE id=? LIMIT 1;", (product_id,)).fetchone()
         return bool(row and row[0])
     except Exception:
         return False

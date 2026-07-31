@@ -1558,6 +1558,7 @@ window._slCk={pid:0,prod:null,walBal:0,basePrice:0,discountCode:'',discountAmoun
 
 function openCheckout(pid){
   window._slCk.pid=pid;window._slCk.discountCode='';window._slCk.discountAmount=0;
+  window._slCk.termsAgreed=false;window._slCk.termsText='';
   var b=document.getElementById('checkout-body');
   b.innerHTML='<div class="sl-skel" style="margin:20px"><div class="b w60"></div><div class="b w90"></div><div class="b w40"></div></div>';
   window._slApp.popup.open('#checkout-popup');
@@ -1569,7 +1570,14 @@ function openCheckout(pid){
     window._slCk.prod=res[0].product||{};
     window._slCk.walBal=res[1].balance||0;
     window._slCk.basePrice=window._slCk.prod.effective_price||window._slCk.prod.price||0;
-    _renderCheckoutBody();
+    if(window._slCk.prod.require_terms){
+      window._slApi('/purchase-terms').then(function(d){
+        window._slCk.termsText=(d&&d.text)||'';
+        _renderCheckoutBody();
+      }).catch(function(){_renderCheckoutBody()});
+    }else{
+      _renderCheckoutBody();
+    }
   }).catch(function(){
     b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📡</span>خطا در دریافت اطلاعات</div>';
   });
@@ -1586,6 +1594,8 @@ function _renderCheckoutBody(){
   var emoji=p._e||'📦';
 
   var outOfStock=Number(p.stock||0)<=0;
+  var needsTerms=!!p.require_terms;
+  var termsDis=(needsTerms&&!window._slCk.termsAgreed)?' disabled':'';
   var btns='';
   if(outOfStock){
     if(p.notify_on_restock){
@@ -1594,18 +1604,23 @@ function _renderCheckoutBody(){
       btns='<div class="sl-checkout-note" style="text-align:center;padding:12px;color:var(--mu)">❌ موجودی این محصول در حال حاضر به پایان رسیده است.</div>';
     }
   }else if(price<=0){
-    btns='<button class="sl-checkout-btn sl-checkout-btn-wallet" onclick="_doPay(\'wallet\')">✅ دریافت رایگان</button>';
+    btns='<button class="sl-checkout-btn sl-checkout-btn-wallet"'+termsDis+' onclick="_doPay(\'wallet\')">✅ دریافت رایگان</button>';
   }else{
     if(canWallet){
-      btns+='<button class="sl-checkout-btn sl-checkout-btn-wallet" onclick="_doPay(\'wallet\')">👛 پرداخت از کیف‌پول ('+window._slFmt(price)+' تومان)</button>';
+      btns+='<button class="sl-checkout-btn sl-checkout-btn-wallet"'+termsDis+' onclick="_doPay(\'wallet\')">👛 پرداخت از کیف‌پول ('+window._slFmt(price)+' تومان)</button>';
     }
     if(canCombined){
       var gw=price-walBal;
-      btns+='<button class="sl-checkout-btn sl-checkout-btn-combined" onclick="_doPay(\'combined\')">'+
+      btns+='<button class="sl-checkout-btn sl-checkout-btn-combined"'+termsDis+' onclick="_doPay(\'combined\')">'+
         '💳 پرداخت ترکیبی (کیف‌پول '+window._slFmt(walBal)+' + درگاه '+window._slFmt(gw)+' تومان)</button>';
     }
-    btns+='<button class="sl-checkout-btn sl-checkout-btn-gateway" onclick="_doPay(\'gateway\')">🌐 پرداخت کامل از درگاه ('+window._slFmt(price)+' تومان)</button>';
+    btns+='<button class="sl-checkout-btn sl-checkout-btn-gateway"'+termsDis+' onclick="_doPay(\'gateway\')">🌐 پرداخت کامل از درگاه ('+window._slFmt(price)+' تومان)</button>';
   }
+  var termsBox=(needsTerms&&!outOfStock)?
+    '<div class="sl-terms-box">'+
+      '<div class="sl-terms-text">'+window._slEsc(window._slCk.termsText||'با ادامهٔ خرید، قوانین و مقررات فروشگاه را می‌پذیرید.').replace(/\n/g,'<br>')+'</div>'+
+      '<label class="sl-terms-chk"><input type="checkbox" id="terms-agree-chk"'+(window._slCk.termsAgreed?' checked':'')+'><span>قوانین بالا را مطالعه کردم و می‌پذیرم</span></label>'+
+    '</div>':'';
 
   var priceLine=window._slCk.discountAmount>0?
     '<div class="sl-checkout-price"><s style="color:var(--mu)">'+window._slFmt(window._slCk.basePrice)+'</s> <b>'+window._slFmt(price)+' تومان</b></div>':
@@ -1635,6 +1650,7 @@ function _renderCheckoutBody(){
       '<div class="sl-checkout-wallet-bal">'+window._slFmt(walBal)+' تومان</div>'+
     '</div>'+
     '<div class="sl-checkout-sec">کد تخفیف</div>'+discRow+
+    termsBox+
     '<div class="sl-checkout-sec">روش پرداخت</div>'+
     '<div class="sl-checkout-btns" id="checkout-btns">'+btns+'</div>'+
     '<div class="sl-checkout-note">بعد از تایید پرداخت، سفارش شما به‌صورت خودکار ثبت و ارسال می‌شود.<br>در پرداخت از درگاه، قبل از ورود فیلترشکن (VPN) خود را خاموش کنید.</div>';
@@ -1643,6 +1659,12 @@ function _renderCheckoutBody(){
   if(da)da.addEventListener('click',function(e){e.preventDefault();_applyDiscount()});
   var dr=document.getElementById('discount-remove');
   if(dr)dr.addEventListener('click',function(e){e.preventDefault();window._slCk.discountCode='';window._slCk.discountAmount=0;_renderCheckoutBody()});
+  var tc=document.getElementById('terms-agree-chk');
+  if(tc)tc.addEventListener('change',function(){
+    window._slCk.termsAgreed=tc.checked;
+    var bb=document.getElementById('checkout-btns');
+    if(bb)bb.querySelectorAll('button').forEach(function(x){x.disabled=!tc.checked});
+  });
 }
 
 window._notifyStock=function(pid,btnId){
@@ -1678,7 +1700,7 @@ window._doPay=function(method){
   fetch('https://panel.stland.ir/api/v1/checkout',{
     method:'POST',
     headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
-    body:JSON.stringify({product_id:window._slCk.pid,payment_type:method,discount_code:window._slCk.discountCode||undefined})
+    body:JSON.stringify({product_id:window._slCk.pid,payment_type:method,discount_code:window._slCk.discountCode||undefined,agreed_terms:!!window._slCk.termsAgreed})
   }).then(function(r){return r.json()}).then(function(d){
     var b=document.getElementById('checkout-body');
     if(!d.ok){

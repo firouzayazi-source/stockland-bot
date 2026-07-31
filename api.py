@@ -214,6 +214,14 @@ async def api_product(pid: int, request: Request):
     return {"ok": True, "product": p}
 
 
+@router.get("/purchase-terms")
+async def api_purchase_terms():
+    """متن قوانین خرید (بخش ۷) — همون متنی که در پنل ادمین ویرایش می‌شه و ربات هم ازش استفاده می‌کنه."""
+    from db import get_cfg
+    text = (get_cfg("PURCHASE_TERMS_TEXT", "") or "").strip()
+    return {"ok": True, "text": text}
+
+
 @router.post("/favorites/{pid}")
 async def api_favorite_add(pid: int, request: Request):
     uid = _auth(request)
@@ -1256,6 +1264,11 @@ async def api_checkout(request: Request):
         raise HTTPException(404, "محصول یافت نشد")
     if int(prod.get("stock") or 0) <= 0:
         raise HTTPException(400, "موجودی این محصول در حال حاضر به پایان رسیده است")
+
+    # تأیید قوانین خرید (بخش ۷) — اگه این محصول نیازمنده، کلاینت باید صریحاً agreed_terms
+    # بفرسته؛ هیچ‌وقت فرض نمی‌شه کاربر تأیید کرده فقط چون درخواست خرید اومده.
+    if prod.get("require_terms") and not body.get("agreed_terms"):
+        raise HTTPException(400, "برای ادامهٔ خرید باید قوانین را تأیید کنید")
 
     # قیمت موثر (همکار یا عادی)
     is_partner = is_partner_approved(uid)
