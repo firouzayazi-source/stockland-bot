@@ -1,18 +1,71 @@
 import json
 import os
 import sqlite3
+import threading as _threading
+import time as _time
 from config import ADMIN_ID
 
 
+class _TrackedDict(dict):
+    """دیکشنری state با ردیابی زمان آخرین ست‌شدن هر کلید در یک دیکشنری موازی
+    جدا (نه داخل خودِ مقدار ذخیره‌شده) — یعنی هیچ کد موجودی که این state‌ها رو
+    می‌خونه یا serialize می‌کنه تحت تأثیر قرار نمی‌گیره. برای پاک‌سازی دورهٔ
+    state‌های رهاشدهٔ خیلی قدیمی (بخش فاز ۳ ممیزی) — قبلاً user_states/
+    admin_states هیچ‌وقت پاک نمی‌شدن، یعنی روی سرور طولانی‌مدت بدون ری‌استارت
+    رشد بی‌پایان حافظه داشتن."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._ts = {}
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._ts[key] = _time.time()
+
+    def pop(self, key, *default):
+        self._ts.pop(key, None)
+        return super().pop(key, *default)
+
+    def __delitem__(self, key):
+        self._ts.pop(key, None)
+        super().__delitem__(key)
+
+    def cleanup_stale(self, max_age_seconds: int) -> int:
+        now = _time.time()
+        stale = [k for k, t in list(self._ts.items()) if now - t > max_age_seconds]
+        for k in stale:
+            self.pop(k, None)
+        return len(stale)
+
+
 STATE = {
-    "user": {},
-    "admin": {},
+    "user": _TrackedDict(),
+    "admin": _TrackedDict(),
 }
 
 # Backward compatibility for existing handlers.
 user_states = STATE["user"]
 admin_states = STATE["admin"]
-reseller_signup = {}
+reseller_signup = _TrackedDict()
+
+# ۶ ساعت — یه مکالمهٔ چندمرحله‌ای واقعی هیچ‌وقت این‌قدر طول نمی‌کشه (طبق مستندات
+# پروژه، ری‌استارت ربات هم همین state‌ها رو کامل پاک می‌کنه، پس این فقط برای
+# سروری که هفته‌ها بدون ری‌استارت بالاست و کاربر state رو رها کرده لازمه).
+_STATE_TTL_SECONDS = 6 * 3600
+
+
+def _state_cleanup_loop():
+    while True:
+        _time.sleep(1800)
+        try:
+            user_states.cleanup_stale(_STATE_TTL_SECONDS)
+            admin_states.cleanup_stale(_STATE_TTL_SECONDS)
+            reseller_signup.cleanup_stale(_STATE_TTL_SECONDS)
+        except Exception:
+            pass
+
+
+_threading.Thread(target=_state_cleanup_loop, daemon=True, name="state-ttl-cleanup").start()
 
 
 def clear_user_state(uid: int):

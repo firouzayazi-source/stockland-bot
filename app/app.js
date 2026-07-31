@@ -203,7 +203,7 @@ function loadHome(){
   // آخرین آموزش
   loadLearnCard();
 
-  var colors=['linear-gradient(120deg,#123,#0A63FF)','linear-gradient(120deg,#1B2B1B,#22C55E)',
+  var colors=['linear-gradient(120deg,#123,var(--br))','linear-gradient(120deg,#1B2B1B,#22C55E)',
     'linear-gradient(120deg,#2B1B2B,#A855F7)','linear-gradient(120deg,#2B1B1B,#EF4444)',
     'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
   api('/news/feed').then(function(d){
@@ -438,7 +438,7 @@ function loadTuts(reset){
     var items=(d&&d.items)||[];
     if(reset&&!items.length){box.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📚</span>آموزشی یافت نشد</div>';if(moreWrap)moreWrap.hidden=true;return}
     var html=items.map(function(p){
-      return '<div class="sl-post" data-tid="'+p.id+'"><div class="sl-post-cv" style="background:linear-gradient(120deg,#101826,#0A63FF)">'+
+      return '<div class="sl-post" data-tid="'+p.id+'"><div class="sl-post-cv" style="background:linear-gradient(120deg,#101826,var(--br))">'+
         '<span class="sl-post-tag">'+(p.featured?'⭐️ ویژه':'📚 آموزش')+'</span>'+
         (p.cover_image?'<img src="'+esc(p.cover_image)+'" alt="">':'')+
         '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
@@ -506,7 +506,7 @@ window.openTutorial=openTutorial;
 /* ═══ اخبار تکنولوژی — فقط فید RSS زندهٔ وبلاگ، بدون هیچ محتوای داخلی، بدون محدودیت تعداد ═══ */
 var _nwLoaded=false;
 var _newsState={offset:0,limit:20,loading:false};
-var _newsColors=['linear-gradient(120deg,#101826,#7C3AED)','linear-gradient(120deg,#0F172A,#0A63FF)',
+var _newsColors=['linear-gradient(120deg,#101826,#7C3AED)','linear-gradient(120deg,#0F172A,var(--br))',
   'linear-gradient(120deg,#1B2B1B,#22C55E)','linear-gradient(120deg,#2B1B1B,#EF4444)',
   'linear-gradient(120deg,#1B2B2B,#06B6D4)','linear-gradient(120deg,#2B2B1B,#F59E0B)'];
 function loadMoreNews(){
@@ -596,7 +596,7 @@ function loadMe(){if(_m)return;_m=1;
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
     '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge" style="width:100%">＋ شارژ کیف‌پول</a></div></div>'+
     '<div class="sl-group"><a class="sl-row" href="#" id="me-notif-row"><span class="sl-ric" style="background:#7C3AED">🔔</span><span class="sl-row-grow">اعلان‌ها</span><span class="sl-badge" id="me-notif-badge" style="display:none">جدید</span><span class="sl-chev">‹</span></a>'+
-    '<a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:#0A63FF">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
+    '<a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:var(--br)">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-favs-row"><span class="sl-ric" style="background:#EF4444">♥</span><span class="sl-row-grow">علاقه‌مندی‌ها</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-support-row"><span class="sl-ric" style="background:#6B7280">💬</span><span class="sl-row-grow">پشتیبانی</span><span class="sl-chev">‹</span></a>'+
@@ -847,7 +847,7 @@ function openOrders(){
       var hasData=!!o.delivered_data;
       var expandable=hasData||o.can_rate||o.has_rated;
       var row='<a href="#" class="sl-row" data-oid="'+o.id+'" style="cursor:pointer">'+
-        '<span class="sl-ric" style="background:#0A63FF">📦</span>'+
+        '<span class="sl-ric" style="background:var(--br)">📦</span>'+
         '<span class="sl-row-grow"><div>'+esc(o.title)+'</div>'+
         '<div style="font-size:12px;color:var(--mu);margin-top:2px">'+esc(String(o.created_at||'').slice(0,16))+'</div></span>'+
         '<span style="text-align:left"><div style="font-weight:800">'+fmt(o.price)+' <small>تومان</small></div>'+
@@ -934,7 +934,7 @@ function openFavorites(){
     b.innerHTML='<div class="sl-group" style="margin:12px">'+items.map(function(p){
       var f=p.flash_active;
       return '<a href="#" class="sl-row" data-favpid="'+p.id+'">'+
-        '<span class="sl-ric" style="background:#0A63FF">'+(p._e||'📦')+'</span>'+
+        '<span class="sl-ric" style="background:var(--br)">'+(p._e||'📦')+'</span>'+
         '<span class="sl-row-grow">'+esc(p.title)+
         (p.rating_count?'<div style="margin-top:2px">'+starsHtml(p.rating_avg,p.rating_count,'sm')+'</div>':'')+'</span>'+
         '<span style="text-align:left"><div style="font-weight:800">'+fmt(p.effective_price)+' <small>تومان</small></div>'+
@@ -1185,7 +1185,7 @@ function _ptDashboard(d){
     progressHtml+
     '<div class="sl-group">'+
       _ptRow('👥','#F59E0B','فروشندگان من','pt-team-row')+
-      _ptRow('👤','#0A63FF','پروفایل فروشگاه','pt-profile-row')+
+      _ptRow('👤','var(--br)','پروفایل فروشگاه','pt-profile-row')+
       _ptRow('💼','#22C55E','کیف‌پول همکاری','pt-wallet-row','<span class="sl-badge" id="pt-wallet-badge"></span>')+
       _ptRow('🔗','#7C3AED','دعوت و تبلیغ','pt-invite-row')+
     '</div>';
