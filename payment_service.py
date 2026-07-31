@@ -212,6 +212,10 @@ def ensure_schema() -> None:
             "paid_at": "TEXT",
             "error": "TEXT",
             "gateway": "TEXT DEFAULT 'zarinpal'",
+            "card_pan": "TEXT",
+            "card_hash": "TEXT",
+            "fee_type": "TEXT",
+            "fee": "INTEGER",
         }.items():
             if col not in tx_cols:
                 conn.execute(f"ALTER TABLE zarinpal_transactions ADD COLUMN {col} {decl};")
@@ -1069,11 +1073,13 @@ def create_payment(payload: dict):
 # ---------------------------------------------------------------------------
 # 2) Payment callback (user returns from the gateway) — چند‌درگاهی
 # ---------------------------------------------------------------------------
-def _finalize_paid_tx(conn, tx, ref_id, authority):
+def _finalize_paid_tx(conn, tx, ref_id, authority, extra: dict | None = None):
     """بخش نهایی‌سازی پرداخت موفق (شارژ کیف‌پول یا تحویل محصول) — مشترک بین کال‌بک همهٔ
     درگاه‌ها. فرض: قفل BEGIN IMMEDIATE از قبل گرفته شده و status هنوز paid نیست. منطق
     این بخش عیناً همون رفتار قبلی زرین‌پاله (شامل بازگشت وجه به کیف‌پول در race condition
-    موجودی) — فقط درگاه‌آگاه شده."""
+    موجودی) — فقط درگاه‌آگاه شده. `extra` فیلدهای اختیاری حسابداری (card_pan/card_hash/
+    fee_type/fee) از verify_payment است — هر درگاهی که پشتیبانی نکنه، خالی می‌مونه."""
+    extra = extra or {}
     user_id = int(tx["user_id"])
     chat_id = int(tx["chat_id"]) if tx["chat_id"] is not None else user_id
     amount = int(tx["amount"])
@@ -1084,9 +1090,10 @@ def _finalize_paid_tx(conn, tx, ref_id, authority):
 
     # Mark paid first (the unique pending guard makes this safe)
     conn.execute(
-        "UPDATE zarinpal_transactions SET status='paid', ref_id=?, paid_at=? "
-        "WHERE authority=? AND status='pending';",
-        (ref_id, now_iso(), authority),
+        "UPDATE zarinpal_transactions SET status='paid', ref_id=?, paid_at=?, "
+        "card_pan=?, card_hash=?, fee_type=?, fee=? WHERE authority=? AND status='pending';",
+        (ref_id, now_iso(), extra.get("card_pan") or "", extra.get("card_hash") or "",
+         extra.get("fee_type") or "", extra.get("fee"), authority),
     )
 
     # ---- wallet top-up ----
@@ -1225,7 +1232,8 @@ def _handle_payment_callback(gw: str, query: dict, form: dict):
             conn.commit()
             return success_page(int(tx["total_amount"] or tx["amount"]), ref_id or "-")
 
-        return _finalize_paid_tx(conn, tx, ref_id, authority)
+        extra = {k: vres.get(k) for k in ("card_pan", "card_hash", "fee_type", "fee")}
+        return _finalize_paid_tx(conn, tx, ref_id, authority, extra)
 
     except HTTPException:
         raise

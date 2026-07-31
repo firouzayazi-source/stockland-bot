@@ -4,9 +4,13 @@
 زرین‌پال بر پایهٔ ریال کار می‌کنه؛ مبلغ داخلی تومانه، پس ×۱۰ می‌شه.
 config: {"merchant_id": str, "sandbox": bool}
 """
+import logging
+
 import requests
 
 from .base import RIAL_PER_TOMAN
+
+logger = logging.getLogger("stockland.payment.zarinpal")
 
 
 def _hosts(sandbox: bool):
@@ -33,7 +37,9 @@ def create_payment(amount_toman: int, callback_url: str, description: str, confi
         }, timeout=15)
         data = resp.json()
     except Exception as exc:
+        logger.error("create_payment request failed: %s", exc)
         return {"ok": False, "authority": "", "payment_url": "", "error": str(exc)}
+    logger.info("create_payment response: %s", data)
     if data.get("data", {}).get("code") == 100:
         authority = str(data["data"]["authority"])
         return {"ok": True, "authority": authority, "payment_url": startpay + authority, "error": ""}
@@ -56,9 +62,22 @@ def verify_payment(authority: str, amount_toman: int, config: dict) -> dict:
         }, timeout=15)
         data = resp.json()
     except Exception as exc:
+        logger.error("verify_payment request failed: %s", exc)
         return {"ok": False, "ref_id": "", "error": str(exc)}
-    code = data.get("data", {}).get("code")
-    # 100 = موفق، 101 = قبلاً تأیید شده (باز هم برای ما موفقیته)
+    logger.info("verify_payment response: %s", data)
+    inner = data.get("data", {}) or {}
+    code = inner.get("code")
+    # 100 = موفق، 101 = قبلاً تأیید شده (باز هم برای ما موفقیته). card_pan از قبل توسط
+    # زرین‌پال ماسک‌شده برمی‌گرده (مثل «402360**...**1234»)، پس ذخیره‌اش نقض «کارت ذخیره
+    # نشه» نیست — همون فرمتیه که خودِ درگاه رسمی برمی‌گردونه.
     if code in (100, 101):
-        return {"ok": True, "ref_id": str(data.get("data", {}).get("ref_id") or ""), "error": ""}
+        return {
+            "ok": True,
+            "ref_id": str(inner.get("ref_id") or ""),
+            "error": "",
+            "card_pan": str(inner.get("card_pan") or ""),
+            "card_hash": str(inner.get("card_hash") or ""),
+            "fee_type": str(inner.get("fee_type") or ""),
+            "fee": inner.get("fee"),
+        }
     return {"ok": False, "ref_id": "", "error": str(data)}
