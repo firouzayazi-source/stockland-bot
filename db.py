@@ -367,6 +367,12 @@ def init_db(db_path=None):
             "paid_at": "TEXT",
             "error": "TEXT",
             "gateway": "TEXT DEFAULT 'zarinpal'",
+            # اطلاعات تکمیلی نتیجهٔ Verify — فقط برای حسابداری/پیگیری، نه اجباری برای هر
+            # درگاه. card_pan از قبل توسط درگاه ماسک‌شده برمی‌گرده (نه شمارهٔ خام کارت).
+            "card_pan": "TEXT",
+            "card_hash": "TEXT",
+            "fee_type": "TEXT",
+            "fee": "INTEGER",
         }.items():
             try:
                 cur.execute(f"ALTER TABLE zarinpal_transactions ADD COLUMN {col} {decl};")
