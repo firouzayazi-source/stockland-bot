@@ -11768,8 +11768,9 @@ async def app_content_save(request: Request, cid: str = Form(""), kind: str = Fo
             fname = f"c{int(time.time())}{ext}"
             data = await image.read()
             if data:
+                from image_utils import compress_image_bytes
                 with open(os.path.join(APP_MEDIA_DIR, fname), "wb") as f:
-                    f.write(data)
+                    f.write(compress_image_bytes(data, ext))
                 final_image = f"/app-media/{fname}"
     except Exception:
         pass
@@ -12060,16 +12061,27 @@ async def _save_tutorial_file(file, subdir: str, allowed_exts: tuple, prefix: st
         os.makedirs(target_dir, exist_ok=True)
         fname = f"{prefix}{int(time.time()*1000)}{ext}"
         target_path = os.path.join(target_dir, fname)
-        # فایل‌های بزرگ (ویدیو) رو تکه‌تکه روی دیسک می‌نویسیم، نه یکجا در RAM —
-        # وگرنه آپلود ویدیوهای حجیم می‌تونه به مصرف حافظهٔ زیاد/تایم‌اوت منجر بشه.
-        size = 0
-        with open(target_path, "wb") as f:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                f.write(chunk)
+        from image_utils import COMPRESSIBLE_EXTS, compress_image_bytes
+        if ext in COMPRESSIBLE_EXTS:
+            # عکس (نه ویدیو/فایل دانلودی) — کل فایل رو می‌خونیم (حجم عکس معمولاً کوچیکه،
+            # برخلاف ویدیو) تا با Pillow فشرده/resize بشه قبل از نوشتن روی دیسک.
+            raw = await file.read()
+            size = len(raw)
+            if size:
+                compressed = compress_image_bytes(raw, ext)
+                with open(target_path, "wb") as f:
+                    f.write(compressed)
+        else:
+            # ویدیو/فایل دانلودی/gif — تکه‌تکه روی دیسک می‌نویسیم، نه یکجا در RAM —
+            # وگرنه آپلود ویدیوهای حجیم می‌تونه به مصرف حافظهٔ زیاد/تایم‌اوت منجر بشه.
+            size = 0
+            with open(target_path, "wb") as f:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    f.write(chunk)
         if size == 0:
             try:
                 os.remove(target_path)
