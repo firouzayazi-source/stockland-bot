@@ -18,8 +18,6 @@ Design notes
   double-credits (idempotency via `status='pending'` guards).
 """
 
-import hashlib
-import hmac
 import html
 import logging
 import os
@@ -47,15 +45,6 @@ if not DB_PATH:
     raise RuntimeError("DB_PATH environment variable is required")
 
 MERCHANT_ID = os.getenv("ZARINPAL_MERCHANT_ID") or ""
-REQUEST_URL = os.getenv(
-    "ZARINPAL_REQUEST_URL", "https://api.zarinpal.com/pg/v4/payment/request.json"
-)
-VERIFY_URL = os.getenv(
-    "ZARINPAL_VERIFY_URL", "https://api.zarinpal.com/pg/v4/payment/verify.json"
-)
-STARTPAY_URL = os.getenv(
-    "ZARINPAL_STARTPAY_URL", "https://www.zarinpal.com/pg/StartPay/"
-)
 BASE_CALLBACK_URL = os.getenv("BASE_CALLBACK_URL") or ""
 MIN_AMOUNT = int(os.getenv("MIN_TOPUP_AMOUNT", "10000"))
 BOT_TOKEN = os.getenv("BOT_TOKEN") or ""
@@ -419,56 +408,6 @@ def count_orders_today(conn: sqlite3.Connection, user_id: int, product_id: int, 
         return 0
 
 
-# ---------------------------------------------------------------------------
-# Zarinpal API
-# ---------------------------------------------------------------------------
-def zarinpal_create(amount_toman: int, description: str) -> tuple[bool, str, str]:
-    """Create a Zarinpal payment. Returns (ok, authority, detail)."""
-    try:
-        response = requests.post(
-            REQUEST_URL,
-            json={
-                "merchant_id": MERCHANT_ID,
-                "amount": int(amount_toman) * RIAL_PER_TOMAN,
-                "callback_url": payment_callback_url(),
-                "description": description,
-            },
-            timeout=15,
-        )
-        result = response.json()
-    except Exception as exc:
-        logger.exception("Zarinpal create request failed")
-        return False, "", str(exc)
-
-    if result.get("data", {}).get("code") == 100:
-        return True, str(result["data"]["authority"]), str(result)
-    return False, "", str(result)
-
-
-def verify_zarinpal(authority: str, amount_toman: int) -> tuple[bool, str, str]:
-    """Verify a payment. Returns (ok, ref_id, detail)."""
-    try:
-        response = requests.post(
-            VERIFY_URL,
-            json={
-                "merchant_id": MERCHANT_ID,
-                "amount": int(amount_toman) * RIAL_PER_TOMAN,
-                "authority": authority,
-            },
-            timeout=15,
-        )
-        data = response.json()
-    except Exception as exc:
-        logger.exception("Zarinpal verify request failed")
-        return False, "", str(exc)
-
-    code = data.get("data", {}).get("code")
-    # 100 = success, 101 = already verified (still a success for our purposes)
-    if code in (100, 101):
-        return True, str(data.get("data", {}).get("ref_id") or ""), str(data)
-    return False, "", str(data)
-
-
 def payment_callback_url() -> str:
     """Build the callback URL Zarinpal redirects the user to.
 
@@ -808,180 +747,12 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
-PHP_SECRET = os.getenv("PHP_SECRET") or ""
-
-
 @app.get("/health")
 def health():
     conn = db_connect()
     try:
         conn.execute("SELECT 1;").fetchone()
-        return {"ok": True, "bot_polling": _bot_thread_started, "php_bridge": bool(PHP_SECRET)}
-    finally:
-        conn.close()
-
-
-# ---------------------------------------------------------------------------
-# PHP Bridge: /payment/finalize
-# PHP callback روی هاست این endpoint را صدا می‌زند پس از تأیید پرداخت از زرین‌پال
-# ---------------------------------------------------------------------------
-@app.post("/payment/finalize")
-def payment_finalize(payload: dict, request: Request):
-    ensure_schema()
-
-    # تأیید secret
-    secret = (
-        request.headers.get("X-Stockland-Secret")
-        or payload.get("secret")
-        or ""
-    )
-    if not PHP_SECRET or not hmac.compare_digest(str(PHP_SECRET), str(secret)):
-        raise HTTPException(403, "Unauthorized")
-
-    try:
-        user_id        = int(payload["user_id"])
-        chat_id        = int(payload.get("chat_id") or user_id)
-        amount         = int(payload["amount"])
-        payment_type   = str(payload.get("payment_type") or "wallet").lower()
-        wallet_reserved= int(payload.get("wallet_reserved") or 0)
-        wallet_bonus   = int(payload.get("wallet_bonus") or 0)   # مازاد حداقل درگاه
-        ref_id         = str(payload.get("ref_id") or "")
-        authority      = str(payload.get("authority") or "")
-    except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(400, f"Invalid payload: {exc}")
-
-    conn = db_connect()
-    try:
-        # idempotency: اگه قبلاً این authority پردازش شده، دوباره انجام نده
-        if authority:
-            existing = conn.execute(
-                "SELECT status FROM zarinpal_transactions WHERE authority=? LIMIT 1;",
-                (authority,)
-            ).fetchone()
-            if existing and str(existing["status"]) == "paid":
-                return {"ok": True, "status": "already_processed"}
-
-        buyer_type = infer_buyer_type(conn, user_id)
-        total_amount = amount + wallet_reserved
-
-        # ذخیره تراکنش در دیتابیس
-        if authority:
-            try:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO zarinpal_transactions
-                        (user_id, amount, authority, status, created_at, payment_type,
-                         wallet_reserved, total_amount, buyer_type, chat_id, ref_id, paid_at)
-                    VALUES (?,?,?,'paid',?,?,?,?,?,?,?,?);
-                    """,
-                    (user_id, amount, authority, now_iso(), payment_type,
-                     wallet_reserved, total_amount, buyer_type, chat_id, ref_id, now_iso()),
-                )
-            except Exception:
-                # ممکنه authority تکراری باشد
-                conn.execute(
-                    "UPDATE zarinpal_transactions SET status='paid', ref_id=?, paid_at=? "
-                    "WHERE authority=? AND status='pending';",
-                    (ref_id, now_iso(), authority),
-                )
-
-        # ─── شارژ کیف پول ─────────────────────────────────
-        if payment_type == "wallet":
-            # Issue 2: اضافه کردن wallet_bonus اگه حداقل درگاه اعمال شده بود
-            total_wallet = amount + wallet_bonus
-            mark_wallet_charge(conn, user_id, total_wallet)
-            conn.commit()
-            msg = (
-                f"✅ کیف پول شما با موفقیت شارژ شد.\n"
-                f"مبلغ: <b>{total_wallet:,}</b> تومان\n"
-                f"کد پیگیری: {ref_id}"
-            )
-            if wallet_bonus > 0:
-                msg += f"\n\n💡 {wallet_bonus:,} تومان بابت حداقل پرداخت درگاه به کیف‌پول اضافه شد."
-            send_telegram_message(chat_id, msg, parse_mode="HTML")
-            return {"ok": True, "type": "wallet", "amount": total_wallet}
-
-        # ─── خرید محصول ───────────────────────────────────
-        product_id = int(payload.get("product_id") or 0)
-        if not product_id:
-            raise HTTPException(400, "product_id is required for product payment")
-
-        product = get_product(conn, product_id)
-        if not product:
-            # Issue 4: محصول پیدا نشد — پول رو به کیف‌پول برگردون
-            refund = amount + wallet_bonus
-            mark_wallet_charge(conn, user_id, refund)
-            conn.commit()
-            send_telegram_message(
-                chat_id,
-                f"⚠️ پرداخت موفق بود ولی محصول یافت نشد.\n"
-                f"مبلغ <b>{refund:,}</b> تومان به کیف‌پول شما بازگردانده شد.\n"
-                f"کد پیگیری: {ref_id}",
-                parse_mode="HTML"
-            )
-            if ADMIN_ID:
-                send_telegram_message(ADMIN_ID, f"⚠️ محصول #{product_id} پیدا نشد — {refund:,}t به کیف‌پول User {user_id} بازگشت")
-            return {"ok": True, "type": "refund", "amount": refund}
-
-        title    = str(product["title"])
-        category = str(product["category"])
-
-        deduct_wallet_reserved(conn, user_id, wallet_reserved)
-        order_id  = create_order(conn, user_id, category, product_id, title, total_amount, buyer_type)
-        feed_item = claim_feed_item(conn, product_id)
-
-        if feed_item:
-            feed_id, feed_data = feed_item
-            conn.commit()
-            send_telegram_message(
-                chat_id,
-                (
-                    "✅ سفارش شما ثبت و تحویل شد.\n\n"
-                    f"شماره سفارش: #{order_id}\n"
-                    f"سرویس: {title}\n"
-                    f"مبلغ کل: {total_amount:,} تومان\n"
-                    f"کد پیگیری: {ref_id}\n\n"
-                    f"<code>{feed_data}</code>"
-                ),
-                parse_mode="HTML",
-            )
-            if ADMIN_ID:
-                send_telegram_message(
-                    ADMIN_ID,
-                    f"📦 تحویل خودکار (PHP Bridge)\n\n"
-                    f"Order: #{order_id} | User: {user_id}\n"
-                    f"Product: {title} (#{product_id})\n"
-                    f"Feed: #{feed_id}",
-                )
-            return {"ok": True, "type": "product", "order_id": order_id, "delivered": True}
-        else:
-            # موجودی درست همین چند لحظه تموم شده — هیچ محصولی در آینده ارسال نمی‌شه،
-            # کل مبلغ به کیف‌پول برمی‌گرده.
-            conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;",
-                         (now_iso(), order_id))
-            mark_wallet_charge(conn, user_id, total_amount)
-            conn.commit()
-            send_telegram_message(
-                chat_id,
-                (
-                    "❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
-                    f"مبلغ <b>{total_amount:,}</b> تومان به کیف‌پول شما بازگردانده شد."
-                ),
-                parse_mode="HTML",
-            )
-            if ADMIN_ID:
-                send_telegram_message(ADMIN_ID, f"⚠️ سفارش بدون موجودی — مبلغ به کیف‌پول بازگشت\nOrder: #{order_id} | User: {user_id} | Product: {title}")
-            return {"ok": True, "type": "product", "order_id": order_id, "delivered": False, "refunded": True}
-
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("payment_finalize failed")
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise HTTPException(500, "Internal error")
+        return {"ok": True, "bot_polling": _bot_thread_started}
     finally:
         conn.close()
 
