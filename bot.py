@@ -261,6 +261,27 @@ def _rate_check(store: dict, uid: int, max_count: int, window: float) -> bool:
     return True
 
 
+def _rl_cleanup_loop():
+    # کلید هر کاربر توی _rl_msg_store/_rl_cb_store قبلاً برای همیشه می‌موند، حتی
+    # وقتی کاربر ماه‌ها دیگه پیامی نمی‌فرستاد — چون _rate_check فقط لیست تایم‌استمپ
+    # داخل هر کلید رو trim می‌کرد، نه خودِ کلید رو. این حلقه هر کلیدی که آخرین
+    # فعالیتش بیش از ۲۴ ساعت پیش بوده رو کامل حذف می‌کنه.
+    while True:
+        _rl_time.sleep(1800)
+        try:
+            cutoff = _rl_time.time() - 86400
+            for store in (_rl_msg_store, _rl_cb_store):
+                dead = [uid for uid, ts_list in list(store.items())
+                        if not ts_list or max(ts_list) < cutoff]
+                for uid in dead:
+                    store.pop(uid, None)
+        except Exception:
+            pass
+
+
+threading.Thread(target=_rl_cleanup_loop, daemon=True, name="ratelimit-ttl-cleanup").start()
+
+
 @bot.message_handler(
     func=lambda m: not _rate_check(_rl_msg_store, m.from_user.id, _RL_MSG_MAX, _RL_MSG_WIN),
     content_types=["text", "photo", "document", "voice", "video", "audio", "sticker"]
@@ -7246,7 +7267,6 @@ def cb_user_invite(call):
     _send_invite_view(call.message.chat.id, call.from_user.id)
 
 
-@bot.callback_query_handler(func=lambda c: c.data == "wallet_crypto")
 def cb_wallet_crypto(call):
     from db import get_crypto_settings
     cs = get_crypto_settings()
@@ -7264,7 +7284,6 @@ def cb_wallet_crypto(call):
         reply_markup=kb, parse_mode="HTML")
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("crypto_net_"))
 def cb_crypto_network(call):
     from db import get_crypto_settings
     cs = get_crypto_settings()

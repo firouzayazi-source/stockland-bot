@@ -1303,7 +1303,7 @@ async def api_discount_validate(request: Request):
         raise HTTPException(400, "product_id و code الزامی هستند")
 
     from core.products import get_product
-    from db import validate_discount, is_partner_approved
+    from db import validate_discount, is_partner_approved, partner_price_applies
 
     prod = get_product(pid)
     if not prod or not prod.get("is_active"):
@@ -1312,7 +1312,7 @@ async def api_discount_validate(request: Request):
     is_partner = is_partner_approved(uid)
     partner_price = int(prod.get("partner_price") or 0)
     base_price = int(prod["effective_price"])
-    price = (partner_price if is_partner and partner_price > 0 and partner_price < base_price
+    price = (partner_price if partner_price_applies(base_price, partner_price, is_partner)
              else base_price)
 
     result = validate_discount(code, product_id=pid, amount=price, user_id=uid)
@@ -1404,7 +1404,7 @@ async def api_checkout(request: Request):
     from core.products import get_product
     from db import (get_wallet_balance, subtract_wallet_balance,
                     create_order, is_partner_approved,
-                    validate_discount, use_discount)
+                    validate_discount, use_discount, partner_price_applies)
 
     prod = get_product(pid)
     if not prod or not prod.get("is_active"):
@@ -1421,7 +1421,7 @@ async def api_checkout(request: Request):
     is_partner = is_partner_approved(uid)
     partner_price = int(prod.get("partner_price") or 0)
     base_price = int(prod["effective_price"])
-    final_price = (partner_price if is_partner and partner_price > 0 and partner_price < base_price
+    final_price = (partner_price if partner_price_applies(base_price, partner_price, is_partner)
                    else base_price)
 
     # کد تخفیف — اعتبارسنجی مجدد سمت سرور (هرگز به مبلغ کلاینت اعتماد نکن)
