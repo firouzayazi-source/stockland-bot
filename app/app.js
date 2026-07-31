@@ -311,10 +311,10 @@ window.shareProduct=shareProduct;
 
 /* ═══ پاپ‌آپ محصول ═══ */
 function openP(pid){
-  var t=document.getElementById('pp-title'),b=document.getElementById('pp-body');
-  t.textContent='…';b.innerHTML=skel(2);app.popup.open('#prod-popup');
+  var b=document.getElementById('pp-body');
+  b.innerHTML=skel(2);app.popup.open('#prod-popup');
   api('/products/'+pid,true).then(function(d){
-    var p=d.product||{};t.textContent=p.title||'';
+    var p=d.product||{};
     var f=p.flash_active,e=p.effective_price,bs=p.price,hs=p.stock!=null,ok=p.stock>0;
     b.innerHTML='<div class="sl-pp-hero">'+
       (loggedIn?'<button class="sl-pp-fav'+(p.is_favorite?' on':'')+'" id="sl-fav-'+p.id+'" data-fav="'+(p.is_favorite?1:0)+'">'+(p.is_favorite?'♥':'♡')+'</button>':'')+
@@ -346,7 +346,9 @@ function openP(pid){
       (loggedIn&&ok!==false?
         '<button class="sl-pp-btn" id="sl-buy-'+p.id+'">🛒 خرید</button>':
         (hs&&!ok?
-          '<a class="sl-pp-btn sl-pp-btn-off" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">🔔 اطلاع‌رسانی موجود شدن</a>':
+          (p.notify_on_restock?
+            '<button class="sl-pp-btn sl-pp-btn-off" onclick="_notifyStock('+p.id+',\'pp-notify-'+p.id+'\')" id="pp-notify-'+p.id+'">🔔 موجود شد، اطلاع بده</button>':
+            '<div class="sl-checkout-note">❌ موجودی این محصول در حال حاضر به پایان رسیده است.</div>'):
           (inTG?
             '<a class="sl-pp-btn" href="https://t.me/'+botUser+'?start=buy_'+p.id+'" target="_blank">🛒 خرید از ربات</a>':
             '<button class="sl-pp-btn" id="sl-login-prompt-'+p.id+'">🔐 ورود با تلگرام برای خرید</button>')));
@@ -1643,8 +1645,8 @@ function _renderCheckoutBody(){
   if(dr)dr.addEventListener('click',function(e){e.preventDefault();window._slCk.discountCode='';window._slCk.discountAmount=0;_renderCheckoutBody()});
 }
 
-window._notifyStock=function(pid){
-  var btn=document.getElementById('notify-stock-btn');
+window._notifyStock=function(pid,btnId){
+  var btn=document.getElementById(btnId||'notify-stock-btn');
   if(btn){btn.disabled=true;btn.textContent='در حال ثبت…'}
   fetch('/api/v1/products/'+pid+'/notify',{method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData}})
     .then(function(r){return r.json()})
