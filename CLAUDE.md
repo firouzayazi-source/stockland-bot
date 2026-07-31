@@ -259,6 +259,7 @@ except Exception:
 | `SESSION_SECRET` | امضای HMAC سشن پنل ادمین — ⚠️ دو پیش‌فرض هاردکد متفاوت در کد وجود دارد اگر ست نشود (بخش ۱۳) |
 | `API_KEYS` | کلیدهای مجاز برای `api.py` (روش دوم auth، جایگزین initData) |
 | `DB_DIALECT`, `DATABASE_URL` | سوییچ SQLite↔Postgres (فعلاً همیشه sqlite در تولید) |
+| `DB_CONNECTION_POOL` | `"1"` برای فعال‌سازی connection pooling سبک SQLite (پیش‌فرض خاموش — بخش ۲۸، فاز C) |
 | `SQLITE_PATH` | ورودی اسکریپت `migrate_to_postgres.py` |
 | `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_FOLDER_ID`, `GDRIVE_SA_JSON` | بکاپ ابری Google Drive |
 | `IV_AI_ENC_KEY` | کلید رمزنگاری Fernet برای ذخیرهٔ کلید API کارشناس مکمل هوش مصنوعی (بخش ۲۲.۹) — بدون این، کل قابلیت AI از پنل قابل‌فعال‌شدن نیست (fail closed، `iphone_valuation/ai_crypto.py`) |
@@ -951,8 +952,17 @@ systemctl restart stockland.service
 - ماژول تازهٔ `tg_notify.py` — `send_telegram_message()` مشترک، یکی‌سازی ۵ نقطهٔ تکراری `requests.post` به تلگرام در `payment_service.py`/`api.py`. `payment_service.send_telegram_message` موجود حالا فقط delegate می‌کنه.
 - بخش ۱۴ آیتم ۲ این سند (mismatch `redirect_url`/`payment_url`) تأیید و به «رفع‌شده» به‌روزرسانی شد — چک مستقیم کد نشون داد اصلاً mismatch نبوده.
 
-### ⚠️ باقی‌مانده — عمداً به فاز جداگانه موکول شد (پرریسک‌ترین آیتم کل گزارش)
-**Connection pooling سبک برای SQLite** — گزارش ممیزی این رو با «ریسک اجرا متوسط تا بالا — نیاز به تست دقیق تراکنش‌های `BEGIN IMMEDIATE` موجود (مثل `subtract_wallet_balance`)» علامت زده بود؛ چون این تنها موردی بود که ریسک واقعی معماری/تراکنشی داشت (نه صرفاً یه تغییر مکانیکی کم‌ریسک مثل بقیهٔ فهرست)، عمداً از بقیهٔ فاز P جدا نگه داشته شد تا با تست جداگانه و دقیق‌تر انجام بشه.
+### فاز C — Connection Pooling سبک SQLite (opt-in، پیش‌فرض خاموش)
+
+پرریسک‌ترین آیتم کل گزارش ممیزی («ریسک اجرا متوسط تا بالا — نیاز به تست دقیق تراکنش‌های `BEGIN IMMEDIATE`»). پیاده‌سازی شد ولی **عمداً پیش‌فرض غیرفعال** — فقط با `DB_CONNECTION_POOL=1` در `.env` فعال می‌شه؛ رفتار پیش‌فرض فعلی (اتصال SQLite تازه به‌ازای هر فراخوانی) دست‌نخورده می‌مونه مگه صراحتاً روشن بشه.
+
+**طراحی (`db_conn.py`):** یک اتصال SQLite به‌ازای هر ترد (`threading.local`)، reuse می‌شه به‌جای باز/بسته‌شدن مکرر. `_PooledSqliteConnection` یه رَپِر نازکه که `close()` روش عمداً no-op است (برمی‌گردونه به pool، نه می‌بنده). **مکانیزم fail-safe:** قبل از تحویل یه اتصال cache‌شده به فراخوان تازه، اگه `conn.in_transaction` باشه (یعنی یه transaction باز جامونده — نشونهٔ باگ commit/rollback جای دیگه)، به‌جای merge بی‌صدا با کوئری بعدی، صریحاً `rollback()` + لاگ هشدار می‌شه.
+
+**باگ واقعی که فقط با تست concurrent کشف شد:** فعال‌سازی pooling، یه race condition پیش‌موجود در `claim_next_feed_item` رو آشکار کرد — مهاجرت `product_feed.order_id`/`delivered_at` قبلاً فقط لیزی (داخل خودِ تابع، هر فراخوانی) با دو `ALTER TABLE` توی یه `try` مشترک انجام می‌شد؛ بدون pooling این race تقریباً هیچ‌وقت trigger نمی‌شد (باز/بستن اتصال هر بار یه فاصلهٔ زمانی طبیعی بین تردها می‌نداخت)، ولی با pooling (بدون اون فاصله) روی یه دیتابیس کاملاً تازه با ۱۵ ترد هم‌زمان، اگه ترد اول فقط `order_id` رو اضافه می‌کرد، ALTER اول تردهای بعدی فوراً fail می‌شد و ALTER دوم (`delivered_at`) هیچ‌وقت اجرا نمی‌شد → `OperationalError: no such column: delivered_at`. رفع ریشه‌ای: این مهاجرت به `init_db()` منتقل شد (ایگر، مطابق قاعدهٔ استاندارد پروژه برای جدول‌های هسته — بخش ۷)، هر `ALTER` هم `try/except` جدا گرفت (هم توی `init_db` هم توی fallback باقی‌ماندهٔ داخل خودِ تابع). **این یافته نشون می‌ده pooling می‌تونه race conditionهای نهفتهٔ قبلی رو با کم‌کردن jitter زمانی بین تردها آشکار کنه — دلیل دیگه‌ای برای پیش‌فرض خاموش بودن.**
+
+**تست انجام‌شده:** پیش‌فرض خاموش (رفتار قبلی دست‌نخورده)، reuse درست اتصال در همون ترد + ایزولاسیون کامل بین تردها، rollback دفاعی روی transaction باز جامونده (با لاگ هشدار)، تست استرس ۲۰ ترد هم‌زمان روی `subtract_wallet_balance` واقعی (دقیقاً ۱۰ کسر موفق از موجودی ۱۰۰٬۰۰۰ با کسر ۱۰٬۰۰۰، موجودی نهایی صفر، بدون کسر دوبل)، تست استرس ۱۵ ترد هم‌زمان روی `claim_next_feed_item` واقعی (۱۰ آیتم، بدون تحویل دوبل، بدون خطا) — هم با pooling هم بدونش.
+
+**توصیه برای فعال‌سازی روی تولید:** اول روی یه محیط staging/کپی از دیتابیس واقعی با بار همزمان واقعی تست بشه؛ بعد با `DB_CONNECTION_POOL=1` در `.env` + ری‌استارت سرویس فعال بشه؛ لاگ‌های `stockland.db_conn` (هشدار transaction باز جامونده) چند روز اول رصد بشن.
 
 ### موارد پایین‌اولویتی که عمداً skip شدن (نه فراموش‌شده)
 - `screenshots` در `manifest.json` — نیاز به عکس واقعی، نه placeholder.
