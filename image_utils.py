@@ -47,3 +47,40 @@ def compress_image_bytes(data: bytes, ext: str) -> bytes:
         return out if 0 < len(out) < len(data) else data
     except Exception:
         return data
+
+
+def generate_webp_variant(data: bytes, ext: str) -> bytes | None:
+    """نسخهٔ WebP یه عکس — برای ذخیرهٔ یه فایل sibling کنار نسخهٔ اصلی، نه
+    جایگزینی خودِ فایل (بخش ۱۰ فاز ۳ ممیزی: WebP معمولاً ۲۵-۳۵٪ کوچیک‌تر از
+    JPEG هم‌کیفیته). None برمی‌گردونه اگه پردازش شکست بخوره یا فرمت پشتیبانی‌نشه —
+    caller باید در این حالت اصلاً فایل webp رو ننویسه، نه یه فایل خراب/خالی.
+
+    ⚠️ عمداً هنوز به هیچ‌جا (آپلود محصول/آموزش/آواتار، یا رندر <picture> در
+    app.js) وصل نشده — چون محصولات/آموزش‌های موجود در دیتابیس تولید از قبل یه
+    image_url ساده (بدون هیچ نسخهٔ webp سایبلینگ) دارن؛ اگه <picture><source
+    type="image/webp"> به یه مسیر ناموجود اشاره کنه، مرورگر (برخلاف تصور رایج)
+    fallback به <img> نمی‌کنه — انتخاب source بر پایهٔ type support قبل از
+    لود انجام می‌شه، نه بعد از شکست لود. یعنی وصل‌کردن این بدون یه migration
+    backfill کامل روی media موجود، عکس محصولات قدیمی رو می‌شکنه."""
+    ext = (ext or "").lower()
+    if ext not in COMPRESSIBLE_EXTS or not data:
+        return None
+    try:
+        import io
+        from PIL import Image
+
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        w, h = im.size
+        if max(w, h) > MAX_DIMENSION:
+            ratio = MAX_DIMENSION / max(w, h)
+            im = im.resize((max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS)
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGBA" if "A" in im.mode else "RGB")
+
+        buf = io.BytesIO()
+        im.save(buf, format="WEBP", quality=WEBP_QUALITY)
+        out = buf.getvalue()
+        return out if len(out) > 0 else None
+    except Exception:
+        return None

@@ -1,7 +1,7 @@
 """سرویس سفارش‌ها — منطق خالص."""
 
 
-def user_orders(user_id: int, limit: int = 50) -> list:
+def user_orders(user_id: int, limit: int = 50, offset: int = 0) -> list:
     from db import _get_connection, has_rated_order
     conn = _get_connection()
     try:
@@ -9,8 +9,8 @@ def user_orders(user_id: int, limit: int = 50) -> list:
             "SELECT o.id, o.title, o.price, o.status, o.created_at, o.feed_id, o.product_id, pf.data AS feed_data "
             "FROM orders o LEFT JOIN product_feed pf ON pf.id = o.feed_id "
             "WHERE o.user_id=? AND COALESCE(o.status,'active')!='returned' "
-            "ORDER BY o.id DESC LIMIT ?;",
-            (str(user_id), limit)).fetchall()
+            "ORDER BY o.id DESC LIMIT ? OFFSET ?;",
+            (str(user_id), limit, offset)).fetchall()
         out = []
         for r in rows:
             try:

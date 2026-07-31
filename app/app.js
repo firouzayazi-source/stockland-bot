@@ -834,91 +834,129 @@ function openNotifications(){
 window.openNotifications=openNotifications;
 
 /* ═══ سفارش‌های من ═══ */
+// صفحه‌بندی offset/limit — قبلاً همهٔ سفارش‌ها (تا سقف ۵۰) یکجا رندر می‌شد؛
+// الگوی «نمایش بیشتر» اخبار/آموزش اینجا هم پیاده شد. هر batch توی یه
+// wrapper با data-page جدا بایند می‌شه تا listenerها روی ردیف‌های قدیمی
+// دوباره ثبت نشن (بدون event delegation کامل، چون این بخش رفتار per-row
+// زیادی داره: expand، کپی، ستاره‌های امتیاز).
+var _ordState={limit:20,offset:0,loading:false,page:0};
+var _ordST={active:'تحویل‌شده',returned:'برگشتی'};
+
+function _renderOrderRow(o){
+  var hasData=!!o.delivered_data;
+  var expandable=hasData||o.can_rate||o.has_rated;
+  var row='<a href="#" class="sl-row" data-oid="'+o.id+'" style="cursor:pointer">'+
+    '<span class="sl-ric" style="background:var(--br)">📦</span>'+
+    '<span class="sl-row-grow"><div>'+esc(o.title)+'</div>'+
+    '<div style="font-size:12px;color:var(--mu);margin-top:2px">'+esc(String(o.created_at||'').slice(0,16))+'</div></span>'+
+    '<span style="text-align:left"><div style="font-weight:800">'+fmt(o.price)+' <small>تومان</small></div>'+
+    '<div style="font-size:11px;color:var(--mu);margin-top:2px">'+esc(_ordST[o.status]||o.status||'')+'</div></span>'+
+    (expandable?'<span class="sl-chev" style="margin-right:4px">‹</span>':'')+'</a>';
+  var detail='<div class="sl-order-detail" id="od-'+o.id+'" hidden style="padding:0 14px 14px">'+
+    (hasData?
+      '<div class="sl-checkout-wallet" style="direction:ltr;text-align:right;word-break:break-all;font-size:13px;white-space:pre-wrap">'+nl2br(o.delivered_data)+'</div>'+
+      '<div class="sl-wal-acts" style="margin-top:8px"><button class="sl-checkout-btn sl-checkout-btn-wallet" data-copy="'+o.id+'">📋 کپی مشخصات</button></div>'
+      :
+      (o.has_rated?'':'<div class="sl-checkout-note">مشخصات این سفارش هنوز ثبت نشده — یا از طریق چت ربات ارسال شده، یا هنوز در صف تحویله.</div>')
+    )+
+    (o.has_rated?'<div class="sl-checkout-note" style="margin-top:8px">✅ نظرتون برای این محصول ثبت شده — ممنون از وقتی که گذاشتید.</div>':'')+
+    (o.can_rate?
+      '<div class="sl-rate-box" id="rate-box-'+o.id+'">'+
+        '<div class="sl-rate-label">این محصول رو چطور دیدید؟</div>'+
+        '<div class="sl-rate-stars" data-oid="'+o.id+'">'+[1,2,3,4,5].map(function(n){return '<span class="sl-rate-star" data-n="'+n+'">☆</span>'}).join('')+'</div>'+
+        '<textarea class="sl-rate-comment" id="rate-comment-'+o.id+'" rows="2" placeholder="نظرتون (اختیاری)…"></textarea>'+
+        '<button class="sl-checkout-btn sl-checkout-btn-combined" id="rate-submit-'+o.id+'" style="margin-top:8px" disabled>ثبت نظر</button>'+
+      '</div>'
+      :'')+
+    '</div>';
+  return row+detail;
+}
+
+function _bindOrderPage(scope){
+  scope.querySelectorAll('.sl-row[data-oid]').forEach(function(rowEl){
+    rowEl.addEventListener('click',function(e){
+      e.preventDefault();
+      var det=document.getElementById('od-'+rowEl.dataset.oid);
+      if(det)det.hidden=!det.hidden;
+    });
+  });
+  scope.querySelectorAll('[data-copy]').forEach(function(btn){
+    btn.addEventListener('click',function(e){
+      e.preventDefault();e.stopPropagation();
+      var det=document.getElementById('od-'+btn.dataset.copy);
+      var txt=det?det.querySelector('.sl-checkout-wallet').textContent:'';
+      var done=function(){btn.textContent='✅ کپی شد';setTimeout(function(){btn.textContent='📋 کپی مشخصات'},1500)};
+      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(done)}
+      else{done()}
+    });
+  });
+  scope.querySelectorAll('.sl-rate-stars').forEach(function(starsEl){
+    var oid=starsEl.dataset.oid,selected=0;
+    var stars=starsEl.querySelectorAll('.sl-rate-star');
+    function paint(n){stars.forEach(function(s){s.textContent=(+s.dataset.n<=n)?'★':'☆'})}
+    stars.forEach(function(s){
+      s.addEventListener('click',function(e){
+        e.preventDefault();e.stopPropagation();
+        selected=+s.dataset.n;paint(selected);
+        var btn=document.getElementById('rate-submit-'+oid);if(btn)btn.disabled=false;
+      });
+    });
+    var sb=document.getElementById('rate-submit-'+oid);
+    if(sb)sb.addEventListener('click',function(e){
+      e.preventDefault();e.stopPropagation();
+      if(!selected)return;
+      sb.disabled=true;sb.textContent='در حال ثبت…';
+      var comment=(document.getElementById('rate-comment-'+oid).value||'').trim();
+      fetch('/api/v1/orders/'+oid+'/rate',{method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
+        body:JSON.stringify({rating:selected,comment:comment})
+      }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+        var box=document.getElementById('rate-box-'+oid);
+        if(res.status!==200||!res.d.ok){
+          if(box)box.innerHTML='<div class="sl-checkout-note" style="margin-top:12px">'+esc((res.d&&res.d.detail)||'خطا در ثبت نظر')+'</div>';
+          return;
+        }
+        if(box)box.innerHTML='<div class="sl-checkout-note" style="margin-top:12px">✅ نظرتون ثبت شد — ممنون از وقتی که گذاشتید.</div>';
+      }).catch(function(){sb.disabled=false;sb.textContent='ثبت نظر'});
+    });
+  });
+}
+
+function loadOrders(reset){
+  var b=document.getElementById('orders-body');if(!b)return;
+  if(reset){_ordState.offset=0;_ordState.page=0;b.innerHTML=skel(3)}
+  if(_ordState.loading)return;_ordState.loading=true;
+  var moreBtn=document.getElementById('ord-more-btn');
+  if(moreBtn&&!reset)moreBtn.textContent='در حال بارگذاری…';
+  api('/me/orders?limit='+_ordState.limit+'&offset='+_ordState.offset,true).then(function(d){
+    _ordState.loading=false;
+    var items=(d&&d.orders)||[];
+    if(reset&&!items.length){b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📦</span>هنوز سفارشی ثبت نکرده‌اید.</div>';return}
+    if(reset){
+      b.innerHTML='<div class="sl-group" style="margin:12px" id="ord-group"></div>'+
+        '<div id="ord-more-wrap" style="text-align:center;padding:14px" hidden>'+
+        '<button id="ord-more-btn" class="sl-retry">نمایش بیشتر</button></div>';
+      document.getElementById('ord-more-btn').addEventListener('click',function(){loadOrders(false)});
+    }
+    var grp=document.getElementById('ord-group');
+    var pageIdx=_ordState.page++;
+    var wrap=document.createElement('div');
+    wrap.className='sl-order-page';wrap.dataset.page=String(pageIdx);
+    wrap.innerHTML=items.map(_renderOrderRow).join('');
+    grp.appendChild(wrap);
+    _bindOrderPage(wrap);
+    _ordState.offset+=items.length;
+    var mw=document.getElementById('ord-more-wrap');
+    if(mw)mw.hidden=items.length<_ordState.limit;
+    var mb=document.getElementById('ord-more-btn');
+    if(mb)mb.textContent='نمایش بیشتر';
+  }).catch(function(){_ordState.loading=false;if(reset)b.innerHTML=err('خطا در دریافت سفارش‌ها')});
+}
+window.loadOrders=loadOrders;
+
 function openOrders(){
-  var b=document.getElementById('orders-body');
-  b.innerHTML=skel(3);
   document.getElementById('orders-popup').querySelector('.title').textContent='سفارش‌های من';
   app.popup.open('#orders-popup');
-  api('/me/orders',true).then(function(d){
-    var items=(d&&d.orders)||[];
-    if(!items.length){b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">📦</span>هنوز سفارشی ثبت نکرده‌اید.</div>';return}
-    var ST={active:'تحویل‌شده',returned:'برگشتی'};
-    b.innerHTML='<div class="sl-group" style="margin:12px">'+items.map(function(o){
-      var hasData=!!o.delivered_data;
-      var expandable=hasData||o.can_rate||o.has_rated;
-      var row='<a href="#" class="sl-row" data-oid="'+o.id+'" style="cursor:pointer">'+
-        '<span class="sl-ric" style="background:var(--br)">📦</span>'+
-        '<span class="sl-row-grow"><div>'+esc(o.title)+'</div>'+
-        '<div style="font-size:12px;color:var(--mu);margin-top:2px">'+esc(String(o.created_at||'').slice(0,16))+'</div></span>'+
-        '<span style="text-align:left"><div style="font-weight:800">'+fmt(o.price)+' <small>تومان</small></div>'+
-        '<div style="font-size:11px;color:var(--mu);margin-top:2px">'+esc(ST[o.status]||o.status||'')+'</div></span>'+
-        (expandable?'<span class="sl-chev" style="margin-right:4px">‹</span>':'')+'</a>';
-      var detail='<div class="sl-order-detail" id="od-'+o.id+'" hidden style="padding:0 14px 14px">'+
-        (hasData?
-          '<div class="sl-checkout-wallet" style="direction:ltr;text-align:right;word-break:break-all;font-size:13px;white-space:pre-wrap">'+nl2br(o.delivered_data)+'</div>'+
-          '<div class="sl-wal-acts" style="margin-top:8px"><button class="sl-checkout-btn sl-checkout-btn-wallet" data-copy="'+o.id+'">📋 کپی مشخصات</button></div>'
-          :
-          (o.has_rated?'':'<div class="sl-checkout-note">مشخصات این سفارش هنوز ثبت نشده — یا از طریق چت ربات ارسال شده، یا هنوز در صف تحویله.</div>')
-        )+
-        (o.has_rated?'<div class="sl-checkout-note" style="margin-top:8px">✅ نظرتون برای این محصول ثبت شده — ممنون از وقتی که گذاشتید.</div>':'')+
-        (o.can_rate?
-          '<div class="sl-rate-box" id="rate-box-'+o.id+'">'+
-            '<div class="sl-rate-label">این محصول رو چطور دیدید؟</div>'+
-            '<div class="sl-rate-stars" data-oid="'+o.id+'">'+[1,2,3,4,5].map(function(n){return '<span class="sl-rate-star" data-n="'+n+'">☆</span>'}).join('')+'</div>'+
-            '<textarea class="sl-rate-comment" id="rate-comment-'+o.id+'" rows="2" placeholder="نظرتون (اختیاری)…"></textarea>'+
-            '<button class="sl-checkout-btn sl-checkout-btn-combined" id="rate-submit-'+o.id+'" style="margin-top:8px" disabled>ثبت نظر</button>'+
-          '</div>'
-          :'')+
-        '</div>';
-      return row+detail;
-    }).join('')+'</div>';
-    b.querySelectorAll('.sl-row[data-oid]').forEach(function(rowEl){
-      rowEl.addEventListener('click',function(e){
-        e.preventDefault();
-        var det=document.getElementById('od-'+rowEl.dataset.oid);
-        if(det)det.hidden=!det.hidden;
-      });
-    });
-    b.querySelectorAll('[data-copy]').forEach(function(btn){
-      btn.addEventListener('click',function(e){
-        e.preventDefault();e.stopPropagation();
-        var det=document.getElementById('od-'+btn.dataset.copy);
-        var txt=det?det.querySelector('.sl-checkout-wallet').textContent:'';
-        var done=function(){btn.textContent='✅ کپی شد';setTimeout(function(){btn.textContent='📋 کپی مشخصات'},1500)};
-        if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(done)}
-        else{done()}
-      });
-    });
-    b.querySelectorAll('.sl-rate-stars').forEach(function(starsEl){
-      var oid=starsEl.dataset.oid,selected=0;
-      var stars=starsEl.querySelectorAll('.sl-rate-star');
-      function paint(n){stars.forEach(function(s){s.textContent=(+s.dataset.n<=n)?'★':'☆'})}
-      stars.forEach(function(s){
-        s.addEventListener('click',function(e){
-          e.preventDefault();e.stopPropagation();
-          selected=+s.dataset.n;paint(selected);
-          var btn=document.getElementById('rate-submit-'+oid);if(btn)btn.disabled=false;
-        });
-      });
-      var sb=document.getElementById('rate-submit-'+oid);
-      if(sb)sb.addEventListener('click',function(e){
-        e.preventDefault();e.stopPropagation();
-        if(!selected)return;
-        sb.disabled=true;sb.textContent='در حال ثبت…';
-        var comment=(document.getElementById('rate-comment-'+oid).value||'').trim();
-        fetch('/api/v1/orders/'+oid+'/rate',{method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData},
-          body:JSON.stringify({rating:selected,comment:comment})
-        }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
-          var box=document.getElementById('rate-box-'+oid);
-          if(res.status!==200||!res.d.ok){
-            if(box)box.innerHTML='<div class="sl-checkout-note" style="margin-top:12px">'+esc((res.d&&res.d.detail)||'خطا در ثبت نظر')+'</div>';
-            return;
-          }
-          if(box)box.innerHTML='<div class="sl-checkout-note" style="margin-top:12px">✅ نظرتون ثبت شد — ممنون از وقتی که گذاشتید.</div>';
-        }).catch(function(){sb.disabled=false;sb.textContent='ثبت نظر'});
-      });
-    });
-  }).catch(function(){b.innerHTML=err('خطا در دریافت سفارش‌ها')});
+  loadOrders(true);
 }
 window.openOrders=openOrders;
 
@@ -1489,7 +1527,12 @@ function openSupport(){
     var pop=document.getElementById('post-popup');
     if(!pop||!pop.classList.contains('modal-in')){clearInterval(_spPoll);_spPoll=null;return}
     var chat=document.getElementById('sp-chat');
-    if(!chat)return; // فقط وقتی داخل صفحهٔ چت هستیم poll کن
+    // اگه کاربر بدون بستن کامل پاپ‌آپ به زیرصفحهٔ دیگهٔ حساب (کیف‌پول/همکاری/...) رفته،
+    // #sp-chat دیگه توی DOM نیست ولی پاپ‌آپ هنوز modal-in هست — قبلاً این یعنی تایمر
+    // برای همیشه هر ۵ ثانیه بی‌دلیل fetch نمی‌زد ولی هم زنده می‌موند تا کاربر کامل ببنده.
+    // حالا همین‌جا خودش رو پاک می‌کنه؛ اگه کاربر دوباره برگرده به تب پشتیبانی، openSupport
+    // دوباره صدا زده می‌شه و تایمر تازه می‌سازه.
+    if(!chat){clearInterval(_spPoll);_spPoll=null;return}
     var inp=document.getElementById('sp-input');
     // وقتی کاربر داره تایپ می‌کنه، رندر نکن — وگرنه input عوض می‌شه، متن تایپ‌شده و
     // فوکوس/کیبورد از دست می‌ره (این دقیقاً همون باگی بود که گزارش شد)
