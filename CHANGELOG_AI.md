@@ -4,6 +4,23 @@
 
 ---
 
+## ۲۰۲۶-۰۷-۳۱ (دور هجدهم) — فاز ۲ ممیزی کامل پروژه (بخش اول): ایندکس، SSRF، توکن یک‌بارمصرف، Cache-Control، GET→POST
+
+**زمینه:** شروع فاز ۲ (Medium) گزارش ممیزی — این دور ۶ مورد اول (#119، #127-129، #131-132) رو پوشش می‌ده؛ بقیهٔ فاز ۲ در دور(های) بعدی.
+
+**فایل‌های تغییرکرده:** `db.py`, `iphone_valuation/db.py`, `iphone_valuation/fx.py`, `api.py`, `admin_panel.py`, `payment_service.py`, `config.py`, `app/app.js`
+
+1. **ایندکس‌های DB جامانده.** `idx_discount_codes_code` (با `COLLATE NOCASE` چون `validate_discount` همین‌طور کوئری می‌زنه)، `idx_discount_usage_cu`، و در `iphone_valuation/db.py`: `idx_iv_capacities_model` (`resolve_capacity` تا ۱۶ کوئری جدا با فیلتر `model_id` در هر کارشناسی می‌زنه — hot path)، `idx_iv_valuations_model_cap`، `idx_iv_transactions_model_cap`.
+2. **محافظت SSRF در `iphone_valuation/fx.py`.** منابع نرخ ارز از پنل با URL دلخواه ادمین فچ می‌شن؛ تابع تازهٔ `_validate_public_url()` قبل از هر `requests.get` اسکیم (فقط http/https) + resolve DNS + رد IPهای loopback/private/link-local/reserved/multicast رو چک می‌کنه. هم `get_current_rate()` هم دکمهٔ «تست اتصال» پنل (که مستقیم `fetch_source` رو صدا می‌زنه) خودکار پوشش داده شدن.
+3. **توکن ورود وب یک‌بارمصرف واقعی.** `POST /api/v1/auth/poll-login` قبلاً هر poll روی توکن `confirmed` یه سشن *تازه* صادر می‌کرد — یعنی هرکی مقدار توکن رو (مثلاً از لاگ سرور) گیر می‌آورد، تا سقف پاکسازی ۲۴ساعته می‌تونست بی‌نهایت سشن برای همون کاربر بسازه. تابع تازهٔ `db.consume_web_login_token()` اتمیک وضعیت رو به `used` تغییر می‌ده — فقط اولین poll بعد از تأیید سشن می‌سازه. `app.js` هم برای وضعیت `used` (مثل `expired`) UI مناسب نشون می‌ده.
+4. **هدر Cache-Control روی فایل‌های استاتیک.** میدل‌ور `_no_cache_pwa_shell` در `payment_service.py` گسترش یافت — بقیهٔ مسیرهای زیر `/app` و `/app-media` (vendor، آیکون‌ها، مدیای آپلودی) که قبلاً هیچ Cache-Control نداشتن، حالا `public, max-age=86400` (۱ روز — نه بیشتر، چون `app-media` شامل فایل‌های قابل‌جایگزینی مثل آواتار کاربر با همون URL است) می‌گیرن؛ فایل‌های shell (`index.html`/`app.js`/`app.css`/`sw.js`) دست‌نخورده با `no-cache` باقی موندن.
+5. **روت GET ریست تم پنل → POST.** `/admin/settings/theme/reset` side-effect (حذف کامل `panel_theme`) روی یک GET بود (ریسک CSRF/prefetch)؛ به POST تبدیل شد. این روت فعلاً هیچ‌جای UI پنل لینک نشده بود (بررسی شد با grep کامل)، پس تغییر بی‌خطره.
+6. **URL هاردکد `127.0.0.1:8001` در `api.py`.** دو نقطهٔ چک‌اوت (کیف‌پول/ترکیبی و درگاه) مستقیم این آدرس رو هاردکد کرده بودن؛ ثابت تازهٔ `config.PAYMENT_API_BASE_URL` (همون الگوی `_default_payment_base_url` موجود در `services/payments.py`، ولی به‌عنوان منبع مشترک در `config.py`) جایگزینش شد — پورت/میزبان از `PAYMENT_API_BASE_URL` env قابل تنظیمه.
+
+**تست:** سینتکس کامل + هارنس مستقیم برای هرکدوم — ساخت ایندکس‌ها با DB موقت (شامل تست self-healing وقتی جدول هنوز نساخته شده)، مسدودسازی ۵ URL خصوصی/loopback/metadata + ۱ اسکیم نامعتبر در SSRF گارد (تأیید `fetch_source` بدون کرش `None` برمی‌گردونه)، سناریوی کامل توکن ورود وب (poll اول موفق+کوکی، poll دوم/replay → `used`)، هدر Cache-Control با `TestClient` روی دو مسیر واقعی، GET روی ریست تم → ۴۰۵ و POST → ریدایرکت موفق، و resolve صحیح `PAYMENT_API_BASE_URL` با/بدون env.
+
+---
+
 ## ۲۰۲۶-۰۷-۳۱ (دور هفدهم) — فاز ۱ ممیزی کامل پروژه: هدر امنیتی، فشرده‌سازی لوگو، threadpool، صفحه‌بندی، rate limit
 
 **زمینه:** ادامهٔ فاز ۱ (High) — تکمیل تسک‌های #114 تا #118 گزارش ممیزی.

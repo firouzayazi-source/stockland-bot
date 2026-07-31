@@ -36,6 +36,11 @@ if not INTERNAL_API_SECRET:
     import secrets as _s2
     INTERNAL_API_SECRET = _s2.token_urlsafe(32)
 
+# آدرس داخلی خودِ payment_service.py — services/payments.py قبلاً این fallback رو
+# داشت ولی api.py مستقیم "http://127.0.0.1:8001" رو دو جا هاردکد کرده بود؛ حالا
+# هردو از همین یک منبع می‌خونن (بخش ۲۴ ممیزی — قابلیت تنظیم پورت/میزبان از env).
+PAYMENT_API_BASE_URL = (os.getenv("PAYMENT_API_BASE_URL") or f"http://127.0.0.1:{os.getenv('PORT') or '8001'}").rstrip("/")
+
 # Admin numeric ID
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
 

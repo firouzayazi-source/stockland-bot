@@ -625,6 +625,11 @@ def ensure_indexes():
         ("idx_ticket_messages_tid",  "ticket_messages(ticket_id)"),
         # رسیدهای کارت‌به‌کارت — لیست/شمارندهٔ badge روی status
         ("idx_card_receipts_status", "card_receipts(status)"),
+        # کدهای تخفیف — validate_discount هر بار با WHERE code=? COLLATE NOCASE
+        # جست‌وجو می‌کنه (مسیر hot-path خرید)؛ discount_usage هم با code_id+user_id
+        # برای شمارش سقف استفادهٔ هر کاربر (بخش ۲۴ ممیزی)
+        ("idx_discount_codes_code",  "discount_codes(code COLLATE NOCASE)"),
+        ("idx_discount_usage_cu",    "discount_usage(code_id, user_id)"),
     ]
     # این تابع از ticket_ensure_schema() هم صدا زده می‌شه که هر /start ربات اجراش می‌کنه؛
     # هر ایندکسی که قبلاً با موفقیت ساخته شده رو دیگه دوباره امتحان نمی‌کنیم (فلگ per-process
@@ -6606,6 +6611,26 @@ def get_web_login_token(token: str):
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute("SELECT * FROM web_login_tokens WHERE token=?;", (token,)).fetchone()
+    finally:
+        conn.close()
+
+
+def consume_web_login_token(token: str):
+    """توکن تأییدشده رو اتمیک به 'used' تغییر می‌ده و ردیف رو برمی‌گردونه — فقط یک‌بار
+    موفق می‌شه، حتی اگه چندبار poll بشه (جلوگیری از replay: قبلاً هر poll روی توکن
+    'confirmed' یه سشن تازه صادر می‌کرد، یعنی هرکی مقدار توکن رو (مثلاً از لاگ/referrer)
+    گیر می‌آورد تا سقف پاکسازی ۲۴ساعته می‌تونست بی‌نهایت سشن برای اون کاربر بسازه).
+    None یعنی توکن قبلاً استفاده شده یا هنوز تأیید نشده."""
+    ensure_web_login_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM web_login_tokens WHERE token=? AND status='confirmed';", (token,)).fetchone()
+        if not row:
+            return None
+        cur = conn.execute("UPDATE web_login_tokens SET status='used' WHERE token=? AND status='confirmed';", (token,))
+        conn.commit()
+        return dict(row) if cur.rowcount > 0 else None
     finally:
         conn.close()
 
