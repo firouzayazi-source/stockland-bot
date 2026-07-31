@@ -441,8 +441,11 @@ html.dark .sl-checkout-emoji{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-sp-chat{padding:16px 20px 8px;min-height:180px;max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
 .sl-sp-hint{color:var(--mu);font-size:13px;text-align:center;padding:24px 0}
 .sl-sp-msg{max-width:78%;padding:10px 14px;border-radius:16px;font-size:13.5px;line-height:1.7;word-break:break-word}
-.sl-sp-mine{align-self:flex-end;background:var(--br);color:#fff;border-bottom-left-radius:5px}
-.sl-sp-theirs{align-self:flex-start;background:var(--card);color:var(--ink);box-shadow:var(--sh);border-bottom-right-radius:5px}
+/* در فلکس‌باکس ستونی داخل dir=rtl، align-self:flex-end به‌صورت فیزیکی سمت CHAP قرار می‌گیرد
+   نه راست (برخلاف تصور اولیه) — پس برای قرارگیری پیام «خودم» در سمت راست (قرارداد استاندارد
+   اپ‌های چت فارسی مثل تلگرام/واتس‌اپ/اینستاگرام، حتی در RTL)، باید از flex-start استفاده شود. */
+.sl-sp-mine{align-self:flex-start;background:var(--br);color:#fff;border-bottom-right-radius:5px}
+.sl-sp-theirs{align-self:flex-end;background:var(--card);color:var(--ink);box-shadow:var(--sh);border-bottom-left-radius:5px}
 .sl-sp-input-row{display:flex;gap:8px;padding:10px 20px;align-items:center;
  background:var(--card);border-top:1px solid var(--ln)}
 /* input.sl-sp-input (نه فقط .sl-sp-input) چون قاعدهٔ پایهٔ F7 روی input[type="text"] با
