@@ -365,11 +365,57 @@ def create_stbak(db_path: str, modules: list = None, progress_cb=None,
     return raw
 
 
-def stbak_filename(mode: str = "full") -> str:
-    # ثانیه هم توی نام هست — بدون این، دو بکاپ توی همون دقیقه (مثلاً دستی+خودکار)
-    # هم‌نام می‌شن و یکی بی‌صدا فایل دیگری رو overwrite می‌کنه.
-    ts = datetime.now().strftime("%Y_%m_%d_%H%M%S")
-    return f"stockland_backup_{ts}_{mode}.stbak"
+def _jalali_today_compact() -> str:
+    """تاریخ امروز به‌صورت جلالی، فرمت YYYYMMDD (۸ رقم لاتین، بدون جداکننده) —
+    بدون وابستگی به پکیج خارجی؛ الگوریتم استاندارد تبدیل میلادی→جلالی."""
+    gy, gm, gd = datetime.now().timetuple()[:3]
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    if gy > 1600:
+        jy = 979
+        gy -= 1600
+    else:
+        jy = 0
+        gy -= 621
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (365 * gy) + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) - 80 + gd + g_d_m[gm - 1]
+    jy += 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + days // 31
+        jd = 1 + (days % 31)
+    else:
+        jm = 7 + (days - 186) // 30
+        jd = 1 + ((days - 186) % 30)
+    return f"{jy:04d}{jm:02d}{jd:02d}"
+
+
+def stbak_filename(mode: str = "full", backup_dir: str = None, prefix: str = "stockland_backup_") -> str:
+    """اسم فایل بکاپ — تاریخ جلالی فشرده (بدون جداکننده، ارقام لاتین)، مثل
+    stockland_backup_14050509_full.stbak. اگه backup_dir داده بشه، همون دایرکتوری
+    برای برخورد اسم چک می‌شه؛ اگه بکاپ دیگری با همین تاریخ/mode از قبل اونجا
+    باشه، پسوند -2, -3, ... اضافه می‌شه (همون پروتکلی که برای بکاپ nginx هم
+    استفاده شد) — تا دو بکاپ توی یه روز (مثلاً دستی+خودکار) هم‌نام نشن."""
+    jdate = _jalali_today_compact()
+    base = f"{prefix}{jdate}_{mode}.stbak"
+    if not backup_dir:
+        return base
+    try:
+        existing = set(os.listdir(backup_dir))
+    except Exception:
+        return base
+    if base not in existing:
+        return base
+    n = 2
+    while True:
+        candidate = f"{prefix}{jdate}-{n}_{mode}.stbak"
+        if candidate not in existing:
+            return candidate
+        n += 1
 
 
 class StbakError(Exception):
@@ -451,7 +497,7 @@ def restore_stbak(raw: bytes, db_path: str, progress_cb=None,
             try:
                 os.makedirs(safety_backup_dir, exist_ok=True)
                 safety_raw = create_stbak(db_path, modules=None, include_media=False, validate=False)
-                safety_name = "pre_restore_safety_" + stbak_filename("auto")
+                safety_name = stbak_filename("auto", safety_backup_dir, prefix="pre_restore_safety_")
                 safety_backup_path = os.path.join(safety_backup_dir, safety_name)
                 with open(safety_backup_path, "wb") as f:
                     f.write(safety_raw)
@@ -586,7 +632,7 @@ def save_local_backup(db_path: str, backup_dir: str, modules: list = None,
     پاک می‌کنه، مسیر فایل تازه رو برمی‌گردونه. معادل SQLite-محورِ pg_backup.create_backup()."""
     os.makedirs(backup_dir, exist_ok=True)
     raw = create_stbak(db_path, modules=modules, include_media=include_media)
-    fname = stbak_filename("full" if modules is None else "custom")
+    fname = stbak_filename("full" if modules is None else "custom", backup_dir)
     fpath = os.path.join(backup_dir, fname)
     with open(fpath, "wb") as f:
         f.write(raw)
