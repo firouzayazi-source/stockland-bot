@@ -29,4 +29,23 @@ curl -fL --retry 3 -o vendor/admin-lucide.min.js \
 
 echo "── فایل‌های دریافت‌شده ──"
 ls -lh vendor vendor/fonts
+
+# تأیید موفقیت دانلود هر ۶ وزن فونت + دو فایل framework7 — قبلاً اگه یه اجرا
+# وسط حلقه با خطای شبکه نصفه‌کاره می‌موند، هیچ خطای قابل‌مشاهده‌ای نمی‌داد؛
+# پنل ادمین برای وزن‌های گمشده بی‌صدا fallback می‌کرد.
+missing=0
+for f in framework7-bundle.min.js framework7-bundle-rtl.min.css \
+         fonts/Vazirmatn-Light.woff2 fonts/Vazirmatn-Regular.woff2 \
+         fonts/Vazirmatn-Medium.woff2 fonts/Vazirmatn-SemiBold.woff2 \
+         fonts/Vazirmatn-Bold.woff2 fonts/Vazirmatn-ExtraBold.woff2; do
+  if [ ! -s "vendor/$f" ]; then
+    echo "❌ vendor/$f دانلود نشد یا خالیه"
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  echo "⚠️  بعضی فایل‌ها ناقص دانلود شدن — دوباره bash app/get_vendor.sh رو اجرا کن."
+  exit 1
+fi
+
 echo "✅ vendor آماده شد — حالا stockland.service را ری‌استارت کنید."

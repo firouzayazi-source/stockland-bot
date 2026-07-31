@@ -561,21 +561,11 @@ async def api_partner_apply(request: Request):
                             note="", city=city, shop_name=shop_name)
 
     from config import BOT_TOKEN, ADMIN_ID
-    import requests
+    from tg_notify import send_telegram_message
 
-    def _notify():
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={"chat_id": ADMIN_ID,
-                      "text": (f"🔔 درخواست فروشندگی جدید (از مینی‌اپ)\n"
-                               f"کاربر: {uid} — {full_name}\nشهر: {city} | فروشگاه: {shop_name}")},
-                timeout=10,
-            )
-        except Exception:
-            pass
-
-    await run_in_threadpool(_notify)
+    text = (f"🔔 درخواست فروشندگی جدید (از مینی‌اپ)\n"
+            f"کاربر: {uid} — {full_name}\nشهر: {city} | فروشگاه: {shop_name}")
+    await run_in_threadpool(send_telegram_message, BOT_TOKEN, ADMIN_ID, text)
     return {"ok": True}
 
 
@@ -976,23 +966,14 @@ async def api_support_ticket_create(request: Request):
 
 def _notify_admin_ticket(ticket_id: int, uid: int, text: str, ttype: str = "support") -> None:
     from config import BOT_TOKEN, ADMIN_ID
-    import requests
+    from tg_notify import send_telegram_message
     if not BOT_TOKEN or not ADMIN_ID:
         return
     label = "🤝 پیام همکار جدید" if ttype == "partner_support" else "🔵 پیام پشتیبانی جدید"
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": ADMIN_ID,
-                "text": (f"{label} (از مینی‌اپ)\n"
-                         f"تیکت #{ticket_id} — کاربر {uid}\n\n{text[:300]}\n\n"
-                         f"https://panel.stland.ir/admin/tickets/{ticket_id}"),
-            },
-            timeout=10,
-        )
-    except Exception:
-        pass
+    text = (f"{label} (از مینی‌اپ)\n"
+            f"تیکت #{ticket_id} — کاربر {uid}\n\n{text[:300]}\n\n"
+            f"https://panel.stland.ir/admin/tickets/{ticket_id}")
+    send_telegram_message(BOT_TOKEN, ADMIN_ID, text)
 
 
 @router.post("/support/message")
@@ -1334,24 +1315,19 @@ def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price
     پول به کیف‌پول برمی‌گرده، نه صف انتظار. برمی‌گردونه: True اگه همون لحظه تحویل شد."""
     from db import claim_next_feed_item, order_set_feed_id, add_wallet_balance
     from config import BOT_TOKEN
-    import requests
+    from tg_notify import send_telegram_message
 
     item = claim_next_feed_item(pid, order_id=order_id)
     if item:
         feed_id, feed_data = item
         order_set_feed_id(order_id, feed_id)
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={"chat_id": uid, "parse_mode": "HTML",
-                      "text": ("✅ <b>سفارش شما ثبت و تحویل شد.</b>\n\n"
-                               f"شماره سفارش: #{order_id}\n"
-                               f"سرویس: {title}\n"
-                               f"مبلغ: {price:,} تومان\n\n"
-                               f"<code>{feed_data}</code>")},
-                timeout=10,
-            )
-        except Exception:
+        ok = send_telegram_message(BOT_TOKEN, uid,
+            ("✅ <b>سفارش شما ثبت و تحویل شد.</b>\n\n"
+             f"شماره سفارش: #{order_id}\n"
+             f"سرویس: {title}\n"
+             f"مبلغ: {price:,} تومان\n\n"
+             f"<code>{feed_data}</code>"), parse_mode="HTML")
+        if not ok:
             logger.exception("Failed to send delivery message for order %s", order_id)
         return True
 
@@ -1364,16 +1340,9 @@ def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price
         _c.close()
     except Exception:
         logger.exception("Failed to mark order %s returned", order_id)
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": uid, "parse_mode": "HTML",
-                  "text": ("❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
-                           f"مبلغ <b>{price:,}</b> تومان به کیف‌پول شما بازگردانده شد.")},
-            timeout=10,
-        )
-    except Exception:
-        pass
+    send_telegram_message(BOT_TOKEN, uid,
+        ("❌ متأسفانه موجودی این محصول لحظاتی پیش به پایان رسید.\n\n"
+         f"مبلغ <b>{price:,}</b> تومان به کیف‌پول شما بازگردانده شد."), parse_mode="HTML")
     return False
 
 

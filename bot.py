@@ -170,11 +170,11 @@ class _BotExceptionHandler(telebot.ExceptionHandler):
 
 
 try:
-    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", exception_handler=_BotExceptionHandler())
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", exception_handler=_BotExceptionHandler(), num_threads=8)
 except TypeError:
     # نسخه قدیمی‌تر pyTelegramBotAPI که exception_handler را پشتیبانی نمی‌کند
     logger.warning("telebot نسخه فعلی از exception_handler پشتیبانی نمی‌کند — fallback به حالت معمولی")
-    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", num_threads=8)
 set_ui_cache_clear_callback(ui_cache_clear)
 
 

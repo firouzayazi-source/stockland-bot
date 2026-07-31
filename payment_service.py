@@ -177,19 +177,8 @@ def db_connect() -> sqlite3.Connection:
 
 def send_telegram_message(user_id: int, text: str, parse_mode: str | None = None) -> None:
     """Send a Telegram message directly via the Bot API (no bot instance needed)."""
-    if not BOT_TOKEN:
-        return
-    payload = {"chat_id": int(user_id), "text": text}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json=payload,
-            timeout=10,
-        )
-    except Exception:
-        logger.exception("Telegram sendMessage failed")
+    from tg_notify import send_telegram_message as _send
+    _send(BOT_TOKEN, user_id, text, parse_mode=parse_mode)
 
 
 # ---------------------------------------------------------------------------

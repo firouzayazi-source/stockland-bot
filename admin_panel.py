@@ -687,6 +687,7 @@ def _layout(title: str, body: str, admin_info=None,
     document.addEventListener('touchmove',function(e){{if(e.touches.length>1)e.preventDefault();}},{{passive:false}});
   </script>
   <title>{e(title)} — استوک لند</title>
+  <link rel="preload" href="/app/vendor/fonts/Vazirmatn-Regular.woff2" as="font" type="font/woff2" crossorigin>
   <script src="/app/vendor/admin-tailwind.js"></script>
   <script>window.tailwind || document.write('<script src="https://cdn.tailwindcss.com"><\\/script>');</script>
   <script src="/app/vendor/admin-lucide.min.js"></script>
