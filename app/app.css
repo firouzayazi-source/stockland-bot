@@ -564,6 +564,10 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
 .sl-acc-page .sl-checkout-sec{padding:16px 0 6px}
 .sl-acc-page .sl-checkout-btns{margin:14px 0 0}
 .sl-acc-page .sl-checkout-note{margin:12px 0 0;padding:0 0 8px}
+.sl-acc-page .sl-group{margin:8px 0 0}
+/* لینک «‹ بازگشت» بالای هر زیرصفحهٔ پنل همکاری — ناوبری تودرتو بدون بستن popup */
+.sl-pt-back{display:inline-flex;align-items:center;gap:2px;color:var(--br);font-size:13px;
+ font-weight:700;margin-bottom:10px;text-decoration:none;padding:4px 0}
 /* ═══ برش عکس پروفایل ═══ */
 .sl-crop-view{width:240px;height:240px;border-radius:50%;overflow:hidden;position:relative;
  margin:4px auto 0;background:#111;touch-action:none;box-shadow:0 0 0 4000px rgba(0,0,0,.5)}
