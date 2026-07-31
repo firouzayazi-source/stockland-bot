@@ -320,7 +320,7 @@ except Exception:
 6. **بدون CSRF token** روی هیچ فرم پنل ادمین (فقط `SameSite=Lax` cookie).
 7. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل)** — ~~دو مسیر webhook تلگرام موازی~~ — مسیر ناامن `/webhook` (بدون auth، امکان جعل کامل هویت `ADMIN_ID` با یک Update جعلی) کاملاً حذف شد؛ تأیید شد که این مسیر هیچ‌وقت به‌عنوان webhook واقعی تلگرام ثبت نمی‌شد (`_activate_webhook` همیشه فقط مسیر امن `/telegram/webhook/{BOT_TOKEN}` با `secret_token=WEBHOOK_SECRET` رو فعال می‌کنه)، پس حذفش کد مرده رو هم پاک کرد هم یه حفرهٔ امنیتی رو بست.
 8. **`API_KEYS`/`X-User-Id`** در `api.py` — روش دوم auth، بدون امضا؛ هر کسی با کلید معتبر می‌تواند خود را جای هر `user_id` دلخواه جا بزند.
-9. **`database/bot.db`** — یک فایل SQLite باینری با داده‌های واقعی‌نما (سفارش، تراکنش زرین‌پال) از ابتدای پروژه در گیت کامیت شده — پیشنهاد: از ردگیری گیت خارج و به `.gitignore` اضافه شود (با تأیید مالک پروژه، چون ممکن است عمداً به‌عنوان seed نگه داشته شده باشد).
+9. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، تأیید صریح مالک پروژه)** — ~~`database/bot.db` یک فایل SQLite باینری با داده‌های واقعی‌نما از ابتدای پروژه در گیت کامیت شده~~ — کاملاً از **تمام تاریخچهٔ گیت** حذف شد (`git-filter-repo --path database/bot.db --invert-paths`)، نه فقط از HEAD. همهٔ برنچ‌ها (`main`, `claude/git-connection-issue-cupwr0`, `server-backup-2026-07-23`) بازنویسی و force-push شدن. **⚠️ این یعنی تمام commit hashها عوض شدن** — سرور تولید (یا هر clone دیگه‌ای) دیگه نمی‌تونه `git pull` ساده بزنه؛ باید کامل دوباره clone بشه یا با `git fetch origin && git reset --hard origin/main` ریست بشه (بخش ۱۹/۲۰ همین سند رو برای دستورهای دقیق ببین).
 10. **بدون رمزهای TODO/FIXME یافت‌شده** در کد — یعنی این موارد خودشان را در کامنت‌ها پرچم نکرده‌اند؛ فقط با خواندن مستقیم کد پیدا شدند.
 11. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل)** — ~~`POST /payment/create` بدون احراز هویت~~ — چون uvicorn پشت nginx روی `127.0.0.1` گوش می‌ده، این مسیر داخلی (که فقط باید از `services/payments.py`/`api.py` صدا زده بشه) از اینترنت هم قابل‌دسترس بود و بدنهٔ کاملاً کلاینت‌کنترل (`user_id`, `wallet_reserved`, `chat_id`) امکان سرقت مستقیم موجودی کیف‌پول هر کاربری رو می‌داد (پرداخت مبلغ کوچیک `amount` توسط مهاجم + کسر کامل `wallet_reserved` قربانی). رفع با راز داخلی `config.INTERNAL_API_SECRET` (الگوی `WEBHOOK_SECRET`، خودکار تولیدشده اگه env ست نشه) چک‌شده با `hmac.compare_digest` روی هدر `X-Internal-Secret`.
 12. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل)** — ~~کوکی سشن ادمین بدون Secure~~ — هر ۳ محل صدور کوکی `adm` حالا `secure=True` دارن (تولید همیشه HTTPS است).
@@ -874,3 +874,51 @@ bot / mini-app → POST /payment/create → payment_service._run_gateway_failove
 - `bot.py:finalize_product_order` بلوک SQL خام حذف شد، جایگزین با یک فراخوانی `subtract_wallet_balance(uid, eff_price)`. **نکتهٔ ظریفی که فقط تست پیدا کرد:** بعد از این جایگزینی، متغیر `new_balance` (که پایین‌تر توی همون تابع برای پیام «موجودی فعلی» و محاسبهٔ بازگشت وجه در سناریوی race-condition موجودی استفاده می‌شه) دیگه تعریف نمی‌شد — باعث `NameError` توی مسیر موفق خرید می‌شد. رفع شد با یک خط `new_balance = get_wallet_balance(uid)` بلافاصله بعد از کسر موفق.
 
 **تست:** هارنس مستقیم — کسر موفق، رد شدن کسر با موجودی ناکافی (بدون تغییر موجودی)، کسر روی کاربر بدون ردیف کیف‌پول، و مهم‌ترین تست: **۲۰ ترد هم‌زمان** هرکدوم سعی در کسر ۱۰٬۰۰۰ از موجودی ۱۰۰٬۰۰۰ — دقیقاً ۱۰تا موفق شدن، موجودی نهایی صفر (نه منفی)، بدون کسر دوبل. `finalize_product_order` هم با هارنس مستقیم تست شد (مسیر رد با موجودی ناکافی، و مسیر موفق با تأیید مقدار صحیح موجودی نهایی).
+
+---
+
+## ۲۷. حذف `database/bot.db` از کل تاریخچهٔ گیت (۲۰۲۶-۰۷-۳۱) — ⚠️ عملیات بازنویسی تاریخچه
+
+طبق تأیید صریح مالک پروژه (در ادامهٔ گزارش ممیزی کامل، بخش ۱۳ آیتم ۹)، فایل باینری SQLite کامیت‌شدهٔ `database/bot.db` **از تمام تاریخچهٔ گیت** حذف شد — نه فقط از HEAD با یه commit جدید (که فایل رو در commitهای قدیمی همچنان قابل‌بازیابی نگه می‌داشت)، بلکه با بازنویسی کامل تاریخچه.
+
+### چیکار شد
+- ابزار: `git-filter-repo --path database/bot.db --invert-paths --force`.
+- قبل از اجرا: بکاپ کامل تمام refها با `git bundle create ... --all`.
+- بعد از اجرا: تأیید با `git rev-list --objects --all | grep bot.db` (بدون نتیجه) + یه clone تازه از remote برای تأیید نهایی.
+- هر سه برنچ محلی/ریموت (`main`, `claude/git-connection-issue-cupwr0`, `server-backup-2026-07-23`) بازنویسی و با `git push --force` جایگزین شدن.
+- فقط **یک** commit تاریخی (`bc8c9b9 Update stbak_engine.py`) این فایل رو اضافه کرده بود؛ از همون commit به بعد همهٔ commitهای بعدی هم بازنویسی شدن (چون tree هرکدوم به بلاب bot.db رفرنس داشت) — یعنی **همهٔ commit hashهای پروژه از اون نقطه به بعد عوض شدن**.
+
+### ⚠️ اقدام لازم روی سرور تولید و هر clone دیگه (حتماً بخون قبل از هر git عملیات بعدی)
+چون تاریخچه بازنویسی شده، `git pull` معمولی روی سرور یا هر clone قدیمی **کار نمی‌کنه** (تاریخچهٔ محلی و ریموت دیگه common ancestor مشترکی که git انتظارش رو داره ندارن — واقعاً دارن ولی hashها فرق دارن، پس git این‌طور می‌بینه که انگار دو تاریخچهٔ کاملاً جدا هستن). راه درست — یکی از این دو:
+
+**روش ۱ (ساده‌تر، توصیه‌شده): clone تازه**
+```bash
+cd /opt/stockland
+mv app app.old-history-$(date +%Y%m%d)   # نه rm — برای احتیاط نگه دار
+git clone https://github.com/firouzayazi-source/stockland-bot.git app
+cd app
+# .env از app.old-history-... کپی کن (untracked بود، توی clone تازه نیست)
+cp ../app.old-history-*/.env .env
+# vendor رو هم دوباره لازمه (untracked/gitignored)
+bash app/get_vendor.sh
+systemctl restart stockland.service
+```
+
+**روش ۲ (بدون clone مجدد، اگه فضای دیسک محدوده):**
+```bash
+cd /opt/stockland/app
+git fetch origin main
+git reset --hard origin/main   # ⚠️ مخرب — هر تغییر لوکال commit‌نشده از بین می‌ره
+git clean -fd                  # فایل‌های untracked اضافه (غیر از .env که gitignore شده) رو هم پاک می‌کنه — با احتیاط
+systemctl restart stockland.service
+```
+در هر دو حالت، `.env` (که هیچ‌وقت commit نشده) و `app/vendor/` (که gitignored هستن) باید دست‌نخورده بمونن یا دوباره ساخته بشن — چک کن قبل از ری‌استارت سرویس.
+
+### چرا این کار درست بود (نه فقط حذف از HEAD)
+یه `git rm database/bot.db && git commit` معمولی فقط فایل رو از ورژن *جدید* پروژه حذف می‌کنه — هر کسی که کل تاریخچه رو clone کنه (`git clone` بدون `--depth`) همچنان می‌تونه با `git show bc8c9b9:database/bot.db` محتوای اون فایل (داده‌های واقعی‌نمای سفارش/تراکنش) رو استخراج کنه. بازنویسی کامل تاریخچه تنها راه واقعی حذفشه.
+
+### تست انجام‌شده
+- `git rev-list --objects --all | grep -i bot.db` روی هم repo لوکال هم یه clone تازهٔ remote → بدون نتیجه، هر دو.
+- سایز `.git` بعد از `git gc --prune=now --aggressive` بررسی شد (کاهش یافت).
+- تأیید سلامت کامل تاریخچه: `git log --oneline` روی هر سه برنچ، commitهای اخیر (فاز ۰ تا ۳ ممیزی) دست‌نخورده و به ترتیب صحیح باقی موندن.
+- تأیید محتوای فایل‌های فعلی پروژه (بعد از rewrite) با اسموک‌تست import کامل (`bot.py`, `api.py`, `admin_panel.py`) — بدون خطا.
