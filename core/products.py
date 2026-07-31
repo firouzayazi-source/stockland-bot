@@ -113,8 +113,10 @@ def get_product(pid: int, uid: int = None) -> Optional[dict]:
     }
 
 
-def favorite_products(user_id: int) -> list:
-    """محصولات علاقه‌مندی کاربر — فقط فعال‌ها، جدیدترین اول."""
+def favorite_products(user_id: int, limit: int = 100, offset: int = 0) -> list:
+    """محصولات علاقه‌مندی کاربر — فقط فعال‌ها، جدیدترین اول.
+    limit/offset برای ثبات با بقیهٔ endpoint های لیستی — فعلاً حجم علاقه‌مندی هر
+    کاربر طبیعتاً محدوده، ولی همون الگو رعایت می‌شه."""
     import db
     from db import get_favorite_ids, ensure_product_support_schema
     ids = get_favorite_ids(user_id)
@@ -123,11 +125,14 @@ def favorite_products(user_id: int) -> list:
     ensure_product_support_schema()
     conn = db._get_connection()
     try:
+        # ids از get_favorite_ids یه set بدون ترتیبه — LIMIT/OFFSET باید روی همون
+        # کوئری مرتب‌شدهٔ نهایی (id DESC) اعمال بشه، نه با slice کردن خودِ set
+        # (که ترتیبش دلخواه/غیرقطعیه و صفحه‌بندی رو خراب می‌کنه).
         placeholders = ",".join("?" * len(ids))
         rows = conn.execute(
             f"SELECT id, category, title, price, description, is_active, COALESCE(image_url,'') AS image_url "
             f"FROM products WHERE id IN ({placeholders}) AND COALESCE(is_active,1)=1 "
-            f"ORDER BY id DESC;", tuple(ids)).fetchall()
+            f"ORDER BY id DESC LIMIT ? OFFSET ?;", tuple(ids) + (limit, offset)).fetchall()
         row_ids = [int(r["id"]) for r in rows]
         ratings = db.batch_product_ratings(row_ids)
         flash_pcts = db.batch_flash_percents(row_ids)

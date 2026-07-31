@@ -203,6 +203,7 @@ async def api_auth_logout():
 async def api_products(request: Request, category: str = "", limit: int = 60, q: str = ""):
     """لیست محصولات — با q می‌شه در عنوان/توضیح جستجو کرد."""
     from core import products
+    limit = min(max(int(limit or 60), 1), 200)
     try:
         data = products.list_products(category=category, active_only=True, limit=limit, q=q.strip())
         return {"ok": True, "products": data}
@@ -252,10 +253,12 @@ async def api_favorite_remove(pid: int, request: Request):
 
 
 @router.get("/favorites")
-async def api_favorites_list(request: Request):
+async def api_favorites_list(request: Request, limit: int = 100, offset: int = 0):
     uid = _auth(request)
+    limit = min(max(int(limit or 100), 1), 200)
+    offset = max(int(offset or 0), 0)
     from core.products import favorite_products
-    return {"ok": True, "products": favorite_products(uid)}
+    return {"ok": True, "products": favorite_products(uid, limit=limit, offset=offset)}
 
 
 @router.post("/products/{pid}/notify")

@@ -58,6 +58,7 @@ def _db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=30000;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
 
 # ─────────────────────────── Permissions ───────────────────────────────────
@@ -404,6 +405,27 @@ def _get_theme() -> dict:
     # همون لحظه‌ای که ادمین تم رو عوض می‌کنه، خودش نتیجهٔ تازه رو می‌بینه.
     return _cached("panel_theme", 60.0, _get_theme_uncached)
 
+
+def _get_admin_prefs_uncached(admin_id: str) -> dict:
+    try:
+        conn = _db()
+        rows = conn.execute(
+            "SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');",
+            (admin_id,)
+        ).fetchall()
+        conn.close()
+        return {r["key"]: r["value"] for r in rows}
+    except Exception:
+        return {}
+
+
+def _get_admin_prefs(admin_id) -> dict:
+    # این کوئری قبلاً بدون کش، مستقیم داخل _layout() اجرا می‌شد — یعنی روی هر
+    # رندر هر صفحهٔ پنل (که _layout در ۷۶+ نقطه صدا زده می‌شه) یه I/O بلاک‌کنندهٔ
+    # synchronous جدا. همون الگوی _get_theme، فقط per-admin (کلید کش شامل
+    # admin_id) چون این مقدار برخلاف تم، بین ادمین‌های مختلف فرق می‌کنه.
+    return _cached(f"admin_prefs:{admin_id}", 30.0, lambda: _get_admin_prefs_uncached(str(admin_id)))
+
 def _ensure_theme_table():
     conn = _db()
     try:
@@ -536,18 +558,9 @@ def _layout(title: str, body: str, admin_info=None,
     saved_dark = ""
     saved_classic = ""
     if admin_info:
-        try:
-            conn = _db()
-            rows = conn.execute(
-                "SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');",
-                (str(admin_info[0]),)
-            ).fetchall()
-            conn.close()
-            prefs = {r[0]: r[1] for r in rows}
-            saved_dark = prefs.get("dark_mode", "")
-            saved_classic = prefs.get("classic_mode", "")
-        except Exception:
-            saved_dark = ""; saved_classic = ""
+        prefs = _get_admin_prefs(admin_info[0])
+        saved_dark = prefs.get("dark_mode", "")
+        saved_classic = prefs.get("classic_mode", "")
 
     flash_html = ""
     if flash:
@@ -2007,6 +2020,7 @@ async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0")
         conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
                      (str(adm[0]), "classic_mode", "1" if classic == "1" else "0"))
         conn.commit(); conn.close()
+        _cache_invalidate(f"admin_prefs:{adm[0]}")
     except Exception:
         pass
     return JSONResponse({"ok": True})
@@ -2290,11 +2304,9 @@ async def settings_hub(request: Request, flash: str = ""):
     # تم فعلی
     saved_dark = "auto"; saved_classic = "0"
     try:
-        conn = _db()
-        for r in conn.execute("SELECT key, value FROM admin_preferences WHERE admin_id=? AND key IN ('dark_mode','classic_mode');", (str(adm[0]),)).fetchall():
-            if r[0] == "dark_mode":    saved_dark = r[1] or "auto"
-            if r[0] == "classic_mode": saved_classic = r[1] or "0"
-        conn.close()
+        _prefs = _get_admin_prefs(adm[0])
+        saved_dark = _prefs.get("dark_mode") or "auto"
+        saved_classic = _prefs.get("classic_mode") or "0"
     except Exception:
         pass
 
@@ -7438,7 +7450,7 @@ async def financial_queue(request: Request, type_filter: str = "", q: str = "",
 @router.get("/tickets", response_class=HTMLResponse)
 async def tickets_list(request: Request, status_filter: str = "", type_filter: str = "",
                        fin_type: str = "", fin_q: str = "", fin_sort: str = "date_desc",
-                       show_archived: str = "0", flash: str = ""):
+                       show_archived: str = "0", page: int = 0, flash: str = ""):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
@@ -7448,6 +7460,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
     from db import ensure_ticket_archive_schema
     ensure_ticket_archive_schema()
 
+    PAGE = 100
     conn = _db()
     try:
         wheres, params = [], []
@@ -7460,7 +7473,8 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         else:
             wheres.append("(t.archived IS NULL OR t.archived=0)")
         where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
-        params.append(200)
+        total = conn.execute(f"SELECT COUNT(*) FROM tickets t {where_sql};", params).fetchone()[0]
+        page_params = params + [PAGE, page * PAGE]
         try:
             tickets = conn.execute(f"""
                 SELECT t.*,
@@ -7470,15 +7484,15 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
                 FROM tickets t
                 LEFT JOIN products p ON p.id=t.product_id
                 {where_sql}
-                ORDER BY t.updated_at DESC, t.id DESC LIMIT ?;
-            """, params).fetchall()
+                ORDER BY t.updated_at DESC, t.id DESC LIMIT ? OFFSET ?;
+            """, page_params).fetchall()
         except Exception:
             tickets = conn.execute(f"""
                 SELECT t.*, (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id=t.id) AS msg_count,
                 NULL AS last_sender, NULL AS product_title
                 FROM tickets t {where_sql}
-                ORDER BY id DESC LIMIT ?;
-            """, params).fetchall()
+                ORDER BY id DESC LIMIT ? OFFSET ?;
+            """, page_params).fetchall()
         # قبلاً ۹ کوئری COUNT جدا (۶ status + ۳ type) — با GROUP BY به ۲ کوئری کاهش
         # پیدا کرد؛ با ایندکس‌های تازهٔ tickets(status)/tickets(type) هم سریع‌تره.
         stats = {s: 0 for s in ("waiting_admin","waiting_user","closed","waiting_info","reviewing","ready_delivery")}
@@ -7491,6 +7505,8 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
                 type_counts[row["type"]] = row["c"]
     finally:
         conn.close()
+
+    pages = max((total + PAGE - 1) // PAGE, 1)
 
     def tq(sf="", tf=""):
         return f"?status_filter={sf}&type_filter={tf}"
@@ -7597,9 +7613,17 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
           </button>
         </div>"""
 
+    # صفحه‌بندی سرور-محور — قبلاً سقف ثابت ۲۰۰ ردیف بدون هیچ صفحهٔ بعدی بود؛
+    # تیکت‌های قدیمی‌تر از سقف اصلاً از دید مدیر محو می‌شدن. الگوی /admin/products.
+    pager = ('<div class="flex gap-2 mt-4 justify-center">' + "".join(
+        f'<a href="?status_filter={status_filter}&type_filter={type_filter}&show_archived={show_archived}&page={i}" '
+        f'class="px-3 py-1 rounded border text-sm {"bg-indigo-600 text-white" if i==page else "bg-white"}">{i+1}</a>'
+        for i in range(min(pages, 10))
+    ) + "</div>") if pages > 1 else ""
+
     body = f"""
     <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <h1 class="text-2xl font-bold text-gray-800">🎫 تیکت‌های پشتیبانی</h1>
+      <h1 class="text-2xl font-bold text-gray-800">🎫 تیکت‌های پشتیبانی ({total:,})</h1>
       <a href="?status_filter={status_filter}&type_filter={type_filter}&show_archived={'0' if show_archived=='1' else '1'}"
          class="px-3 py-1.5 text-xs rounded-lg border {'bg-gray-700 text-white' if show_archived=='1' else 'bg-gray-50 text-gray-500 border-gray-200'}">
         {'🔙 بازگشت به لیست فعال' if show_archived=='1' else '📦 آرشیو شده‌ها'}
@@ -7621,6 +7645,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         </table>
       </div>
       {tickets_toggle_btn}
+      {pager}
     </div>
 
     <script>
@@ -8620,6 +8645,18 @@ def _do_auto_backup() -> None:
         _tg_logger.error("Auto-backup failed: %s", ex)
         return
     _tg_logger.info("Auto-backup done: %s", dst)
+
+    # ANALYZE هفتگی — برنامه‌ریز کوئری SQLite بدون آمار به‌روز، با رشد دیتابیس
+    # تصمیمات کمتر بهینه می‌گیره؛ همراه همین جاب روزانهٔ بکاپ (فقط دوشنبه‌ها) اجرا می‌شه.
+    try:
+        import datetime as _dt
+        if _dt.datetime.now().weekday() == 0:
+            _aconn = sqlite3.connect(_DB_PATH(), timeout=30)
+            _aconn.execute("ANALYZE;")
+            _aconn.close()
+            _tg_logger.info("Weekly ANALYZE done")
+    except Exception as ex:
+        _tg_logger.error("Weekly ANALYZE failed: %s", ex)
 
     # ☁️ آپلود ابری (کانال تلگرام + گوگل درایو) — غیرهمزمان
     try:

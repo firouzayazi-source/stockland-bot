@@ -30,6 +30,11 @@ def _sqlite_connection(db_path: str):
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA busy_timeout=5000;")
         conn.execute("PRAGMA foreign_keys=ON;")
+        # synchronous=FULL (پیش‌فرض SQLite) برای WAL بیش از حد محافظه‌کارانه‌ست؛
+        # NORMAL هم امنه (تحت WAL هیچ corruption‌ای در crash نداره) هم سریع‌تر —
+        # چون این یه تنظیم per-connection است (نه persist روی فایل دیتابیس)،
+        # باید همین‌جا کنار بقیهٔ PRAGMA ها روی هر اتصال تازه ست بشه.
+        conn.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
         pass
     conn.row_factory = sqlite3.Row
