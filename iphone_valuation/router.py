@@ -1,6 +1,7 @@
 """روتر نازک FastAPI — فقط auth + اعتبارسنجی سطحی + صدا زدن service. منطق این‌جا نیست."""
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import service as ivservice
 from . import db as ivdb
@@ -45,7 +46,10 @@ async def iphone_valuate(request: Request):
         payload["user_id"] = uid
 
     try:
-        result = ivservice.valuate(payload)
+        # ivservice.valuate() زنجیرهٔ کاملاً synchronous است (فچ نرخ ارز HTTP + چند
+        # کوئری SQLite + احتمالاً یک فراخوانی provider هوش مصنوعی) — بدون threadpool
+        # این async def مستقیم event loop مشترک رو بلاک می‌کرد.
+        result = await run_in_threadpool(ivservice.valuate, payload)
     except ivservice.ValuationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

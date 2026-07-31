@@ -246,6 +246,7 @@ except Exception:
 | `BOT_USERNAME` | یوزرنیم ربات برای دیپ‌لینک |
 | `WEBHOOK_BASE_URL` | دامنهٔ پایه برای حالت webhook و لینک PWA (پیش‌فرض `https://panel.stland.ir`) |
 | `WEBHOOK_SECRET` | اگر خالی باشد، هر ری‌استارت یک مقدار تصادفی تازه تولید می‌شود |
+| `INTERNAL_API_SECRET` | راز محافظت‌کنندهٔ `POST /payment/create` از فراخوانی مستقیم اینترنت (بخش ۱۳ آیتم ۱۱) — دقیقاً همون الگوی `WEBHOOK_SECRET`، اگر خالی باشد خودکار تولید می‌شود |
 | `USE_WEBHOOK` | `"1"` برای فعال‌سازی حالت webhook |
 | `ZARINPAL_MERCHANT_ID`, `ZARINPAL_SANDBOX`, `ZARINPAL_REQUEST_URL`, `ZARINPAL_VERIFY_URL`, `ZARINPAL_STARTPAY_URL` | تنظیمات زرین‌پال |
 | `BASE_CALLBACK_URL` | آدرس کال‌بک پرداخت |
@@ -317,10 +318,13 @@ except Exception:
 4. **دو پیش‌فرض متفاوت برای `SESSION_SECRET`** — `_hash_pw` پیش‌فرض `"stockland"` دارد، `_make_session`/`_get_admin` پیش‌فرض `"stockland-panel"` دارند. اگر env ست نشود، سشن‌ها/هش پسورد با این رشته‌های هاردکدشدهٔ ضعیف قابل جعل‌اند.
 5. **هش پسورد ادمین‌ها ضعیف** — `SHA256(SESSION_SECRET + password)`، بدون salt، بدون iteration — نه bcrypt/argon2/PBKDF2.
 6. **بدون CSRF token** روی هیچ فرم پنل ادمین (فقط `SameSite=Lax` cookie).
-7. **دو مسیر webhook تلگرام موازی** — `/telegram/webhook/{BOT_TOKEN}` با secret-token امن است؛ `/webhook` قدیمی‌تر **بدون هیچ auth** است.
+7. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل)** — ~~دو مسیر webhook تلگرام موازی~~ — مسیر ناامن `/webhook` (بدون auth، امکان جعل کامل هویت `ADMIN_ID` با یک Update جعلی) کاملاً حذف شد؛ تأیید شد که این مسیر هیچ‌وقت به‌عنوان webhook واقعی تلگرام ثبت نمی‌شد (`_activate_webhook` همیشه فقط مسیر امن `/telegram/webhook/{BOT_TOKEN}` با `secret_token=WEBHOOK_SECRET` رو فعال می‌کنه)، پس حذفش کد مرده رو هم پاک کرد هم یه حفرهٔ امنیتی رو بست.
 8. **`API_KEYS`/`X-User-Id`** در `api.py` — روش دوم auth، بدون امضا؛ هر کسی با کلید معتبر می‌تواند خود را جای هر `user_id` دلخواه جا بزند.
 9. **`database/bot.db`** — یک فایل SQLite باینری با داده‌های واقعی‌نما (سفارش، تراکنش زرین‌پال) از ابتدای پروژه در گیت کامیت شده — پیشنهاد: از ردگیری گیت خارج و به `.gitignore` اضافه شود (با تأیید مالک پروژه، چون ممکن است عمداً به‌عنوان seed نگه داشته شده باشد).
 10. **بدون رمزهای TODO/FIXME یافت‌شده** در کد — یعنی این موارد خودشان را در کامنت‌ها پرچم نکرده‌اند؛ فقط با خواندن مستقیم کد پیدا شدند.
+11. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل)** — ~~`POST /payment/create` بدون احراز هویت~~ — چون uvicorn پشت nginx روی `127.0.0.1` گوش می‌ده، این مسیر داخلی (که فقط باید از `services/payments.py`/`api.py` صدا زده بشه) از اینترنت هم قابل‌دسترس بود و بدنهٔ کاملاً کلاینت‌کنترل (`user_id`, `wallet_reserved`, `chat_id`) امکان سرقت مستقیم موجودی کیف‌پول هر کاربری رو می‌داد (پرداخت مبلغ کوچیک `amount` توسط مهاجم + کسر کامل `wallet_reserved` قربانی). رفع با راز داخلی `config.INTERNAL_API_SECRET` (الگوی `WEBHOOK_SECRET`، خودکار تولیدشده اگه env ست نشه) چک‌شده با `hmac.compare_digest` روی هدر `X-Internal-Secret`.
+12. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل)** — ~~کوکی سشن ادمین بدون Secure~~ — هر ۳ محل صدور کوکی `adm` حالا `secure=True` دارن (تولید همیشه HTTPS است).
+13. ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل)** — ~~rate-limit ورود پنل روی IP اشتباه~~ — `login_post` حالا مثل `_log()` از `X-Forwarded-For` می‌خونه؛ قبلاً `request.client.host` پشت nginx همیشه یکسان بود، یعنی هرکسی می‌تونست با ۵ تلاش ناموفق، ورود پنل رو برای مدیر واقعی هم قفل کنه (DoS رایگان).
 
 ---
 
@@ -780,6 +784,7 @@ API (/api/v1/iphone/valuate) ──┼──> iphone_valuation.service.valuate(p
 - `db.py`: `init_db()` حالا یک فلگ per-process (`_DB_INIT_DONE_PATH`) داره — دیگه هر `/start` ربات کل ۳۱ دستور DDL رو دوباره اجرا نمی‌کنه. `ensure_indexes()` هم یک فلگ per-index-name (`_INDEXES_DONE`) داره — self-healing (ایندکسی که به‌خاطر نبودن جدولش شکست بخوره، دفعهٔ بعد دوباره امتحان می‌شه). **اگه تابع مهاجرت جدیدی (`ensure_*_schema`) اضافه می‌کنی که ممکنه از چند نقطهٔ hot-path (نه فقط استارتاپ) صدا زده بشه، همین الگوی فلگ per-process رو رعایت کن — وگرنه دقیقاً همین کلاس باگ تکرار می‌شه.**
 - `idx_orders_created_at` اضافه شد (داشبورد پنل ۳ کوئری روی این ستون می‌زنه، بدون ایندکس اسکن کامل جدول).
 - `dashboard()` (admin_panel.py) کوئری‌هاش رو به تابع sync جدا (`_dashboard_fetch`) استخراج کرده و با `run_in_threadpool` صدا می‌زنه — همون الگویی که PR #86 فقط برای تماس‌های تلگرام رعایت کرده بود، حالا برای سنگین‌ترین route هم اعمال شده. **بقیهٔ routeهای سنگین پنل (لیست سفارش‌ها، گزارش‌ها، ...) هنوز همین رفتار رو ندارن — کاندید فاز بعد اگه باز گزارش کندی اومد.**
+- ✅ **تکمیل‌شده (۲۰۲۶-۰۷-۳۱، فاز ۰ ممیزی کامل):** این الگو به `payment_service.py` (`payment_callback_gw` — مسیر فعال تأیید پرداخت) و `iphone_valuation/router.py` (`POST /valuate`) هم تعمیم یافت؛ تا قبل از این، فقط `admin_panel.py` این محافظت رو داشت، در حالی که این دو مسیر هم I/O بلاکینگ سنگین (SQLite خام + `requests.post` به درگاه/تلگرام، یا فچ نرخ ارز + provider هوش مصنوعی) رو مستقیم روی event loop مشترک اجرا می‌کردن.
 
 ---
 

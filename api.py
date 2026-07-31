@@ -714,10 +714,12 @@ async def api_wallet_topup(request: Request):
         raise HTTPException(400, f"حداقل مبلغ شارژ {MIN_TOPUP_AMOUNT:,} تومان است")
 
     import httpx
+    from config import INTERNAL_API_SECRET
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
                 "http://127.0.0.1:8001/payment/create",
+                headers={"X-Internal-Secret": INTERNAL_API_SECRET},
                 json={
                     "user_id": uid,
                     "amount": amount,
@@ -1438,12 +1440,13 @@ async def api_checkout(request: Request):
 
     # درگاه زرین‌پال
     import httpx
-    from config import WEBHOOK_BASE_URL
+    from config import WEBHOOK_BASE_URL, INTERNAL_API_SECRET
     callback = WEBHOOK_BASE_URL.rstrip("/") + "/api/v1/payment/verify"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
                 "http://127.0.0.1:8001/payment/create",
+                headers={"X-Internal-Secret": INTERNAL_API_SECRET},
                 json={
                     "user_id": uid,
                     "amount": gateway_amount,
