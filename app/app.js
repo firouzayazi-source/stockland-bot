@@ -599,7 +599,6 @@ function loadMe(){if(_m)return;_m=1;
     '<a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:#0A63FF">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-favs-row"><span class="sl-ric" style="background:#EF4444">♥</span><span class="sl-row-grow">علاقه‌مندی‌ها</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
-    '<a class="sl-row" href="#" id="me-invite-row"><span class="sl-ric" style="background:#22C55E">🎁</span><span class="sl-row-grow">دعوت دوستان</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-support-row"><span class="sl-ric" style="background:#6B7280">💬</span><span class="sl-row-grow">پشتیبانی</span><span class="sl-chev">‹</span></a>'+
     '</div>'+
     (inTG?'':'<div class="sl-group" style="margin-top:12px"><a class="sl-row" href="#" id="me-logout-row"><span class="sl-ric" style="background:#EF4444">🚪</span><span class="sl-row-grow">خروج از حساب</span></a></div>')+
@@ -631,8 +630,6 @@ function loadMe(){if(_m)return;_m=1;
   if(wc_)wc_.addEventListener('click',function(e){e.preventDefault();startCharge()});
   var pr_=document.getElementById('me-partner-row');
   if(pr_)pr_.addEventListener('click',function(e){e.preventDefault();openPartner()});
-  var iv_=document.getElementById('me-invite-row');
-  if(iv_)iv_.addEventListener('click',function(e){e.preventDefault();openInvite()});
   var sp_=document.getElementById('me-support-row');
   if(sp_)sp_.addEventListener('click',function(e){e.preventDefault();openSupport()});
 }
@@ -1128,27 +1125,21 @@ function payCryptoForm(amount,net,note){
   });
 }
 
-/* ─── دعوت دوستان — برای همهٔ کاربران (چه همکار باشند چه نه)، پاداش معرفی عمومیه ───
-   داخل پنل همکاری هم یه دکمهٔ اختصاصی برای همین لینک هست (renderInviteInline)،
-   ولی این مسیر مستقل هم می‌مونه چون پاداش دعوت مخصوص همکارها نیست. */
-function openInvite(){
-  _accPopup('دعوت دوستان',skel(2));
-  window._slApi('/me/invite',true).then(function(d){
-    var b=_accBody();if(!b)return;
-    b.innerHTML='<div style="text-align:center;padding:8px 0 4px">'+
-      '<span style="font-size:44px">🎁</span>'+
-      '<p style="margin:10px 0 4px;font-size:14px;font-weight:700">لینک دعوت اختصاصی شما</p>'+
-      '<p style="font-size:12px;color:var(--mu)">با هر دعوت موفق '+window._slFmt(d.reward_amount||0)+' تومان پاداش بگیرید</p></div>'+
-      '<div id="inv-slot"></div>';
-    renderInviteInline(document.getElementById('inv-slot'),d);
-  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات دعوت')});
+/* ─── پنل همکاری — بازطراحی کامل به‌صورت پنل چندبخشی، مطابق داشبورد بات ───
+   (_show_partner_dashboard) به‌جز «چت با پشتیبان» که چون اپ خودش گزینهٔ پشتیبانی
+   مستقل داره حذف شده. «دعوت دوستان» هم دیگه ردیف مستقلی در تب حساب نداره — طبق
+   دستور صریح مالک پروژه، فقط از داخل همین پنل (بخش دعوت و تبلیغ) در دسترسه.
+   ساختار: openPartner (داشبورد اصلی: سطح+پیشرفت+لیست ناوبری ۴بخشی) → هر بخش
+   (فروشندگان من/پروفایل/کیف‌پول/دعوت) صفحهٔ خودش رو همون‌جا داخل popup رندر
+   می‌کنه، بدون بستن/بازکردن popup — با یه لینک «‹ بازگشت» بالای صفحه. */
+function _ptTitle(t){var el=document.getElementById('post-title');if(el)el.textContent=t}
+function _ptBackHtml(label){return '<a href="#" class="sl-pt-back" id="pt-back-link">‹ '+(label||'بازگشت به پنل همکاری')+'</a>'}
+function _ptWireBack(target){var el=document.getElementById('pt-back-link');if(el)el.addEventListener('click',function(e){e.preventDefault();(target||openPartner)()})}
+function _ptRow(icon,color,label,rowId,badgeHtml){
+  return '<a class="sl-row" href="#" id="'+rowId+'"><span class="sl-ric" style="background:'+color+'">'+icon+'</span>'+
+    '<span class="sl-row-grow">'+label+'</span>'+(badgeHtml||'')+'<span class="sl-chev">‹</span></a>';
 }
-window.openInvite=openInvite;
 
-/* ─── پنل همکاری ───
-   مطابق داشبورد بات (_show_partner_dashboard): سطح+پیشرفت، کیف‌پول همکاری،
-   آمار سفارش/دعوت، دکمهٔ تسویه، و لینک دعوت اختصاصی (اینجا به‌جای دکمهٔ جدا
-   در بات، مستقیم داخل همین پنل قابل‌نمایشه — طبق بخش ۵ سند مینی‌اپ). */
 function openPartner(){
   _accPopup('پنل همکاری',skel(2));
   window._slApi('/me/partner',true).then(function(d){
@@ -1165,75 +1156,253 @@ function openPartner(){
       renderPartnerApplyForm(b);
       return;
     }
-    var tierName=(d.tier&&d.tier.name)||'—';
-    var tierIcon=(d.tier&&d.tier.icon)||'🏅';
-    var progressHtml='';
-    if(d.next_tier){
-      var cur=(d.tier&&d.tier.order_count)||0;
-      var pct=Math.max(0,Math.min(100,Math.round(cur/d.next_tier.min_orders*100)));
-      progressHtml='<div class="sl-tier-progress">'+
-        '<div class="sl-tier-progress-top"><span>تا سطح '+window._slEsc(d.next_tier.icon||'')+' '+window._slEsc(d.next_tier.name)+'</span>'+
-        '<b>'+window._slFmt(d.next_tier.orders_needed)+' سفارش دیگه</b></div>'+
-        '<div class="sl-tier-progress-bar"><div class="sl-tier-progress-fill" style="width:'+pct+'%"></div></div>'+
-      '</div>';
-    }
-    b.innerHTML='<div style="text-align:center;padding:8px 0">'+
-      '<span style="font-size:44px">'+window._slEsc(tierIcon)+'</span>'+
-      '<p style="margin:8px 0 0;font-size:16px;font-weight:800">سطح '+window._slEsc(tierName)+'</p></div>'+
-      progressHtml+
-      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">موجودی کیف‌پول همکاری</div>'+
-      '<div class="sl-checkout-wallet-bal">'+window._slFmt(d.balance||0)+' تومان</div></div>'+
-      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">تعداد سفارش‌های شما</div>'+
-      '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.tier&&d.tier.order_count)||0)+'</div></div>'+
-      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">تعداد دعوت‌های موفق</div>'+
-      '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.referrals&&d.referrals.rewarded)||0)+'</div></div>'+
-      '<div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="pt-payout-btn">💸 درخواست تسویه</button></div>'+
-      '<div class="sl-checkout-sec">🎁 دعوت دوستان</div>'+
-      '<div id="pt-invite-slot"><div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-combined" id="pt-invite-btn">🔗 نمایش لینک دعوت من</button></div></div>';
-    var pb=document.getElementById('pt-payout-btn');
-    if(pb)pb.addEventListener('click',function(){openPayoutRequest()});
-    var ib=document.getElementById('pt-invite-btn');
-    if(ib)ib.addEventListener('click',function(){renderInviteInline(document.getElementById('pt-invite-slot'))});
+    _ptDashboard(d);
   }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات همکاری')});
 }
+window.openPartner=openPartner;
 
-/* رندر لینک دعوت + آمار، داخل یه ظرف مشخص — هم از پنل همکاری استفاده می‌شه هم از
-   openInvite. اگه d از قبل fetch شده باشه (مثلاً openInvite که برای متن بالای صفحه
-   هم بهش نیاز داره) پاس داده می‌شه تا دوباره fetch نشه؛ وگرنه خودش می‌گیرتش. */
-function renderInviteInline(slot,d){
-  if(!slot)return;
-  var render=function(d){
+function _ptDashboard(d){
+  _ptTitle('پنل همکاری');
+  var b=_accBody();if(!b)return;
+  var tierName=(d.tier&&d.tier.name)||'—';
+  var tierIcon=(d.tier&&d.tier.icon)||'🏅';
+  var progressHtml='';
+  if(d.next_tier){
+    var cur=(d.tier&&d.tier.order_count)||0;
+    var pct=Math.max(0,Math.min(100,Math.round(cur/d.next_tier.min_orders*100)));
+    progressHtml='<div class="sl-tier-progress">'+
+      '<div class="sl-tier-progress-top"><span>تا سطح '+window._slEsc(d.next_tier.icon||'')+' '+window._slEsc(d.next_tier.name)+'</span>'+
+      '<b>'+window._slFmt(d.next_tier.orders_needed)+' سفارش دیگه</b></div>'+
+      '<div class="sl-tier-progress-bar"><div class="sl-tier-progress-fill" style="width:'+pct+'%"></div></div>'+
+    '</div>';
+  }else{
+    progressHtml='<div class="sl-checkout-note" style="margin-top:0">🎉 شما در بالاترین سطح همکاری هستید!</div>';
+  }
+  b.innerHTML='<div style="text-align:center;padding:8px 0">'+
+    '<span style="font-size:44px">'+window._slEsc(tierIcon)+'</span>'+
+    '<p style="margin:8px 0 0;font-size:16px;font-weight:800">سطح '+window._slEsc(tierName)+'</p>'+
+    '<p style="margin:4px 0 0;font-size:12px;color:var(--mu)">'+window._slFmt((d.tier&&d.tier.order_count)||0)+' خرید همکاری</p></div>'+
+    progressHtml+
+    '<div class="sl-group">'+
+      _ptRow('👥','#F59E0B','فروشندگان من','pt-team-row')+
+      _ptRow('👤','#0A63FF','پروفایل فروشگاه','pt-profile-row')+
+      _ptRow('💼','#22C55E','کیف‌پول همکاری','pt-wallet-row','<span class="sl-badge" id="pt-wallet-badge"></span>')+
+      _ptRow('🔗','#7C3AED','دعوت و تبلیغ','pt-invite-row')+
+    '</div>';
+  var wb=document.getElementById('pt-wallet-badge');
+  if(wb)wb.textContent=window._slFmt(d.balance||0)+' ت';
+  var r1=document.getElementById('pt-team-row');if(r1)r1.addEventListener('click',function(e){e.preventDefault();_ptTeam()});
+  var r2=document.getElementById('pt-profile-row');if(r2)r2.addEventListener('click',function(e){e.preventDefault();_ptProfile()});
+  var r3=document.getElementById('pt-wallet-row');if(r3)r3.addEventListener('click',function(e){e.preventDefault();_ptWallet()});
+  var r4=document.getElementById('pt-invite-row');if(r4)r4.addEventListener('click',function(e){e.preventDefault();_ptInvite()});
+}
+
+/* ─── فروشندگان من — تیم فروش دوسطحی ─── */
+function _ptTeam(){
+  _ptTitle('فروشندگان من');
+  var b=_accBody();if(!b)return;
+  b.innerHTML=_ptBackHtml()+skel(2);_ptWireBack();
+  window._slApi('/partner/team',true).then(function(d){
+    var b2=_accBody();if(!b2)return;
+    var members=d.members||[];
+    var html;
+    if(!members.length){
+      html='<div class="sl-empty" style="padding:40px 12px"><span class="sl-empty-e">👥</span>هنوز فروشنده‌ای ندارید.<br><span style="font-size:12px">لینک دعوت خودتون رو به اشتراک بذارید تا تیم فروش شما رشد کنه.</span></div>';
+    }else{
+      html='<div class="sl-group">'+members.map(function(m,i){
+        var medal=(i===0&&m.order_count>0)?'🥇':(i===1&&m.order_count>0)?'🥈':(i===2&&m.order_count>0)?'🥉':'👤';
+        var sub=(m.order_count>0
+          ? window._slFmt(m.order_count)+' خرید · '+window._slFmt(m.total_spent)+' تومان'
+          : 'بدون خرید')+(m.own_subs?' · 👥'+window._slFmt(m.own_subs):'');
+        return '<div class="sl-row" style="cursor:default"><span class="sl-ric" style="background:#F59E0B">'+medal+'</span>'+
+          '<div class="sl-row-grow"><div style="font-weight:700;font-size:13.5px">'+window._slEsc(m.name)+'</div>'+
+          '<div style="font-size:11.5px;color:var(--mu);margin-top:2px">'+sub+'</div></div></div>';
+      }).join('')+'</div>'+
+      '<div class="sl-checkout-wallet" style="display:flex;justify-content:space-around;text-align:center;gap:8px">'+
+        '<div><div class="sl-checkout-wallet-info">تعداد</div><div class="sl-checkout-wallet-bal">'+window._slFmt(d.total_members)+'</div></div>'+
+        '<div><div class="sl-checkout-wallet-info">خرید</div><div class="sl-checkout-wallet-bal">'+window._slFmt(d.total_orders)+'</div></div>'+
+        '<div><div class="sl-checkout-wallet-info">فروش (ت)</div><div class="sl-checkout-wallet-bal">'+window._slFmt(d.total_spent)+'</div></div>'+
+      '</div>';
+    }
+    b2.innerHTML=_ptBackHtml()+html;_ptWireBack();
+  }).catch(function(){var b2=_accBody();if(b2){b2.innerHTML=_ptBackHtml()+err('خطا در دریافت اطلاعات تیم');_ptWireBack()}});
+}
+
+/* ─── پروفایل فروشگاه — نام/فروشگاه/شهر/آدرس + اطلاعات بانکی، دقیقاً همون فیلدهای
+   قابل‌ویرایش داشبورد بات (_show_partner_profile/_PEDIT_MAP)، در یک فرم واحد ─── */
+function _ptProfile(){
+  _ptTitle('پروفایل فروشگاه');
+  var b=_accBody();if(!b)return;
+  b.innerHTML=_ptBackHtml()+skel(3);_ptWireBack();
+  window._slApi('/partner/profile',true).then(function(d){
+    var p=(d&&d.profile)||{};
+    var b2=_accBody();if(!b2)return;
+    function field(id,label,val,ph,dir){
+      return '<div class="sl-checkout-sec">'+label+'</div>'+
+        '<div class="sl-pay-box"><input type="text" id="'+id+'" class="sl-amount-input" style="text-align:'+(dir==='ltr'?'left':'right')+'" '+(dir?'dir="'+dir+'"':'')+
+        ' value="'+window._slEsc(val||'')+'" placeholder="'+(ph||'')+'" autocomplete="off"></div>';
+    }
+    b2.innerHTML=_ptBackHtml()+
+      field('pf-name','نام و نام خانوادگی',p.name,'مثلاً علی رضایی')+
+      field('pf-shop','نام فروشگاه',p.shop_name,'مثلاً فروشگاه من')+
+      field('pf-city','شهر',p.city,'مثلاً تهران')+
+      field('pf-address','آدرس',p.address,'آدرس کامل فروشگاه')+
+      '<div class="sl-checkout-sec" style="padding-top:22px">💳 اطلاعات بانکی (برای تسویه)</div>'+
+      field('pf-bankname','نام صاحب حساب',p.bank_owner_name,'مطابق کارت بانکی')+
+      field('pf-card','شمارهٔ کارت',p.card_number,'۱۶ رقم','ltr')+
+      field('pf-iban','شمارهٔ شبا',p.iban,'IR...','ltr')+
+      '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="pf-save-btn">💾 ذخیرهٔ تغییرات</button></div>';
+    _ptWireBack();
+    var sb=document.getElementById('pf-save-btn');
+    if(sb)sb.addEventListener('click',function(){
+      var body={
+        name:(document.getElementById('pf-name').value||'').trim(),
+        shop_name:(document.getElementById('pf-shop').value||'').trim(),
+        city:(document.getElementById('pf-city').value||'').trim(),
+        address:(document.getElementById('pf-address').value||'').trim(),
+        bank_owner_name:(document.getElementById('pf-bankname').value||'').trim(),
+        card_number:(document.getElementById('pf-card').value||'').trim(),
+        iban:(document.getElementById('pf-iban').value||'').trim()
+      };
+      Object.keys(body).forEach(function(k){if(!body[k])delete body[k]});
+      if(!Object.keys(body).length){window._slApp.dialog.alert('حداقل یک فیلد رو تغییر بدید','خطا');return}
+      sb.disabled=true;sb.textContent='در حال ذخیره…';
+      fetch('https://panel.stland.ir/api/v1/partner/profile',{
+        method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+        body:JSON.stringify(body)
+      }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
+        if(res.status!==200||!res.d.ok){
+          window._slApp.dialog.alert((res.d&&res.d.detail)||'خطا در ذخیره','خطا');
+          sb.disabled=false;sb.textContent='💾 ذخیرهٔ تغییرات';return;
+        }
+        sb.textContent='✅ ذخیره شد';
+        setTimeout(function(){_ptProfile()},700);
+      }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='💾 ذخیرهٔ تغییرات'});
+    });
+  }).catch(function(){var b2=_accBody();if(b2){b2.innerHTML=_ptBackHtml()+err('خطا در دریافت پروفایل');_ptWireBack()}});
+}
+
+/* ─── کیف‌پول همکاری — موجودی + تراکنش‌ها + انتقال به کیف‌پول اصلی + درخواست تسویه ─── */
+function _ptWallet(){
+  _ptTitle('کیف‌پول همکاری');
+  var b=_accBody();if(!b)return;
+  b.innerHTML=_ptBackHtml()+skel(2);_ptWireBack();
+  window._slApi('/partner/wallet',true).then(function(d){
+    var b2=_accBody();if(!b2)return;
+    var typeMap={credit:'💚 واریز پورسانت',transfer_out:'🔄 انتقال به کیف‌پول اصلی',payout_request:'📤 درخواست تسویه',payout_rejected:'↩️ برگشت تسویه'};
+    var txHtml=(d.transactions&&d.transactions.length)?'<div class="sl-group" style="margin-top:8px">'+d.transactions.map(function(tx){
+      var plus=(tx.type==='credit'||tx.type==='payout_rejected');
+      return '<div class="sl-row" style="cursor:default"><span class="sl-ric" style="background:'+(plus?'#22C55E':'#EF4444')+'">'+(plus?'+':'−')+'</span>'+
+        '<div class="sl-row-grow"><div style="font-weight:700;font-size:13px">'+(typeMap[tx.type]||tx.type)+'</div>'+
+        '<div style="font-size:11px;color:var(--mu);margin-top:2px">'+window._slEsc(tx.created_at||'')+'</div></div>'+
+        '<div style="font-weight:800;font-size:13px;color:'+(plus?'#22C55E':'#EF4444')+'">'+(plus?'+':'−')+window._slFmt(tx.amount)+'</div></div>';
+    }).join('')+'</div>':'<div class="sl-empty" style="padding:24px 12px"><span class="sl-empty-e">📋</span>هنوز تراکنشی ثبت نشده.</div>';
+    b2.innerHTML=_ptBackHtml()+
+      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">موجودی کیف‌پول همکاری</div>'+
+      '<div class="sl-checkout-wallet-bal" style="font-size:22px">'+window._slFmt(d.balance||0)+' تومان</div></div>'+
+      '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="pt-transfer-btn">🔄 انتقال به کیف‌پول اصلی</button>'+
+      '<button class="sl-checkout-btn sl-checkout-btn-combined" id="pt-payout-btn">📤 درخواست تسویه</button></div>'+
+      '<div class="sl-checkout-sec">📋 آخرین تراکنش‌ها</div>'+txHtml;
+    _ptWireBack();
+    var tb=document.getElementById('pt-transfer-btn');
+    if(tb)tb.addEventListener('click',function(){_ptTransfer(d.balance||0)});
+    var pb=document.getElementById('pt-payout-btn');
+    if(pb)pb.addEventListener('click',function(){openPayoutRequest()});
+  }).catch(function(){var b2=_accBody();if(b2){b2.innerHTML=_ptBackHtml()+err('خطا در دریافت کیف‌پول همکاری');_ptWireBack()}});
+}
+
+/* ─── انتقال کیف‌پول همکاری → کیف‌پول اصلی ─── */
+function _ptTransfer(balance){
+  _ptTitle('انتقال به کیف‌پول اصلی');
+  var b=_accBody();if(!b)return;
+  b.innerHTML=_ptBackHtml('بازگشت به کیف‌پول')+
+    '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">موجودی کیف‌پول همکاری</div>'+
+    '<div class="sl-checkout-wallet-bal">'+window._slFmt(balance)+' تومان</div></div>'+
+    '<div class="sl-checkout-sec">مبلغ انتقال (تومان)</div>'+
+    '<div class="sl-pay-box"><input type="tel" inputmode="numeric" id="pt-tr-amount" class="sl-amount-input" placeholder="مبلغ مورد نظر" autocomplete="off"></div>'+
+    '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-gateway" id="pt-tr-all-btn">انتقال کل موجودی</button>'+
+    '<button class="sl-checkout-btn sl-checkout-btn-combined" id="pt-tr-submit-btn">انتقال</button></div>';
+  _ptWireBack(_ptWallet);
+  var inp=document.getElementById('pt-tr-amount');
+  function doTransfer(body){
+    var sb=document.getElementById('pt-tr-submit-btn'),ab=document.getElementById('pt-tr-all-btn');
+    if(sb)sb.disabled=true;if(ab)ab.disabled=true;
+    fetch('https://panel.stland.ir/api/v1/partner/wallet/transfer',{
+      method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
+      body:JSON.stringify(body)
+    }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
+      if(res.status!==200||!res.d.ok){
+        window._slApp.dialog.alert((res.d&&res.d.detail)||'خطا در انتقال','خطا');
+        if(sb)sb.disabled=false;if(ab)ab.disabled=false;return;
+      }
+      var b2=_accBody();if(!b2)return;
+      b2.innerHTML=_ptBackHtml('بازگشت به کیف‌پول')+'<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
+        '<div class="sl-checkout-result-t">انجام شد</div>'+
+        '<div class="sl-checkout-result-s">'+window._slFmt(res.d.transferred)+' تومان به کیف‌پول اصلی شما منتقل شد.</div>'+
+        '<button class="sl-checkout-close-btn" id="pt-tr-done-btn">باشه</button></div>';
+      _ptWireBack(_ptWallet);
+      var db_=document.getElementById('pt-tr-done-btn');
+      if(db_)db_.addEventListener('click',function(){_ptWallet()});
+    }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');if(sb)sb.disabled=false;if(ab)ab.disabled=false});
+  }
+  var sb=document.getElementById('pt-tr-submit-btn');
+  if(sb)sb.addEventListener('click',function(){
+    var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
+    if(!amount||amount<=0){window._slApp.dialog.alert('مبلغ رو وارد کنید','خطا');return}
+    doTransfer({amount:amount});
+  });
+  var ab=document.getElementById('pt-tr-all-btn');
+  if(ab)ab.addEventListener('click',function(){doTransfer({all:true})});
+}
+
+/* ─── دعوت و تبلیغ — لینک اختصاصی + متن آماده + اشتراک‌گذاری تلگرام، معادل
+   cb_partner_ref_link در بات. تنها راه دسترسی به لینک دعوت در مینی‌اپ همینه —
+   ردیف مستقل «دعوت دوستان» طبق دستور مالک پروژه از تب حساب حذف شده. ─── */
+function _ptInvite(){
+  _ptTitle('دعوت و تبلیغ');
+  var b=_accBody();if(!b)return;
+  b.innerHTML=_ptBackHtml()+skel(2);_ptWireBack();
+  window._slApi('/me/invite',true).then(function(d){
+    var b2=_accBody();if(!b2)return;
     var link=d.referral_link||'';
-    slot.innerHTML='<div class="sl-checkout-wallet" style="direction:ltr;text-align:center;word-break:break-all;font-size:12px">'+window._slEsc(link)+'</div>'+
-      '<div class="sl-wal-acts"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="inv-copy-btn-2">📋 کپی لینک</button></div>'+
-      '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">جمع درآمد از دعوت</div>'+
+    var promo=d.promo_text||'';
+    var shareUrl='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(promo);
+    b2.innerHTML=_ptBackHtml()+
+      '<div style="text-align:center;padding:8px 0 4px"><span style="font-size:40px">🔗</span>'+
+      '<p style="margin:8px 0 0;font-size:13px;color:var(--mu)">لینک اختصاصی خودتون رو با مشتری‌ها و دوست‌ها به اشتراک بذارید</p></div>'+
+      '<div class="sl-pay-box" style="direction:ltr;text-align:center;word-break:break-all;font-size:12px">'+window._slEsc(link)+'</div>'+
+      '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="pt-inv-copy-btn">📋 کپی لینک</button>'+
+      '<a class="sl-checkout-btn sl-checkout-btn-combined" style="text-decoration:none;box-sizing:border-box" href="'+esc(shareUrl)+'" target="_blank" rel="noopener">📤 ارسال به دوستان و گروه‌ها</a></div>'+
+      '<div class="sl-checkout-sec">📣 متن آماده تبلیغ</div>'+
+      '<div class="sl-pay-box" style="white-space:pre-wrap;font-size:12.5px;line-height:1.9">'+nl2br(promo)+'</div>'+
+      '<div class="sl-checkout-wallet" style="margin-top:14px"><div class="sl-checkout-wallet-info">جمع درآمد از دعوت</div>'+
       '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.stats&&d.stats.earned)||0)+' تومان</div></div>';
-    var cb=document.getElementById('inv-copy-btn-2');
+    _ptWireBack();
+    var cb=document.getElementById('pt-inv-copy-btn');
     if(cb)cb.addEventListener('click',function(){
       var done=function(){cb.textContent='✅ کپی شد';setTimeout(function(){cb.textContent='📋 کپی لینک'},1500)};
       if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(link).then(done).catch(done)}
       else{done()}
     });
-  };
-  if(d){render(d);return}
-  slot.innerHTML='<div class="sl-skel" style="margin:12px 0"><div class="b w90"></div><div class="b w40"></div></div>';
-  window._slApi('/me/invite',true).then(render).catch(function(){slot.innerHTML=err('خطا در دریافت لینک دعوت')});
+  }).catch(function(){var b2=_accBody();if(b2){b2.innerHTML=_ptBackHtml()+err('خطا در دریافت لینک دعوت');_ptWireBack()}});
 }
 
 /* ─── درخواست تسویهٔ موجودی همکاری ─── */
 function openPayoutRequest(){
-  _accPopup('درخواست تسویه',skel(2));
+  _accPopup('درخواست تسویه',_ptBackHtml('بازگشت به کیف‌پول')+skel(2));
+  _ptWireBack(_ptWallet);
   window._slApi('/partner/payout-info',true).then(function(d){
-    if(!d.is_active){var b=_accBody();if(b)b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">⏸</span>تسویه در حال حاضر غیرفعاله.<br><span style="font-size:12px">بعداً دوباره امتحان کنید.</span></div>';return}
+    if(!d.is_active){var b=_accBody();if(b){b.innerHTML=_ptBackHtml('بازگشت به کیف‌پول')+'<div class="sl-empty"><span class="sl-empty-e">⏸</span>تسویه در حال حاضر غیرفعاله.<br><span style="font-size:12px">بعداً دوباره امتحان کنید.</span></div>';_ptWireBack(_ptWallet)}return}
     if(!d.bank_info){renderPayoutBankForm(d);return}
     renderPayoutAmountForm(d);
-  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت اطلاعات تسویه')});
+  }).catch(function(){var b=_accBody();if(b){b.innerHTML=_ptBackHtml('بازگشت به کیف‌پول')+err('خطا در دریافت اطلاعات تسویه');_ptWireBack(_ptWallet)}});
 }
 window.openPayoutRequest=openPayoutRequest;
 
 function renderPayoutBankForm(info){
   var b=_accBody();if(!b)return;
-  b.innerHTML='<div class="sl-checkout-note" style="margin-bottom:10px">برای درخواست تسویه، اول اطلاعات حساب بانکی خودتون رو ثبت کنید.</div>'+
+  b.innerHTML=_ptBackHtml('بازگشت به کیف‌پول')+
+    '<div class="sl-checkout-note" style="margin-bottom:10px">برای درخواست تسویه، اول اطلاعات حساب بانکی خودتون رو ثبت کنید.</div>'+
     '<div class="sl-checkout-sec">نام صاحب حساب</div>'+
     '<div class="sl-pay-box"><input type="text" id="pb-name" class="sl-amount-input" placeholder="مطابق کارت بانکی" autocomplete="off"></div>'+
     '<div class="sl-checkout-sec">شمارهٔ کارت</div>'+
@@ -1241,6 +1410,7 @@ function renderPayoutBankForm(info){
     '<div class="sl-checkout-sec">شبا (اختیاری)</div>'+
     '<div class="sl-pay-box"><input type="text" id="pb-iban" class="sl-amount-input" dir="ltr" placeholder="IR..." autocomplete="off"></div>'+
     '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="pb-save-btn">ثبت و ادامه</button></div>';
+  _ptWireBack(_ptWallet);
   var sb=document.getElementById('pb-save-btn');
   if(sb)sb.addEventListener('click',function(){
     var full_name=(document.getElementById('pb-name').value||'').trim();
@@ -1252,7 +1422,7 @@ function renderPayoutBankForm(info){
     fetch('https://panel.stland.ir/api/v1/partner/bank-info',{
       method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
       body:JSON.stringify({full_name:full_name,card_number:card_number,iban:iban})
-    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+    }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
       if(res.status!==200||!res.d.ok){
         window._slApp.dialog.alert((res.d&&res.d.detail)||'خطا در ثبت اطلاعات','خطا');
         sb.disabled=false;sb.textContent='ثبت و ادامه';return;
@@ -1267,12 +1437,14 @@ function renderPayoutAmountForm(info){
   var bank=info.bank_info||{};
   var hint='موجودی: '+fmt(info.balance||0)+' تومان';
   if(info.min_amount)hint+=' · حداقل: '+fmt(info.min_amount)+' تومان';
-  b.innerHTML='<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">حساب مقصد</div>'+
+  b.innerHTML=_ptBackHtml('بازگشت به کیف‌پول')+
+    '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">حساب مقصد</div>'+
     '<div style="font-size:13px;font-weight:700;margin-top:2px">'+esc(bank.full_name||'')+'</div>'+
     '<div style="font-size:12px;color:var(--mu);direction:ltr;text-align:right;margin-top:2px">'+esc(bank.card_number||'')+'</div></div>'+
     '<div class="sl-checkout-sec">مبلغ درخواست تسویه (تومان)</div>'+
     '<div class="sl-pay-box"><input type="tel" inputmode="numeric" id="po-amount" class="sl-amount-input" placeholder="'+esc(hint)+'" autocomplete="off"></div>'+
     '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-combined" id="po-submit-btn">ثبت درخواست</button></div>';
+  _ptWireBack(_ptWallet);
   var inp=document.getElementById('po-amount'),sb=document.getElementById('po-submit-btn');
   if(sb)sb.addEventListener('click',function(){
     var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
@@ -1281,21 +1453,22 @@ function renderPayoutAmountForm(info){
     fetch('https://panel.stland.ir/api/v1/partner/payout',{
       method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
       body:JSON.stringify({amount:amount})
-    }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
+    }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
       if(res.status!==200||!res.d.ok){
         window._slApp.dialog.alert((res.d&&res.d.detail)||'خطا در ثبت درخواست','خطا');
         sb.disabled=false;sb.textContent='ثبت درخواست';return;
       }
-      b.innerHTML='<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
+      var b2=_accBody();if(!b2)return;
+      b2.innerHTML=_ptBackHtml('بازگشت به کیف‌پول')+'<div class="sl-checkout-result"><div class="sl-checkout-result-e">✅</div>'+
         '<div class="sl-checkout-result-t">ثبت شد</div>'+
         '<div class="sl-checkout-result-s">درخواست تسویهٔ شما ثبت شد و توسط تیم مالی بررسی می‌شه.</div>'+
         '<button class="sl-checkout-close-btn" id="po-done-btn">باشه</button></div>';
+      _ptWireBack(_ptWallet);
       var db_=document.getElementById('po-done-btn');
-      if(db_)db_.addEventListener('click',function(){openPartner()});
+      if(db_)db_.addEventListener('click',function(){_ptWallet()});
     }).catch(function(){window._slApp.dialog.alert('خطای شبکه','خطا');sb.disabled=false;sb.textContent='ثبت درخواست'});
   });
 }
-window.openPartner=openPartner;
 
 /* ─── درخواست همکاری — فعلاً فقط از ربات (ویزارد کامل اونجاست)، اپ فقط ارجاع می‌ده ─── */
 function renderPartnerApplyForm(b){

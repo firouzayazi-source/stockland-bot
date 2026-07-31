@@ -558,6 +558,115 @@ async def api_partner_apply(request: Request):
     return {"ok": True}
 
 
+@router.get("/partner/team")
+async def api_partner_team(request: Request):
+    """تیم فروش دوسطحی همکار — دقیقاً همون دادهٔ cb_partner_sub_stats در bot.py."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    from db import get_partner_team_stats
+    return {"ok": True, **get_partner_team_stats(uid)}
+
+
+@router.get("/partner/profile")
+async def api_partner_profile_get(request: Request):
+    """پروفایل کامل همکار (نام/فروشگاه/شهر/آدرس/اطلاعات بانکی)."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    from db import get_partner_profile
+    return {"ok": True, "profile": get_partner_profile(uid)}
+
+
+@router.post("/partner/profile")
+async def api_partner_profile_save(request: Request):
+    """ذخیرهٔ فیلدهای پروفایل همکار — فقط فیلدهای ارسال‌شده آپدیت می‌شن (partial update)،
+    دقیقاً مثل ویرایش تک‌فیلدی ربات (_pedit_save)."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    body = await request.json()
+    from db import update_partner_profile_field, _PARTNER_PROFILE_FIELD_MAP
+
+    def _clean(v):
+        return (v or "").strip()
+
+    updated = []
+    for field in _PARTNER_PROFILE_FIELD_MAP:
+        if field not in body:
+            continue
+        val = _clean(body.get(field))
+        if field == "card_number":
+            val = val.replace("-", "").replace(" ", "")
+            if val and not (val.isdigit() and len(val) == 16):
+                raise HTTPException(400, "شماره کارت باید ۱۶ رقم باشد")
+        elif field == "iban":
+            val = val.upper().replace(" ", "")
+            if val:
+                if not val.startswith("IR"):
+                    val = "IR" + val
+                if len(val) != 26:
+                    raise HTTPException(400, "شماره شبا باید ۲۴ رقم (بدون IR) باشد")
+        if not val:
+            continue
+        update_partner_profile_field(uid, field, val)
+        updated.append(field)
+    if not updated:
+        raise HTTPException(400, "هیچ فیلد معتبری برای ذخیره ارسال نشد")
+    return {"ok": True, "updated": updated}
+
+
+@router.get("/partner/wallet")
+async def api_partner_wallet(request: Request):
+    """موجودی + آخرین تراکنش‌های کیف‌پول همکاری — دقیقاً همون دادهٔ cb_partner_wallet."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    from db import get_partner_wallet_balance, get_partner_transactions, fa_date
+    txns = get_partner_transactions(uid, 20)
+    return {
+        "ok": True,
+        "balance": get_partner_wallet_balance(uid),
+        "transactions": [
+            {"type": tx["type"], "amount": int(tx["amount"]),
+             "note": tx["note"], "created_at": fa_date(tx["created_at"]) if tx["created_at"] else ""}
+            for tx in txns
+        ],
+    }
+
+
+@router.post("/partner/wallet/transfer")
+async def api_partner_wallet_transfer(request: Request):
+    """انتقال از کیف‌پول همکاری به کیف‌پول اصلی — دقیقاً همون transfer_partner_to_main
+    که handle_partner_transfer در ربات استفاده می‌کنه."""
+    uid = _auth(request)
+    from core import partners
+    if not partners.is_approved(uid):
+        raise HTTPException(403, "فقط همکاران تأییدشده دسترسی دارن")
+    from db import get_partner_wallet_balance, transfer_partner_to_main
+    body = await request.json()
+    bal = get_partner_wallet_balance(uid)
+    if body.get("all"):
+        amount = bal
+    else:
+        try:
+            amount = int(body.get("amount", 0))
+        except Exception:
+            amount = 0
+    if amount <= 0:
+        raise HTTPException(400, "مبلغ نامعتبر است")
+    result = transfer_partner_to_main(uid, amount)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "خطا در انتقال")
+    from core import wallet
+    return {"ok": True, "transferred": amount, "partner_balance": get_partner_wallet_balance(uid),
+            "main_balance": wallet.get_balance(uid)}
+
+
 @router.get("/me/invite")
 async def api_me_invite(request: Request):
     """لینک دعوت + آمار معرفی کاربر (چه همکار باشد چه کاربر عادی)."""
@@ -573,11 +682,18 @@ async def api_me_invite(request: Request):
     username = username or "stock_land_ir"
 
     settings = get_referral_settings()
+    link = f"https://t.me/{username}?start=ref_{uid}"
+    from db import get_promo_settings
+    try:
+        promo_text = str(get_promo_settings().get("text") or "").format(link=link)
+    except Exception:
+        promo_text = link
     return {
         "ok": True,
-        "referral_link": f"https://t.me/{username}?start=ref_{uid}",
+        "referral_link": link,
         "is_partner": partners.is_approved(uid),
         "reward_amount": int(settings.get("reward_amount") or 0),
+        "promo_text": promo_text,
         "stats": referrals.stats(uid),
     }
 
