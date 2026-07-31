@@ -89,7 +89,8 @@ def start_wallet_charge_payment(
     # پل PHP واسط حذف شد — ربات همیشه مستقیم مسیر داخلی /payment/create رو صدا می‌زنه که
     # خودش سیستم چند‌درگاهی با failover رو اجرا می‌کنه (payment_service._run_gateway_failover).
     _call_url = f"{PAYMENT_API_BASE_URL}/payment/create"
-    _headers  = {"Content-Type": "application/json"}
+    from config import INTERNAL_API_SECRET
+    _headers  = {"Content-Type": "application/json", "X-Internal-Secret": INTERNAL_API_SECRET}
 
     try:
         resp = requests.post(_call_url, json=payload, headers=_headers, timeout=PAYMENT_API_TIMEOUT)

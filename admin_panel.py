@@ -244,7 +244,7 @@ def _refresh_session(response, admin_info) -> None:
         max_age=IDLE_TIMEOUT_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=False,  # اگه پنل HTTPS داره، True بذار
+        secure=True,  # تولید همیشه HTTPS است (panel.stland.ir) — مثل کوکی sl_sess در api.py
     )
 
 
@@ -1575,7 +1575,11 @@ async def login_get(request: Request, err: str = "", flash: str = ""):
 async def login_post(request: Request, username: str = Form(""), password: str = Form("")):
     ensure_admins_table()
     _ensure_theme_table()
-    ip = request.client.host if request.client else "unknown"
+    # پشت nginx (که خودش روی همون سرور به 127.0.0.1:8001 وصل می‌شه)، request.client.host
+    # همیشه IP خودِ nginx است، نه IP واقعی کاربر — یعنی rate-limit روی این کلید عملاً
+    # برای همهٔ کاربران اینترنت مشترکه و هرکسی می‌تونه با ۵ تلاش ناموفق، ورود پنل رو
+    # برای مدیر واقعی هم قفل کنه. همون الگوی _log() که از قبل درست این کار رو می‌کنه.
+    ip = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or (request.client.host if request.client else "unknown")
 
     blocked, remaining = _is_rate_limited(ip)
     if blocked:
@@ -1589,7 +1593,7 @@ async def login_post(request: Request, username: str = Form(""), password: str =
     if username.lower() in (super_un.lower(), "admin", "super") and super_pw and _hmac.compare_digest(password, super_pw):
         _clear_attempts(ip)
         resp = _redir("/admin/")
-        resp.set_cookie("adm", _make_session("super"), max_age=300, httponly=True, samesite="lax")
+        resp.set_cookie("adm", _make_session("super"), max_age=300, httponly=True, samesite="lax", secure=True)
         _log(request, "ورود", "احراز هویت", f"سوپرادمین از {ip}")
         return resp
 
@@ -1600,10 +1604,10 @@ async def login_post(request: Request, username: str = Form(""), password: str =
             (username,),
         ).fetchone()
         conn.close()
-        if row and row["is_active"] and row["web_password_hash"] == _hash_pw(password):
+        if row and row["is_active"] and _hmac.compare_digest(row["web_password_hash"], _hash_pw(password)):
             _clear_attempts(ip)
             resp = _redir("/admin/")
-            resp.set_cookie("adm", _make_session(str(row["id"])), max_age=300, httponly=True, samesite="lax")
+            resp.set_cookie("adm", _make_session(str(row["id"])), max_age=300, httponly=True, samesite="lax", secure=True)
             _log(request, "ورود", "احراز هویت", f"ادمین #{row['id']}")
             return resp
     except Exception:
