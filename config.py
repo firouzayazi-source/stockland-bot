@@ -28,6 +28,14 @@ if not WEBHOOK_SECRET:
 # فعال‌سازی webhook: اگر USE_WEBHOOK=1 و WEBHOOK_BASE_URL پر باشد
 USE_WEBHOOK = (os.getenv("USE_WEBHOOK", "0") == "1") and bool(WEBHOOK_BASE_URL)
 
+# راز داخلی برای محافظت از POST /payment/create (که فقط باید از داخل همین پروسه —
+# services/payments.py و api.py — صدا زده بشه، نه مستقیم از اینترنت). دقیقاً همون
+# الگوی WEBHOOK_SECRET بالا: اگر ست نشده، یک مقدار تصادفی در حافظه ساخته می‌شود.
+INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET") or ""
+if not INTERNAL_API_SECRET:
+    import secrets as _s2
+    INTERNAL_API_SECRET = _s2.token_urlsafe(32)
+
 # Admin numeric ID
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
 

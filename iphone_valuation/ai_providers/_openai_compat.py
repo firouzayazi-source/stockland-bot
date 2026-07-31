@@ -14,7 +14,10 @@ def analyze_openai_compatible(context: dict, api_key: str, model: str,
     except ImportError as e:
         raise AIProviderError("پکیج openai نصب نیست") from e
 
-    client = openai.OpenAI(api_key=api_key, base_url=base_url) if base_url else openai.OpenAI(api_key=api_key)
+    # timeout صریح — بدونش SDK به پیش‌فرض داخلی خودش وابسته می‌شد؛ این تابع هر سه
+    # provider (OpenAI/OpenRouter/DeepSeek) رو سرویس می‌ده، پس این محافظت هر سه رو می‌گیره.
+    client = (openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30.0) if base_url
+              else openai.OpenAI(api_key=api_key, timeout=30.0))
     max_adjust = context.get("max_adjust_percent", 5)
     user_content = (
         "این اطلاعات کامل کارشناسی رو تحلیل کن و طبق schema زیر، فقط یک شیء JSON خام "

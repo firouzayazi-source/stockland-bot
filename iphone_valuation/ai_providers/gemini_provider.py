@@ -19,7 +19,8 @@ def analyze(context: dict, api_key: str, model: str) -> dict:
         f"حداکثر بازهٔ مجاز adjustment_percent: دقیقاً بین {-max_adjust} تا {max_adjust}."
     )
     try:
-        client = genai.Client(api_key=api_key)
+        # timeout صریح (میلی‌ثانیه) — بدونش SDK به پیش‌فرض داخلی خودش وابسته می‌شد.
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=30000))
         response = client.models.generate_content(
             model=model or "gemini-2.0-flash",
             contents=user_content,
