@@ -139,6 +139,20 @@ html.dark .sl-search-input::placeholder{color:#98989E}
 .sl-head{padding:4px 20px 2px}
 .sl-eyebrow{font-size:12px;color:var(--mu);font-weight:500}
 .sl-big{font-size:32px;font-weight:800;letter-spacing:-.5px;line-height:1.35}
+/* تب «ابزار مفید» — چیدمان موزاییکی، دو کارت بزرگ در هر ردیف (بخش ۶) */
+.sl-tools-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:18px 20px 0;box-sizing:border-box}
+.sl-tool-card{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-end;
+ min-height:158px;border-radius:22px;padding:16px;box-sizing:border-box;text-decoration:none;color:#fff;
+ overflow:hidden;box-shadow:var(--sh)}
+.sl-tool-a{background:linear-gradient(145deg,#0A63FF,#5B8CFF)}
+.sl-tool-b{background:linear-gradient(145deg,#7C3AED,#B197FC)}
+.sl-tool-c{background:linear-gradient(145deg,#0EA5A6,#5EEAD4)}
+.sl-tool-ico{font-size:32px;margin-bottom:10px}
+.sl-tool-t{font-size:15.5px;font-weight:800;line-height:1.4}
+.sl-tool-s{font-size:11.5px;opacity:.9;margin-top:4px;line-height:1.7}
+.sl-tool-soon{cursor:default}
+.sl-tool-badge{position:absolute;top:12px;left:12px;background:rgba(255,255,255,.28);backdrop-filter:blur(4px);
+ font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px}
 .sl-sec{padding:18px 20px 2px;display:flex;align-items:baseline;justify-content:space-between}
 .sl-sec b{font-size:18.5px;font-weight:800}
 .sl-link{font-size:13px;color:var(--br);font-weight:600;cursor:pointer}
