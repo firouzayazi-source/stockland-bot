@@ -2930,6 +2930,36 @@ def reset_subscriptions_on_restock(product_id: int):
         conn.close()
 
 
+def list_stock_requests() -> list:
+    """همهٔ درخواست‌های «اطلاع‌رسانی موجود شدن» — برای مدیریت پنل ادمین، جدیدترین اول."""
+    ensure_subscription_table()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("""
+            SELECT s.id, s.user_id, s.product_id, s.created_at, s.notified,
+                   p.title AS product_title,
+                   (SELECT COUNT(*) FROM product_feed f WHERE f.product_id=p.id AND f.delivered=0) AS product_stock,
+                   u.full_name
+            FROM stock_subscriptions s
+            LEFT JOIN products p ON p.id = s.product_id
+            LEFT JOIN users u ON u.user_id = s.user_id
+            ORDER BY s.id DESC;
+        """).fetchall()]
+    finally:
+        conn.close()
+
+
+def delete_stock_request(request_id: int) -> None:
+    ensure_subscription_table()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM stock_subscriptions WHERE id=?;", (request_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ─── پشتیبانی اختصاصی محصول ─────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
