@@ -140,6 +140,17 @@ async def _refresh_admin_session(request, call_next):
     return response
 
 
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    """هدرهای امنیتی پایه روی همهٔ پاسخ‌ها — بدون CSP (چون admin_panel._layout
+    از اسکریپت این‌لاین استفاده می‌کنه و نیاز به یه پاس جدا و دقیق‌تر داره)."""
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -768,6 +779,15 @@ def create_payment(payload: dict, request: Request):
         wallet_reserved = int(payload.get("wallet_reserved", 0) or 0)
     except (TypeError, ValueError):
         raise HTTPException(400, "Invalid input")
+
+    # ریت‌لیمیت روی خودِ user_id (نه IP) — چون این مسیر همیشه از داخل همون
+    # پروسه (services/payments.py, api.py) صدا زده می‌شه، IP همیشه 127.0.0.1
+    # است؛ این لایه محافظت در برابر یه باگ/حلقهٔ تکراری تو یکی از فراخوان‌های
+    # داخلیه که بی‌وقفه برای یه کاربر تراکنش می‌سازه، نه محافظت شبکه‌ای.
+    from rate_limit import is_rate_limited
+    _blocked, _wait = is_rate_limited("payment_create", str(user_id), max_calls=10, window_seconds=60)
+    if _blocked:
+        raise HTTPException(429, f"تعداد درخواست بیش از حد مجاز است. {_wait} ثانیه دیگر تلاش کنید.")
 
     chat_id = payload.get("chat_id")
     try:
