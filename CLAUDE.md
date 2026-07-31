@@ -38,8 +38,8 @@ stockland-bot/
 ├── stbak_engine.py            موتور بکاپ/ریست ماژول‌محور فرمت .stbak (SQLite)
 ├── duplicate_products.py      ماژول مستقل تشخیص/حذف محصولات تکراری (بخش ۸ سند مینی‌اپ، از ۲۰۲۶-۰۷-۳۱) — فقط توسط admin_panel.py استفاده می‌شود
 ├── rate_limit.py               ریت‌لیمیت سبک درون‌حافظه‌ای مشترک بین payment_service.py/api.py/iphone_valuation (از ۲۰۲۶-۰۷-۳۱، فاز ۱ ممیزی) — الگوی _login_attempts پنل، عمومی‌شده
-├── storage.py                 لایهٔ انتزاعی DB — نوشته شده ولی **در هیچ‌جا import نمی‌شود (کاملاً بلااستفاده)**
-├── payments.py                کمکی پرداخت کیف‌پول — **در هیچ‌جا import نمی‌شود (کد مرده)**
+├── image_utils.py               فشرده‌سازی/resize خودکار عکس آپلودی با Pillow (از ۲۰۲۶-۰۷-۳۱، فاز ۲ ممیزی)
+├── html_sanitize.py             sanitizer whitelist-محور HTML برای بدنهٔ آموزش/محتوا (از ۲۰۲۶-۰۷-۳۱، فاز ۲ ممیزی)
 ├── backup_tools.py             بکاپ/ریست قدیمی (پسوند Robuser) — هنوز در bot.py ایمپورت می‌شود؛ رشته‌های فارسی‌اش mojibake/خراب هستند
 ├── backup_uploader.py          آپلود بکاپ به کانال تلگرام + Google Drive (async, thread-based)
 ├── migrate_to_postgres.py      اسکریپت CLI یک‌بارهٔ مهاجرت SQLite→Postgres (دستی، در اپ وایر نشده)
@@ -55,7 +55,6 @@ stockland-bot/
 ├── app/                        Mini App / PWA — نسخهٔ **زنده** (Framework7، vendor از CDN دانلود می‌شود)
 │   ├── index.html, app.js, app.css, manifest.json, sw.js, get_vendor.sh
 │   └── icons/
-├── app.js, app.css, manifest.json, sw.js  (ریشهٔ پروژه) — **نسخه‌های قدیمی/کپی راکد** app/*، دیگر deploy نمی‌شوند
 ├── deploy.sh                   اسکریپت دیپلوی فعلی (git pull + کش PWA بست + restart stockland.service)
 ├── deploy/                     **زیرساخت دیپلوی قدیمیِ نام‌گذاری‌شده «Robuser»** — دو سرویس جدا (bot.py مستقل + internal_api مستقل)؛ جایگزین شده با معماری تک‌سرویسی فعلی، فقط برای مرجع نگه داشته شده
 │   ├── install_venv.sh, robuser.env.example
@@ -350,7 +349,7 @@ except Exception:
 - داخل catch-all `handle_callbacks`، یک کپی مردهٔ منطق `confirm_wallet_*`/`confirm_full_*` باقی مانده (bot.py:۶۰۶۹-۶۱۳۴) — اگر ترتیب ثبت handlerها روزی تغییر کند، **ریسک کسر دوبرابری کیف‌پول** دارد؛ بلافاصله بعدش هم کد مردهٔ ارجاع به متغیر تعریف‌نشدهٔ `message` (باید `call` باشد)
 - `handle_admin_cmd` (bot.py:۳۰۶۳) توسط `handle_admin_command` (۱۰۴۶) سایه می‌شود، هرگز اجرا نمی‌شود
 - `handle_admin_text` به تابع تعریف‌نشدهٔ `handle_ticket_chat_user` ارجاع می‌دهد (حالت `ticket_support` که دیگر هیچ‌جا ست نمی‌شود — در حال حاضر بی‌خطر، ولی اگر آن حالت برگردد، `NameError`)
-- `payments.py` (ریشه) و `storage.py` کاملاً بلااستفاده‌اند — هیچ فایلی importشان نمی‌کند
+- ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱)** — ~~`payments.py` (ریشه) و `storage.py` کاملاً بلااستفاده‌اند~~ — هر دو حذف شدن (+ نسخه‌های راکد ریشهٔ `app.js`/`app.css`/`manifest.json`/`sw.js`)، طبق تأیید صریح مالک پروژه.
 - ۷۴ از ۱۳۱ کلید `DEFAULT_UI_TEXTS` (~۵۶٪) هیچ‌جا استفاده نمی‌شوند — پیام‌های واقعی معادل، هاردکد فارسی داخل کدند (نقض قانون خود پروژه دربارهٔ عدم هاردکد متن)
 - دو سیستم Rate-Limit موازی در bot.py
 - `app_content` در هیچ ماژول `stbak_engine.py` پوشش داده نمی‌شود — بکاپ/ریست کامل این جدول را نادیده می‌گیرد
