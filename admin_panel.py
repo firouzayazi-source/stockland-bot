@@ -2391,6 +2391,45 @@ async def settings_hub(request: Request, flash: str = ""):
     return _layout("تنظیمات", body, adm, flash=flash)
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ─── تأیید قوانین قبل از خرید (بخش ۷ سند مینی‌اپ) ─────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+_PURCHASE_TERMS_CFG_KEY = "PURCHASE_TERMS_TEXT"
+
+@router.get("/settings/purchase-terms", response_class=HTMLResponse)
+async def purchase_terms_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import get_cfg
+    text = get_cfg(_PURCHASE_TERMS_CFG_KEY, "")
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← تنظیمات","/admin/settings/panel","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">📜 قوانین خرید</h1>
+    </div>
+    <div class="card p-6 max-w-2xl">
+      <p class="text-sm text-gray-500 mb-4">این متن، وقتی برای یک محصول «نیاز به تأیید قوانین خرید» فعال باشه، قبل از پرداخت به کاربر نشون داده می‌شه — هم در ربات، هم در مینی‌اپ. کاربر فقط با تیک‌زدن چک‌باکس تأیید می‌تونه ادامه بده.</p>
+      <form method="post" action="/admin/settings/purchase-terms">
+        {_textarea("text", "مثلاً: کالای دیجیتال پس از تحویل، قابل استرداد نیست مگر در صورت خرابی...", value=text, rows=10)}
+        <div class="mt-3">{_btn("💾 ذخیره", color="green")}</div>
+      </form>
+    </div>"""
+    return _layout("قوانین خرید", body, adm, flash=flash)
+
+
+@router.post("/settings/purchase-terms")
+async def purchase_terms_save(request: Request, text: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "settings")
+    if guard: return guard
+    from db import set_cfg
+    set_cfg(_PURCHASE_TERMS_CFG_KEY, text.strip())
+    _log(request, "ویرایش متن قوانین خرید", "قوانین خرید", "", admin_info=adm)
+    return _redir(f"/admin/settings/purchase-terms?flash={e('✅ ذخیره شد')}")
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_get(request: Request, group: str = "", flash: str = ""):
     adm = _get_admin(request)
@@ -4597,6 +4636,16 @@ async def product_new_get(request: Request):
           </div>
         </label>
       </div>
+      <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
+        <label class="perm-label" style="font-size:13px">
+          <input type="checkbox" name="require_terms" value="1"
+            style="width:16px;height:16px;min-height:16px;cursor:pointer">
+          <div>
+            <strong>نیاز به تأیید قوانین خرید</strong>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">اگه فعال باشه، کاربر قبل از پرداخت باید متن قوانین خرید رو ببینه و با تیک‌زدن یک چک‌باکس تأیید کنه (هم در ربات، هم در مینی‌اپ). متن قوانین از <a href="/admin/settings/purchase-terms" target="_blank" class="text-indigo-600 underline">اینجا</a> قابل ویرایشه. پیش‌فرض خاموش.</div>
+          </div>
+        </label>
+      </div>
       <div class="flex gap-3">{_btn("ذخیره محصول", color="green")} {_btn("انصراف", "/admin/products", "slate")}</div>
     </form>"""
 
@@ -4613,6 +4662,7 @@ async def product_new_post(request: Request,
     form = await request.form()
     support_after = 1 if form.get("support_after_purchase") == "1" else 0
     notify_on_restock = 1 if form.get("notify_on_restock") == "1" else 0
+    require_terms = 1 if form.get("require_terms") == "1" else 0
 
     if not category_id.strip().isdigit():
         return _redir("/admin/products/new?flash=دسته‌بندی+انتخاب+کنید")
@@ -4639,11 +4689,11 @@ async def product_new_post(request: Request,
         cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
             INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url, notify_on_restock)
-            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?);""",
+                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url, notify_on_restock, require_terms)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?);""",
             (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
              int(limit_c or 0), int(limit_p or 0), description.strip(), support_after,
-             str(form.get("setup_message","")).strip(), image_url, notify_on_restock))
+             str(form.get("setup_message","")).strip(), image_url, notify_on_restock, require_terms))
         conn.commit()
     finally:
         conn.close()
@@ -4839,6 +4889,16 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
               </div>
             </label>
           </div>
+          <div class="p-4 bg-gray-50 rounded-lg">
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" name="require_terms" value="1"
+                {"checked" if int(p["require_terms"] if "require_terms" in p.keys() else 0) else ""}>
+              <div>
+                <div class="text-sm font-medium text-gray-800">نیاز به تأیید قوانین خرید</div>
+                <div class="text-xs text-gray-400 mt-0.5">قبل از پرداخت، کاربر باید متن قوانین رو تأیید کنه (هم ربات، هم مینی‌اپ). متن از <a href="/admin/settings/purchase-terms" target="_blank" class="text-indigo-600 underline">اینجا</a> قابل ویرایشه.</div>
+              </div>
+            </label>
+          </div>
           {_btn("ذخیره", color="green")}
         </form>
       </div>
@@ -4876,6 +4936,7 @@ async def product_edit_post(request: Request, pid: int,
     form = await request.form()
     support_after = 1 if form.get("support_after_purchase") == "1" else 0
     notify_on_restock = 1 if form.get("notify_on_restock") == "1" else 0
+    require_terms = 1 if form.get("require_terms") == "1" else 0
     pp = int(partner_price or 0)
     # migration: اطمینان از وجود ستون
     try:
@@ -4896,16 +4957,16 @@ async def product_edit_post(request: Request, pid: int,
     try:
         if image_url is None:
             conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,notify_on_restock=? WHERE id=?;""",
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,notify_on_restock=?,require_terms=? WHERE id=?;""",
                 (category,title.strip(),int(price or 0),pp if pp>0 else None,
                  int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-                 str(form.get("setup_message","")).strip(),notify_on_restock,pid))
+                 str(form.get("setup_message","")).strip(),notify_on_restock,require_terms,pid))
         else:
             conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,image_url=?,notify_on_restock=? WHERE id=?;""",
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,image_url=?,notify_on_restock=?,require_terms=? WHERE id=?;""",
                 (category,title.strip(),int(price or 0),pp if pp>0 else None,
                  int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-                 str(form.get("setup_message","")).strip(),image_url,notify_on_restock,pid))
+                 str(form.get("setup_message","")).strip(),image_url,notify_on_restock,require_terms,pid))
         conn.commit()
     finally:
         conn.close()
