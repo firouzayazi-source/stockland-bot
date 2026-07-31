@@ -8585,13 +8585,13 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
     <form method="get" class="flex gap-2 items-center mb-6 flex-wrap">
       <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
         <span class="text-xs text-gray-400 whitespace-nowrap">از:</span>
-        <input type="text" name="df_fa" value="{_to_jalali(df)}" placeholder="۱۴۰۴/۰۱/۰۱"
+        <input type="text" name="df_fa" value="{fa_date(df)}" placeholder="۱۴۰۴/۰۱/۰۱"
           class="w-28 text-sm outline-none" autocomplete="off">
         <input type="hidden" name="df" value="{df}">
       </div>
       <div class="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
         <span class="text-xs text-gray-400 whitespace-nowrap">تا:</span>
-        <input type="text" name="dt_fa" value="{_to_jalali(dt)}" placeholder="۱۴۰۴/۰۱/۳۱"
+        <input type="text" name="dt_fa" value="{fa_date(dt)}" placeholder="۱۴۰۴/۰۱/۳۱"
           class="w-28 text-sm outline-none" autocomplete="off">
         <input type="hidden" name="dt" value="{dt}">
       </div>
@@ -8921,14 +8921,14 @@ async def export_expenses(request: Request, df: str="", dt: str="", cat: str="")
     try:
         import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="هزینه‌ها"
         ws.append(["تاریخ","عنوان","دسته","مبلغ","توضیح"])
-        for r in data: ws.append([r["expense_date"],r["title"],r["category"],r["amount"],r["description"]])
+        for r in data: ws.append([fa_date(r["expense_date"]),r["title"],r["category"],r["amount"],r["description"]])
         buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
         from fastapi.responses import StreamingResponse
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition":"attachment; filename=expenses.xlsx"})
     except Exception:
         from fastapi.responses import PlainTextResponse
-        csv = "تاریخ,عنوان,دسته,مبلغ\n"+"\n".join(f"{r['expense_date']},{r['title']},{r['category']},{r['amount']}" for r in data)
+        csv = "تاریخ,عنوان,دسته,مبلغ\n"+"\n".join(f"{fa_date(r['expense_date'])},{r['title']},{r['category']},{r['amount']}" for r in data)
         return PlainTextResponse(csv, headers={"Content-Disposition":"attachment; filename=expenses.csv"})
 
 
@@ -8940,7 +8940,7 @@ async def export_cashflow(request: Request, df: str="", dt: str=""):
     try:
         import openpyxl; wb = openpyxl.Workbook(); ws = wb.active; ws.title="گردش مالی"
         ws.append(["تاریخ","نوع","توضیح","مبلغ","جهت"])
-        for r in data: ws.append([r["created_at"],r["type"],r["description"],r["amount"],r["direction"]])
+        for r in data: ws.append([fa_date(r["created_at"], with_time=True),r["type"],r["description"],r["amount"],r["direction"]])
         buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
         from fastapi.responses import StreamingResponse
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
