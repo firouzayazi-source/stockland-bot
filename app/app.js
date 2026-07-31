@@ -192,7 +192,7 @@ function loadHome(){
     var it=d.item;
     dp.innerHTML='<div class="sl-sec"><b>📋 لیست روزانه</b></div>'+
       '<div class="sl-post" data-cid="'+it.id+'" style="margin:0 20px">'+
-      (it.image_url?'<div class="sl-post-cv" style="background:#0B1B4A"><img src="'+esc(it.image_url)+'" alt=""></div>':'')+
+      (it.image_url?'<div class="sl-post-cv" style="background:#0B1B4A"><img src="'+esc(it.image_url)+'" alt="" loading="lazy"></div>':'')+
       '<div class="sl-post-bd"><div class="sl-post-t">'+esc(it.title)+'</div>'+
       '<div class="sl-post-x">'+esc((it.body||'').substring(0,160))+'</div>'+
       '<div class="sl-post-m">'+esc(it.created_at)+'</div></div></div>';
@@ -214,7 +214,7 @@ function loadHome(){
     nr.innerHTML=it.map(function(p,i){
       return '<a class="sl-mini" href="'+esc(p.link)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'+
         '<div class="sl-mini-cv" style="background:'+colors[i%colors.length]+'">'+
-        (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'📰')+'</div>'+
+        (p.image_url?'<img src="'+esc(p.image_url)+'" alt="" loading="lazy">':'📰')+'</div>'+
         '<div class="sl-mini-b"><div class="sl-mini-t">'+esc(p.title)+'</div><div class="sl-mini-m">'+esc(p.pub_date)+'</div></div></a>';
     }).join('');
   }).catch(function(){nr.innerHTML=''});
@@ -250,7 +250,7 @@ function loadLearnCard(){
     var it=(d&&d.items&&d.items[0]);
     if(!it){lc.style.display='none';if(ls)ls.style.display='none';return}
     lc.innerHTML='<div class="sl-learn-card" data-tid="'+it.id+'">'+
-      '<div class="sl-learn-img">'+(it.cover_image?'<img src="'+esc(it.cover_image)+'" alt="">':'📚')+'</div>'+
+      '<div class="sl-learn-img">'+(it.cover_image?'<img src="'+esc(it.cover_image)+'" alt="" loading="lazy">':'📚')+'</div>'+
       '<div class="sl-learn-body">'+
         '<div class="sl-learn-tag">'+(it.featured?'⭐️ ویژه':'📚 آموزش')+'</div>'+
         '<div class="sl-learn-title">'+esc(it.title)+'</div>'+
@@ -440,7 +440,7 @@ function loadTuts(reset){
     var html=items.map(function(p){
       return '<div class="sl-post" data-tid="'+p.id+'"><div class="sl-post-cv" style="background:linear-gradient(120deg,#101826,var(--br))">'+
         '<span class="sl-post-tag">'+(p.featured?'⭐️ ویژه':'📚 آموزش')+'</span>'+
-        (p.cover_image?'<img src="'+esc(p.cover_image)+'" alt="">':'')+
+        (p.cover_image?'<img src="'+esc(p.cover_image)+'" alt="" loading="lazy">':'')+
         '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
         '<div class="sl-post-x">'+esc(p.short_desc||'')+'</div>'+
         '<div class="sl-post-m">'+(p.category_name?esc(p.category_name)+' · ':'')+esc(p.publish_date||'')+'</div></div></div>';
@@ -488,10 +488,10 @@ function openTutorial(tid){
     var tags=it.tags||[];
     var tagsHtml=tags.length?'<div class="sl-tut-tags">'+tags.map(function(tg){return '<span class="sl-tut-tag">'+esc(tg)+'</span>'}).join('')+'</div>':'';
     var gallery=it.gallery||[];
-    var galleryHtml=gallery.length?'<div class="sl-tut-gallery">'+gallery.map(function(g){return '<img src="'+esc(g)+'" alt="">'}).join('')+'</div>':'';
+    var galleryHtml=gallery.length?'<div class="sl-tut-gallery">'+gallery.map(function(g){return '<img src="'+esc(g)+'" alt="" loading="lazy">'}).join('')+'</div>':'';
     var videoHtml=it.video_upload?'<video controls class="sl-tut-video" src="'+esc(it.video_upload)+'"></video>':videoEmbedHtml(it.video_link);
     var downloadHtml=it.download_file?'<a class="sl-pp-btn" href="'+esc(it.download_file)+'" target="_blank" style="margin:14px 0 4px;width:100%;box-sizing:border-box">⬇️ '+esc(it.download_label||'دانلود فایل')+'</a>':'';
-    b.innerHTML=(it.cover_image?'<img src="'+esc(it.cover_image)+'" alt="">':'')+
+    b.innerHTML=(it.cover_image?'<img src="'+esc(it.cover_image)+'" alt="" loading="lazy">':'')+
       '<div class="sl-postf-title">'+esc(it.title)+'</div>'+
       '<div class="sl-postf-date">'+(it.category_name?esc(it.category_name)+' · ':'')+esc(it.publish_date||'')+' · 👁 '+fmt(it.view_count||0)+'</div>'+
       tagsHtml+
@@ -537,7 +537,7 @@ function _fetchNewsPage(reset){
     var html=it.map(function(p,i){
       return '<a class="sl-post" href="'+esc(p.link)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'+
         '<div class="sl-post-cv" style="background:'+_newsColors[(startI+i)%_newsColors.length]+'">'+
-        (p.image_url?'<img src="'+esc(p.image_url)+'" alt="">':'')+
+        (p.image_url?'<img src="'+esc(p.image_url)+'" alt="" loading="lazy">':'')+
         '</div><div class="sl-post-bd"><div class="sl-post-t">'+esc(p.title)+'</div>'+
         '<div class="sl-post-x">'+esc(p.excerpt)+'</div><div class="sl-post-m">'+esc(p.pub_date)+'</div></div></a>';
     }).join('');
@@ -555,7 +555,7 @@ function openC(cid){
   t.textContent='…';b.innerHTML=skel(2);app.popup.open('#post-popup');
   api('/content/'+cid).then(function(d){
     var it=d.item||{};t.textContent=it.title||'';
-    b.innerHTML=(it.image_url?'<img src="'+esc(it.image_url)+'" alt="">':'')+
+    b.innerHTML=(it.image_url?'<img src="'+esc(it.image_url)+'" alt="" loading="lazy">':'')+
       '<div class="sl-postf-title">'+esc(it.title)+'</div><div class="sl-postf-date">'+esc(it.created_at)+'</div>'+
       '<div class="sl-postf-text">'+formatBody(it.body)+'</div>'+
       (it.link_url?'<a class="sl-pp-btn" href="'+esc(it.link_url)+'" target="_blank" rel="noopener" style="margin:20px 0 4px;width:100%;box-sizing:border-box">🔗 مشاهده در تلگرام / اینستاگرام</a>':'');
@@ -583,7 +583,7 @@ function loadMe(){if(_m)return;_m=1;
   body.innerHTML='<div class="sl-me sl-me-c">'+
     '<label class="sl-ava-wrap" id="me-ava-wrap" for="me-ava-input">'+
       '<div class="sl-ava" id="me-ava">🥉</div>'+
-      '<img class="sl-ava-img" id="me-ava-img" style="display:none" alt="">'+
+      '<img class="sl-ava-img" id="me-ava-img" style="display:none" alt="" loading="lazy">'+
       '<div class="sl-ava-spin" id="me-ava-spin" style="display:none"><div class="sl-spin"></div></div>'+
       '<span class="sl-ava-edit" id="me-ava-edit" title="تغییر عکس پروفایل">📷</span>'+
       '<input type="file" id="me-ava-input" accept="image/*" style="display:none">'+
@@ -695,7 +695,7 @@ function uploadAvatarBlob(blob){
 /* ─── پاپ‌آپ برش عکس (پن + زوم، خروجی مربع ۴۸۰×۴۸۰ روی canvas — بدون کتابخانهٔ خارجی) ─── */
 function openAvatarCropper(dataUrl,onDone){
   _accPopup('برش عکس پروفایل',
-    '<div class="sl-crop-view" id="crop-view"><img class="sl-crop-img" id="crop-img" src="'+dataUrl+'" alt=""></div>'+
+    '<div class="sl-crop-view" id="crop-view"><img class="sl-crop-img" id="crop-img" src="'+dataUrl+'" alt="" loading="lazy"></div>'+
     '<div class="sl-crop-zoom-row"><span class="sl-crop-zoom-i">－</span>'+
     '<input type="range" id="crop-zoom" class="sl-crop-zoom" min="100" max="300" value="100">'+
     '<span class="sl-crop-zoom-i">＋</span></div>'+
@@ -1542,7 +1542,7 @@ function renderSupportChat(ticket,messages){
   b.innerHTML='<div class="sl-sp-chat" id="sp-chat">'+
     (messages.length?messages.map(function(m){
       var mine=m.sender==='user';
-      var img=m.image_url?'<img src="'+esc(m.image_url)+'" class="sl-sp-img" alt="">':'';
+      var img=m.image_url?'<img src="'+esc(m.image_url)+'" class="sl-sp-img" alt="" loading="lazy">':'';
       var txt=m.text?'<div>'+esc(m.text)+'</div>':'';
       return '<div class="sl-sp-msg '+(mine?'sl-sp-mine':'sl-sp-theirs')+'">'+img+txt+'</div>';
     }).join(''):'<div class="sl-sp-hint">پیام خودتون رو بنویسید</div>')+

@@ -3,7 +3,7 @@ var SHELL=['./', 'index.html', 'app.css', 'app.js', 'manifest.json',
   'vendor/framework7-bundle.min.js','vendor/framework7-bundle-rtl.min.css',
   'vendor/fonts/Vazirmatn-Regular.woff2','vendor/fonts/Vazirmatn-Medium.woff2',
   'vendor/fonts/Vazirmatn-Bold.woff2','icons/icon-192.png','icons/icon-512.png',
-  'icons/icon-180.png','icons/favicon-32.png'];
+  'icons/icon-180.png','icons/favicon-32.png','icons/logo-sl.png'];
 // سقف تعداد ورودی کش — بدون این، هر عکس محصول/پاسخ API که یه‌بار فچ بشه برای
 // همیشه روی دستگاه کاربر می‌مونه (بدون هیچ eviction ای)، یعنی کش با گذر زمان
 // بی‌پایان رشد می‌کنه. بعد از هر put، اگه از سقف رد شد، قدیمی‌ترین ورودی‌ها
