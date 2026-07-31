@@ -201,10 +201,10 @@ async def api_products(request: Request, category: str = "", limit: int = 60, q:
 async def api_product(pid: int, request: Request):
     """جزئیات یک محصول."""
     from core import products
-    p = products.get_product(pid)
+    uid = _auth_optional(request)
+    p = products.get_product(pid, uid=uid)
     if not p:
         return JSONResponse({"ok": False, "error": "محصول یافت نشد"}, status_code=404)
-    uid = _auth_optional(request)
     if uid:
         from db import is_favorite
         try:

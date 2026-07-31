@@ -328,6 +328,14 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
 .sl-pp-flash{font-size:13px;margin-top:4px}
 .sl-pp-flash .old{text-decoration:line-through;color:var(--mu)}
 .sl-pp-flash .tag{color:#FF453A;font-weight:800}
+/* دو قیمت (اصلی + همکاری) در صفحهٔ محصول — بخش ۲ */
+.sl-pp-dualprice{margin-top:6px}
+.sl-pp-price-orig{font-size:12.5px;color:var(--mu)}
+.sl-pp-price-orig s{text-decoration:line-through}
+.sl-pp-partner-badge{display:inline-block;margin-inline-start:8px;vertical-align:middle;background:linear-gradient(145deg,#0EA5A6,#34D399);
+ color:#fff;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:999px}
+.sl-partner-badge{display:inline-block;background:linear-gradient(145deg,#0EA5A6,#34D399);color:#fff;
+ font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;vertical-align:middle}
 .sl-pp-desc{padding:0 20px 20px;font-size:14.5px;line-height:2;color:var(--mu)}
 .sl-pp-stock{padding:0 20px 12px;font-size:13px;font-weight:600}
 .sl-pp-divider{height:1px;background:var(--ln);margin:0 20px 16px}

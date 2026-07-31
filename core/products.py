@@ -54,15 +54,25 @@ def list_products(category: str = "", active_only: bool = True, limit: int = 100
         conn.close()
 
 
-def get_product(pid: int) -> Optional[dict]:
-    """جزئیات یک محصول + موجودی + امتیاز/نظرات."""
+def get_product(pid: int, uid: int = None) -> Optional[dict]:
+    """جزئیات یک محصول + موجودی + امتیاز/نظرات.
+
+    اگه uid داده بشه و کاربر همکارِ تأییدشده باشه، قیمت همکاری هم (طبق همون منطق
+    بات — bot.py:_show_order_summary) به‌عنوان یه فیلد جدا برمی‌گرده تا صفحهٔ محصول
+    مینی‌اپ بتونه هر دو قیمت رو نشون بده. طی فروش فوری قیمت همکاری نشون داده نمی‌شه
+    (دقیقاً مثل بات) چون این دو تخفیف با هم قابل‌جمع نیستن."""
     import db
     p = db.get_product_by_id(pid)
     if not p:
         return None
-    from db import apply_flash_price, get_feed_stats, get_product_rating, get_product_ratings_list
+    from db import apply_flash_price, get_feed_stats, get_product_rating, get_product_ratings_list, is_partner_approved
     base = int(p["price"] or 0)
     eff, flash = apply_flash_price(pid, base)
+    partner_price = int(p.get("partner_price") or 0)
+    show_partner_price = bool(
+        uid and not flash and is_partner_approved(uid)
+        and partner_price > 0 and partner_price < base
+    )
     try:
         _t, remaining, _d = get_feed_stats(pid)
     except Exception:
@@ -82,7 +92,8 @@ def get_product(pid: int) -> Optional[dict]:
         "id": int(p["id"]), "category": p.get("category"),
         "title": p["title"], "price": base,
         "effective_price": int(eff), "flash_active": bool(flash),
-        "partner_price": int(p.get("partner_price") or 0),
+        "partner_price": partner_price,
+        "show_partner_price": show_partner_price,
         "description": p.get("description") or "",
         "is_active": bool(p.get("is_active", 1)),
         "stock": int(remaining),

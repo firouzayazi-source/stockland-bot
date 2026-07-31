@@ -316,13 +316,25 @@ function openP(pid){
   api('/products/'+pid,true).then(function(d){
     var p=d.product||{};
     var f=p.flash_active,e=p.effective_price,bs=p.price,hs=p.stock!=null,ok=p.stock>0;
+    var priceBlock;
+    if(f){
+      priceBlock='<div class="sl-pp-flash"><span class="old">'+fmt(bs)+' تومان</span> <span class="tag">⚡️ فروش فوری</span></div>'+
+        '<div class="sl-pp-price">'+fmt(e)+' <small>تومان</small></div>';
+    }else if(p.show_partner_price){
+      // دو قیمت: اصلی (خط‌خورده) + همکاری (برجسته) — دقیقاً همون منطق _show_order_summary در bot.py
+      priceBlock='<div class="sl-pp-dualprice">'+
+        '<div class="sl-pp-price-orig">قیمت اصلی: <s>'+fmt(bs)+' تومان</s></div>'+
+        '<div class="sl-pp-price">'+fmt(p.partner_price)+' <small>تومان</small><span class="sl-pp-partner-badge">🤝 قیمت همکاری</span></div>'+
+      '</div>';
+    }else{
+      priceBlock='<div class="sl-pp-price">'+fmt(e)+' <small>تومان</small></div>';
+    }
     b.innerHTML='<div class="sl-pp-hero">'+
       (loggedIn?'<button class="sl-pp-fav'+(p.is_favorite?' on':'')+'" id="sl-fav-'+p.id+'" data-fav="'+(p.is_favorite?1:0)+'">'+(p.is_favorite?'♥':'♡')+'</button>':'')+
       '<button class="sl-pp-share" id="sl-share-'+p.id+'">↗</button>'+
       '<div class="sl-pp-emoji">'+prodImgHtml(p)+'</div>'+
       '<div class="sl-pp-title">'+esc(p.title)+'</div>'+
-      (f?'<div class="sl-pp-flash"><span class="old">'+fmt(bs)+' تومان</span> <span class="tag">⚡️ فروش فوری</span></div>':'')+
-      '<div class="sl-pp-price">'+fmt(e)+' <small>تومان</small></div>'+
+      priceBlock+
       (p.rating_count?'<div class="sl-pp-rating">'+starsHtml(p.rating_avg,p.rating_count)+'</div>':'')+
       '</div>'+
       (hs?'<div class="sl-pp-stock">'+(ok?'✅ موجود — '+p.stock+' عدد':'❌ ناموجود')+'</div>':'')+
@@ -1577,12 +1589,16 @@ function openCheckout(pid){
   window._slApp.popup.open('#checkout-popup');
 
   Promise.all([
-    window._slApi('/products/'+pid),
+    window._slApi('/products/'+pid,true),
     window._slApi('/me/wallet',true)
   ]).then(function(res){
     window._slCk.prod=res[0].product||{};
     window._slCk.walBal=res[1].balance||0;
-    window._slCk.basePrice=window._slCk.prod.effective_price||window._slCk.prod.price||0;
+    // منطق قیمت باید دقیقاً با صفحهٔ محصول/بات هماهنگ باشه — اگه قیمت همکاری
+    // فعاله، همون رقم پایهٔ محاسبهٔ چک‌اوت می‌شه (سرور هم مستقل همین رو دوباره
+    // حساب می‌کنه، اینجا فقط برای نمایش صحیحه)
+    window._slCk.basePrice=window._slCk.prod.show_partner_price?window._slCk.prod.partner_price:
+      (window._slCk.prod.effective_price||window._slCk.prod.price||0);
     if(window._slCk.prod.require_terms){
       window._slApi('/purchase-terms').then(function(d){
         window._slCk.termsText=(d&&d.text)||'';
@@ -1635,9 +1651,10 @@ function _renderCheckoutBody(){
       '<label class="sl-terms-chk"><input type="checkbox" id="terms-agree-chk"'+(window._slCk.termsAgreed?' checked':'')+'><span>قوانین بالا را مطالعه کردم و می‌پذیرم</span></label>'+
     '</div>':'';
 
+  var partnerTag=(p.show_partner_price&&!window._slCk.discountCode)?' <span class="sl-partner-badge">🤝 قیمت همکاری</span>':'';
   var priceLine=window._slCk.discountAmount>0?
     '<div class="sl-checkout-price"><s style="color:var(--mu)">'+window._slFmt(window._slCk.basePrice)+'</s> <b>'+window._slFmt(price)+' تومان</b></div>':
-    '<div class="sl-checkout-price">قیمت: <b>'+window._slFmt(price)+' تومان</b></div>';
+    '<div class="sl-checkout-price">قیمت: <b>'+window._slFmt(price)+' تومان</b></div>'+partnerTag;
 
   var discRow=window._slCk.discountCode?
     '<div class="sl-checkout-wallet"><div class="sl-checkout-wallet-info">🎟 کد «'+window._slEsc(window._slCk.discountCode)+'» اعمال شد <span style="color:var(--mu)">(−'+window._slFmt(window._slCk.discountAmount)+' تومان)</span></div>'+
