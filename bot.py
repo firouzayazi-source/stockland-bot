@@ -28,6 +28,7 @@ from db import (
     add_wallet_balance,
     subtract_wallet_balance,
     set_wallet_balance,
+    log_admin_action,
     create_order,
     get_recent_orders_by_user,
     get_recent_orders_global,
@@ -5218,6 +5219,8 @@ def handle_admin_text(message):
         target_id = state["target_user_id"]
         new_balance = add_wallet_balance(target_id, amount)
         clear_admin_state(aid)
+        log_admin_action(aid, "شارژ دستی کیف‌پول (ربات)", "کیف‌پول‌ها",
+                          f"کاربر {target_id}: +{amount:,} تومان (موجودی جدید: {new_balance:,})")
         bot.reply_to(
             message,
             f"کیف پول کاربر {target_id} به مقدار {amount:,} تومان شارژ شد.\n"
@@ -5259,6 +5262,8 @@ def handle_admin_text(message):
             return
         new_balance = get_wallet_balance(target_id)
         clear_admin_state(aid)
+        log_admin_action(aid, "کسر دستی کیف‌پول (ربات)", "کیف‌پول‌ها",
+                          f"کاربر {target_id}: -{amount:,} تومان (موجودی جدید: {new_balance:,})")
         bot.reply_to(
             message,
             f"از کیف پول کاربر {target_id} مقدار {amount:,} تومان کسر شد.\n"
@@ -5291,6 +5296,8 @@ def handle_admin_text(message):
         target_id = state["target_user_id"]
         final_balance = set_wallet_balance(target_id, new_balance_val)
         clear_admin_state(aid)
+        log_admin_action(aid, "تنظیم دستی موجودی کیف‌پول (ربات)", "کیف‌پول‌ها",
+                          f"کاربر {target_id}: موجودی روی {final_balance:,} تومان تنظیم شد")
         bot.reply_to(
             message,
             f"موجودی کیف پول کاربر {target_id} روی {final_balance:,} تومان تنظیم شد.",

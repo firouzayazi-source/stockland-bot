@@ -4324,6 +4324,47 @@ def get_partner_payouts(user_id: int = None, status: str = "", limit: int = 50) 
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ─── لاگ اقدامات ادمین — نسخهٔ مستقل از Request برای bot.py ──────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def log_admin_action(admin_id, action: str, section: str = "", details: str = "") -> None:
+    """ثبت اقدام ادمین در همون جدول admin_logs که admin_panel._log() ازش استفاده
+    می‌کنه — برای اقداماتی که از خودِ ربات (نه پنل وب) انجام می‌شن، مثل شارژ/کسر
+    دستی کیف‌پول کاربر، که قبلاً هیچ ردی در تاریخچهٔ لاگ‌های ادمین نمی‌ذاشتن.
+    هیچ‌وقت exception نمی‌ده (دقیقاً مثل _log() پنل)."""
+    try:
+        conn = _get_connection()
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS admin_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id   INTEGER,
+                    admin_name TEXT,
+                    action     TEXT NOT NULL,
+                    section    TEXT,
+                    details    TEXT,
+                    ip         TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                );
+            """)
+            conn.execute("ALTER TABLE admin_logs ADD COLUMN result TEXT DEFAULT 'ok';")
+        except Exception:
+            pass
+        conn.execute(
+            "INSERT INTO admin_logs (admin_id,admin_name,action,section,details,ip,result) VALUES (?,?,?,?,?,?,?);",
+            (str(admin_id), f"admin#{admin_id}", action, section, (details or "")[:500], "bot", "ok")
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ─── دفتر یادداشت مدیران ────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
