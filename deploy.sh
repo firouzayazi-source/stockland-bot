@@ -70,6 +70,22 @@ if [ -f app/index.html ]; then
     echo "   ✅ index.html → ?v=${V}"
 fi
 
+# ۴.۵ minify اختیاری app.js/app.css با esbuild (اگه از قبل نصب باشه) — کاملاً
+# اختیاریه، هیچ وابستگی جدیدی اجباری نمی‌کنه؛ اگه esbuild نبود، بی‌صدا رد می‌شه.
+# چون بعد از هر git reset --hard دوباره از سورس تازه اجرا می‌شه، هیچ‌وقت با
+# تغییرات کد قدیمی نمی‌مونه.
+if command -v esbuild >/dev/null 2>&1; then
+    echo ""
+    echo "🗜  minify با esbuild..."
+    esbuild app/app.js --minify --outfile=app/app.js --allow-overwrite 2>/dev/null \
+        && echo "   ✅ app.js فشرده شد" || echo "   ⚠️  minify app.js شکست خورد — نسخهٔ خام باقی موند"
+    esbuild app/app.css --minify --outfile=app/app.css --allow-overwrite 2>/dev/null \
+        && echo "   ✅ app.css فشرده شد" || echo "   ⚠️  minify app.css شکست خورد — نسخهٔ خام باقی موند"
+else
+    echo ""
+    echo "ℹ️  esbuild نصب نیست — minify رد شد (اختیاریه؛ برای فعال‌سازی: npm i -g esbuild)"
+fi
+
 # ۵. ری‌استارت سرویس
 echo ""
 echo "♻️  ری‌استارت سرویس..."
