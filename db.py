@@ -854,6 +854,7 @@ def get_product_by_id(pid: int):
             "COALESCE(image_url, '') AS image_url",
             "COALESCE(notify_on_restock, 0) AS notify_on_restock",
             "COALESCE(require_terms, 0) AS require_terms",
+            "COALESCE(terms_text, '') AS terms_text",
             "created_by", "created_at",
         ]
         cur.execute(
@@ -2992,6 +2993,7 @@ def ensure_product_support_schema():
             ("image_url", "TEXT DEFAULT ''"),
             ("notify_on_restock", "INTEGER DEFAULT 0"),
             ("require_terms", "INTEGER DEFAULT 0"),
+            ("terms_text", "TEXT DEFAULT ''"),
             ("created_by", "INTEGER"),
             ("created_at", "TEXT"),
         ]:
@@ -3026,6 +3028,27 @@ def get_product_require_terms(product_id: int) -> bool:
         return False
     finally:
         conn.close()
+
+
+def get_product_terms_text(product_id: int) -> str:
+    """متن قوانین خرید این محصول — اگه ادمین متن اختصاصی برای همین محصول ثبت کرده باشه
+    (products.terms_text) همون برمی‌گرده؛ وگرنه متن پیش‌فرض عمومی (bot_config.PURCHASE_TERMS_TEXT)
+    که از /admin/settings/purchase-terms قابل ویرایشه. دقیقاً همون الگوی setup_message
+    (متن اختصاصی هر محصول)، فقط با یک fallback سراسری اضافه چون این متن قبلاً همیشه
+    سراسری بود و محصولات موجود که require_terms روشن دارن نباید یک‌دفعه متن خالی ببینن."""
+    ensure_product_support_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT terms_text FROM products WHERE id=? LIMIT 1;", (product_id,)).fetchone()
+        text = (row[0] if row else "") or ""
+    except Exception:
+        text = ""
+    finally:
+        conn.close()
+    text = text.strip()
+    if text:
+        return text
+    return (get_cfg("PURCHASE_TERMS_TEXT", "") or "").strip()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
