@@ -795,7 +795,7 @@ function _checkMeBadge(){
   api('/me/checkin',true).then(function(d){
     if(d&&d.available){show=true;_applyMeBadge(show)}
   }).catch(function(){});
-  fetch('https://panel.stland.ir/api/v1/support/ticket',{headers:{'X-Telegram-Init-Data':initData}})
+  fetch('/api/v1/support/ticket',{headers:{'X-Telegram-Init-Data':initData}})
     .then(function(r){return r.json()}).then(function(d){
       if(!d||!d.ok||!d.ticket)return;
       var msgs=d.messages||[];
@@ -1023,7 +1023,7 @@ function showPaymentMethods(amount){
 function payGateway(amount){
   var b=_accBody();
   if(b)b.innerHTML='<div class="sl-checkout-note">⏳ در حال اتصال به درگاه...</div>';
-  fetch('https://panel.stland.ir/api/v1/wallet/topup',{
+  fetch('/api/v1/wallet/topup',{
     method:'POST',
     headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
     body:JSON.stringify({amount:amount})
@@ -1067,7 +1067,7 @@ function payCard2card(amount,info){
     if(!f){window._slApp.dialog.alert('عکس رسید رو انتخاب کنید','خطا');return}
     sb.disabled=true;sb.textContent='در حال ارسال…';
     var fd=new FormData();fd.append('amount',amount);fd.append('photo',f);
-    fetch('https://panel.stland.ir/api/v1/wallet/card2card',{
+    fetch('/api/v1/wallet/card2card',{
       method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData},body:fd
     }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
       if(res.status!==200||!res.d.ok){
@@ -1111,7 +1111,7 @@ function payCryptoForm(amount,net,note){
     var txid=(tx.value||'').trim();
     if(!txid){window._slApp.dialog.alert('TXID رو وارد کنید','خطا');return}
     sb.disabled=true;sb.textContent='در حال ثبت…';
-    fetch('https://panel.stland.ir/api/v1/wallet/crypto',{
+    fetch('/api/v1/wallet/crypto',{
       method:'POST',
       headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
       body:JSON.stringify({amount:amount,network:net.k,txid:txid})
@@ -1267,7 +1267,7 @@ function _ptProfile(){
       Object.keys(body).forEach(function(k){if(!body[k])delete body[k]});
       if(!Object.keys(body).length){window._slApp.dialog.alert('حداقل یک فیلد رو تغییر بدید','خطا');return}
       sb.disabled=true;sb.textContent='در حال ذخیره…';
-      fetch('https://panel.stland.ir/api/v1/partner/profile',{
+      fetch('/api/v1/partner/profile',{
         method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
         body:JSON.stringify(body)
       }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
@@ -1327,7 +1327,7 @@ function _ptTransfer(balance){
   function doTransfer(body){
     var sb=document.getElementById('pt-tr-submit-btn'),ab=document.getElementById('pt-tr-all-btn');
     if(sb)sb.disabled=true;if(ab)ab.disabled=true;
-    fetch('https://panel.stland.ir/api/v1/partner/wallet/transfer',{
+    fetch('/api/v1/partner/wallet/transfer',{
       method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
       body:JSON.stringify(body)
     }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
@@ -1419,7 +1419,7 @@ function renderPayoutBankForm(info){
     if(full_name.length<3){window._slApp.dialog.alert('نام صاحب حساب رو کامل وارد کنید','خطا');return}
     if(card_number.length<16){window._slApp.dialog.alert('شمارهٔ کارت باید ۱۶ رقم باشه','خطا');return}
     sb.disabled=true;sb.textContent='در حال ثبت…';
-    fetch('https://panel.stland.ir/api/v1/partner/bank-info',{
+    fetch('/api/v1/partner/bank-info',{
       method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
       body:JSON.stringify({full_name:full_name,card_number:card_number,iban:iban})
     }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
@@ -1450,7 +1450,7 @@ function renderPayoutAmountForm(info){
     var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
     if(!amount||amount<=0){window._slApp.dialog.alert('مبلغ رو وارد کنید','خطا');return}
     sb.disabled=true;sb.textContent='در حال ثبت…';
-    fetch('https://panel.stland.ir/api/v1/partner/payout',{
+    fetch('/api/v1/partner/payout',{
       method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
       body:JSON.stringify({amount:amount})
     }).then(function(r){return r.json().then(function(dd){return {status:r.status,d:dd}})}).then(function(res){
@@ -1501,7 +1501,7 @@ window.openSupport=openSupport;
 
 function loadSupportTicket(silent){
   var b=_accBody();
-  fetch('https://panel.stland.ir/api/v1/support/ticket',{
+  fetch('/api/v1/support/ticket',{
     headers:{'X-Telegram-Init-Data':window._slInitData}
   }).then(function(r){return r.json()}).then(function(d){
     if(!d||!d.ok)throw 0;
@@ -1523,7 +1523,7 @@ function renderSupportStart(){
   var sb=document.getElementById('sp-start-btn');
   if(sb)sb.addEventListener('click',function(){
     sb.disabled=true;sb.textContent='در حال شروع…';
-    fetch('https://panel.stland.ir/api/v1/support/ticket',{
+    fetch('/api/v1/support/ticket',{
       method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData}
     }).then(function(r){return r.json()}).then(function(d){
       if(!d||!d.ok)throw 0;
@@ -1601,7 +1601,7 @@ function renderSupportChat(ticket,messages){
     var fd=new FormData();
     fd.append('text',text);
     if(_spPendingFile)fd.append('photo',_spPendingFile);
-    fetch('https://panel.stland.ir/api/v1/support/message',{
+    fetch('/api/v1/support/message',{
       method:'POST',headers:{'X-Telegram-Init-Data':window._slInitData},body:fd
     }).then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})}).then(function(res){
       if(res.status!==200||!res.d.ok){
@@ -1912,7 +1912,7 @@ window._notifyStock=function(pid,btnId){
 window._applyDiscount=function(){
   window._slApp.dialog.prompt('کد تخفیف را وارد کنید','کد تخفیف',function(code){
     code=(code||'').trim();if(!code)return;
-    fetch('https://panel.stland.ir/api/v1/discount/validate',{
+    fetch('/api/v1/discount/validate',{
       method:'POST',
       headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
       body:JSON.stringify({product_id:window._slCk.pid,code:code})
@@ -1928,7 +1928,7 @@ window._doPay=function(method){
   var btns=document.getElementById('checkout-btns');
   if(btns) btns.querySelectorAll('button').forEach(function(x){x.disabled=true;x.textContent='⏳ در حال پردازش...'});
 
-  fetch('https://panel.stland.ir/api/v1/checkout',{
+  fetch('/api/v1/checkout',{
     method:'POST',
     headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window._slInitData},
     body:JSON.stringify({product_id:window._slCk.pid,payment_type:method,discount_code:window._slCk.discountCode||undefined,agreed_terms:!!window._slCk.termsAgreed})
