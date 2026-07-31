@@ -5054,8 +5054,9 @@ async def feed_overview(request: Request):
         </tr>"""
 
     body = f"""
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center justify-between mb-6 flex-wrap gap-2">
       <h1 class="text-2xl font-bold text-gray-800">🗃 مدیریت موجودی</h1>
+      {_btn("🧬 بررسی محصولات تکراری", "/admin/products/duplicates", "amber", small=True)}
     </div>
     <div class="card overflow-hidden">
       <div class="overflow-x-auto">
@@ -5070,6 +5071,74 @@ async def feed_overview(request: Request):
     </div>"""
 
     return _layout("موجودی", body, adm)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── بررسی و حذف محصولات تکراری (بخش ۸ سند مینی‌اپ) ──────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/products/duplicates", response_class=HTMLResponse)
+async def duplicate_products_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+    import duplicate_products as dup
+    groups = dup.find_duplicate_groups()
+
+    def _pcard(p, is_original):
+        badge = ('<span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✅ اصل</span>' if is_original
+                 else '<span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">⚠️ تکراری</span>')
+        del_btn = "" if is_original else f'''
+          <form method="post" action="/admin/products/duplicates/{p['id']}/delete" onsubmit="return confirm('این نسخهٔ تکراری حذف بشه؟ موجودی/دسته‌بندی قیمت‌خرید و FAQهای این نسخه پاک می‌شن (نسخهٔ اصل و سفارش‌های قبلی دست‌نخورده می‌مونن).')">
+            <button class="text-xs text-red-600 border border-red-200 rounded-lg px-2 py-1 mt-2">🗑 حذف این تکراری</button>
+          </form>'''
+        return f"""
+        <div class="border rounded-lg p-3 {'bg-emerald-50/40' if is_original else 'bg-red-50/40'}">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <span class="text-xs text-gray-400">#{p['id']}</span>{badge}
+          </div>
+          <div class="text-xs text-gray-500">دسته: {e(p['category'])}</div>
+          <div class="text-xs text-gray-500">قیمت: {int(p['price'] or 0):,} ت</div>
+          <div class="text-xs text-gray-500">موجودی: {p['stock']} عدد</div>
+          <div class="text-xs text-gray-500">بچ خرید: {p['feed_batches_count']} ({int(p['feed_batches_cost']):,} ت)</div>
+          <div class="text-xs text-gray-500">سفارش‌های ثبت‌شده: {p['orders_count']}</div>
+          {del_btn}
+        </div>"""
+
+    groups_html = "".join(f"""
+      <div class="card p-4 mb-4">
+        <h3 class="font-bold text-gray-700 text-sm mb-3">📦 {e(g['title'])} <span class="text-xs text-gray-400 font-normal">({len(g['products'])} نسخه)</span></h3>
+        <div class="grid md:grid-cols-3 gap-3">
+          {"".join(_pcard(p, p['is_original']) for p in g['products'])}
+        </div>
+      </div>""" for g in groups) or '<div class="card p-10 text-center text-gray-400 text-sm">محصول تکراری‌ای (با تطابق دقیق عنوان) پیدا نشد. ✅</div>'
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← موجودی","/admin/feed","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">🧬 بررسی محصولات تکراری</h1>
+    </div>
+    <div class="text-xs text-gray-400 mb-4">معیار تشخیص: تطابق دقیق عنوان محصول، مستقل از دسته‌بندی. در هر گروه، اولین محصول ثبت‌شده «اصل» در نظر گرفته می‌شه و بقیه «تکراری»‌ان. حذف هر تکراری فقط داده‌های همون نسخه (موجودی، بچ خرید، FAQ، امتیاز) رو پاک می‌کنه — نسخهٔ اصل و سفارش‌های قبلی دست‌نخورده می‌مونن.</div>
+    {groups_html}"""
+    return _layout("محصولات تکراری", body, adm, flash=flash)
+
+
+@router.post("/products/duplicates/{pid}/delete")
+async def duplicate_product_delete(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+    import duplicate_products as dup
+    try:
+        result = dup.delete_duplicate_product(pid)
+        _log(request, "حذف محصول تکراری", "محصولات تکراری",
+             f"product:{pid} — feed:{result.get('feed_items',0)} batches:{result.get('feed_batches',0)} faqs:{result.get('faqs',0)} ratings:{result.get('ratings',0)}",
+             admin_info=adm)
+        msg = e("✅ حذف شد")
+    except ValueError as ex:
+        msg = e(f"❌ {ex}")
+    return _redir(f"/admin/products/duplicates?flash={msg}")
+
 
 @router.get("/feed/{pid}", response_class=HTMLResponse)
 async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
