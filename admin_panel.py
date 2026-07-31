@@ -4689,11 +4689,12 @@ async def product_new_post(request: Request,
         cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
             INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url, notify_on_restock, require_terms)
-            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?);""",
+                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url, notify_on_restock, require_terms, created_by, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,datetime('now'));""",
             (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
              int(limit_c or 0), int(limit_p or 0), description.strip(), support_after,
-             str(form.get("setup_message","")).strip(), image_url, notify_on_restock, require_terms))
+             str(form.get("setup_message","")).strip(), image_url, notify_on_restock, require_terms,
+             _admin_id_of(adm)))
         conn.commit()
     finally:
         conn.close()
@@ -4824,6 +4825,9 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
     if not p:
         return _redir("/admin/products")
 
+    from db import get_price_history
+    price_history = get_price_history(pid, limit=10)
+
     cats = ""
     for s in [("apple","سرویس‌های اپل آیدی")] + [(r["service_key"],r["title"]) for r in services]:
         sel = "selected" if s[0]==p["category"] else ""
@@ -4910,6 +4914,17 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
           {_btn("مدیریت موجودی →", f"/admin/feed/{pid}", "teal")}
           {_btn("❓ FAQ و نظرات", f"/admin/products/{pid}/faqs", "amber")}
         </div>
+        <div class="bg-white rounded-xl shadow p-5">
+          <h3 class="font-bold text-gray-700 mb-2 text-sm">🗓 اطلاعات ثبت</h3>
+          <div class="text-xs text-gray-500">تاریخ ثبت: {fa_date(p["created_at"]) if ("created_at" in p.keys() and p["created_at"]) else "نامشخص (قبل از این نسخه)"}</div>
+          <div class="text-xs text-gray-500 mt-1">ثبت‌کننده: {e(str(p["created_by"])) if ("created_by" in p.keys() and p["created_by"]) else "نامشخص"}</div>
+        </div>
+        {f'''<div class="bg-white rounded-xl shadow p-5">
+          <h3 class="font-bold text-gray-700 mb-2 text-sm">💹 تاریخچهٔ تغییر قیمت</h3>
+          <div class="space-y-2 max-h-64 overflow-y-auto">
+            {"".join(f'<div class="text-xs border-b pb-1.5"><div class="text-gray-400">{fa_date(h["changed_at"], with_time=True)}</div><div class="text-gray-700">{int(h["old_price"]):,} ← <b>{int(h["new_price"]):,}</b> تومان</div></div>' for h in price_history)}
+          </div>
+        </div>''' if price_history else ""}
         <div class="bg-white rounded-xl shadow p-5 space-y-2">
           <form method="post" action="/admin/products/{pid}/toggle">
             <button type="submit" class="w-full py-2 text-sm rounded-lg border-2 border-{"red" if p["is_active"] else "green"}-300 text-{"red" if p["is_active"] else "green"}-700 hover:bg-{"red" if p["is_active"] else "green"}-50">
@@ -4953,8 +4968,11 @@ async def product_edit_post(request: Request, pid: int,
     else:
         image_url = None  # یعنی دست نخوره — همون مقدار قبلی بمونه
 
+    new_price = int(price or 0)
+    new_pp = pp if pp > 0 else 0
     conn = _db()
     try:
+        old_row = conn.execute("SELECT price, COALESCE(partner_price,0) FROM products WHERE id=?;", (pid,)).fetchone()
         if image_url is None:
             conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
                 daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,notify_on_restock=?,require_terms=? WHERE id=?;""",
@@ -4970,6 +4988,11 @@ async def product_edit_post(request: Request, pid: int,
         conn.commit()
     finally:
         conn.close()
+
+    if old_row:
+        from db import log_price_change
+        log_price_change(pid, old_row[0], new_price, old_row[1], new_pp, changed_by=_admin_id_of(adm))
+
     return _redir(f"/admin/products/{pid}?flash=ذخیره+شد")
 
 @router.post("/products/{pid}/toggle")
