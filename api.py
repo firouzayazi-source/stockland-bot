@@ -752,11 +752,6 @@ async def api_wallet_topup(request: Request):
     return {"ok": True, "redirect_url": data["payment_url"]}
 
 
-# کارت مقصد کارت‌به‌کارت — دقیقاً همون مقداری که ربات هم هاردکد داره (bot.py handle_card2card_amount)
-_CARD2CARD_NUMBER = "6037701608004393"
-_CARD2CARD_NAME = "سید فیروز ایازی"
-
-
 async def _upload_photo_to_telegram(photo_bytes: bytes, content_type: str | None, caption: str) -> str:
     """آپلود عکس به چت ادمین در تلگرام برای گرفتن یه file_id واقعی (رسید/تیکت).
 
@@ -806,12 +801,13 @@ async def _upload_photo_to_telegram(photo_bytes: bytes, content_type: str | None
 @router.get("/payment/methods")
 async def api_payment_methods():
     """روش‌های فعال شارژ کیف‌پول — دقیقاً همون تنظیماتی که ربات هم می‌خونه."""
-    from db import get_crypto_settings
+    from db import get_crypto_settings, get_card2card_settings
     cs = get_crypto_settings()
+    c2c = get_card2card_settings()
     return {
         "ok": True,
         "gateway": True,
-        "card2card": {"card_number": _CARD2CARD_NUMBER, "card_name": _CARD2CARD_NAME},
+        "card2card": {"card_number": c2c["card_number"], "card_name": c2c["card_name"]},
         "crypto": {
             "enabled": bool(int(cs.get("enabled") or 0)),
             "usdt_trc20": cs.get("usdt_trc20") or "",
@@ -1200,33 +1196,46 @@ async def api_content_item(cid: int):
 @router.get("/categories")
 async def api_categories():
     """درخت دسته‌بندی‌ها برای PWA — فعال‌ها، مرتب‌شده."""
+    import db
     from db import get_root_categories, get_subcategories, get_category_products, ensure_product_support_schema
     ensure_product_support_schema()
     roots = [dict(r) for r in get_root_categories(active_only=True)]
-    from db import apply_flash_price, get_product_rating
-    def _with_rating(p):
-        try:
-            r = get_product_rating(int(p["id"]))
-        except Exception:
-            r = {"count": 0, "avg": 0}
+
+    # پاس اول: فقط جمع‌آوری محصولات هر شاخه، بدون کوئری قیمت/امتیاز per-row —
+    # این صفحه (بارگذاری اولیهٔ خانهٔ مینی‌اپ) عمیق‌ترین N+1 پروژه بود: به‌ازای
+    # هر محصول، در هر زیردستهٔ هر دستهٔ اصلی، دو کوئری جدا. حالا کل درخت رو اول
+    # می‌سازیم، بعد فقط دو کوئری batch برای همهٔ محصولات کل درخت با هم (بخش ۲۰
+    # فاز ۲ ممیزی).
+    tree = []
+    all_pids = []
+    for rc in roots:
+        subs = [dict(s) for s in get_subcategories(int(rc["id"]), active_only=True)]
+        prods = [dict(p) for p in get_category_products(int(rc["id"]), active_only=True)]
+        for sub in subs:
+            sub["_products"] = [dict(p) for p in get_category_products(int(sub["id"]), active_only=True)]
+            all_pids.extend(int(p["id"]) for p in sub["_products"])
+        all_pids.extend(int(p["id"]) for p in prods)
+        tree.append((rc, subs, prods))
+
+    ratings = db.batch_product_ratings(all_pids)
+    flash_pcts = db.batch_flash_percents(all_pids)
+
+    def _finalize(p):
+        pid = int(p["id"])
+        base = int(p.get("price") or 0)
+        pct = flash_pcts.get(pid)
+        p["effective_price"] = max(0, base - base * pct // 100) if pct is not None else base
+        p["flash_active"] = pct is not None
+        p["partner_price"] = int(p.get("partner_price") or 0)
+        r = ratings.get(pid, {"count": 0, "avg": 0})
         p["rating_avg"] = r.get("avg", 0)
         p["rating_count"] = r.get("count", 0)
         return p
+
     out = []
-    for rc in roots:
-        subs = [dict(s) for s in get_subcategories(int(rc["id"]), active_only=True)]
-        # محصولات دسته اصلی (بدون زیردسته)
-        prods = [dict(p) for p in get_category_products(int(rc["id"]), active_only=True)]
+    for rc, subs, prods in tree:
         for sub in subs:
-            sub["products"] = []
-            for p in get_category_products(int(sub["id"]), active_only=True):
-                p = dict(p)
-                base = int(p.get("price") or 0)
-                eff, fl = apply_flash_price(int(p["id"]), base)
-                p["effective_price"] = int(eff)
-                p["flash_active"] = bool(fl)
-                p["partner_price"] = int(p.get("partner_price") or 0)
-                sub["products"].append(_with_rating(p))
+            sub["products"] = [_finalize(p) for p in sub.pop("_products")]
         cat_out = {
             "id": int(rc["id"]), "name": rc.get("name"), "emoji": rc.get("emoji") or "",
             "slug": rc.get("slug") or "",
@@ -1237,15 +1246,9 @@ async def api_categories():
         }
         # اگر محصولات مستقیم زیر دسته اصلی هم داشت
         for p in prods:
-            p = dict(p)
-            base = int(p.get("price") or 0)
-            eff, fl = apply_flash_price(int(p["id"]), base)
-            p["effective_price"] = int(eff)
-            p["flash_active"] = bool(fl)
-            p["partner_price"] = int(p.get("partner_price") or 0)
             if not cat_out.get("products"):
                 cat_out["products"] = []
-            cat_out["products"].append(_with_rating(p))
+            cat_out["products"].append(_finalize(p))
         out.append(cat_out)
     return {"ok": True, "categories": out}
 
