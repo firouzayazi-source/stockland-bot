@@ -535,6 +535,21 @@ def ensure_schema():
         _migrate_condition_merge_new_sealed_v1(conn)
         _migrate_grade_category_v1(conn)
         _migrate_grade_labels_v1(conn)
+
+        # ایندکس‌ها — resolve_capacity() تا ۱۶ کوئری جدا روی iv_capacities با فیلتر
+        # model_id در هر کارشناسی می‌زنه (hot path)؛ بدون ایندکس هرکدوم اسکن کامل
+        # جدوله. iv_valuations/iv_transactions هم با model_id+capacity_id فیلتر
+        # می‌شن (کارشناس AI، تاریخچهٔ قیمت). الگوی db.py:ensure_indexes (بخش ۲۴ CLAUDE.md).
+        for _name, _target in [
+            ("idx_iv_capacities_model",       "iv_capacities(model_id)"),
+            ("idx_iv_valuations_model_cap",   "iv_valuations(model_id, capacity_id)"),
+            ("idx_iv_transactions_model_cap", "iv_transactions(model_id, capacity_id)"),
+        ]:
+            try:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {_name} ON {_target};")
+            except Exception:
+                pass
+        conn.commit()
     finally:
         conn.close()
     _SCHEMA_DONE = True
