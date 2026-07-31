@@ -36,6 +36,7 @@ stockland-bot/
 ├── ui_texts.py                متن‌ها/برچسب‌های قابل‌ویرایش + تابع t()
 ├── state.py                   دیکشنری‌های in-memory وضعیت کاربر/ادمین (user_states, admin_states, reseller_signup)
 ├── stbak_engine.py            موتور بکاپ/ریست ماژول‌محور فرمت .stbak (SQLite)
+├── duplicate_products.py      ماژول مستقل تشخیص/حذف محصولات تکراری (بخش ۸ سند مینی‌اپ، از ۲۰۲۶-۰۷-۳۱) — فقط توسط admin_panel.py استفاده می‌شود
 ├── storage.py                 لایهٔ انتزاعی DB — نوشته شده ولی **در هیچ‌جا import نمی‌شود (کاملاً بلااستفاده)**
 ├── payments.py                کمکی پرداخت کیف‌پول — **در هیچ‌جا import نمی‌شود (کد مرده)**
 ├── backup_tools.py             بکاپ/ریست قدیمی (پسوند Robuser) — هنوز در bot.py ایمپورت می‌شود؛ رشته‌های فارسی‌اش mojibake/خراب هستند
