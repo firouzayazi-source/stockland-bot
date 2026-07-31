@@ -6,7 +6,7 @@ import logging
 import requests
 from telebot import types
 
-logger = logging.getLogger("inox_bot")
+logger = logging.getLogger("stockland.bot.payments")
 
 MIN_TOPUP_AMOUNT = int(os.getenv("MIN_TOPUP_AMOUNT", "10000"))
 

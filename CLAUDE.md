@@ -105,7 +105,7 @@ stockland-bot/
 - **فقط Polling** فعال است در حالت مستقیم (`bot.infinity_polling`)؛ کد webhook هم در `payment_service.py` وجود دارد و سوییچ‌پذیر است.
 - **Exception handler مرکزی**: `_BotExceptionHandler` (bot.py:143-165) — همهٔ خطاهای بدون‌مدیریت هندلرها را می‌گیرد، لاگ کامل + traceback می‌نویسد، و یک هشدار HTML (حداکثر ۱ بار در ۶۰ ثانیه) به `ADMIN_ID` می‌فرستد. متن این هشدار فقط `str(exception)[:300]` است — برای تشخیص دقیق همیشه باید traceback کامل را از `journalctl` گرفت.
 - **پچ اعداد فارسی سراسری**: `_fa_digits()` (bot.py:180-229) روی `send_message`/`edit_message_text`/`reply_to`/`send_photo` caption/`answer_callback_query`/`edit_message_caption` مانکی‌پچ شده؛ لینک‌ها، `<code>`/`<pre>`، `@username`، `/command` مستثنا هستند. **پچ نشده:** `send_document`، captionِ `send_animation`/`send_video`.
-- **دو سیستم Rate-Limit مستقل و همپوشان** روی هر پیام/کال‌بک اجرا می‌شوند (بی‌ضرر ولی تکراری): یکی در بالای فایل (`_rl_msg_store`/`_rl_cb_store`)، یکی جدا در وسط فایل (`_rate_limits` با `deque`). — نیاز به یکی‌سازی در آینده.
+- ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، فاز ۳ ممیزی)** — ~~دو سیستم Rate-Limit مستقل و همپوشان~~ — سیستم دوم (`_rate_limits`/`_is_rate_limited`، وسط فایل) حذف شد؛ چون آستانهٔ سیستم اول (`_rl_msg_store`/`_rl_cb_store`، بالای فایل، registered زودتر) همیشه سخت‌گیرانه‌تر بود و طبق قانون single-dispatch تلگرام‌بات، همیشه اول تصمیم می‌گرفت — سیستم دوم برای پیام‌ها عملاً هیچ‌وقت واقعاً تصمیم‌گیرنده نبود.
 - **Maintenance mode**: `maintenance_blocker`/`maintenance_blocker_cb` با اولویت بالا ثبت شده‌اند؛ `ADMIN_ID` همیشه مستثناست (By Design).
 - **`_setup_app_menu_button()`** در **زمان import ماژول** اجرا می‌شود (نه فقط زیر `if __name__=="__main__"`) — یعنی حتی import صرف `bot.py` (مثلاً برای تست/health-check) یک کال واقعی به Telegram API می‌زند.
 
@@ -351,7 +351,6 @@ except Exception:
 - `handle_admin_text` به تابع تعریف‌نشدهٔ `handle_ticket_chat_user` ارجاع می‌دهد (حالت `ticket_support` که دیگر هیچ‌جا ست نمی‌شود — در حال حاضر بی‌خطر، ولی اگر آن حالت برگردد، `NameError`)
 - ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱)** — ~~`payments.py` (ریشه) و `storage.py` کاملاً بلااستفاده‌اند~~ — هر دو حذف شدن (+ نسخه‌های راکد ریشهٔ `app.js`/`app.css`/`manifest.json`/`sw.js`)، طبق تأیید صریح مالک پروژه.
 - ۷۴ از ۱۳۱ کلید `DEFAULT_UI_TEXTS` (~۵۶٪) هیچ‌جا استفاده نمی‌شوند — پیام‌های واقعی معادل، هاردکد فارسی داخل کدند (نقض قانون خود پروژه دربارهٔ عدم هاردکد متن)
-- دو سیستم Rate-Limit موازی در bot.py
 - `app_content` در هیچ ماژول `stbak_engine.py` پوشش داده نمی‌شود — بکاپ/ریست کامل این جدول را نادیده می‌گیرد
 - `daily_checkins`, `favorites`, `user_notifications` (جداول جدید مینی‌اپ، بخش ۲۱) هم مثل `app_content` هنوز به `stbak_engine.py` MODULES اضافه نشده‌اند — همون کلاس مشکل، جدید
 - جداول کارشناسی آیفون (`iv_*`، بخش ۲۲) هم به همین دلیل هنوز به `stbak_engine.py` اضافه نشده‌اند
@@ -368,7 +367,6 @@ except Exception:
 
 ## ۱۵. پیشنهادهای بهبود آینده (Pending Improvements — صرفاً پیشنهاد، بدون اقدام خودکار)
 
-- یکی‌سازی دو سیستم Rate-Limit در bot.py
 - افزودن مهاجرت `products.chat_enabled`
 - تصمیم دربارهٔ حذف کامل مسیر مردهٔ `apply_discount_*`/`_process_discount_code` تکراری
 - بررسی و شاید ادغام `sellers`/`seller_*` با `partners`/`partner_*`
