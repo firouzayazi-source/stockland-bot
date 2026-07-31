@@ -1471,6 +1471,19 @@ app.on('tabShow',function(el){var id=el&&el.id;
   if(id==='tab-learn'){loadTutCats();if(!_tutLoaded){_tutLoaded=true;loadTuts(true)}}
   if(id==='tab-news')loadNews();
   if(id==='tab-me')loadMe();
+  // «آموزش» حالا زیرمجموعهٔ تب «ابزار مفید»ه، نه یه تب مستقل توی نوار پایین —
+  // پس وقتی از داخل کارت آموزش در همون تب (نه لینک نوار پایین) واردش می‌شیم،
+  // باید دستی هایلایت نوار پایین رو روی «ابزار مفید» نگه داریم. setTimeout چون
+  // F7 خودش بعد از رویداد tabShow هم کلاس‌های tab-link-active رو آپدیت می‌کنه —
+  // باید بعد از اون تمومشدن اجرا بشیم، نه همزمانش.
+  if(id==='tab-tools'||id==='tab-learn'){
+    setTimeout(function(){
+      var toolsLink=document.querySelector('.tabbar .tab-link[href="#tab-tools"]');
+      if(!toolsLink)return;
+      document.querySelectorAll('.tabbar .tab-link').forEach(function(l){l.classList.remove('tab-link-active')});
+      toolsLink.classList.add('tab-link-active');
+    },0);
+  }
 });
 app.on('ptrRefresh',function(el,done){var t=document.querySelector('.tab.tab-active'),id=t&&t.id;
   if(id==='tab-home'){_h=0;cats=[];prods=[];loadHome()}if(id==='tab-shop'){_s=0;prods=[];loadShop()}
