@@ -2687,7 +2687,7 @@ async def settings_theme_save(request: Request):
     return _redir("/admin/settings?flash=تنظیمات+رنگ+ذخیره+شد")
 
 
-@router.get("/settings/theme/reset")
+@router.post("/settings/theme/reset")
 async def settings_theme_reset(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "panel_appearance")

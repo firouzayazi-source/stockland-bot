@@ -5,9 +5,39 @@
 یا نرخ دستی برمی‌گرده — کارشناسی هیچ‌وقت به‌خاطر قطعی یک سرویس خارجی نباید
 با خطا متوقف بشه.
 """
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
 import requests
 
 from . import db as ivdb
+
+
+class _UnsafeUrlError(Exception):
+    pass
+
+
+def _validate_public_url(url: str) -> None:
+    """محافظت SSRF پایه — چون URL منبع نرخ ارز مستقیم از پنل ادمین میاد (بخش ۱۳
+    CLAUDE.md: هیچ CSRF token روی فرم‌های پنل نیست)، بدون این چک یه ادمین
+    غیرمحتاط/هک‌شده می‌تونست fx.py رو وادار کنه به سرویس‌های داخلی (مثل خودِ
+    127.0.0.1:8001 یا cloud metadata endpoint) درخواست بزنه. فقط http/https +
+    IPهای عمومی مجازن؛ همهٔ رنجهای loopback/private/link-local/reserved رد می‌شن."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise _UnsafeUrlError("scheme نامعتبر")
+    host = parsed.hostname
+    if not host:
+        raise _UnsafeUrlError("host نامعتبر")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        raise _UnsafeUrlError("resolve DNS ناموفق")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise _UnsafeUrlError(f"IP غیرمجاز: {ip}")
 
 
 def _extract(data, json_path: str):
@@ -27,6 +57,7 @@ def _extract(data, json_path: str):
 
 def fetch_source(source: dict) -> int | None:
     try:
+        _validate_public_url(source["url"])
         resp = requests.get(source["url"], timeout=8)
         resp.raise_for_status()
         data = resp.json()
