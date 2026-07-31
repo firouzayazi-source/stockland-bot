@@ -3577,7 +3577,7 @@ async def backup_full_sync(request: Request):
     def _build_and_save():
         from stbak_engine import create_stbak, stbak_filename, _rotate_local
         raw = create_stbak(_DB_PATH(), modules=sections)
-        fname = stbak_filename("full" if is_full else "custom")
+        fname = stbak_filename("full" if is_full else "custom", _BACKUP_DIR)
         # ذخیرهٔ یک نسخه محلی هم — قبلاً این بکاپ فقط مستقیم دانلود می‌شد و هیچ ردی از
         # خودش توی _BACKUP_DIR نمی‌ذاشت؛ یعنی نه توی لیست «بکاپ‌های خودکار» پنل دیده
         # می‌شد نه «بازگردانی اضطراری» (که فقط _BACKUP_DIR رو می‌گرده) پیداش می‌کرد.
@@ -3793,7 +3793,7 @@ async def backup_download_job(request: Request, job_id: str):
         return _redir("/admin/database?flash=فایل+بکاپ+یافت+نشد")
     raw = open(fpath, "rb").read()
     from stbak_engine import stbak_filename, _rotate_local
-    fname = stbak_filename("full")
+    fname = stbak_filename("full", _BACKUP_DIR)
     # همون رفع مشترک با backup_full_sync — یه نسخه هم روی سرور ذخیره بشه تا توی
     # لیست پنل دیده بشه و «بازگردانی اضطراری» بتونه پیداش کنه.
     try:
