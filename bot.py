@@ -29,6 +29,7 @@ from db import (
     subtract_wallet_balance,
     set_wallet_balance,
     log_admin_action,
+    partner_price_applies,
     create_order,
     get_recent_orders_by_user,
     get_recent_orders_global,
@@ -326,7 +327,7 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
 
     partner_ok = (user_id is not None) and is_partner_approved(int(user_id))
     # partner_price باید > 0 و < price باشه تا اعمال شه
-    eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+    eff_price = partner_price if partner_price_applies(price, partner_price, partner_ok) else price
     from db import apply_flash_price as _afp
     eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
@@ -378,7 +379,7 @@ def send_product_detail(chat_id_or_msg, product, category=None, user_id=None, me
     _raw_base = int(price)  # قیمت پایه قبل از فلش
     if _flash_sale:
         _price_line = f"💰 قیمت: <s>{_raw_base:,}</s> ← <b>{int(eff_price):,}</b> تومان 🔥\n"
-    elif partner_ok_view and partner_price and int(partner_price) > 0 and int(partner_price) < int(price):
+    elif partner_ok_view and partner_price_applies(price, partner_price, partner_ok_view):
         # نمایش دو‌خطی ساده برای همکار: قیمت واقعی (خط‌خورده) + مبلغ قابل پرداخت
         _price_line = (
             f"💰 قیمت واقعی محصول: <s>{int(price):,}</s> تومان\n"
@@ -1921,7 +1922,7 @@ def send_products_menu(chat_id, category, admin_view=False, user_id=None):
             text = f"{status_icon} {title} | {price:,} تومان"
             cb = f"admin_product_{pid}"
         else:
-            eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+            eff_price = partner_price if partner_price_applies(price, partner_price, partner_ok) else price
             from db import apply_flash_price as _afp
             eff_price, _flash_sale = _afp(int(pid), int(eff_price))
             text = f"{title} | {eff_price:,} تومان"
@@ -1948,7 +1949,7 @@ def _get_eff_price(product, uid):
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
-    base = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+    base = partner_price if partner_price_applies(price, partner_price, partner_ok) else price
     from db import apply_flash_price
     eff, _ = apply_flash_price(int(product[0]), int(base))
     return eff
@@ -2350,7 +2351,7 @@ def handle_confirm_full(call):
     price  = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok    = is_partner_approved(uid)
-    eff_price     = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+    eff_price     = partner_price if partner_price_applies(price, partner_price, partner_ok) else price
 
     # تخفیف اعمال شده از _show_order_summary
     discount  = int(user_states.get(uid, {}).get("applied_discount", 0))
@@ -2403,7 +2404,7 @@ def handle_confirm_wallet(call):
     price = product[3]
     partner_price = product[6] if len(product) > 6 else None
     partner_ok = is_partner_approved(uid)
-    eff_price = partner_price if (partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price)) else price
+    eff_price = partner_price if partner_price_applies(price, partner_price, partner_ok) else price
     from db import apply_flash_price as _afp
     eff_price, _flash_sale = _afp(int(pid), int(eff_price))
 
@@ -7046,14 +7047,16 @@ def handle_card2card_amount(message):
         return
     amount = int(txt)
     user_states[uid] = {"mode": "card2card_receipt", "amount": amount}
+    from db import get_card2card_settings
+    c2c = get_card2card_settings()
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="wallet_cancel_card2card"))
     bot.reply_to(message,
         f"✅ مبلغ شارژ: <b>{amount:,}</b> تومان\n\n"
         "لطفاً این مبلغ را به کارت زیر واریز کنید:\n\n"
         "💳 شماره کارت:\n"
-        "<code>6037701608004393</code>\n"
-        "به نام: <b>سید فیروز ایازی</b>\n\n"
+        f"<code>{c2c['card_number']}</code>\n"
+        f"به نام: <b>{c2c['card_name']}</b>\n\n"
         "سپس <b>عکس رسید واریز</b> را همین‌جا ارسال کنید.\n"
         "(برای تغییر مبلغ، فقط عدد جدید را بفرستید)",
         parse_mode="HTML", reply_markup=kb)

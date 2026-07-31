@@ -668,24 +668,26 @@ def add_wallet_balance(user_id: int, amount: int) -> int:
     """
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
-    row = cur.fetchone()
-    if row:
-        new_balance = int(row[0]) + int(amount)
-        cur.execute(
-            "UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?;",
-            (new_balance, now, user_id),
-        )
-    else:
-        new_balance = int(amount)
-        cur.execute(
-            "INSERT INTO wallets (user_id, balance, updated_at) VALUES (?, ?, ?);",
-            (user_id, new_balance, now),
-        )
-    conn.commit()
-    conn.close()
-    return new_balance
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
+        row = cur.fetchone()
+        if row:
+            new_balance = int(row[0]) + int(amount)
+            cur.execute(
+                "UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?;",
+                (new_balance, now, user_id),
+            )
+        else:
+            new_balance = int(amount)
+            cur.execute(
+                "INSERT INTO wallets (user_id, balance, updated_at) VALUES (?, ?, ?);",
+                (user_id, new_balance, now),
+            )
+        conn.commit()
+        return new_balance
+    finally:
+        conn.close()
 
 
 def subtract_wallet_balance(user_id: int, amount: int) -> bool:
@@ -732,22 +734,24 @@ def set_wallet_balance(user_id: int, new_balance: int) -> int:
     """
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
-    row = cur.fetchone()
-    if row:
-        cur.execute(
-            "UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?;",
-            (int(new_balance), now, user_id),
-        )
-    else:
-        cur.execute(
-            "INSERT INTO wallets (user_id, balance, updated_at) VALUES (?, ?, ?);",
-            (user_id, int(new_balance), now),
-        )
-    conn.commit()
-    conn.close()
-    return int(new_balance)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?;",
+                (int(new_balance), now, user_id),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO wallets (user_id, balance, updated_at) VALUES (?, ?, ?);",
+                (user_id, int(new_balance), now),
+            )
+        conn.commit()
+        return int(new_balance)
+    finally:
+        conn.close()
 
 
 # ========= ORDERS =========
@@ -760,18 +764,20 @@ def create_order(user_id: int, category: str, title: str, price: int, product_id
     now = datetime.utcnow().isoformat()
     product_id_str = str(product_id) if product_id is not None else ""
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO orders (user_id, category, product_id, title, price, created_at, buyer_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?);
-        """,
-        (user_id, category, product_id_str, title, int(price), now, buyer_type),
-    )
-    order_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return order_id
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO orders (user_id, category, product_id, title, price, created_at, buyer_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            (user_id, category, product_id_str, title, int(price), now, buyer_type),
+        )
+        order_id = cur.lastrowid
+        conn.commit()
+        return order_id
+    finally:
+        conn.close()
 
 
 def get_recent_orders_by_user(user_id: int, limit: int = 10):
@@ -1060,21 +1066,23 @@ def update_zarinpal_status(authority: str, new_status: str, expected_current: st
     خروجی: تعداد ردیفهای تغییرکرده (0 یا 1).
     """
     conn = _get_connection()
-    cur = conn.cursor()
-    if expected_current is None:
-        cur.execute(
-            "UPDATE zarinpal_transactions SET status = ? WHERE authority = ?;",
-            (str(new_status), str(authority)),
-        )
-    else:
-        cur.execute(
-            "UPDATE zarinpal_transactions SET status = ? WHERE authority = ? AND status = ?;",
-            (str(new_status), str(authority), str(expected_current)),
-        )
-    conn.commit()
-    changed = cur.rowcount or 0
-    conn.close()
-    return int(changed)
+    try:
+        cur = conn.cursor()
+        if expected_current is None:
+            cur.execute(
+                "UPDATE zarinpal_transactions SET status = ? WHERE authority = ?;",
+                (str(new_status), str(authority)),
+            )
+        else:
+            cur.execute(
+                "UPDATE zarinpal_transactions SET status = ? WHERE authority = ? AND status = ?;",
+                (str(new_status), str(authority), str(expected_current)),
+            )
+        conn.commit()
+        changed = cur.rowcount or 0
+        return int(changed)
+    finally:
+        conn.close()
 
 
     cur = conn.cursor()
@@ -1384,19 +1392,21 @@ def add_other_service(service_key: str, title: str, emoji: str = "🧩") -> bool
 def delete_other_service(service_key: str, delete_products: bool = True) -> None:
     """یک سرویس را حذف میکند. در صورت delete_products محصولات و فیدهای آن سرویس هم پاک میشود."""
     conn = _get_connection()
-    cur = conn.cursor()
-    if delete_products:
-        # حذف فیدهای مربوط به محصولات این دسته
-        cur.execute(
-            "DELETE FROM product_feed WHERE product_id IN (SELECT id FROM products WHERE category=?);",
-            (service_key,),
-        )
-        # حذف محصولات این دسته
-        cur.execute("DELETE FROM products WHERE category=?;", (service_key,))
-    # حذف خود سرویس
-    cur.execute("DELETE FROM other_services WHERE service_key=?;", (service_key,))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        if delete_products:
+            # حذف فیدهای مربوط به محصولات این دسته
+            cur.execute(
+                "DELETE FROM product_feed WHERE product_id IN (SELECT id FROM products WHERE category=?);",
+                (service_key,),
+            )
+            # حذف محصولات این دسته
+            cur.execute("DELETE FROM products WHERE category=?;", (service_key,))
+        # حذف خود سرویس
+        cur.execute("DELETE FROM other_services WHERE service_key=?;", (service_key,))
+        conn.commit()
+    finally:
+        conn.close()
 
 # ========= FEED ALERT SETTINGS =========
 
@@ -1783,22 +1793,26 @@ def get_ui_text(key: str) -> str | None:
 
 def set_ui_text(key: str, value: str) -> None:
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO ui_texts(key, value, updated_at) VALUES(?,?,?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;",
-        (key, value, datetime.now().isoformat()),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ui_texts(key, value, updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;",
+            (key, value, datetime.now().isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_ui_text(key: str) -> None:
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ui_texts WHERE key=?;", (key,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_ui_texts(prefix: str | None = None) -> list[tuple[str, str, str]]:
@@ -6058,6 +6072,79 @@ def get_flash_sale(product_id: int):
         conn.close()
 
 
+def batch_flash_percents(product_ids: list) -> dict:
+    """نسخهٔ batch سبک get_flash_sale — فقط درصد فعال هر محصول (نه شیء کامل با
+    mins_left/left_str)، چون همینو مصرف‌کننده‌های لیستی (list_products،
+    favorite_products، api_categories) لازم دارن. یک کوئری برای کل لیست به‌جای
+    یک کوئری جدا به‌ازای هر محصول (رفع N+1، بخش ۲ فاز ۲ ممیزی). کلید غایب در
+    خروجی یعنی فروش فوری فعالی نداره."""
+    if not product_ids:
+        return {}
+    ensure_growth_schema()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        placeholders = ",".join("?" * len(product_ids))
+        rows = conn.execute(f"""
+            SELECT product_id, percent FROM flash_sales
+            WHERE product_id IN ({placeholders}) AND is_active=1
+              AND datetime('now','localtime') BETWEEN starts_at AND ends_at
+            ORDER BY id DESC;
+        """, tuple(product_ids)).fetchall()
+        out = {}
+        for r in rows:
+            pid = int(r["product_id"])
+            if pid not in out:  # اولین (جدیدترین، چون ORDER BY id DESC) رو نگه دار
+                out[pid] = int(r["percent"])
+        return out
+    finally:
+        conn.close()
+
+
+def batch_product_ratings(product_ids: list) -> dict:
+    """نسخهٔ batch get_product_rating — یک کوئری GROUP BY برای کل لیست."""
+    if not product_ids:
+        return {}
+    ensure_ratings_schema()
+    conn = _get_connection()
+    try:
+        placeholders = ",".join("?" * len(product_ids))
+        rows = conn.execute(f"""
+            SELECT product_id, COUNT(*) as cnt, ROUND(AVG(rating),1) as avg
+            FROM product_ratings WHERE product_id IN ({placeholders})
+            GROUP BY product_id;
+        """, tuple(product_ids)).fetchall()
+        return {int(r[0]): {"count": int(r[1] or 0), "avg": float(r[2] or 0)} for r in rows}
+    finally:
+        conn.close()
+
+
+def batch_available_stock(product_ids: list) -> dict:
+    """نسخهٔ batch get_available_stock — یک کوئری GROUP BY برای کل لیست.
+    کلید غایب یعنی موجودی صفر (هیچ ردیف product_feed تحویل‌نشده‌ای نداره)."""
+    if not product_ids:
+        return {}
+    conn = _get_connection()
+    try:
+        placeholders = ",".join("?" * len(product_ids))
+        rows = conn.execute(f"""
+            SELECT product_id, COUNT(*) as cnt FROM product_feed
+            WHERE product_id IN ({placeholders}) AND delivered=0
+            GROUP BY product_id;
+        """, tuple(product_ids)).fetchall()
+        return {int(r[0]): int(r[1] or 0) for r in rows}
+    finally:
+        conn.close()
+
+
+def partner_price_applies(price, partner_price, partner_ok: bool) -> bool:
+    """آیا قیمت همکاری باید به‌جای قیمت اصلی اعمال بشه؟ باید مثبت و کمتر از قیمت
+    اصلی باشه، فقط برای همکار تأییدشده. قبلاً همین شرط عیناً در ۵ جای جدا bot.py
+    تکرار شده بود (بخش ۲۲ فاز ۲ ممیزی) — منبع واحد یعنی هر تغییر آیندهٔ این قاعده
+    فقط یه‌جا لازمه اعمال بشه، نه ریسک جا موندن یکی از مسیرهای خرید."""
+    return bool(partner_ok and partner_price and int(partner_price) > 0 and int(partner_price) < int(price))
+
+
 def apply_flash_price(product_id: int, price: int):
     """(قیمت نهایی، فروش‌فوری یا None)"""
     try:
@@ -6240,6 +6327,13 @@ def weekly_top_partners(limit: int = 3) -> list:
 
 # ─── ۷) تنظیمات رمزارز / کانال / تبلیغ / وب‌اپ ────────────────────────────
 
+# شماره کارت مقصد کارت‌به‌کارت — قبلاً هم در bot.py هم api.py مستقل هاردکد شده
+# بود (دو نسخهٔ جدا از یه مقدار)؛ یعنی تغییر کارت بانکی نیاز به ویرایش دو فایل
+# و دیپلوی داشت، با ریسک واقعی جا موندن یکی و نمایش کارت قدیمی به بخشی از
+# کاربرها. مقادیر پیش‌فرض زیر دقیقاً همون مقادیر قبلاً هاردکدشده‌ن — یعنی تا
+# وقتی ادمین از پنل تغییرش نده، رفتار برای کاربر نهایی کاملاً یکسان می‌مونه.
+CARD2CARD_DEFAULTS = {"card_number": "6037701608004393", "card_name": "سید فیروز ایازی"}
+
 CRYPTO_DEFAULTS = {"enabled": 0, "usdt_trc20": "", "trx": "",
                    "note": ("💡 <b>راهنمای پرداخت رمزارز:</b>\n\n""۱. مبلغ به تومان را وارد کنید\n""۲. به آدرس نشان‌داده‌شده واریز کنید\n""۳. TXID (هش تراکنش) را برای ما ارسال کنید\n\n""⏳ پس از تأیید تراکنش (معمولاً ۱۵-۳۰ دقیقه)، کیف‌پول شارژ می‌شود.")}
 SOCIAL_DEFAULTS = {"channel_id": "", "sale_post": 0, "rating": 1, "upsell": 1,
@@ -6262,6 +6356,11 @@ PROMO_DEFAULTS  = {"text": (
 
 def get_crypto_settings() -> dict:
     return get_cfg_json("crypto", CRYPTO_DEFAULTS)
+
+
+def get_card2card_settings() -> dict:
+    """کارت مقصد کارت‌به‌کارت — منبع واحد برای هم ربات هم مینی‌اپ (بخش ۲۲ فاز ۲ ممیزی)."""
+    return get_cfg_json("card2card", CARD2CARD_DEFAULTS)
 
 
 def get_social_settings() -> dict:
