@@ -280,6 +280,15 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
 .sl-login-s{font-size:13px;color:var(--mu);line-height:1.9}
 .sl-login-btn{display:inline-block;margin-top:16px;background:#54A9EB;color:#fff;font-size:14px;font-weight:700;
  border-radius:12px;padding:12px 24px;text-decoration:none}
+/* هدر پاپ‌آپ محصول: عنوان ثابت «محصول» باید کاملاً وسط‌چین بمونه و هیچ‌وقت با دکمهٔ
+   بستن (سمت راست در RTL) تداخل نکنه — position:absolute مستقل از عرض .right،
+   نه فقط centering پیش‌فرض F7 که با متن بلند/RTL می‌تونست جابه‌جا بشه. */
+#prod-popup .navbar-inner{position:relative}
+#prod-popup .navbar-inner .title{
+ position:absolute;left:0;right:0;margin:0 auto;text-align:center;
+ pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+#prod-popup .navbar-inner .right{position:relative;z-index:1}
 .sl-pp-hero{padding:24px 20px 18px;text-align:center;position:relative}
 .sl-pp-emoji{font-size:54px;margin-bottom:8px}
 .sl-pp-emoji img{width:96px;height:96px;object-fit:cover;border-radius:20px;display:block;margin:0 auto;
