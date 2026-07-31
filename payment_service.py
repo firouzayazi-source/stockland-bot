@@ -108,12 +108,20 @@ async def _no_cache_pwa_shell(request, call_next):
     """sw.js/index.html/app.css/app.js نباید HTTP-cache بشن — وگرنه مرورگر/تلگرام
     هیچ‌وقت متوجه آپدیت نمی‌شه و کش PWA برای همیشه قدیمی می‌مونه. app.css/app.js
     از قبل با ?v=timestamp نسخه‌بندی می‌شن، ولی این لایهٔ دومه — اگه یه‌جا نسخه‌بندی
-    عمل نکنه (باگ دیگه‌ای در sed یا هر چیز دیگه)، مرورگر بازم مجبوره از سرور بپرسه."""
+    عمل نکنه (باگ دیگه‌ای در sed یا هر چیز دیگه)، مرورگر بازم مجبوره از سرور بپرسه.
+
+    برعکسش: بقیهٔ فایل‌های استاتیک زیر /app و /app-media (vendor، آیکون‌ها، مدیای
+    آپلودی) اصلاً Cache-Control نداشتن — یعنی هر بار کامل از سرور دانلود می‌شدن.
+    یک روز کش (نه بیشتر — چون app-media شامل فایل‌های قابل‌جایگزینی مثل آواتار
+    کاربر با همون URL است، بخش ۲۱ CLAUDE.md) برای این مسیرها اضافه شد."""
     response = await call_next(request)
     try:
-        if request.url.path in _PWA_NO_CACHE_PATHS:
+        path = request.url.path
+        if path in _PWA_NO_CACHE_PATHS:
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"
+        elif path.startswith("/app/") or path.startswith("/app-media/"):
+            response.headers.setdefault("Cache-Control", "public, max-age=86400")
     except Exception:
         pass
     return response

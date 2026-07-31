@@ -152,7 +152,7 @@ async def api_auth_start_login(request: Request):
 @router.get("/auth/poll-login")
 async def api_auth_poll_login(token: str = ""):
     """فرانت هر چند ثانیه صدا می‌زنه تا ببینه کاربر داخل ربات لینک weblogin_TOKEN رو باز کرده یا نه."""
-    from db import get_web_login_token, get_user_full_name
+    from db import get_web_login_token, get_user_full_name, consume_web_login_token
     row = get_web_login_token(token) if token else None
     if not row:
         raise HTTPException(404, "توکن نامعتبر")
@@ -160,7 +160,12 @@ async def api_auth_poll_login(token: str = ""):
     if status == "pending" and (time.time() - int(row["created_at"] or 0)) > _WEB_LOGIN_TOKEN_TTL:
         status = "expired"
     if status == "confirmed":
-        uid = int(row["user_id"])
+        # مصرف اتمیک — فقط اولین poll بعد از تأیید واقعاً سشن می‌سازه؛ poll بعدی
+        # (تکراری یا replay با همون مقدار توکن) دیگه status='confirmed' نمی‌بینه.
+        consumed = consume_web_login_token(token)
+        if not consumed:
+            return {"ok": True, "status": "used"}
+        uid = int(consumed["user_id"])
         resp = JSONResponse({"ok": True, "status": "confirmed", "full_name": get_user_full_name(uid)})
         resp.set_cookie(
             _WEB_SESSION_COOKIE, _make_web_session(uid),
@@ -723,11 +728,11 @@ async def api_wallet_topup(request: Request):
         raise HTTPException(400, f"حداقل مبلغ شارژ {MIN_TOPUP_AMOUNT:,} تومان است")
 
     import httpx
-    from config import INTERNAL_API_SECRET
+    from config import INTERNAL_API_SECRET, PAYMENT_API_BASE_URL
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
-                "http://127.0.0.1:8001/payment/create",
+                f"{PAYMENT_API_BASE_URL}/payment/create",
                 headers={"X-Internal-Secret": INTERNAL_API_SECRET},
                 json={
                     "user_id": uid,
@@ -1454,12 +1459,12 @@ async def api_checkout(request: Request):
 
     # درگاه زرین‌پال
     import httpx
-    from config import WEBHOOK_BASE_URL, INTERNAL_API_SECRET
+    from config import WEBHOOK_BASE_URL, INTERNAL_API_SECRET, PAYMENT_API_BASE_URL
     callback = WEBHOOK_BASE_URL.rstrip("/") + "/api/v1/payment/verify"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(
-                "http://127.0.0.1:8001/payment/create",
+                f"{PAYMENT_API_BASE_URL}/payment/create",
                 headers={"X-Internal-Secret": INTERNAL_API_SECRET},
                 json={
                     "user_id": uid,

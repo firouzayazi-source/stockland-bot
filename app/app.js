@@ -119,7 +119,7 @@ function startWebLogin(containerId){
             clearInterval(_loginPoll);_loginPoll=null;
             loggedIn=true;tgUser={first_name:pd.full_name||'کاربر',username:''};
             _m=0;loadMe();
-          }else if(pd&&pd.status==='expired'){
+          }else if(pd&&(pd.status==='expired'||pd.status==='used')){
             clearInterval(_loginPoll);_loginPoll=null;
             box.innerHTML='<div class="sl-checkout-note">لینک منقضی شد — دوباره تلاش کنید</div>';
           }
