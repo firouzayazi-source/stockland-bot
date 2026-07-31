@@ -18,21 +18,33 @@ _slApplyTheme();
 if(inTG&&tg.onEvent){try{tg.onEvent('themeChanged',_slApplyTheme)}catch(e){}}
 
 /* داخل مینی‌اپ تلگرام، navigation طبیعی a[target=_blank] قابل‌اعتماد نیست —
-   همهٔ این لینک‌ها (خبر، دانلود، …) رو از طریق پل جاوااسکریپت تلگرام باز می‌کنیم. */
-if(inTG){
-  document.addEventListener('click',function(ev){
-    var a=ev.target.closest('a[target="_blank"]');
-    if(!a)return;
-    var href=a.getAttribute('href');
-    if(!href||href==='#')return;
-    ev.preventDefault();
+   همهٔ این لینک‌ها (خبر، دانلود، …) رو از طریق پل جاوااسکریپت تلگرام باز می‌کنیم.
+   ⚠️ بیرون از تلگرام هم (یعنی وقتی اپ به‌صورت PWA نصب‌شده روی صفحهٔ اصلی گوشی با
+   display:standalone باز می‌شه، نه در مرورگر معمولی) a[target=_blank] معمولاً کار
+   نمی‌کنه — خیلی از مرورگرهای موبایل (خصوصاً iOS Safari) در حالت standalone اصلاً
+   مفهوم «تب جدید» ندارن، پس کلیک روی لینک ساکت هیچ اتفاقی نمی‌افته (این دقیقاً همون
+   باگ گزارش‌شده بود: کلیک روی خبر در PWA نصب‌شده چیزی باز نمی‌کرد). راه‌حل: همین
+   interceptor بیرون از تلگرام هم فعاله؛ اول window.open رو امتحان می‌کنه، و اگه
+   null برگردوند (یعنی مرورگر/PWA پشتیبانی نکرد یا پاپ‌آپ بلاک شد)، به ناوبری همون
+   تب فعلی (location.href) برمی‌گرده — تضمین می‌کنه کاربر حتماً مقاله رو می‌بینه. */
+document.addEventListener('click',function(ev){
+  var a=ev.target.closest('a[target="_blank"]');
+  if(!a)return;
+  var href=a.getAttribute('href');
+  if(!href||href==='#')return;
+  ev.preventDefault();
+  if(inTG){
     try{
       if(/^https:\/\/t\.me\//i.test(href)&&tg.openTelegramLink){tg.openTelegramLink(href)}
       else if(tg.openLink){tg.openLink(href,{try_instant_view:false})}
       else{window.open(href,'_blank')}
     }catch(e){window.open(href,'_blank')}
-  },true);
-}
+    return;
+  }
+  var w=null;
+  try{w=window.open(href,'_blank')}catch(e){w=null}
+  if(!w){try{window.location.href=href}catch(e2){}}
+},true);
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function nl2br(s){return esc(s).replace(/\r?\n/g,'<br>')}
