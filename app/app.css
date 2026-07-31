@@ -409,7 +409,9 @@ html.dark .sl-checkout-emoji{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-tier-progress{margin:0 20px 14px;background:var(--card);border-radius:14px;padding:14px 16px;box-shadow:var(--sh)}
 .sl-tier-progress-top{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;color:var(--mu);margin-bottom:8px}
 .sl-tier-progress-top b{color:var(--ink);font-weight:800}
-.sl-tier-progress-bar{height:8px;border-radius:999px;background:var(--ln);overflow:hidden}
+/* عمداً direction:ltr — طبق درخواست صریح مالک پروژه، نوار پیشرفت پنل همکار برخلاف
+   بقیهٔ اپ (که RTL‌ه) باید از چپ به راست پر بشه، نه راست‌به‌چپ پیش‌فرض RTL */
+.sl-tier-progress-bar{height:8px;border-radius:999px;background:var(--ln);overflow:hidden;direction:ltr}
 .sl-tier-progress-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#F59E0B,#FBBF24);transition:width .4s ease}
 .sl-checkout-wallet-info{font-size:13px;color:var(--mu)}
 .sl-checkout-wallet-bal{font-size:18px;font-weight:800;color:var(--br);margin-top:2px}
