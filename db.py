@@ -414,8 +414,25 @@ def init_db(db_path=None):
             );
             """
         )
+        # order_id/delivered_at قبلاً فقط داخل claim_next_feed_item (لیزی، هر بار
+        # فراخوانی) اضافه می‌شدن — هم برخلاف قاعدهٔ پروژه برای جدول‌های هسته (باید
+        # ایگر توی init_db باشن)، هم یه race condition واقعی داشت: با connection
+        # pooling فعال (db_conn.py، DB_CONNECTION_POOL=1)، چند ترد هم‌زمان روی یه
+        # دیتابیس کاملاً تازه می‌تونستن به‌ترتیب نامنظم دو ALTER رو (که توی یه
+        # try/except مشترک بودن) اجرا کنن — اگه order_id قبلاً توسط ترد دیگه اضافه
+        # شده بود، ALTER اول همون‌جا Exception می‌داد و ALTER دوم (delivered_at)
+        # هیچ‌وقت اجرا نمی‌شد، یعنی «no such column: delivered_at» توی claim بعدی.
+        # با تست مستقیم concurrent (۱۵ ترد هم‌زمان روی دیتابیس تازه) کشف شد.
+        try:
+            cur.execute("ALTER TABLE product_feed ADD COLUMN order_id INTEGER;")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute("ALTER TABLE product_feed ADD COLUMN delivered_at TEXT;")
+        except sqlite3.OperationalError:
+            pass
 
-    
+
 
         # تنظیمات هشدار کمبود موجودی فید (برای هر محصول)
         cur.execute(
@@ -1179,13 +1196,20 @@ def claim_next_feed_item(product_id: int, order_id: int = None):
     conn = _get_connection()
     cur = conn.cursor()
     try:
-        # migration: اضافه کردن ستونهای tracking اگه نباشن
+        # migration fallback — این ستون‌ها الان ایگر توی init_db اضافه می‌شن (بالای
+        # همین فایل)؛ این بلوک فقط برای دیتابیس‌هایی که هنوز init_db تازه رو ندیدن
+        # نگه داشته شده. هر ALTER جدا try/except داره — قبلاً هر دو تو یه try
+        # مشترک بودن که یه race condition واقعی داشت (جزئیات بالای init_db).
         try:
             cur.execute("ALTER TABLE product_feed ADD COLUMN order_id INTEGER;")
+            conn.commit()
+        except Exception:
+            pass
+        try:
             cur.execute("ALTER TABLE product_feed ADD COLUMN delivered_at TEXT;")
             conn.commit()
         except Exception:
-            pass  # ستونها قبلاً اضافه شدن
+            pass
 
         cur.execute("BEGIN IMMEDIATE;")
         cur.execute(
