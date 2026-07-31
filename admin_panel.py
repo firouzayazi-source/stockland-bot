@@ -4081,7 +4081,6 @@ async def admins_add(request: Request):
         except: pass
 
     _log(request, "ایجاد ادمین", "ادمین‌ها", f"یوزرنیم: {web_username}")
-    _log(request, "ایجاد ادمین", "ادمین‌ها", f"یوزرنیم: {web_username}")
     return _redir("/admin/admins?flash=ادمین+جدید+اضافه+شد")
 
 @router.get("/admins/{aid}/edit", response_class=HTMLResponse)
@@ -4188,6 +4187,8 @@ async def admins_edit_post(request: Request, aid: int):
     finally:
         conn.close()
 
+    detail = f"id:{aid} — دسترسی‌های تازه: {', '.join(perms) or '—'}" + (" — رمز عوض شد" if web_password else "")
+    _log(request, "ویرایش ادمین", "ادمین‌ها", detail, admin_info=adm)
     return _redir(f"/admin/admins/{aid}/edit?flash=ذخیره+شد")
 
 @router.post("/admins/{aid}/toggle")
@@ -4200,8 +4201,11 @@ async def admins_toggle(request: Request, aid: int):
     try:
         conn.execute("UPDATE admins SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE id=?;", (aid,))
         conn.commit()
+        row = conn.execute("SELECT is_active FROM admins WHERE id=?;", (aid,)).fetchone()
     finally:
         conn.close()
+    new_state = "فعال" if (row and row["is_active"]) else "غیرفعال"
+    _log(request, "تغییر وضعیت ادمین", "ادمین‌ها", f"id:{aid} — وضعیت جدید: {new_state}", admin_info=adm)
     return _redir("/admin/admins?flash=وضعیت+تغییر+کرد")
 
 @router.post("/admins/{aid}/delete")
@@ -7029,6 +7033,8 @@ async def wallet_adjust(request: Request, uid: str=Form(""), amount: str=Form("0
 
     # اطلاع به کاربر
     op_label = {"add": "افزایش", "sub": "کاهش", "set": "تنظیم"}.get(op, op)
+    _log(request, "تعدیل دستی کیف‌پول", "کیف‌پول‌ها",
+         f"کاربر {user_id}: {op_label} {amt:,} تومان ({cur:,} ← {new_bal:,})", admin_info=adm)
     try:
         await run_in_threadpool(
             _tg_send,
