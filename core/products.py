@@ -87,6 +87,7 @@ def get_product(pid: int) -> Optional[dict]:
         "is_active": bool(p.get("is_active", 1)),
         "stock": int(remaining),
         "notify_on_restock": bool(p.get("notify_on_restock") or 0),
+        "require_terms": bool(p.get("require_terms") or 0),
         "image_url": p.get("image_url") or "",
         "rating_avg": rating.get("avg", 0),
         "rating_count": rating.get("count", 0),
