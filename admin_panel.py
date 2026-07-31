@@ -2410,7 +2410,7 @@ async def purchase_terms_page(request: Request, flash: str = ""):
       <h1 class="text-2xl font-bold text-gray-800">📜 قوانین خرید</h1>
     </div>
     <div class="card p-6 max-w-2xl">
-      <p class="text-sm text-gray-500 mb-4">این متن، وقتی برای یک محصول «نیاز به تأیید قوانین خرید» فعال باشه، قبل از پرداخت به کاربر نشون داده می‌شه — هم در ربات، هم در مینی‌اپ. کاربر فقط با تیک‌زدن چک‌باکس تأیید می‌تونه ادامه بده.</p>
+      <p class="text-sm text-gray-500 mb-4">این متن، پیش‌فرض عمومیه — وقتی برای یک محصول «نیاز به تأیید قوانین خرید» فعال باشه ولی متن اختصاصی خودِ اون محصول خالی گذاشته شده باشه، همین متن قبل از پرداخت به کاربر نشون داده می‌شه (هم در ربات، هم در مینی‌اپ). هر محصول می‌تونه از فرم ویرایش خودش، متن قوانین اختصاصی جدا داشته باشه — چون ممکنه محصولات مختلف قوانین متفاوتی داشته باشن. کاربر فقط با تیک‌زدن چک‌باکس تأیید می‌تونه ادامه بده.</p>
       <form method="post" action="/admin/settings/purchase-terms">
         {_textarea("text", "مثلاً: کالای دیجیتال پس از تحویل، قابل استرداد نیست مگر در صورت خرابی...", value=text, rows=10)}
         <div class="mt-3">{_btn("💾 ذخیره", color="green")}</div>
@@ -4639,12 +4639,19 @@ async def product_new_get(request: Request):
       <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
         <label class="perm-label" style="font-size:13px">
           <input type="checkbox" name="require_terms" value="1"
+            id="terms_chk_new" onchange="document.getElementById('terms_text_new').style.display=this.checked?'block':'none'"
             style="width:16px;height:16px;min-height:16px;cursor:pointer">
           <div>
             <strong>نیاز به تأیید قوانین خرید</strong>
-            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">اگه فعال باشه، کاربر قبل از پرداخت باید متن قوانین خرید رو ببینه و با تیک‌زدن یک چک‌باکس تأیید کنه (هم در ربات، هم در مینی‌اپ). متن قوانین از <a href="/admin/settings/purchase-terms" target="_blank" class="text-indigo-600 underline">اینجا</a> قابل ویرایشه. پیش‌فرض خاموش.</div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">اگه فعال باشه، کاربر قبل از پرداخت باید متن قوانین خرید رو ببینه و با تیک‌زدن یک چک‌باکس تأیید کنه (هم در ربات، هم در مینی‌اپ). پیش‌فرض خاموش.</div>
           </div>
         </label>
+        <div id="terms_text_new" style="display:none;margin-top:12px">
+          <label style="font-size:12px;font-weight:600;color:var(--text-muted)">
+            متن قوانین اختصاصی این محصول (اختیاری)
+          </label>
+          {_textarea("terms_text","اگه خالی بذارید، از متن پیش‌فرض عمومی استفاده می‌شه (قابل ویرایش از تنظیمات → قوانین خرید).",rows=4)}
+        </div>
       </div>
       <div class="flex gap-3">{_btn("ذخیره محصول", color="green")} {_btn("انصراف", "/admin/products", "slate")}</div>
     </form>"""
@@ -4689,12 +4696,12 @@ async def product_new_post(request: Request,
         cat_slug = cat["slug"] if cat else str(cat_id)
         conn.execute("""
             INSERT INTO products (category, category_id, product_key, title, price, partner_price,
-                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url, notify_on_restock, require_terms, created_by, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,datetime('now'));""",
+                daily_limit_customer, daily_limit_partner, description, is_active, support_after_purchase, setup_message, image_url, notify_on_restock, require_terms, terms_text, created_by, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,datetime('now'));""",
             (cat_slug, cat_id, slug, title.strip(), int(price or 0), pp if pp > 0 else None,
              int(limit_c or 0), int(limit_p or 0), description.strip(), support_after,
              str(form.get("setup_message","")).strip(), image_url, notify_on_restock, require_terms,
-             _admin_id_of(adm)))
+             str(form.get("terms_text","")).strip(), _admin_id_of(adm)))
         conn.commit()
     finally:
         conn.close()
@@ -4894,14 +4901,24 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
             </label>
           </div>
           <div class="p-4 bg-gray-50 rounded-lg">
-            <label class="flex items-center gap-3 cursor-pointer">
+            <label class="flex items-center gap-3 cursor-pointer mb-3">
               <input type="checkbox" name="require_terms" value="1"
+                id="terms_chk_edit"
+                onchange="document.getElementById('terms_text_edit').style.display=this.checked?'block':'none'"
                 {"checked" if int(p["require_terms"] if "require_terms" in p.keys() else 0) else ""}>
               <div>
                 <div class="text-sm font-medium text-gray-800">نیاز به تأیید قوانین خرید</div>
-                <div class="text-xs text-gray-400 mt-0.5">قبل از پرداخت، کاربر باید متن قوانین رو تأیید کنه (هم ربات، هم مینی‌اپ). متن از <a href="/admin/settings/purchase-terms" target="_blank" class="text-indigo-600 underline">اینجا</a> قابل ویرایشه.</div>
+                <div class="text-xs text-gray-400 mt-0.5">قبل از پرداخت، کاربر باید متن قوانین رو تأیید کنه (هم ربات، هم مینی‌اپ).</div>
               </div>
             </label>
+            <div id="terms_text_edit" style="display:{"block" if int(p["require_terms"] if "require_terms" in p.keys() else 0) else "none"}">
+              <label class="text-xs font-medium text-gray-600 block mb-1">
+                متن قوانین اختصاصی این محصول (اختیاری)
+              </label>
+              {_textarea("terms_text","اگه خالی بذارید، از متن پیش‌فرض عمومی استفاده می‌شه.",
+                         value=str(p["terms_text"] if "terms_text" in p.keys() else ""),rows=4)}
+              <div class="text-xs text-gray-400 mt-1">متن پیش‌فرض عمومی از <a href="/admin/settings/purchase-terms" target="_blank" class="text-indigo-600 underline">اینجا</a> قابل ویرایشه.</div>
+            </div>
           </div>
           {_btn("ذخیره", color="green")}
         </form>
@@ -4975,16 +4992,18 @@ async def product_edit_post(request: Request, pid: int,
         old_row = conn.execute("SELECT price, COALESCE(partner_price,0) FROM products WHERE id=?;", (pid,)).fetchone()
         if image_url is None:
             conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,notify_on_restock=?,require_terms=? WHERE id=?;""",
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,notify_on_restock=?,require_terms=?,terms_text=? WHERE id=?;""",
                 (category,title.strip(),int(price or 0),pp if pp>0 else None,
                  int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-                 str(form.get("setup_message","")).strip(),notify_on_restock,require_terms,pid))
+                 str(form.get("setup_message","")).strip(),notify_on_restock,require_terms,
+                 str(form.get("terms_text","")).strip(),pid))
         else:
             conn.execute("""UPDATE products SET category=?,title=?,price=?,partner_price=?,
-                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,image_url=?,notify_on_restock=?,require_terms=? WHERE id=?;""",
+                daily_limit_customer=?,daily_limit_partner=?,description=?,support_after_purchase=?,setup_message=?,image_url=?,notify_on_restock=?,require_terms=?,terms_text=? WHERE id=?;""",
                 (category,title.strip(),int(price or 0),pp if pp>0 else None,
                  int(limit_c or 0),int(limit_p or 0),description.strip(),support_after,
-                 str(form.get("setup_message","")).strip(),image_url,notify_on_restock,require_terms,pid))
+                 str(form.get("setup_message","")).strip(),image_url,notify_on_restock,require_terms,
+                 str(form.get("terms_text","")).strip(),pid))
         conn.commit()
     finally:
         conn.close()
