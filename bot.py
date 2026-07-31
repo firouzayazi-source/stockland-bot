@@ -1659,34 +1659,14 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         return
 
     # ----------------------------
-    # بررسی و کسر موجودی (نسخه قطعی)
+    # بررسی و کسر موجودی (نسخه قطعی) — از subtract_wallet_balance استفاده می‌شه، نه SQL
+    # خام مستقیم؛ این تابع خودش با BEGIN IMMEDIATE قفل می‌شه (بخش ۱ سند مینی‌اپ: تنها
+    # نقطهٔ کسر کیف‌پول اصلی همینه، تا هیچ مسیر دیگه‌ای — بات یا مینی‌اپ — بتونه رد بشه)
     # ----------------------------
-    conn = sqlite3.connect(DB_FULL_PATH)
-    try:
-        cur = conn.cursor()
-
-        cur.execute("SELECT balance FROM wallets WHERE user_id=?", (uid,))
-        row = cur.fetchone()
-
-        if not row:
-            bot.answer_callback_query(call.id, "کیف پول یافت نشد", show_alert=True)
-            return
-
-        current_balance = int(row[0])
-
-        if current_balance < eff_price:
-            bot.answer_callback_query(call.id, "موجودی کافی نیست", show_alert=True)
-            return
-
-        new_balance = current_balance - eff_price
-
-        cur.execute(
-            "UPDATE wallets SET balance=?, updated_at=? WHERE user_id=?",
-            (new_balance, datetime.utcnow().isoformat(), uid)
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    if not subtract_wallet_balance(uid, eff_price):
+        bot.answer_callback_query(call.id, "موجودی کافی نیست", show_alert=True)
+        return
+    new_balance = get_wallet_balance(uid)
 
     # ----------------------------
     # ایجاد سفارش
