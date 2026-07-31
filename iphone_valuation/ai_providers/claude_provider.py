@@ -10,7 +10,10 @@ def analyze(context: dict, api_key: str, model: str) -> dict:
     except ImportError as e:
         raise AIProviderError("پکیج anthropic نصب نیست") from e
 
-    client = anthropic.Anthropic(api_key=api_key)
+    # timeout صریح — بدونش SDK به پیش‌فرض داخلی خودش (که می‌تونه چند دقیقه باشه) وابسته
+    # می‌شد و چون این تابع synchronous از داخل run_in_threadpool صدا زده می‌شه، یه
+    # provider آویزان می‌تونست اون ترد رو برای مدت نامعین اشغال کنه.
+    client = anthropic.Anthropic(api_key=api_key, timeout=30.0)
     max_adjust = context.get("max_adjust_percent", 5)
     user_content = (
         "این اطلاعات کامل کارشناسی رو تحلیل کن و طبق schema خروجی بده:\n\n"

@@ -29,6 +29,7 @@ from datetime import datetime, timezone, date
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from starlette.concurrency import run_in_threadpool
 
 
 logging.basicConfig(
@@ -731,22 +732,6 @@ def switch_bot_mode(new_mode: str) -> tuple:
     return True, "ربات متوقف شد"
 
 
-@app.post("/webhook")
-async def telegram_webhook(request: Request):
-    """دریافت آپدیت از تلگرام در Webhook mode."""
-    global _bot_module_ref
-    if not _bot_module_ref:
-        return {"ok": False, "error": "bot not initialized"}
-    try:
-        import telebot
-        data = await request.json()
-        update = telebot.types.Update.de_json(data)
-        _bot_module_ref.bot.process_new_updates([update])
-    except Exception as ex:
-        logger.error("webhook processing error: %s", ex)
-    return {"ok": True}
-
-
 @app.get("/health")
 def health():
     conn = db_connect()
@@ -761,7 +746,18 @@ def health():
 # 1) Create a payment
 # ---------------------------------------------------------------------------
 @app.post("/payment/create")
-def create_payment(payload: dict):
+def create_payment(payload: dict, request: Request):
+    # این مسیر فقط برای فراخوانی داخلی (services/payments.py و api.py، همون پروسه)
+    # طراحی شده — بدون این چک، هرکسی از اینترنت می‌تونه با user_id/wallet_reserved
+    # دلخواه یه تراکنش بسازه و بعد از پرداخت مبلغ کوچیک amount، کل wallet_reserved
+    # قربانی رو خالی کنه (_finalize_paid_tx). چون uvicorn پشت nginx روی 127.0.0.1
+    # گوش می‌ده، چک IP به‌تنهایی این دو حالت رو از هم تشخیص نمی‌ده؛ به‌جاش یه راز
+    # داخلی (INTERNAL_API_SECRET، خودکار تولیدشده مثل WEBHOOK_SECRET) استفاده می‌شه.
+    import hmac as _hmac
+    from config import INTERNAL_API_SECRET
+    hdr = request.headers.get("X-Internal-Secret", "")
+    if not _hmac.compare_digest(hdr, INTERNAL_API_SECRET):
+        raise HTTPException(403, "forbidden")
     ensure_schema()
     if not MERCHANT_ID:
         raise HTTPException(500, "ZARINPAL_MERCHANT_ID is not configured")
@@ -1029,7 +1025,10 @@ def payment_callback(request: Request):
 @app.api_route("/payment/callback/{gw}", methods=["GET", "POST"], response_class=HTMLResponse)
 async def payment_callback_gw(gw: str, request: Request):
     """کال‌بک درگاه‌آگاه — نام درگاه در مسیره. هم GET (اکثر درگاه‌ها با ریدایرکت مرورگر)
-    هم POST (برخی درگاه‌ها فرم POST می‌فرستن) پشتیبانی می‌شه."""
+    هم POST (برخی درگاه‌ها فرم POST می‌فرستن) پشتیبانی می‌شه.
+    _handle_payment_callback خودش synchronous است (SQLite خام + requests.post به درگاه
+    تا ۱۵ ثانیه + requests.post به تلگرام تا ۱۰ ثانیه) — بدون run_in_threadpool، این
+    async def مستقیم event loop مشترک پنل/مینی‌اپ/وبهوک رو تا ~۲۵ ثانیه بلاک می‌کرد."""
     query = dict(request.query_params)
     form = {}
     if request.method == "POST":
@@ -1037,7 +1036,7 @@ async def payment_callback_gw(gw: str, request: Request):
             form = dict(await request.form())
         except Exception:
             form = {}
-    return _handle_payment_callback(gw, query, form)
+    return await run_in_threadpool(_handle_payment_callback, gw, query, form)
 
 
 # ---------------------------------------------------------------------------
