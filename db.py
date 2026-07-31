@@ -686,28 +686,38 @@ def add_wallet_balance(user_id: int, amount: int) -> int:
 def subtract_wallet_balance(user_id: int, amount: int) -> bool:
     """
     اگر موجودی کافی باشد، مبلغ را کم میکند و True برمیگرداند؛ در غیر این صورت False.
+    از BEGIN IMMEDIATE برای جلوگیری از race condition بین دو کسر همزمان (مثلاً
+    دبل‌تپ دکمهٔ خرید، یا خرید همزمان از بات و مینی‌اپ) استفاده میشه — همون الگوی
+    claim_next_feed_item. تنها نقطهٔ کسر کیف‌پول اصلی باید همینجا باشه؛ هیچ کد
+    دیگه‌ای نباید مستقیم روی جدول wallets UPDATE بزنه (بخش ۱ سند مینی‌اپ).
     """
     amount = int(amount)
     conn = _get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
-    row = cur.fetchone()
-    if not row:
-        conn.close()
-        return False
-    balance = int(row[0])
-    if balance < amount:
-        conn.close()
-        return False
+    try:
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.commit()
+            return False
+        balance = int(row[0])
+        if balance < amount:
+            conn.commit()
+            return False
 
-    new_balance = balance - amount
-    now = datetime.utcnow().isoformat()
-    cur.execute(
-        "UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?;",
-        (new_balance, now, user_id),
-    )
-    conn.commit()
-    conn.close()
+        new_balance = balance - amount
+        now = datetime.utcnow().isoformat()
+        cur.execute(
+            "UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?;",
+            (new_balance, now, user_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     return True
 
 
