@@ -98,7 +98,7 @@ html.dark .sl-search{background:rgba(255,255,255,.12);color:#98989E}
 .sl-search-input::placeholder{color:#8E8E93}
 html.dark .sl-search-input{color:#F5F5F7}
 html.dark .sl-search-input::placeholder{color:#98989E}
-.sl-search-clear{flex:none;font-size:13px;color:#8E8E93;cursor:pointer;padding:2px 4px}
+.sl-search-clear{flex:none;font-size:13px;color:var(--mu);cursor:pointer;padding:2px 4px}
 /* ═══ نتایج جستجو — پنل شناور زیر جعبه ═══
    در HTML بیرون از .sl-hero (که overflow:hidden داره) قرار داره، مستقیم زیر #tab-home
    (که خودش position:absolute هست) — پس با position:absolute اینجا، مختصاتش نسبت به
@@ -354,7 +354,7 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
 .sl-review-txt{font-size:13.5px;color:var(--mu);margin-top:5px;line-height:1.8}
 .sl-pp-btn{margin:0 20px 24px;display:block;background:var(--br);color:#fff;text-align:center;
  font-size:15px;font-weight:700;border-radius:14px;padding:14px 0;border:none;width:calc(100% - 40px);cursor:pointer;text-decoration:none}
-.sl-pp-btn-off{background:#8E8E93!important}
+.sl-pp-btn-off{background:var(--mu)!important}
 .sl-post-body{padding-left:18px;padding-right:18px;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}
 .sl-post-body img{width:100%;border-radius:16px;margin:12px 0 4px;display:block}
 .sl-postf-title{font-size:20px;font-weight:700;line-height:1.6;margin:14px 0 2px}
