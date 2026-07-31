@@ -3971,6 +3971,46 @@ def get_referral_stats_for(referrer_id: int) -> dict:
         conn.close()
 
 
+def get_partner_team_stats(referrer_id: int) -> dict:
+    """تیم فروش دوسطحی یک همکار — دقیقاً همون کوئری cb_partner_sub_stats در bot.py،
+    فقط به‌جای متن HTML، دادهٔ خام برمی‌گردونه (برای مصرف مینی‌اپ/API)."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT r.referred_id AS sid,
+                   COALESCE(u.full_name, u.username, 'کاربر ' || r.referred_id) AS name,
+                   COALESCE(o.cnt, 0)   AS order_count,
+                   COALESCE(o.total, 0) AS total_spent,
+                   COALESCE(r2.cnt, 0)  AS own_subs
+            FROM referrals r
+            LEFT JOIN users u ON CAST(u.user_id AS INTEGER) = r.referred_id
+            LEFT JOIN (
+                SELECT CAST(user_id AS INTEGER) AS ouid, COUNT(*) AS cnt, SUM(price) AS total
+                FROM orders WHERE COALESCE(status,'active') != 'returned'
+                GROUP BY CAST(user_id AS INTEGER)
+            ) o ON o.ouid = r.referred_id
+            LEFT JOIN (
+                SELECT referrer_id, COUNT(*) AS cnt FROM referrals GROUP BY referrer_id
+            ) r2 ON r2.referrer_id = r.referred_id
+            WHERE r.referrer_id = ?
+            ORDER BY total_spent DESC, order_count DESC
+            LIMIT 30;
+        """, (referrer_id,)).fetchall()
+        members = [{"user_id": r["sid"], "name": r["name"], "order_count": int(r["order_count"]),
+                    "total_spent": int(r["total_spent"]), "own_subs": int(r["own_subs"])} for r in rows]
+        return {
+            "members": members,
+            "total_members": len(members),
+            "total_orders": sum(m["order_count"] for m in members),
+            "total_spent": sum(m["total_spent"] for m in members),
+        }
+    except Exception:
+        return {"members": [], "total_members": 0, "total_orders": 0, "total_spent": 0}
+    finally:
+        conn.close()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ─── کیفپول همکاری ────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4461,6 +4501,63 @@ def save_partner_bank_info(user_id: int, full_name: str, card_number: str, iban:
         else:
             conn.execute("INSERT INTO partner_bank_info (user_id,full_name,card_number,iban) VALUES (?,?,?,?);",
                          (user_id, full_name, card_number, iban))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_partner_profile(user_id: int) -> dict:
+    """پروفایل کامل همکار — نام/فروشگاه/شهر از partners + آدرس/کارت/شبا/صاحب‌حساب از
+    partner_bank_info. دقیقاً همون دو منبعی که _show_partner_profile در bot.py می‌خونه،
+    برای مصرف مینی‌اپ."""
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        p = conn.execute("SELECT full_name, shop_name, city FROM partners WHERE tg_user_id=?;", (user_id,)).fetchone()
+    finally:
+        conn.close()
+    bank = get_partner_bank_info(user_id)
+    return {
+        "name": ((p["full_name"] if p else "") or ""),
+        "shop_name": ((p["shop_name"] if p else "") or ""),
+        "city": ((p["city"] if p else "") or ""),
+        "address": ((bank["address"] if bank else "") or ""),
+        "card_number": ((bank["card_number"] if bank else "") or ""),
+        "iban": ((bank["iban"] if bank else "") or ""),
+        "bank_owner_name": ((bank["full_name"] if bank else "") or ""),
+    }
+
+
+_PARTNER_PROFILE_FIELD_MAP = {
+    "name": ("partners", "full_name"),
+    "shop_name": ("partners", "shop_name"),
+    "city": ("partners", "city"),
+    "address": ("partner_bank_info", "address"),
+    "card_number": ("partner_bank_info", "card_number"),
+    "iban": ("partner_bank_info", "iban"),
+    "bank_owner_name": ("partner_bank_info", "full_name"),
+}
+
+
+def update_partner_profile_field(user_id: int, field: str, value: str):
+    """ذخیرهٔ یک فیلد پروفایل همکار — دقیقاً همون منطق _pedit_save در bot.py، برای
+    استفادهٔ مشترک ربات و API مینی‌اپ. `field` فقط از _PARTNER_PROFILE_FIELD_MAP
+    (لیست ثابت داخلی) اجازه داره، پس نام ستون هیچ‌وقت از ورودی خام کاربر ساخته نمی‌شه."""
+    if field not in _PARTNER_PROFILE_FIELD_MAP:
+        raise ValueError(f"unknown partner profile field: {field}")
+    table, col = _PARTNER_PROFILE_FIELD_MAP[field]
+    ensure_partner_bank_schema(); ensure_partner_bank_address()
+    conn = _get_connection()
+    try:
+        if table == "partners":
+            conn.execute(f"UPDATE partners SET {col}=? WHERE tg_user_id=?;", (value, user_id))
+        else:
+            existing = conn.execute("SELECT user_id FROM partner_bank_info WHERE user_id=?;", (user_id,)).fetchone()
+            if existing:
+                conn.execute(f"UPDATE partner_bank_info SET {col}=?,updated_at=datetime('now') WHERE user_id=?;", (value, user_id))
+            else:
+                conn.execute(f"INSERT INTO partner_bank_info (user_id,{col}) VALUES (?,?);", (user_id, value))
         conn.commit()
     finally:
         conn.close()
