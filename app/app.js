@@ -592,7 +592,12 @@ function loadMe(){if(_m)return;_m=1;
     '<div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div>'+
     '</div>'+
     '<div id="me-checkin-card"></div>'+
-    '<div class="sl-wallet"><div class="sl-wallet-glow"></div><div class="sl-wallet-l">موجودی کیف پول</div>'+
+    '<div class="sl-wallet"><div class="sl-wallet-glow"></div>'+
+    '<div class="sl-wallet-reward" id="me-reward-wallet" style="display:none">'+
+      '<div class="sl-wallet-reward-l">🎁 کیف پول پاداش</div>'+
+      '<div class="sl-wallet-reward-b" id="me-reward-bal">—</div>'+
+    '</div>'+
+    '<div class="sl-wallet-l">موجودی کیف پول</div>'+
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
     '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge" style="width:100%">＋ شارژ کیف‌پول</a></div></div>'+
     '<div class="sl-group"><a class="sl-row" href="#" id="me-notif-row"><span class="sl-ric" style="background:#7C3AED">🔔</span><span class="sl-row-grow">اعلان‌ها</span><span class="sl-badge" id="me-notif-badge" style="display:none">جدید</span><span class="sl-chev">‹</span></a>'+
@@ -605,7 +610,17 @@ function loadMe(){if(_m)return;_m=1;
     foot;
   api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
   api('/me/partner',true).then(function(d){
-    if(d.is_partner){var b=document.getElementById('me-pb');if(b)b.style.display=''}
+    if(d.is_partner){
+      var b=document.getElementById('me-pb');if(b)b.style.display='';
+      // کیف‌پول پاداش فقط برای همکاران فعال می‌شه — همون balance که از قبل توی همین
+      // پاسخ برای پنل همکاری هست، بدون نیاز به فراخوانی API جدا
+      var rw=document.getElementById('me-reward-wallet');
+      if(rw){
+        rw.style.display='';
+        var rb=document.getElementById('me-reward-bal');
+        if(rb)rb.innerHTML=fmt(d.balance||0)+' <small>تومان</small>';
+      }
+    }
     if(d.is_partner&&d.tier)setTierAvatar(d.tier.name,d.tier.icon);
   }).catch(function(){});
   renderCheckinCard();
