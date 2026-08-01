@@ -582,7 +582,7 @@ def _layout(title: str, body: str, admin_info=None,
     bell_count = open_tickets + pending_financial_top
 
     def has_perm(perm):
-        return is_super or perm in perms
+        return is_super or _has(admin_info, perm)
 
     def nav_item(href, icon, label, perm=None, badge=0):
         if perm and not has_perm(perm):
@@ -594,50 +594,52 @@ def _layout(title: str, body: str, admin_info=None,
     if admin_info:
         sidebar = f"""
         <aside id="sidebar" class="sidebar">
-          <div class="sidebar-header" style="justify-content:center;position:relative">
-            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" style="margin:0 auto" id="sb-brand">
-              <div class="brand-text-only" style="direction:ltr;text-align:center">
-                <span style="color:#E8EDF2;font-weight:900;letter-spacing:1.5px">STOCK</span>
-                <span style="color:#2EC4B6;font-weight:900;letter-spacing:1.5px"> LAND</span>
-                <small style="display:block;font-size:9.5px;color:#536075;letter-spacing:.8px;font-weight:400;margin-top:3px;direction:rtl">مدیریت فروشگاه</small>
+          <div class="sidebar-header">
+            <a href="/admin/" class="brand-lockup" aria-label="استوک‌لند" id="sb-brand">
+              <div class="brand-text-only">
+                <span class="brand-word brand-word--stock">STOCK</span>
+                <span class="brand-word brand-word--land"> LAND</span>
+                <small class="brand-subtitle">مدیریت فروشگاه</small>
               </div>
             </a>
-            <button onclick="sbCollapse()" id="sb-col-btn" title="جمع/باز"
-              style="position:absolute;left:-11px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;background:#2EC4B6;border:none;cursor:pointer;color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;z-index:60;box-shadow:0 2px 8px rgba(0,0,0,.3)">
-              <span id="sb-toggle-icon" style="transition:transform .2s;display:inline-block">›</span>
+            <button onclick="sbCollapse()" id="sb-col-btn" class="sb-col-btn" title="جمع/باز">
+              <span id="sb-toggle-icon" class="sb-toggle-icon">›</span>
             </button>
           </div>
           <div class="nav-caption">منو اصلی</div>
           <nav class="sidebar-nav">
             {nav_item("/admin/", "layout-dashboard", "داشبورد")}
             <div class="nav-divider"><span>فروشگاه</span></div>
-            {nav_item("/admin/categories", "tag", "دسته‌بندی‌ها", "products")}
+            {nav_item("/admin/categories", "tag", "دسته‌بندی‌ها", "categories")}
             {nav_item("/admin/products", "package", "محصولات", "products")}
             {nav_item("/admin/feed", "layers", "موجودی", "feed")}
-            <div class="nav-divider"><span>فروش</span></div>
+            <div class="nav-divider"><span>فروش و مالی</span></div>
             {nav_item("/admin/orders", "shopping-bag", "سفارش‌ها", "orders")}
+            {nav_item("/admin/receipts", "receipt", "رسید کارت‌به‌کارت", "payment")}
             {nav_item("/admin/wallets", "wallet", "کیف‌پول", "wallets")}
-            {nav_item("/admin/discounts", "tag", "کدهای تخفیف", "discounts")}
+            {nav_item("/admin/discounts", "percent", "کدهای تخفیف", "discounts")}
             {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
+            {nav_item("/admin/accounting", "calculator", "حسابداری", "accounting")}
+            {nav_item("/admin/reports", "bar-chart-2", "گزارش‌های مالی", "reports")}
             {nav_item("/admin/payment-gateways", "credit-card", "درگاه‌های پرداخت", "payment_gateways")}
-            <div class="nav-divider"><span>مدیریت اپ</span></div>
-            {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "settings")}
-            {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "settings")}
-            {nav_item("/admin/engagement", "star", "امتیازها و پاداش روزانه", "settings")}
-            {nav_item("/admin/stock-requests", "bell-ring", "درخواست‌های موجودی", "settings")}
-            {nav_item("/admin/iphone", "smartphone", "کارشناسی آیفون", "settings")}
+            <div class="nav-divider"><span>محتوا</span></div>
+            {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "news")}
+            {nav_item("/admin/tutorials", "graduation-cap", "آموزش", "articles")}
+            {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
             <div class="nav-divider"><span>کاربران</span></div>
             {nav_item("/admin/users", "users", "کاربران", "users")}
             {nav_item("/admin/partners", "handshake", "همکاران و معرفی", "partners", pending_partners)}
             {nav_item("/admin/tickets", "message-square", "تیکت‌ها", "tickets", open_tickets)}
-            {nav_item("/admin/accounting", "calculator", "💰 حسابداری", "accounting")}
-            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "notes")}
-            {nav_item("/admin/broadcast", "megaphone", "پیام‌رسانی", "broadcast")}
+            <div class="nav-divider"><span>ابزارها</span></div>
+            {nav_item("/admin/iphone", "smartphone", "کارشناسی آیفون", "ai_pricing")}
+            {nav_item("/admin/engagement", "star", "پاداش و تعامل", "notifications")}
+            {nav_item("/admin/stock-requests", "bell-ring", "درخواست‌های موجودی", "notifications")}
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
             {nav_item("/admin/logs", "activity", "گزارش فعالیت", "logs")}
+            {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "notes")}
           </nav>
           <div class="sidebar-footer">
             <div class="sidebar-status"><span class="status-dot"></span><div><strong>سامانه فعال</strong><small>همه سرویس‌ها پایدارند</small></div></div>
@@ -663,12 +665,12 @@ def _layout(title: str, body: str, admin_info=None,
           <div class="topbar-actions">
 
             <a class="icon-button notification-button" href="/admin/tickets" aria-label="تیکت‌ها"><i data-lucide="bell"></i><span id="ticket-badge-top" class="notification-count {'hidden' if bell_count == 0 else ''}">{bell_count}</span></a>
-            <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count {'hidden' if pending_partners == 0 else ''}" style="background:#F59E0B">{pending_partners}</span></a>
-            <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count hidden" style="background:#EF4444"></span></a>
-            <a href="/admin/account" class="profile-trigger" style="text-decoration:none">
+            <a class="icon-button notification-button" href="/admin/partners" aria-label="همکاران"><i data-lucide="handshake"></i><span id="partner-badge-top" class="notification-count notification-count--warn {'hidden' if pending_partners == 0 else ''}">{pending_partners}</span></a>
+            <a class="icon-button notification-button" href="/admin/notes" aria-label="یادداشت‌ها"><i data-lucide="edit-3"></i><span id="notes-badge-top" class="notification-count notification-count--danger hidden"></span></a>
+            <a href="/admin/account" class="profile-trigger">
               <span class="profile-avatar"><i data-lucide="user-round"></i></span>
               <span class="profile-copy"><strong>{admin_label}</strong><small>مدیریت فروشگاه</small></span>
-              <i data-lucide="settings" class="profile-chevron" style="width:14px;height:14px;opacity:.5"></i>
+              <i data-lucide="settings" class="profile-chevron profile-chevron--sm"></i>
             </a>
           </div>
         </header>"""
@@ -1049,19 +1051,6 @@ def _layout(title: str, body: str, admin_info=None,
     .status-neutral {{ background:var(--clr-neutral-dim); color:#374151; }} .status-neutral span {{ background:var(--clr-neutral); }}
     .status-info {{ background:var(--clr-info-dim); color:#1D4ED8; }} .status-info span {{ background:var(--clr-info); }}
 
-    /* ── Filter Tabs ──────────────────────────────────────────── */
-    .filter-bar {{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:var(--sp-5); align-items:center; }}
-    .filter-tab {{
-      display:inline-flex; align-items:center; gap:6px;
-      padding:6px 14px; border-radius:var(--r-md); font-size:12.5px; font-weight:500;
-      border:1.5px solid var(--bdr); background:var(--bg-card); color:var(--txt-muted);
-      cursor:pointer; text-decoration:none; transition:.15s; white-space:nowrap;
-    }}
-    .filter-tab:hover {{ background:var(--bg-subtle); color:var(--txt-secondary); }}
-    .filter-tab.active {{ background:var(--clr-primary); color:#000; border-color:var(--clr-primary); font-weight:700; }}
-    .filter-count {{ font-size:10px; padding:1px 6px; border-radius:20px; background:rgba(0,0,0,.1); }}
-    .filter-tab:not(.active) .filter-count {{ background:var(--bg-subtle); }}
-
     /* ── Forms ────────────────────────────────────────────────── */
     label {{ font-size:12.5px; color:var(--txt-secondary); display:block; margin-bottom:var(--sp-2); font-weight:600; }}
     input:not([type=checkbox]):not([type=radio]):not([type=range]),
@@ -1120,6 +1109,8 @@ def _layout(title: str, body: str, admin_info=None,
       --txt-primary:#F5F5F5; --txt-secondary:#D9E1EA; --txt-muted:#8A99AC;
       --bdr:#2B3A4C; --bdr-input:#2B3A4C;
       --shadow-card:0 1px 4px rgba(0,0,0,.35);
+      /* نام‌های قدیمی — هنوز جاهای زیادی (مخصوصاً داشبورد) استفاده می‌شن */
+      --text-main:#F5F5F5; --text-muted:#8A99AC; --card-bg:#17212B; --border:#2B3A4C; --primary:#2EC4B6;
       background:#0E1621; color:#F5F5F5;
     }}
     body.sl-dark .topbar, body.dark-mode .topbar {{ background:rgba(14,22,33,.92) !important; border-color:#2B3A4C !important; }}
@@ -1221,6 +1212,233 @@ def _layout(title: str, body: str, admin_info=None,
     .mb-4 {{ margin-bottom:16px; }}.mb-5 {{ margin-bottom:20px; }}.mb-6 {{ margin-bottom:24px; }}
     .legacy-lucide {{ width:1em; height:1em; display:inline-block; vertical-align:-.16em; stroke-width:1.9; }}
 
+    /* ── Sidebar Brand ────────────────────────────────────────── */
+    .sidebar-header {{ justify-content:center; position:relative; }}
+    .brand-lockup {{ margin:0 auto; }}
+    .brand-text-only {{ direction:ltr; text-align:center; }}
+    .brand-word {{ font-weight:900; letter-spacing:1.5px; }}
+    .brand-word--stock {{ color:#E8EDF2; }}
+    .brand-word--land  {{ color:var(--clr-primary); }}
+    .brand-subtitle {{ display:block; font-size:9.5px; color:#536075; letter-spacing:.8px; font-weight:400; margin-top:3px; direction:rtl; }}
+    .sb-col-btn {{
+      position:absolute; left:-11px; top:50%; transform:translateY(-50%);
+      width:22px; height:22px; border-radius:50%; background:var(--clr-primary);
+      border:none; cursor:pointer; color:#fff; font-size:12px;
+      display:flex; align-items:center; justify-content:center;
+      z-index:60; box-shadow:0 2px 8px rgba(0,0,0,.3);
+    }}
+    .sb-toggle-icon {{ transition:transform .2s; display:inline-block; }}
+
+    /* ── Topbar badge variants + profile ─────────────────────── */
+    .notification-count--warn {{ background:#F59E0B; }}
+    .notification-count--danger {{ background:var(--clr-danger); }}
+    .profile-trigger {{ text-decoration:none; }}
+    .profile-chevron--sm {{ width:14px; height:14px; opacity:.5; }}
+
+    /* ── Login Page ────────────────────────────────────────────── */
+    .login-wrap {{ min-height:80vh; display:flex; align-items:center; justify-content:center; }}
+    .login-card {{ background:var(--bg-card); border-radius:var(--r-xl); box-shadow:var(--shadow-modal); padding:40px 36px; width:100%; max-width:380px; }}
+    .login-header {{ text-align:center; margin-bottom:28px; }}
+    .login-brand {{ font-size:24px; font-weight:900; letter-spacing:1.5px; margin-bottom:6px; direction:ltr; }}
+    .login-brand .brand-word--stock {{ color:var(--txt-secondary); }}
+    .login-subtitle {{ font-size:12px; color:var(--txt-muted); }}
+    .login-form {{ display:flex; flex-direction:column; gap:14px; }}
+    .field-label {{ font-size:12px; font-weight:600; color:var(--txt-muted); display:block; margin-bottom:6px; }}
+    .login-submit {{
+      width:100%; padding:12px; background:var(--clr-primary); color:#fff;
+      font-weight:700; font-size:14px; border:none; border-radius:var(--r-md);
+      cursor:pointer; margin-top:4px;
+    }}
+    .alert-error {{ background:var(--clr-danger-dim); border:1px solid #FECACA; color:#991B1B; padding:12px 16px; border-radius:10px; font-size:13px; margin-bottom:14px; }}
+    .alert-warning {{ background:var(--clr-warning-dim); border:1px solid #FDE68A; color:#92400E; padding:12px 16px; border-radius:10px; font-size:13px; margin-bottom:14px; }}
+    body.sl-dark .alert-error, body.dark-mode .alert-error {{ background:rgba(239,68,68,.15); border-color:rgba(239,68,68,.3); color:#FCA5A5; }}
+    body.sl-dark .alert-warning, body.dark-mode .alert-warning {{ background:rgba(245,158,11,.15); border-color:rgba(245,158,11,.3); color:#FDE68A; }}
+    body.sl-dark .login-card, body.dark-mode .login-card {{ background:var(--bg-card); }}
+    body.sl-dark .login-brand .brand-word--stock, body.dark-mode .login-brand .brand-word--stock {{ color:#E8EDF2; }}
+
+    /* ── Settings / Account Forms ──────────────────────────────── */
+    .settings-header {{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:22px; }}
+    .form-section {{ display:flex; flex-direction:column; gap:14px; }}
+    .form-card {{ padding:var(--sp-5); margin-bottom:var(--sp-4); }}
+    .form-card-title {{ font-size:14px; font-weight:700; margin-bottom:20px; padding-bottom:14px; border-bottom:1px solid var(--bdr); }}
+    .field-icon {{ font-size:1.1rem; width:22px; text-align:center; flex-shrink:0; }}
+    .field-icon-sm {{ font-size:1rem; width:20px; text-align:center; flex-shrink:0; }}
+    .btn-link-muted {{ font-size:.76rem; color:var(--txt-xmuted); background:none; border:none; cursor:pointer; transition:color .15s; padding:0; }}
+    .btn-link-muted:hover {{ color:#ef4444; }}
+    .disabled-look {{ background:var(--bg-page); color:var(--txt-muted); cursor:not-allowed; }}
+    .flex-col {{ display:flex; flex-direction:column; }}
+    .flex-col-6 {{ display:flex; flex-direction:column; gap:6px; }}
+    .grid-2col {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
+    @media(max-width:640px){{ .grid-2col {{ grid-template-columns:1fr; }} }}
+    .settings-title {{ font-size:1.4rem; font-weight:700; color:var(--txt-primary); margin:0; }}
+    .footer-bar {{ display:flex; align-items:center; justify-content:space-between; padding-bottom:32px; flex-wrap:wrap; gap:10px; }}
+    .text-section-label {{ display:block; font-size:.82rem; font-weight:600; color:var(--txt-secondary); margin-bottom:6px; }}
+    .input-full {{ width:100%; box-sizing:border-box; }}
+    .textarea-full {{ width:100%; box-sizing:border-box; resize:vertical; min-height:110px; }}
+    .card-reset-footer {{ margin-top:12px; padding-top:12px; border-top:1px solid var(--bdr); display:flex; justify-content:flex-end; }}
+    .mb-18 {{ margin-bottom:18px; }}
+    .mb-14 {{ margin-bottom:14px; }}
+    .mt-14 {{ margin-top:14px; }}
+    .flex-col-10 {{ display:flex; flex-direction:column; gap:10px; }}
+    .max-w-640 {{ max-width:640px; }}
+    .btn-row-12 {{ display:flex; gap:12px; }}
+    .info-box {{ background:var(--page-bg); border-radius:10px; padding:10px 14px; font-size:12.5px; margin-bottom:14px; }}
+
+    /* ── Backup Modal ──────────────────────────────────────────── */
+    .bk-overlay {{ display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,.6); z-index:99999; }}
+    .bk-modal {{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:var(--bg-card); border-radius:var(--r-xl); padding:36px 24px; width:calc(100% - 48px); max-width:340px; text-align:center; box-shadow:var(--shadow-modal); }}
+    .bk-icon {{ font-size:52px; margin-bottom:12px; line-height:1; }}
+    .bk-title {{ font-weight:700; color:var(--txt-primary); font-size:17px; margin:0 0 6px 0; font-family:inherit; }}
+    .bk-msg {{ font-size:12px; color:var(--txt-muted); margin:0 0 18px 0; }}
+    .bk-track {{ direction:ltr; background:var(--bdr); border-radius:999px; height:8px; overflow:hidden; margin-bottom:20px; }}
+    .bk-bar {{ background:#6366f1; height:8px; border-radius:999px; width:5%; transition:width .5s ease; }}
+    .bk-done-btn {{ display:none; padding:11px 36px; background:#6366f1; color:#fff; border:none; border-radius:var(--r-md); font-size:14px; font-weight:600; cursor:pointer; font-family:inherit; }}
+
+    /* ── Chat Bubbles (Ticket) ─────────────────────────────────── */
+    .chat-row {{ display:flex; margin-bottom:10px; }}
+    .chat-row--admin {{ justify-content:flex-end; }}
+    .chat-row--user {{ justify-content:flex-start; }}
+    .chat-col {{ max-width:80%; }}
+    .chat-bubble {{ padding:10px 14px; font-size:13.5px; word-break:break-word; white-space:pre-wrap; }}
+    .chat-bubble--admin {{ background:var(--clr-primary); color:#fff; border-radius:18px 4px 18px 18px; box-shadow:0 1px 2px rgba(0,0,0,.1); }}
+    .chat-bubble--user {{ background:var(--bg-card); border:1px solid var(--bdr); border-radius:4px 18px 18px 18px; box-shadow:0 1px 2px rgba(0,0,0,.06); }}
+    body.sl-dark .chat-bubble--user, body.dark-mode .chat-bubble--user {{ background:#1B2530; border-color:#2B3A4C; }}
+    .chat-meta {{ font-size:10px; color:#aaa; margin-top:3px; }}
+    .chat-meta--admin {{ text-align:left; }}
+    .chat-media-img {{ max-width:260px; max-height:200px; border-radius:10px; display:block; }}
+    .chat-media-video {{ max-width:280px; max-height:200px; border-radius:10px; }}
+    .chat-media-audio {{ max-width:260px; }}
+    .chat-media-file {{ display:inline-flex; align-items:center; gap:6px; padding:7px 12px; background:rgba(0,0,0,.06); border-radius:9px; text-decoration:none; color:inherit; font-size:12px; }}
+    .chat-empty {{ opacity:.5; font-size:12px; }}
+    .chat-caption {{ margin-top:6px; font-size:13px; }}
+    .chat-icon-label {{ opacity:.6; font-size:12px; }}
+    .chat-empty-msg {{ opacity:.6; }}
+    .chat-empty-msg--user {{ opacity:.4; }}
+
+    /* ── Ticket Detail ─────────────────────────────────────────── */
+    .ticket-header {{ display:flex; align-items:center; gap:10px; margin-bottom:18px; flex-wrap:wrap; }}
+    .ticket-title {{ font-size:17px; font-weight:800; }}
+    .ticket-info-grid {{ display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:12px; }}
+    .ticket-info-dt {{ color:var(--txt-muted); }}
+    .ticket-info-dd-bold {{ font-weight:600; }}
+    .ticket-info-code {{ background:var(--bg-subtle); padding:1px 6px; border-radius:5px; }}
+    .ticket-setup-card {{ margin-bottom:12px; border:2px solid rgba(46,196,182,.13); }}
+    .ticket-setup-title {{ font-size:13px; font-weight:700; margin-bottom:12px; color:#166534; }}
+    body.sl-dark .ticket-setup-title, body.dark-mode .ticket-setup-title {{ color:#86EFAC; }}
+    .ticket-direct-card {{ border:2px dashed var(--bdr); background:var(--bg-subtle); }}
+    .ticket-direct-label {{ font-size:11px; color:var(--txt-muted); margin-bottom:8px; }}
+    .ticket-direct-form {{ display:flex; gap:8px; }}
+    .ticket-direct-input {{ flex:1; border:1px solid var(--bdr); border-radius:10px; padding:8px 12px; font-size:13px; resize:none; font-family:inherit; }}
+    .ticket-direct-btn {{ background:var(--clr-neutral); color:#fff; border:none; border-radius:10px; padding:8px 14px; font-size:12px; cursor:pointer; align-self:flex-end; }}
+    .card-title-sm {{ font-size:13px; font-weight:700; margin-bottom:12px; }}
+    .card-title-sm-10 {{ font-size:13px; font-weight:700; margin-bottom:10px; }}
+    .muted-xs-mb8 {{ font-size:11px; color:var(--txt-muted); margin-bottom:8px; }}
+    .flex-wrap-gap6 {{ display:flex; flex-wrap:wrap; gap:6px; }}
+    .btn-full-mt12 {{ width:100%; margin-top:12px; }}
+    .icon-15 {{ width:15px; }}
+    .sidebar-flex-col-12 {{ display:flex; flex-direction:column; gap:12px; }}
+    .chat-box {{ min-height:280px; max-height:500px; }}
+    .archive-btn {{ width:100%; padding:8px 12px; background:#F3F4F6; color:#6B7280; border:1px solid #E5E7EB; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; }}
+    body.sl-dark .archive-btn, body.dark-mode .archive-btn {{ background:#1B2530; color:#8A99AC; border-color:#2B3A4C; }}
+    .setup-status-btn--active {{ background:var(--primary); color:#000; font-weight:700; }}
+    .ticket-type-label {{ font-size:12px; color:var(--txt-muted); }}
+    .d-inline {{ display:inline; }}
+    .mt-12 {{ margin-top:12px; }}
+    .count-primary {{ font-weight:700; color:var(--clr-primary); }}
+    .stat-card-value {{ color:var(--text-main); }}
+    .stat-card-sub {{ font-size:12px; color:var(--text-muted); margin-top:3px; }}
+    .empty-result {{ display:block; padding:12px; color:var(--txt-muted); font-size:12px; }}
+    .max-w-560 {{ max-width:560px; }}
+    .ltr-num {{ direction:ltr; text-align:right; }}
+    .ltr-left {{ direction:ltr; text-align:left; }}
+    .scroll-anchor {{ scroll-margin-top:80px; }}
+    .bidi-plain {{ unicode-bidi:plaintext; }}
+    .quill-editor-box {{ height:280px; background:#fff; }}
+    body.sl-dark .quill-editor-box, body.dark-mode .quill-editor-box {{ background:#17212B; }}
+    .min-h-300 {{ min-height:300px; }}
+    .tree-overlay-fixed {{ position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:70; }}
+    .tree-drawer-fixed {{
+      position:fixed; top:0; left:0; height:100vh; width:min(92vw,380px); z-index:400;
+      transform:translateX(-105%); transition:transform .25s; overflow-y:auto;
+      border-radius:0; padding:0; box-shadow:4px 0 24px rgba(0,0,0,.2);
+    }}
+    .tree-drawer-header {{ z-index:1; }}
+    .disabled-visual {{ opacity:.5; cursor:not-allowed; }}
+    .disabled-visual--noclick {{ opacity:.5; pointer-events:none; }}
+    .sort-link {{ text-decoration:none; font-size:11px; color:var(--text-muted); }}
+    .sort-link--active {{ color:var(--clr-primary); font-weight:700; }}
+    .chat-js-bubble {{ max-width:85%; white-space:pre-wrap; }}
+    .icon-18 {{ width:18px; }}
+    .icon-amber {{ color:#f59e0b; }}
+    .icon-cyan {{ color:#0891b2; }}
+    .m-0 {{ margin:0; }}
+    .flex-gap14 {{ display:flex; align-items:center; gap:14px; }}
+    .field-row-sm {{ padding:8px 14px; }}
+    .mb-16 {{ margin-bottom:16px; }}
+    .mb-20 {{ margin-bottom:20px; }}
+    .mb-0 {{ margin-bottom:0; }}
+
+    /* ── Filter Tabs / Pills ───────────────────────────────────── */
+    .filter-tabs {{ display:flex; gap:6px; flex-wrap:wrap; }}
+    .filter-tab {{
+      display:inline-flex; align-items:center; gap:5px; padding:5px 12px;
+      border-radius:9px; border:1.5px solid var(--bdr);
+      font-size:11px; font-weight:500; text-decoration:none;
+      background:var(--bg-card); color:var(--txt-muted);
+    }}
+    .filter-tab--active {{ border-color:var(--txt-secondary); background:var(--txt-secondary); color:#fff; font-weight:700; }}
+    .filter-tab-lg {{
+      display:inline-flex; align-items:center; gap:6px; padding:6px 14px;
+      border-radius:10px; border:1.5px solid var(--bdr);
+      font-size:12px; font-weight:500; text-decoration:none;
+      background:var(--bg-card); color:var(--txt-muted);
+    }}
+    .filter-tab-lg--active {{ border-color:var(--clr-primary); background:var(--clr-primary); color:#fff; font-weight:700; }}
+    .filter-tab-count {{ font-size:10px; padding:1px 6px; border-radius:20px; background:var(--bg-subtle); }}
+    .filter-tab--active .filter-tab-count,
+    .filter-tab-lg--active .filter-tab-count {{ background:rgba(0,0,0,.15); }}
+
+    /* ── Status Badges ─────────────────────────────────────────── */
+    .status-pill {{ padding:3px 9px; border-radius:20px; font-size:11px; font-weight:600; }}
+    .status-pill-sm {{ padding:2px 7px; border-radius:20px; font-size:10px; font-weight:600; }}
+
+    /* ── Show-More Button ──────────────────────────────────────── */
+    .show-more-btn {{
+      padding:6px 16px; background:var(--clr-neutral-dim); color:var(--clr-neutral);
+      border:1px solid var(--bdr); border-radius:var(--r-sm); font-size:12px;
+      cursor:pointer; font-family:inherit;
+    }}
+    body.sl-dark .show-more-btn, body.dark-mode .show-more-btn {{ background:#1B2530; color:#8A99AC; border-color:#2B3A4C; }}
+
+    /* ── Pagination ────────────────────────────────────────────── */
+    .pagination {{ display:flex; gap:6px; justify-content:center; margin-top:16px; flex-wrap:wrap; }}
+    .page-link {{ padding:5px 12px; border-radius:var(--r-sm); font-size:12px; text-decoration:none; border:1px solid var(--bdr); color:var(--txt-muted); background:var(--bg-card); }}
+    .page-link--active {{ background:var(--clr-primary); color:#000; }}
+
+    /* ── Radio/Checkbox Cards ──────────────────────────────────── */
+    .option-card {{ padding:12px; background:var(--page-bg); border-radius:var(--r-md); font-size:13px; }}
+    .option-card--success {{ background:#F0FDF4; }}
+    body.sl-dark .option-card--success, body.dark-mode .option-card--success {{ background:rgba(34,197,94,.12); }}
+    .option-card--danger {{ background:#FEF2F2; }}
+    body.sl-dark .option-card--danger, body.dark-mode .option-card--danger {{ background:rgba(239,68,68,.12); }}
+    .option-radio, .option-check {{ width:17px; height:17px; min-height:17px; cursor:pointer; }}
+    .option-check-sm {{ width:15px; height:15px; min-height:15px; }}
+    .option-hint {{ font-size:11.5px; color:var(--txt-muted); margin-top:2px; }}
+    .option-toggle-box {{ padding:12px 16px; background:var(--page-bg); border-radius:var(--r-md); }}
+    .option-toggle-label {{ font-size:13px; }}
+    .option-check-16 {{ width:16px; height:16px; min-height:16px; cursor:pointer; }}
+    .option-reveal {{ display:none; margin-top:12px; }}
+
+    /* ── Broadcast Form ────────────────────────────────────────── */
+    .broadcast-form {{ display:flex; flex-direction:column; gap:18px; }}
+    .label-hint {{ font-size:11px; font-weight:400; color:var(--txt-muted); }}
+    .warning-box {{ background:#FEF3C7; border:1px solid #FDE68A; border-radius:12px; padding:12px 16px; font-size:13px; color:#92400E; }}
+    body.sl-dark .warning-box, body.dark-mode .warning-box {{ background:rgba(253,230,138,.12); border-color:rgba(253,230,138,.25); color:#FDE68A; }}
+
+    /* ── Progress Bar (generic) ────────────────────────────────── */
+    .progress-track {{ direction:ltr; border-radius:9999px; overflow:hidden; }}
+    .progress-bar {{ border-radius:9999px; }}
+
     /* ── Responsive Breakpoints ───────────────────────────────── */
     @media (max-width:1100px) {{
       .topbar {{ grid-template-columns:auto minmax(180px,1fr) auto; padding:0 16px; }}
@@ -1250,8 +1468,9 @@ def _layout(title: str, body: str, admin_info=None,
       .card-p {{ padding:var(--sp-4) var(--sp-5); }}
       .stat-grid {{ grid-template-columns:repeat(2,1fr); gap:10px; }}
       .page-header h1 {{ font-size:18px; }}
-      .filter-bar {{ gap:5px; }}
-      .filter-tab {{ padding:5px 10px; font-size:11.5px; }}
+      .filter-tabs {{ gap:5px; }}
+      .filter-tab {{ padding:4px 10px; font-size:10.5px; }}
+      .filter-tab-lg {{ padding:5px 11px; font-size:11.5px; }}
       .btn {{ font-size:13px; padding:0 14px; }}
     }}
     @media (max-width:375px) {{
@@ -1403,7 +1622,7 @@ def _layout(title: str, body: str, admin_info=None,
     Array.from(document.querySelectorAll('.sidebar-nav .nav-item')).filter(function(a){{return a.textContent.trim().toLowerCase().includes(q);}}).slice(0,7).forEach(function(a){{
       var item=document.createElement('a'); item.href=a.href; item.innerHTML='<span>'+a.textContent.trim()+'</span><small>'+new URL(a.href).pathname+'</small>'; results.appendChild(item);
     }});
-    if(!results.children.length) results.innerHTML='<span style="display:block;padding:12px;color:var(--text-muted);font-size:12px">نتیجه‌ای پیدا نشد</span>';
+    if(!results.children.length) results.innerHTML='<span class="empty-result">نتیجه‌ای پیدا نشد</span>';
     results.classList.add('open');
   }}
   search?.addEventListener('input',searchPanel);
@@ -1521,8 +1740,8 @@ def _card(title, value, sub="", color="indigo"):
     return (
         f'<div class="card p-5">'
         f'<div class="text-xs font-semibold mb-1" style="color:{fg}">{e(title)}</div>'
-        f'<div class="text-2xl font-bold" style="color:var(--text-main)">{e(str(value))}</div>'
-        f'{"<div style=\"font-size:12px;color:var(--text-muted);margin-top:3px\">"+e(sub)+"</div>" if sub else ""}'
+        f'<div class="text-2xl font-bold stat-card-value">{e(str(value))}</div>'
+        f'{"<div class=\"stat-card-sub\">"+e(sub)+"</div>" if sub else ""}'
         f'</div>'
     )
 
@@ -1553,33 +1772,33 @@ async def login_get(request: Request, err: str = "", flash: str = ""):
 
     err_html = ""
     if err == "1":
-        err_html = '<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">❌ نام کاربری یا رمز اشتباه است</div>'
+        err_html = '<div class="alert-error">❌ نام کاربری یا رمز اشتباه است</div>'
     elif err == "rate":
         mins = request.query_params.get("mins", "15")
-        err_html = f'<div style="background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">🔒 دسترسی موقتاً مسدود شد. {mins} دقیقه دیگر تلاش کنید.</div>'
+        err_html = f'<div class="alert-warning">🔒 دسترسی موقتاً مسدود شد. {mins} دقیقه دیگر تلاش کنید.</div>'
     if flash:
-        err_html += f'<div style="background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:14px">⏱ {e(flash)}</div>'
+        err_html += f'<div class="alert-warning">⏱ {e(flash)}</div>'
 
     body = f"""
-    <div style="min-height:80vh;display:flex;align-items:center;justify-content:center">
-      <div style="background:var(--card-bg);border-radius:24px;box-shadow:0 20px 60px rgba(15,23,42,.12);padding:40px 36px;width:100%;max-width:380px">
-        <div style="text-align:center;margin-bottom:28px">
-          <div style="font-size:24px;font-weight:900;letter-spacing:1.5px;margin-bottom:6px;direction:ltr">
-            <span style="color:#374151">STOCK</span><span style="color:#2EC4B6"> LAND</span>
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-header">
+          <div class="login-brand">
+            <span class="brand-word brand-word--stock">STOCK</span><span class="brand-word brand-word--land"> LAND</span>
           </div>
-          <div style="font-size:12px;color:var(--text-muted)">پنل مدیریت فروشگاه</div>
+          <div class="login-subtitle">پنل مدیریت فروشگاه</div>
         </div>
         {err_html}
-        <form method="post" action="/admin/login" style="display:flex;flex-direction:column;gap:14px">
+        <form method="post" action="/admin/login" class="login-form">
           <div>
-            <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">نام کاربری</label>
+            <label class="field-label">نام کاربری</label>
             {_input("username","نام کاربری",required=True)}
           </div>
           <div>
-            <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">رمز ورود</label>
+            <label class="field-label">رمز ورود</label>
             {_input("password","رمز ورود",type_="password",required=True)}
           </div>
-          <button type="submit" style="width:100%;padding:12px;background:#2EC4B6;color:#fff;font-weight:700;font-size:14px;border:none;border-radius:12px;cursor:pointer;margin-top:4px">ورود به پنل ←</button>
+          <button type="submit" class="login-submit">ورود به پنل ←</button>
         </form>
       </div>
     </div>"""
@@ -1896,7 +2115,7 @@ async def dashboard(request: Request, err: str = ""):
       </section>
 
       <section class="card chart-card" aria-labelledby="sales-title">
-        <div class="chart-toolbar"><div class="section-heading" style="margin:0"><div><h3 id="sales-title">تحلیل فروش</h3><p>روند درآمد در ۳۰ روز اخیر</p></div></div><div style="display:flex;align-items:center;gap:14px"><span class="chart-legend"><span></span>فروش روزانه</span><span class="chart-period">۳۰ روز اخیر</span></div></div>
+        <div class="chart-toolbar"><div class="section-heading m-0"><div><h3 id="sales-title">تحلیل فروش</h3><p>روند درآمد در ۳۰ روز اخیر</p></div></div><div class="flex-gap14"><span class="chart-legend"><span></span>فروش روزانه</span><span class="chart-period">۳۰ روز اخیر</span></div></div>
         <div class="chart-shell"><canvas id="salesChart"></canvas></div>
       </section>
 
@@ -1906,9 +2125,9 @@ async def dashboard(request: Request, err: str = ""):
       </section>
 
       <section class="three-column">
-        <article class="card mini-panel"><div class="panel-header"><div><h3>محصولات برتر</h3><p>بر اساس سفارش‌های اخیر</p></div><i data-lucide="trophy" style="width:18px;color:#f59e0b"></i></div>{top_product_rows or '<div class="empty-state">داده‌ای برای نمایش وجود ندارد</div>'}</article>
+        <article class="card mini-panel"><div class="panel-header"><div><h3>محصولات برتر</h3><p>بر اساس سفارش‌های اخیر</p></div><i data-lucide="trophy" class="icon-18 icon-amber"></i></div>{top_product_rows or '<div class="empty-state">داده‌ای برای نمایش وجود ندارد</div>'}</article>
         <article class="card mini-panel"><div class="panel-header"><div><h3>موجودی رو به اتمام</h3><p>محصولات نیازمند تأمین</p></div><a href="/admin/feed" class="section-link">مدیریت<i data-lucide="arrow-left"></i></a></div>{low_rows or '<div class="empty-state">موجودی همه محصولات کافی است</div>'}</article>
-        <article class="card mini-panel"><div class="panel-header"><div><h3>فعالیت‌های اخیر</h3><p>رویدادهای تازه فروشگاه</p></div><i data-lucide="history" style="width:18px;color:#0891b2"></i></div>{activity_rows or '<div class="empty-state">فعالیت تازه‌ای ثبت نشده است</div>'}</article>
+        <article class="card mini-panel"><div class="panel-header"><div><h3>فعالیت‌های اخیر</h3><p>رویدادهای تازه فروشگاه</p></div><i data-lucide="history" class="icon-18 icon-cyan"></i></div>{activity_rows or '<div class="empty-state">فعالیت تازه‌ای ثبت نشده است</div>'}</article>
       </section>
     </main>
 
@@ -2507,7 +2726,7 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
           <input type="checkbox" name="enable_{e(key)}" {"checked" if en else ""} onchange="markDirty();this.closest('.tog').classList.toggle('tog-off',!this.checked)">
           <span class="tog-track"></span>
         </label>
-        <span style="font-size:1.1rem;width:22px;text-align:center;flex-shrink:0">{icon}</span>
+        <span class="field-icon">{icon}</span>
         <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()" placeholder="برچسب دکمه">
       </div>"""
 
@@ -2517,8 +2736,8 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
         val = gv(key)
         icon = _BICONS.get(key, "")
         partner_rows += f"""
-      <div class="field-row" style="padding:8px 14px">
-        <span style="font-size:1rem;width:20px;text-align:center;flex-shrink:0">{icon}</span>
+      <div class="field-row field-row-sm">
+        <span class="field-icon-sm">{icon}</span>
         <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()">
       </div>"""
 
@@ -2528,8 +2747,8 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
         val = gv(key)
         icon = _BICONS.get(key, "")
         wallet_rows += f"""
-      <div class="field-row" style="padding:8px 14px">
-        <span style="font-size:1rem;width:20px;text-align:center;flex-shrink:0">{icon}</span>
+      <div class="field-row field-row-sm">
+        <span class="field-icon-sm">{icon}</span>
         <input type="text" class="field-inp" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()">
       </div>"""
 
@@ -2539,20 +2758,20 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
         val = gv(key)
         lbl = _CTL.get(key, key)
         if key == "WALLET_QUICK_AMOUNTS":
-            fld = f'<input type="text" class="field-inp" style="width:100%;box-sizing:border-box" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()" placeholder="10000,50000,100000,500000">'
+            fld = f'<input type="text" class="field-inp input-full" name="field_{e(key)}" value="{e(val)}" oninput="markDirty()" placeholder="10000,50000,100000,500000">'
         else:
-            fld = f'<textarea class="field-inp" style="width:100%;box-sizing:border-box;resize:vertical;min-height:110px" name="field_{e(key)}" oninput="markDirty()" dir="rtl">{e(val)}</textarea>'
+            fld = f'<textarea class="field-inp textarea-full" name="field_{e(key)}" oninput="markDirty()" dir="rtl">{e(val)}</textarea>'
         text_fields += f"""
-      <div style="margin-bottom:18px">
-        <label style="display:block;font-size:.82rem;font-weight:600;color:#4b5563;margin-bottom:6px">{e(lbl)}</label>
+      <div class="mb-18">
+        <label class="text-section-label">{e(lbl)}</label>
         {fld}
       </div>"""
 
     body = f"""
     {tog_css}
 
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px">
-      <h1 style="font-size:1.4rem;font-weight:700;color:#1f2937;margin:0">⚙️ تنظیمات ربات</h1>
+    <div class="settings-header">
+      <h1 class="settings-title">⚙️ تنظیمات ربات</h1>
       <button id="sbtn-top" form="sf" type="submit" class="save-btn" disabled>💾 ذخیره تغییرات</button>
     </div>
 
@@ -2560,62 +2779,52 @@ async def settings_get(request: Request, group: str = "", flash: str = ""):
       <input type="hidden" name="is_combined" value="1">
 
       <!-- ─── دکمه‌های منوی اصلی ─────────────────────────────────────── -->
-      <div class="card" style="padding:20px;margin-bottom:16px">
+      <div class="card form-card">
         <div class="sec-hdr">🔘 دکمه‌های منوی اصلی</div>
         <div class="sec-sub">دکمه‌های Reply Keyboard در منوی کاربران — می‌توانید نمایش هر دکمه را فعال یا غیرفعال کنید.</div>
-        <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="flex-col-6">
           {main_rows}
         </div>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end">
-          <button type="button" onclick="resetSection('main')"
-            style="font-size:.76rem;color:#9ca3af;background:none;border:none;cursor:pointer;transition:color .15s"
-            onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'">
+        <div class="card-reset-footer">
+          <button type="button" onclick="resetSection('main')" class="btn-link-muted">
             🔄 بازگردانی این بخش به پیش‌فرض
           </button>
         </div>
       </div>
 
       <!-- ─── دکمه‌های پنل همکار + کیف‌پول (۲ ستون) ─────────────────── -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" class="two-col-grid">
-        <div class="card" style="padding:20px">
+      <div class="grid-2col mb-16">
+        <div class="card form-card mb-0">
           <div class="sec-hdr">🤝 دکمه‌های پنل همکار</div>
           <div class="sec-sub">Inline Keyboard — داشبورد همکاران</div>
-          <div style="display:flex;flex-direction:column;gap:6px">
+          <div class="flex-col-6">
             {partner_rows}
           </div>
         </div>
-        <div class="card" style="padding:20px">
+        <div class="card form-card mb-0">
           <div class="sec-hdr">💰 دکمه‌های کیف‌پول</div>
           <div class="sec-sub">Inline Keyboard — بخش کیف‌پول</div>
-          <div style="display:flex;flex-direction:column;gap:6px">
+          <div class="flex-col-6">
             {wallet_rows}
           </div>
         </div>
       </div>
 
       <!-- ─── تنظیمات متنی مهم ─────────────────────────────────────────── -->
-      <div class="card" style="padding:20px;margin-bottom:20px">
+      <div class="card form-card mb-20">
         <div class="sec-hdr">📝 تنظیمات متنی</div>
         <div class="sec-sub">این متن‌ها مستقیماً در ربات نمایش داده می‌شوند — بقیه متن‌ها ثابت و پیش‌فرض هستند.</div>
         {text_fields}
       </div>
 
       <!-- ─── دکمه‌های پایین صفحه ──────────────────────────────────────── -->
-      <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:32px;flex-wrap:wrap;gap:10px">
-        <button type="button" onclick="confirmResetAll()"
-          style="font-size:.82rem;color:#9ca3af;background:none;border:none;cursor:pointer;transition:color .15s;padding:0"
-          onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#9ca3af'">
+      <div class="footer-bar">
+        <button type="button" onclick="confirmResetAll()" class="btn-link-muted">
           🔄 بازگردانی همه به پیش‌فرض
         </button>
         <button id="sbtn-bot" form="sf" type="submit" class="save-btn" disabled>💾 ذخیره همه تغییرات</button>
       </div>
     </form>
-
-    <style>
-    @media(max-width:640px){{
-      .two-col-grid{{grid-template-columns:1fr !important}}
-    }}
-    </style>
 
     <script>
     var _dirty = false;
@@ -2666,8 +2875,7 @@ def _settings_action_bar():
     return """
       <div class="flex items-center gap-3 pt-4 border-t">
         <button type="submit" id="save-btn" disabled
-          style="opacity:.5;cursor:not-allowed"
-          class="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold transition">
+          class="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold transition disabled-visual">
           💾 ذخیره تغییرات
         </button>
         <button type="submit" formaction="/admin/settings/reset-group" onclick="return confirmReset()"
@@ -3091,7 +3299,7 @@ async def database_page(request: Request, flash: str = ""):
         _rep = _j.loads(_gk("cloudbk_last_report", "") or "{}")
         _errs = [r for r in _rep.get("results", []) if not r.get("ok")]
         if _errs:
-            _cb_report_html = '<span class="text-red-500" style="unicode-bidi:plaintext">آخرین خطا: ' + e(str(_errs[0].get("driver")) + " — " + str(_errs[0].get("error"))[:100]) + "</span>"
+            _cb_report_html = '<span class="text-red-500 bidi-plain">آخرین خطا: ' + e(str(_errs[0].get("driver")) + " — " + str(_errs[0].get("error"))[:100]) + "</span>"
     except Exception:
         pass
 
@@ -3415,16 +3623,16 @@ async def database_page(request: Request, flash: str = ""):
     </div>
 
     <!-- Progress overlay -->
-    <div id="bk-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.6);z-index:99999">
-      <div id="ov-modal" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:20px;padding:36px 24px;width:calc(100% - 48px);max-width:340px;text-align:center;box-shadow:0 25px 80px rgba(0,0,0,.4)">
-        <div style="font-size:52px;margin-bottom:12px;line-height:1" id="ov-icon">⏳</div>
-        <h3 style="font-weight:700;color:#111827;font-size:17px;margin:0 0 6px 0;font-family:inherit" id="ov-title">در حال انجام...</h3>
-        <p style="font-size:12px;color:#6b7280;margin:0 0 18px 0" id="ov-msg">لطفاً صبر کنید</p>
-        <div style="direction:ltr;background:#e5e7eb;border-radius:999px;height:8px;overflow:hidden;margin-bottom:20px">
-          <div id="ov-bar" style="background:#6366f1;height:8px;border-radius:999px;width:5%;transition:width .5s ease"></div>
+    <div id="bk-overlay" class="bk-overlay">
+      <div id="ov-modal" class="bk-modal">
+        <div class="bk-icon" id="ov-icon">⏳</div>
+        <h3 class="bk-title" id="ov-title">در حال انجام...</h3>
+        <p class="bk-msg" id="ov-msg">لطفاً صبر کنید</p>
+        <div class="bk-track">
+          <div id="ov-bar" class="bk-bar"></div>
         </div>
         <button id="ov-close" onclick="document.getElementById('bk-overlay').style.display='none'"
-          style="display:none;padding:11px 36px;background:#6366f1;color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">
+          class="bk-done-btn">
           بستن
         </button>
       </div>
@@ -3546,7 +3754,7 @@ async def database_page(request: Request, flash: str = ""):
         try{{
           const r=await fetch('/admin/database/gdrive/start',{{method:'POST'}});
           const d=await r.json();
-          if(!d.ok){{box.innerHTML='<span class="text-red-600" style="unicode-bidi:plaintext">❌ '+d.error+'</span>';return;}}
+          if(!d.ok){{box.innerHTML='<span class="text-red-600 bidi-plain">❌ '+d.error+'</span>';return;}}
           box.innerHTML=`
             <div class="text-center space-y-3">
               <p class="text-sm text-gray-700">لینک زیر را باز کنید و کد را وارد کنید:</p>
@@ -3555,7 +3763,7 @@ async def database_page(request: Request, flash: str = ""):
               <p class="text-xs text-gray-400">پس از تأیید در گوگل، دکمه زیر را بزنید</p>
               <button onclick="pollGdrive('${{d.device_code}}')" class="px-6 py-2 bg-green-600 text-white rounded-lg text-sm">✅ تأیید کردم</button>
             </div>`;
-        }}catch(e){{box.innerHTML='<span class="text-red-600" style="unicode-bidi:plaintext">خطا: '+e.message+'</span>';}}
+        }}catch(e){{box.innerHTML='<span class="text-red-600 bidi-plain">خطا: '+e.message+'</span>';}}
       }}
       async function pollGdrive(dc){{
         const box=document.getElementById('gdrive_connect_box');
@@ -3566,7 +3774,7 @@ async def database_page(request: Request, flash: str = ""):
             const r=await fetch('/admin/database/gdrive/poll',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{device_code:dc}})}});
             const d=await r.json();
             if(d.ok){{box.innerHTML='<span class="text-green-600 font-bold">✅ اتصال موفق! صفحه را رفرش کنید.</span>';return;}}
-            if(!d.pending){{box.innerHTML='<span class="text-red-600" style="unicode-bidi:plaintext">❌ '+(d.error||'خطا')+'</span>';return;}}
+            if(!d.pending){{box.innerHTML='<span class="text-red-600 bidi-plain">❌ '+(d.error||'خطا')+'</span>';return;}}
           }}catch(e){{}}
         }}
         box.innerHTML='<span class="text-red-600">⏱ زمان منقضی شد. دوباره تلاش کنید.</span>';
@@ -3937,29 +4145,29 @@ async def account_page(request: Request, flash: str = ""):
         return _redir("/admin/")
     current_username = _env("ADMIN_WEB_USERNAME", "admin")
     body = f"""
-    <div style="max-width:560px">
+    <div class="max-w-560">
       <div class="page-header"><h1>تنظیمات حساب</h1><p>اطلاعات امنیتی مدیر ارشد</p></div>
-      <div class="card card-p" style="margin-bottom:16px">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر نام کاربری</h2>
-        <form method="post" action="/admin/account/username" style="display:flex;flex-direction:column;gap:14px">
+      <div class="card card-p form-card">
+        <h2 class="form-card-title">تغییر نام کاربری</h2>
+        <form method="post" action="/admin/account/username" class="form-section">
           <div><label>نام کاربری فعلی</label>
-            <input type="text" value="{e(current_username)}" disabled style="background:var(--page-bg);color:var(--text-muted);cursor:not-allowed">
+            <input type="text" value="{e(current_username)}" disabled class="disabled-look">
           </div>
           <div><label>نام کاربری جدید</label>{_input("new_username","فقط a-z, 0-9, _ (حداقل ۳ کاراکتر)",required=True)}</div>
           {_btn("ذخیره نام کاربری","",color="indigo")}
         </form>
       </div>
-      <div class="card card-p" style="margin-bottom:16px">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر رمز پنل</h2>
-        <form method="post" action="/admin/admins/super/password" style="display:flex;flex-direction:column;gap:14px">
+      <div class="card card-p form-card">
+        <h2 class="form-card-title">تغییر رمز پنل</h2>
+        <form method="post" action="/admin/admins/super/password" class="form-section">
           <div><label>رمز جدید</label>{_input("new_password","رمز قوی",type_="password",required=True)}</div>
           <div><label>تکرار رمز</label>{_input("confirm_password","تکرار رمز",type_="password",required=True)}</div>
           {_btn("ذخیره رمز","",color="green")}
         </form>
       </div>
       <div class="card card-p">
-        <h2 style="font-size:14px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">تغییر آیدی تلگرام</h2>
-        <form method="post" action="/admin/admins/super/telegram_id" style="display:flex;flex-direction:column;gap:14px">
+        <h2 class="form-card-title">تغییر آیدی تلگرام</h2>
+        <form method="post" action="/admin/admins/super/telegram_id" class="form-section">
           <div><label>آیدی عددی تلگرام</label>{_input("new_telegram_id","مثلاً: 638469407",type_="number",required=True)}</div>
           {_btn("ذخیره آیدی","",color="green")}
         </form>
@@ -4124,10 +4332,8 @@ async def admins_edit_get(request: Request, aid: int, flash: str = ""):
         </label>"""
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/admins", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش ادمین: {e(a["name"])}</h1>
-    </div>
+    <a href="/admin/admins" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به ادمین‌ها</a>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">✏️ ویرایش ادمین: {e(a["name"])}</h1>
     <div class="bg-white rounded-xl shadow p-6 max-w-2xl">
       <form method="post" action="/admin/admins/{aid}/edit" class="space-y-4">
         <div class="grid md:grid-cols-2 gap-4">
@@ -4393,10 +4599,8 @@ async def categories_edit_get(request: Request, cid: int, flash: str = ""):
     )
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/categories", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش: {e(cat["name"])}</h1>
-    </div>
+    <a href="/admin/categories" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به دسته‌بندی‌ها</a>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">✏️ ویرایش: {e(cat["name"])}</h1>
     <div class="card p-6 max-w-xl">
       <form method="post" action="/admin/categories/{cid}/edit" class="space-y-4">
         <div>
@@ -4603,10 +4807,8 @@ async def product_new_get(request: Request):
 
     if not cats_all:
         body = f"""
-        <div class="flex items-center gap-3 mb-6">
-          {_btn("← بازگشت", "/admin/products", "slate", small=True)}
-          <h1 class="text-2xl font-bold text-gray-800">➕ محصول جدید</h1>
-        </div>
+        <a href="/admin/products" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به محصولات</a>
+        <h1 class="text-2xl font-bold text-gray-800 mb-6">➕ محصول جدید</h1>
         <div class="card p-6">
           <p class="text-amber-600">⚠️ ابتدا باید دسته‌بندی بسازید.</p>
           <div class="mt-4">{_btn("← ساخت دسته‌بندی", "/admin/categories", "indigo")}</div>
@@ -4616,10 +4818,8 @@ async def product_new_get(request: Request):
     cat_opts = _cat_select_options(cats_all)
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/products", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">➕ محصول جدید</h1>
-    </div>
+    <a href="/admin/products" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به محصولات</a>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">➕ محصول جدید</h1>
     <form method="post" action="/admin/products/new" enctype="multipart/form-data" class="card p-6 max-w-2xl space-y-4">
       <div>
         <label class="text-sm font-medium text-gray-700 block mb-1">دسته‌بندی *</label>
@@ -4649,45 +4849,45 @@ async def product_new_get(request: Request):
         <input type="file" name="image" accept="image/*" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
         <div class="text-xs text-gray-400 mt-1">اگه عکسی انتخاب نشه، آیکون پیش‌فرض دسته‌بندی نمایش داده می‌شه.</div>
       </div>
-      <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
-        <label class="perm-label" style="font-size:13px">
+      <div class="option-toggle-box">
+        <label class="perm-label option-toggle-label">
           <input type="checkbox" name="support_after_purchase" value="1"
             id="setup_chk_new" onchange="document.getElementById('setup_msg_new').style.display=this.checked?'block':'none'"
-            style="width:16px;height:16px;min-height:16px;cursor:pointer">
+            class="option-check-16">
           <div>
             <strong>نیاز به راه‌اندازی / دریافت اطلاعات مشتری</strong>
-            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">پس از خرید، به جای تحویل مستقیم، گفتگوی راه‌اندازی باز می‌شود</div>
+            <div class="option-hint">پس از خرید، به جای تحویل مستقیم، گفتگوی راه‌اندازی باز می‌شود</div>
           </div>
         </label>
-        <div id="setup_msg_new" style="display:none;margin-top:12px">
-          <label style="font-size:12px;font-weight:600;color:var(--text-muted)">
+        <div id="setup_msg_new" class="option-reveal">
+          <label class="field-label">
             متن راهنما برای مشتری — چه اطلاعاتی باید بفرستد؟
           </label>
           {_textarea("setup_message","مثلاً: لطفاً ایمیل اپل، شماره موبایل و کد تأیید دو مرحله‌ای را ارسال کنید.",rows=3)}
         </div>
       </div>
-      <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
-        <label class="perm-label" style="font-size:13px">
+      <div class="option-toggle-box">
+        <label class="perm-label option-toggle-label">
           <input type="checkbox" name="notify_on_restock" value="1"
-            style="width:16px;height:16px;min-height:16px;cursor:pointer">
+            class="option-check-16">
           <div>
             <strong>اطلاع‌رسانی موجود شدن مجدد</strong>
-            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">وقتی موجودی این محصول صفر بشه، به‌جای دکمهٔ خرید، دکمهٔ «موجود شد اطلاع بده» به کاربر نشون داده می‌شه (بدون امکان خرید/پیش‌خرید). اگه خاموش باشه، فقط پیام «ناموجود» دیده می‌شه.</div>
+            <div class="option-hint">وقتی موجودی این محصول صفر بشه، به‌جای دکمهٔ خرید، دکمهٔ «موجود شد اطلاع بده» به کاربر نشون داده می‌شه (بدون امکان خرید/پیش‌خرید). اگه خاموش باشه، فقط پیام «ناموجود» دیده می‌شه.</div>
           </div>
         </label>
       </div>
-      <div style="padding:12px 16px;background:var(--page-bg);border-radius:12px">
-        <label class="perm-label" style="font-size:13px">
+      <div class="option-toggle-box">
+        <label class="perm-label option-toggle-label">
           <input type="checkbox" name="require_terms" value="1"
             id="terms_chk_new" onchange="document.getElementById('terms_text_new').style.display=this.checked?'block':'none'"
-            style="width:16px;height:16px;min-height:16px;cursor:pointer">
+            class="option-check-16">
           <div>
             <strong>نیاز به تأیید قوانین خرید</strong>
-            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">اگه فعال باشه، کاربر قبل از پرداخت باید متن قوانین خرید رو ببینه و با تیک‌زدن یک چک‌باکس تأیید کنه (هم در ربات، هم در مینی‌اپ). پیش‌فرض خاموش.</div>
+            <div class="option-hint">اگه فعال باشه، کاربر قبل از پرداخت باید متن قوانین خرید رو ببینه و با تیک‌زدن یک چک‌باکس تأیید کنه (هم در ربات، هم در مینی‌اپ). پیش‌فرض خاموش.</div>
           </div>
         </label>
-        <div id="terms_text_new" style="display:none;margin-top:12px">
-          <label style="font-size:12px;font-weight:600;color:var(--text-muted)">
+        <div id="terms_text_new" class="option-reveal">
+          <label class="field-label">
             متن قوانین اختصاصی این محصول (اختیاری)
           </label>
           {_textarea("terms_text","اگه خالی بذارید، از متن پیش‌فرض عمومی استفاده می‌شه (قابل ویرایش از تنظیمات → قوانین خرید).",rows=4)}
@@ -4881,10 +5081,8 @@ async def product_edit_get(request: Request, pid: int, flash: str = ""):
         cats += f'<option value="{e(s[0])}" {sel}>{e(s[1])}</option>'
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/products", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش محصول #{pid}</h1>
-    </div>
+    <a href="/admin/products" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به محصولات</a>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">✏️ ویرایش محصول #{pid}</h1>
     <div class="grid md:grid-cols-3 gap-6">
       <div class="md:col-span-2">
         <form method="post" action="/admin/products/{pid}/edit" enctype="multipart/form-data" class="bg-white rounded-xl shadow p-6 space-y-4">
@@ -5126,7 +5324,7 @@ async def feed_overview(request: Request):
           <td class="px-4 py-3 text-xs text-gray-400">{e(p["category"])}</td>
           <td class="px-4 py-3">
             <div class="flex items-center gap-2">
-              <div class="flex-1 bg-gray-100 rounded-full h-2" style="direction:ltr">
+              <div class="flex-1 bg-gray-100 rounded-full h-2 ltr-num">
                 <div class="bg-{c}-500 h-2 rounded-full" style="width:{pct}%"></div>
               </div>
               <span class="text-sm font-medium text-{c}-700 w-16">{avail}/{total}</span>
@@ -5290,10 +5488,8 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
     ) + "</div>" if pages > 1 else ""
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/feed", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">🗃 موجودی: {e(product["title"])}</h1>
-    </div>
+    <a href="/admin/feed" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به موجودی</a>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">🗃 موجودی: {e(product["title"])}</h1>
     <div class="grid grid-cols-4 gap-4 mb-6">
       {_card("کل آیتم‌ها", str(total), "", "slate")}
       {_card("موجود", str(avail), "", "green")}
@@ -5785,11 +5981,8 @@ async def feed_item_edit_get(request: Request, fid: int, flash: str = ""):
         </div>"""
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", f"/admin/feed/{item['product_id']}", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">✏️ ویرایش آیتم فید #{fid}</h1>
-      <span class="text-sm text-gray-400">{e(product_title)}</span>
-    </div>
+    <a href="/admin/feed/{item['product_id']}" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به موجودی</a>
+    <h1 class="text-xl font-bold text-gray-800 mb-6">✏️ ویرایش آیتم فید #{fid} <span class="text-sm text-gray-400 font-normal">{e(product_title)}</span></h1>
     <div class="card p-6 max-w-2xl">
       <form method="post" action="/admin/feed/item/{fid}/edit" class="space-y-4">
         <div>
@@ -6298,10 +6491,8 @@ async def order_edit_get(request: Request, oid: int, flash: str=""):
         return _redir("/admin/orders?flash=سفارش+یافت+نشد")
 
     body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← بازگشت", "/admin/orders", "slate", small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">✏️ ویرایش سفارش #{oid}</h1>
-    </div>
+    <a href="/admin/orders" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به سفارش‌ها</a>
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">✏️ ویرایش سفارش #{oid}</h1>
     <div class="card p-6 max-w-xl">
       <form method="post" action="/admin/orders/{oid}/edit" class="space-y-4">
         <div>
@@ -6356,58 +6547,58 @@ async def order_return_form(request: Request, oid: int):
         conn.close()
 
     body = f"""
-    <div style="max-width:640px">
+    <div class="max-w-640">
       <div class="page-header">
         <h1>برگشت سفارش #{oid}</h1>
         <p>محصول: {e(order["title"] or "")} — کاربر: {order["user_id"]}</p>
       </div>
       <form method="post" action="/admin/orders/{oid}/return">
-        <div class="card card-p" style="margin-bottom:14px">
+        <div class="card card-p mb-14">
           <h2 class="section-title">تکلیف محصول</h2>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="product_action" value="restore" checked style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>بازگشت به موجودی</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">محصول مجدداً قابل فروش می‌شود</div></div>
+          <div class="flex-col-10">
+            <label class="perm-label option-card">
+              <input type="radio" name="product_action" value="restore" checked class="option-radio">
+              <div><strong>بازگشت به موجودی</strong><div class="option-hint">محصول مجدداً قابل فروش می‌شود</div></div>
             </label>
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="product_action" value="delete" style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>حذف دائم از فید</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">محصول از چرخه فروش خارج می‌شود</div></div>
+            <label class="perm-label option-card">
+              <input type="radio" name="product_action" value="delete" class="option-radio">
+              <div><strong>حذف دائم از فید</strong><div class="option-hint">محصول از چرخه فروش خارج می‌شود</div></div>
             </label>
           </div>
         </div>
 
-        <div class="card card-p" style="margin-bottom:14px">
+        <div class="card card-p mb-14">
           <h2 class="section-title">تکلیف کیف‌پول کاربر</h2>
-          <div style="background:var(--page-bg);border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:14px">
+          <div class="info-box">
             موجودی فعلی: <strong>{wallet_balance:,} تومان</strong> — مبلغ سفارش: <strong>{price:,} تومان</strong>
           </div>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="none" checked style="width:17px;height:17px;min-height:17px;cursor:pointer">
+          <div class="flex-col-10">
+            <label class="perm-label option-card">
+              <input type="radio" name="wallet_action" value="none" checked class="option-radio">
               <div><strong>بدون تغییر کیف‌پول</strong></div>
             </label>
-            <label class="perm-label" style="padding:12px;background:#F0FDF4;border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="full" style="width:17px;height:17px;min-height:17px;cursor:pointer">
-              <div><strong>بازگشت کامل — {price:,} تومان</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">مبلغ کامل سفارش به کیف‌پول اضافه می‌شود</div></div>
+            <label class="perm-label option-card option-card--success">
+              <input type="radio" name="wallet_action" value="full" class="option-radio">
+              <div><strong>بازگشت کامل — {price:,} تومان</strong><div class="option-hint">مبلغ کامل سفارش به کیف‌پول اضافه می‌شود</div></div>
             </label>
-            <label class="perm-label" style="padding:12px;background:var(--page-bg);border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="custom_add" style="width:17px;height:17px;min-height:17px;cursor:pointer">
+            <label class="perm-label option-card">
+              <input type="radio" name="wallet_action" value="custom_add" class="option-radio">
               <div><strong>افزایش مبلغ دلخواه</strong></div>
             </label>
-            <label class="perm-label" style="padding:12px;background:#FEF2F2;border-radius:12px;font-size:13px">
-              <input type="radio" name="wallet_action" value="custom_deduct" style="width:17px;height:17px;min-height:17px;cursor:pointer">
+            <label class="perm-label option-card option-card--danger">
+              <input type="radio" name="wallet_action" value="custom_deduct" class="option-radio">
               <div><strong>کسر از کیف‌پول</strong></div>
             </label>
           </div>
-          <div style="margin-top:14px">
+          <div class="mt-14">
             <label>مبلغ (تومان) — فقط برای گزینه‌های دلخواه</label>
             {_input("custom_amount", f"مثلاً: {price}", type_="number")}
           </div>
         </div>
 
-        <div class="card card-p" style="margin-bottom:14px">
+        <div class="card card-p mb-14">
           <h2 class="section-title">اطلاعات تکمیلی</h2>
-          <div style="margin-bottom:14px">
+          <div class="mb-14">
             <label>علت برگشت</label>
             <select name="reason">
               <option value="wrong_product">ارسال محصول اشتباه</option>
@@ -6421,15 +6612,15 @@ async def order_return_form(request: Request, oid: int):
             <label>توضیحات اضافه (اختیاری)</label>
             {_input("note", "توضیح بیشتر...")}
           </div>
-          <div style="margin-top:14px">
-            <label class="perm-label" style="font-size:13px">
-              <input type="checkbox" name="notify_user" value="1" checked style="width:15px;height:15px;min-height:15px">
+          <div class="mt-14">
+            <label class="perm-label option-toggle-label">
+              <input type="checkbox" name="notify_user" value="1" checked class="option-check-sm">
               ارسال نوتیف به کاربر
             </label>
           </div>
         </div>
 
-        <div style="display:flex;gap:12px">
+        <div class="btn-row-12">
           {_btn("ثبت برگشت","",color="red")}
           <a href="/admin/orders/{oid}" class="btn btn-slate">انصراف</a>
         </div>
@@ -6770,8 +6961,8 @@ async def users_list(request: Request, page: int = 0, q: str = "", sort: str = "
 
     def sort_link(col, label):
         active = sort == col
-        style = "color:var(--primary);font-weight:700" if active else "color:var(--text-muted)"
-        return f'<a href="?q={e(q)}&sort={col}" style="{style};text-decoration:none;font-size:11px">{label} {"↓" if active else ""}</a>'
+        cls = "sort-link sort-link--active" if active else "sort-link"
+        return f'<a href="?q={e(q)}&sort={col}" class="{cls}">{label} {"↓" if active else ""}</a>'
 
     rows = ""
     for u in users:
@@ -7232,10 +7423,11 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
 
     pagination = ""
     if pages > 1:
-        pagination = '<div style="display:flex;gap:6px;justify-content:center;margin-top:16px;flex-wrap:wrap">'
+        pagination = '<div class="pagination">'
         for i in range(pages):
             active = i == page
-            pagination += f'<a href="?q={e(q)}&section={e(section)}&admin_name={e(admin_name)}&page={i}" style="padding:5px 12px;border-radius:8px;font-size:12px;text-decoration:none;background:{"var(--primary)" if active else "var(--card-bg)"};color:{"#000" if active else "var(--text-muted)"};border:1px solid var(--border)">{i+1}</a>'
+            cls = "page-link page-link--active" if active else "page-link"
+            pagination += f'<a href="?q={e(q)}&section={e(section)}&admin_name={e(admin_name)}&page={i}" class="{cls}">{i+1}</a>'
         pagination += "</div>"
 
     body = f"""
@@ -7360,10 +7552,8 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
     fin_toggle_btn = ""
     if fin_older:
         fin_toggle_btn = f"""
-        <div style="text-align:center;padding:10px">
-          <button type="button" id="toggle-older-fin-btn" data-older-count="{len(fin_older)}"
-            style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:20px;font-size:12px;cursor:pointer">
+        <div class="text-center p-3">
+          <button type="button" id="toggle-older-fin-btn" data-older-count="{len(fin_older)}" class="show-more-btn">
             🔽 نمایش {len(fin_older)} درخواست قدیمی‌تر
           </button>
         </div>
@@ -7401,7 +7591,7 @@ def _financial_section_html(type_filter: str, q: str, sort: str, link_fn) -> str
         </form>"""
 
     return f"""
-    <div id="financial" style="scroll-margin-top:80px" class="mt-8">
+    <div id="financial" class="scroll-anchor mt-8">
       <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 class="text-xl font-bold text-gray-800">💰 مرکز مالی</h1>
         {f'<span class="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">{pending_count} در انتظار رسیدگی</span>' if pending_count else ''}
@@ -7512,7 +7702,7 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
     def tq(sf="", tf=""):
         return f"?status_filter={sf}&type_filter={tf}"
 
-    type_tabs = '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'
+    type_tabs = '<div class="filter-tabs mb-3">'
     for lbl, val, cnt in [
         ("همه", "", sum(type_counts.values())),
         ("🔵 پشتیبانی", "support", type_counts["support"]),
@@ -7520,37 +7710,36 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
         ("🤝 همکاران", "partner_support", type_counts["partner_support"]),
     ]:
         active = type_filter == val
-        bg = "var(--primary)" if active else "var(--card-bg)"
-        col = "#000" if active else "var(--text-muted)"
-        type_tabs += f'<a href="{tq(status_filter, val)}" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;border:1.5px solid {"var(--primary)" if active else "var(--border)"};background:{bg};color:{col};font-size:12px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} <span style="font-size:10px;padding:1px 6px;border-radius:20px;background:{"rgba(0,0,0,.15)" if active else "var(--page-bg)"};">{cnt}</span></a>'
+        cls = "filter-tab-lg filter-tab-lg--active" if active else "filter-tab-lg"
+        type_tabs += f'<a href="{tq(status_filter, val)}" class="{cls}">{lbl} <span class="filter-tab-count">{cnt}</span></a>'
     type_tabs += "</div>"
 
-    status_tabs = '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
+    status_tabs = '<div class="filter-tabs mb-4">'
     for lbl, val, cnt in [("همه","",sum(stats.values())),("منتظر اطلاعات","waiting_info",stats.get("waiting_info",0)),
                           ("نیاز به پاسخ","waiting_admin",stats.get("waiting_admin",0)),("در بررسی","reviewing",stats.get("reviewing",0)),
                           ("آماده تحویل","ready_delivery",stats.get("ready_delivery",0)),("منتظر کاربر","waiting_user",stats.get("waiting_user",0)),
                           ("بسته","closed",stats.get("closed",0))]:
         active = status_filter == val
-        bg = "#374151" if active else "var(--card-bg)"; col = "#fff" if active else "var(--text-muted)"
-        status_tabs += f'<a href="{tq(val, type_filter)}" style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:9px;border:1.5px solid {"#374151" if active else "var(--border)"};background:{bg};color:{col};font-size:11px;font-weight:{"700" if active else "500"};text-decoration:none">{lbl} {cnt}</a>'
+        cls = "filter-tab filter-tab--active" if active else "filter-tab"
+        status_tabs += f'<a href="{tq(val, type_filter)}" class="{cls}">{lbl} {cnt}</a>'
     status_tabs += "</div>"
 
     def sbadge(s):
-        defs = {"waiting_info":("🔴","منتظر اطلاعات","#FEE2E2","#B91C1C"),
-                "waiting_admin":("🔴","نیاز به پاسخ","#FEE2E2","#B91C1C"),
-                "reviewing":("🟡","در بررسی","#FEF3C7","#B45309"),
-                "waiting_user":("🟢","پاسخ داده شد","#DCFCE7","#166534"),
-                "ready_delivery":("🟢","آماده تحویل","#DCFCE7","#166534"),
-                "closed":("⚫","بسته","#F3F4F6","#6B7280")}
-        icon,label,bg,color = defs.get(s,("⚪",s,"#F3F4F6","#6B7280"))
-        return f'<span style="padding:3px 9px;background:{bg};color:{color};border-radius:20px;font-size:11px;font-weight:600">{icon} {label}</span>'
+        defs = {"waiting_info":("🔴","منتظر اطلاعات","status-danger"),
+                "waiting_admin":("🔴","نیاز به پاسخ","status-danger"),
+                "reviewing":("🟡","در بررسی","status-warning"),
+                "waiting_user":("🟢","پاسخ داده شد","status-success"),
+                "ready_delivery":("🟢","آماده تحویل","status-success"),
+                "closed":("⚫","بسته","status-neutral")}
+        icon,label,cls = defs.get(s,("⚪",s,"status-neutral"))
+        return f'<span class="status-badge {cls}">{icon} {label}</span>'
 
     def tbadge(t):
-        defs = {"product_setup":("🟢","راه‌اندازی","#DCFCE7","#166534"),
-                "partner_support":("🤝","همکاران","#D1FAE5","#047857"),
-                "support":("🔵","پشتیبانی","#EFF6FF","#1D4ED8")}
-        icon,label,bg,color = defs.get(t,("🔵","پشتیبانی","#EFF6FF","#1D4ED8"))
-        return f'<span style="padding:2px 7px;background:{bg};color:{color};border-radius:20px;font-size:10px;font-weight:600">{icon} {label}</span>'
+        defs = {"product_setup":("🟢","راه‌اندازی","status-success"),
+                "partner_support":("🤝","همکاران","status-success"),
+                "support":("🔵","پشتیبانی","status-info")}
+        icon,label,cls = defs.get(t,("🔵","پشتیبانی","status-info"))
+        return f'<span class="status-badge status-pill-sm {cls}">{icon} {label}</span>'
 
     ticket_rows_list = []
     for t in tickets:
@@ -7606,10 +7795,8 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
     tickets_toggle_btn = ""
     if older_rows:
         tickets_toggle_btn = f"""
-        <div style="text-align:center;padding:10px">
-          <button type="button" id="toggle-older-tickets-btn" data-older-count="{len(older_rows)}"
-            style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:20px;font-size:12px;cursor:pointer">
+        <div class="text-center p-3">
+          <button type="button" id="toggle-older-tickets-btn" data-older-count="{len(older_rows)}" class="show-more-btn">
             🔽 نمایش {len(older_rows)} تیکت قدیمی‌تر
           </button>
         </div>"""
@@ -7778,31 +7965,31 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             try: txt = (msg["text"] or "").strip()
             except: txt = ""
 
-            caption = f'<div style="margin-top:6px;font-size:13px">{e(txt)}</div>' if txt and not txt.startswith("[") else ""
+            caption = f'<div class="chat-caption">{e(txt)}</div>' if txt and not txt.startswith("[") else ""
             proxy = f"/admin/tickets/media/{e(fid)}" if fid else ""
 
             if mt == "photo" and proxy:
                 return (
                     f'<a href="{proxy}" target="_blank">'
-                    f'<img src="{proxy}" style="max-width:260px;max-height:200px;border-radius:10px;display:block" '
+                    f'<img src="{proxy}" class="chat-media-img" '
                     f'onerror="this.parentElement.innerHTML=\'📷 خطا در بارگذاری\'"></a>'
                     + caption
                 )
             elif mt == "voice" and proxy:
-                return f'<audio controls style="max-width:260px"><source src="{proxy}"></audio>{caption}'
+                return f'<audio controls class="chat-media-audio"><source src="{proxy}"></audio>{caption}'
             elif mt == "video" and proxy:
-                return f'<video controls style="max-width:280px;max-height:200px;border-radius:10px"><source src="{proxy}"></video>{caption}'
+                return f'<video controls class="chat-media-video"><source src="{proxy}"></video>{caption}'
             elif mt in ("document", "audio") and proxy:
                 icon = "🎵" if mt == "audio" else "📎"
                 label = txt if txt and not txt.startswith("[") else "دانلود فایل"
-                return f'<a href="{proxy}" download target="_blank" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:rgba(0,0,0,.06);border-radius:9px;text-decoration:none;color:inherit;font-size:12px">{icon} {e(label)}</a>'
+                return f'<a href="{proxy}" download target="_blank" class="chat-media-file">{icon} {e(label)}</a>'
             elif mt and mt not in ("text", ""):
                 icons = {"sticker": "🎭", "animation": "🎬", "video_note": "📹"}
-                return f'{icons.get(mt, "📁")} <em style="opacity:.6;font-size:12px">[{e(mt)}]</em>{caption}'
+                return f'{icons.get(mt, "📁")} <em class="chat-icon-label">[{e(mt)}]</em>{caption}'
             else:
                 return e(txt) if txt else ""
         except Exception:
-            return '<em style="opacity:.5;font-size:12px">[خطا]</em>'
+            return '<em class="chat-empty">[خطا]</em>'
 
     older_messages = messages[:-3] if len(messages) > 3 else []
     recent_messages = messages[-3:] if len(messages) > 3 else messages
@@ -7816,26 +8003,22 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
         time_str = fa_date(msg["created_at"] or "", with_time=True)
         if is_adm:
             return f"""
-        <div style="display:flex;justify-content:flex-end;margin-bottom:10px" data-msg-id="{msg['id']}">
-          <div style="max-width:80%">
-            <div style="background:#2EC4B6;color:#fff;border-radius:18px 4px 18px 18px;
-                        padding:10px 14px;font-size:13.5px;word-break:break-word;white-space:pre-wrap;
-                        box-shadow:0 1px 2px rgba(0,0,0,.1)">
-              {content_html or '<em style="opacity:.6">پیام خالی</em>'}
+        <div class="chat-row chat-row--admin" data-msg-id="{msg['id']}">
+          <div class="chat-col">
+            <div class="chat-bubble chat-bubble--admin">
+              {content_html or '<em class="chat-empty-msg">پیام خالی</em>'}
             </div>
-            <div style="font-size:10px;color:#aaa;text-align:left;margin-top:3px">{src_icon} ادمین · {time_str}</div>
+            <div class="chat-meta chat-meta--admin">{src_icon} ادمین · {time_str}</div>
           </div>
         </div>"""
         else:
             return f"""
-        <div style="display:flex;justify-content:flex-start;margin-bottom:10px" data-msg-id="{msg['id']}">
-          <div style="max-width:80%">
-            <div style="background:#fff;border:1px solid #E5E7EB;border-radius:4px 18px 18px 18px;
-                        padding:10px 14px;font-size:13.5px;word-break:break-word;white-space:pre-wrap;
-                        box-shadow:0 1px 2px rgba(0,0,0,.06)">
-              {content_html or '<em style="opacity:.4">پیام خالی</em>'}
+        <div class="chat-row chat-row--user" data-msg-id="{msg['id']}">
+          <div class="chat-col">
+            <div class="chat-bubble chat-bubble--user">
+              {content_html or '<em class="chat-empty-msg--user">پیام خالی</em>'}
             </div>
-            <div style="font-size:10px;color:#aaa;margin-top:3px">📱 کاربر {user_id_val} · {time_str}</div>
+            <div class="chat-meta">📱 کاربر {user_id_val} · {time_str}</div>
           </div>
         </div>"""
 
@@ -7848,14 +8031,13 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     toggle_btn = ""
     if older_messages:
         toggle_btn = f"""
-        <div style="text-align:center;margin-bottom:12px">
-          <button type="button" id="toggle-older-btn" onclick="
+        <div class="text-center mb-3">
+          <button type="button" id="toggle-older-btn" class="show-more-btn" onclick="
             var el=document.getElementById('older-messages-block');
             var btn=document.getElementById('toggle-older-btn');
             if(el.style.display==='none'){{ el.style.display='block'; btn.textContent='🔼 بستن پیام‌های قبلی'; }}
             else {{ el.style.display='none'; btn.textContent='🔽 نمایش {len(older_messages)} پیام قبلی'; }}
-          " style="padding:6px 16px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:20px;font-size:12px;cursor:pointer">
+          ">
             🔽 نمایش {len(older_messages)} پیام قبلی
           </button>
         </div>
@@ -7932,9 +8114,9 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             ("ready_delivery", "🟢 آماده تحویل"),
         ]
         setup_status_btns = "".join(
-            f'<form method="post" action="/admin/tickets/{tid}/setup-status" style="display:inline">'
+            f'<form method="post" action="/admin/tickets/{tid}/setup-status" class="d-inline">'
             f'<input type="hidden" name="status" value="{sv}">'
-            f'<button class="btn btn-slate btn-sm" style="{"background:var(--primary);color:#000;font-weight:700" if t_setup_status==sv else ""}">{sl}</button></form>'
+            f'<button class="btn btn-slate btn-sm {"setup-status-btn--active" if t_setup_status==sv else ""}">{sl}</button></form>'
             for sv, sl in setup_status_opts
         )
         deliver_btn = ""
@@ -7942,71 +8124,68 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             deliver_btn = f"""
             <form method="post" action="/admin/tickets/{tid}/deliver"
                   onsubmit="return confirm('محصول به کاربر تحویل داده شود و گفتگو بسته شود؟')">
-              <button class="btn btn-primary" style="width:100%;margin-top:12px">
-                <i data-lucide="send" style="width:15px"></i> تحویل محصول و بستن گفتگو
+              <button class="btn btn-primary btn-full-mt12">
+                <i data-lucide="send" class="icon-15"></i> تحویل محصول و بستن گفتگو
               </button>
             </form>"""
         setup_panel = f"""
-        <div class="card card-p" style="margin-bottom:12px;border:2px solid #2EC4B620">
-          <h3 style="font-size:13px;font-weight:700;margin-bottom:12px;color:#166534">🟢 اطلاعات راه‌اندازی محصول</h3>
-          <dl style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px">
-            <dt style="color:var(--text-muted)">محصول</dt><dd style="font-weight:600">{e(ticket["product_title"] or "—")}</dd>
-            <dt style="color:var(--text-muted)">سفارش</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">#{t_order_id}</code></dd>
-            <dt style="color:var(--text-muted)">فید</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">#{t_feed_id or "—"}</code></dd>
+        <div class="card card-p ticket-setup-card">
+          <h3 class="ticket-setup-title">🟢 اطلاعات راه‌اندازی محصول</h3>
+          <dl class="ticket-info-grid">
+            <dt class="ticket-info-dt">محصول</dt><dd class="ticket-info-dd-bold">{e(ticket["product_title"] or "—")}</dd>
+            <dt class="ticket-info-dt">سفارش</dt><dd><code class="ticket-info-code">#{t_order_id}</code></dd>
+            <dt class="ticket-info-dt">فید</dt><dd><code class="ticket-info-code">#{t_feed_id or "—"}</code></dd>
           </dl>
-          <div style="margin-top:12px">
-            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">وضعیت راه‌اندازی</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px">{setup_status_btns}</div>
+          <div class="mt-12">
+            <div class="muted-xs-mb8">وضعیت راه‌اندازی</div>
+            <div class="flex-wrap-gap6">{setup_status_btns}</div>
           </div>
           {deliver_btn}
         </div>"""
 
     direct_form_html = "" if is_closed else f"""
-        <div class="card p-4 mt-3" style="border:2px dashed var(--border);background:var(--page-bg)">
-          <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px">📩 پیام مستقیم</p>
-          <form method="post" action="/admin/tickets/{tid}/direct" style="display:flex;gap:8px">
-            <textarea name="direct_msg" rows="2" placeholder="پیام آزاد..."
-              style="flex:1;border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:13px;resize:none;font-family:inherit"></textarea>
-            <button type="submit" style="background:#6B7280;color:#fff;border:none;border-radius:10px;padding:8px 14px;font-size:12px;cursor:pointer;align-self:flex-end">ارسال</button>
+        <div class="card p-4 mt-3 ticket-direct-card">
+          <p class="ticket-direct-label">📩 پیام مستقیم</p>
+          <form method="post" action="/admin/tickets/{tid}/direct" class="ticket-direct-form">
+            <textarea name="direct_msg" rows="2" placeholder="پیام آزاد..." class="ticket-direct-input"></textarea>
+            <button type="submit" class="ticket-direct-btn">ارسال</button>
           </form>
         </div>"""
 
     body = f"""
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+    <div class="ticket-header">
       {_btn("← تیکت‌ها", "/admin/tickets", "slate", small=True)}
-      <h1 style="font-size:17px;font-weight:800">تیکت #{tid}</h1>
+      <h1 class="ticket-title">تیکت #{tid}</h1>
       {_ticket_status_badge(ticket["status"])}
-      <span style="font-size:12px;color:var(--text-muted)">{type_label}</span>
+      <span class="ticket-type-label">{type_label}</span>
     </div>
 
     <div class="grid lg:grid-cols-3 gap-4">
       <div class="lg:col-span-2">
-        <div class="card p-4 overflow-y-auto" style="min-height:280px;max-height:500px;" id="chat-box">
+        <div class="card p-4 overflow-y-auto chat-box" id="chat-box">
           {chat_html}
         </div>
         {reply_form}
         {direct_form_html}
       </div>
 
-      <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="sidebar-flex-col-12">
         {setup_panel}
         <div class="card card-p">
-          <h3 style="font-size:13px;font-weight:700;margin-bottom:12px">اطلاعات تیکت</h3>
-          <dl style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px">
-            <dt style="color:var(--text-muted)">User ID</dt><dd><code style="background:var(--page-bg);padding:1px 6px;border-radius:5px">{user_id_val}</code></dd>
-            <dt style="color:var(--text-muted)">نوع</dt><dd style="font-weight:600">{type_label}</dd>
-            <dt style="color:var(--text-muted)">پیام‌ها</dt><dd style="font-weight:700;color:var(--primary)">{len(messages)}</dd>
-            <dt style="color:var(--text-muted)">تاریخ</dt><dd style="color:var(--text-muted)">{fa_date(ticket["created_at"] or "", with_time=True)}</dd>
+          <h3 class="card-title-sm">اطلاعات تیکت</h3>
+          <dl class="ticket-info-grid">
+            <dt class="ticket-info-dt">User ID</dt><dd><code class="ticket-info-code">{user_id_val}</code></dd>
+            <dt class="ticket-info-dt">نوع</dt><dd class="ticket-info-dd-bold">{type_label}</dd>
+            <dt class="ticket-info-dt">پیام‌ها</dt><dd class="count-primary">{len(messages)}</dd>
+            <dt class="ticket-info-dt">تاریخ</dt><dd class="ticket-info-dt">{fa_date(ticket["created_at"] or "", with_time=True)}</dd>
           </dl>
         </div>
         <div class="card card-p">
-          <h3 style="font-size:13px;font-weight:700;margin-bottom:10px">تغییر وضعیت</h3>
+          <h3 class="card-title-sm-10">تغییر وضعیت</h3>
           {status_btns}
         </div>
         <div class="card card-p">
-          <button type="button" onclick="archiveThisTicket({tid})"
-            style="width:100%;padding:8px 12px;background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB;
-                   border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer">
+          <button type="button" onclick="archiveThisTicket({tid})" class="archive-btn">
             📦 آرشیو این تیکت
           </button>
         </div>
@@ -8047,7 +8226,7 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
                 var txt = (msg.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
                 if(msg.media_type) txt = '[' + msg.media_type + '] ' + txt;
                 d.innerHTML = '<div class="text-xs text-gray-400 mb-1">' + lbl + ' · ' + (msg.created_at||'').slice(0,16) + '</div>' +
-                  '<div class="' + bbl + ' rounded-2xl px-4 py-2 text-sm" style="max-width:85%;white-space:pre-wrap">' + txt + '</div>';
+                  '<div class="' + bbl + ' rounded-2xl px-4 py-2 text-sm chat-js-bubble">' + txt + '</div>';
                 if(b) b.appendChild(d);
               }});
               if(b) b.scrollTop = b.scrollHeight;
@@ -8488,8 +8667,8 @@ async def broadcast_page(request: Request, flash: str = ""):
     </div>
 
     <div class="card card-p">
-      <h2 style="font-size:15px;font-weight:700;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)">ارسال پیام جدید</h2>
-      <form method="post" action="/admin/broadcast/send" style="display:flex;flex-direction:column;gap:18px">
+      <h2 class="section-title">ارسال پیام جدید</h2>
+      <form method="post" action="/admin/broadcast/send" class="broadcast-form">
 
         <div>
           <label>مخاطبان *</label>
@@ -8513,21 +8692,21 @@ async def broadcast_page(request: Request, flash: str = ""):
         </div>
 
         <div>
-          <label>متن پیام * <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(HTML پشتیبانی می‌شود: &lt;b&gt;، &lt;i&gt;، &lt;code&gt;)</span></label>
+          <label>متن پیام * <span class="label-hint">(HTML پشتیبانی می‌شود: &lt;b&gt;، &lt;i&gt;، &lt;code&gt;)</span></label>
           {_textarea("text", "متن پیام را اینجا بنویسید...", rows=6)}
         </div>
 
         <div>
-          <label>آدرس عکس <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(اختیاری)</span></label>
+          <label>آدرس عکس <span class="label-hint">(اختیاری)</span></label>
           {_input("photo_url", "https://example.com/image.jpg")}
         </div>
 
         <div>
-          <label>دکمه‌های Inline <span style="font-size:11px;font-weight:400;color:var(--text-muted)">(اختیاری — فرمت: متن|لینک — هر دکمه یک خط)</span></label>
+          <label>دکمه‌های Inline <span class="label-hint">(اختیاری — فرمت: متن|لینک — هر دکمه یک خط)</span></label>
           {_textarea("buttons", "دکمه اول|https://t.me/yourbot\nدکمه دوم|https://site.com", rows=3)}
         </div>
 
-        <div style="background:#FEF3C7;border:1px solid #FDE68A;border-radius:12px;padding:12px 16px;font-size:13px;color:#92400E">
+        <div class="warning-box">
           ⚠️ بعد از ارسال، عملیات در پس‌زمینه اجرا می‌شود. صفحه را ببندید و بعداً وضعیت را بررسی کنید.
         </div>
 
@@ -8936,7 +9115,7 @@ def _acbar(label, value, total, color):
     pct = max(0, min(100, int(value/total*100) if total>0 else 0))
     return f"""<div><div class="flex justify-between text-xs text-gray-500 mb-1">
       <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
-      <div class="h-2 bg-gray-100 rounded-full" style="direction:ltr"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
+      <div class="h-2 bg-gray-100 rounded-full ltr-num"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
 
 
 
@@ -8970,7 +9149,7 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
       <td class="px-3 py-2 font-medium">{e(ex["title"])}</td>
       <td class="px-3 py-2 text-xs text-gray-500">{_payee(ex)}</td>
       <td class="px-3 py-2"><span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{e(ex["category"])}</span></td>
-      <td class="px-3 py-2 font-bold text-red-600 no-fa" style="direction:ltr;text-align:left">{int(ex["amount"]):,}</td>
+      <td class="px-3 py-2 font-bold text-red-600 no-fa ltr-left">{int(ex["amount"]):,}</td>
       <td class="px-3 py-2 text-xs text-gray-400">{e((ex["description"] or "")[:30])}</td>
       <td class="px-3 py-2"><form method="post" action="/admin/accounting/expenses/{ex["id"]}/delete" onsubmit="return confirm(\'حذف؟\')"><button class="text-xs text-red-400 hover:text-red-600">حذف</button></form></td>
     </tr>''' for ex in expenses) or "<tr><td colspan='8' class='text-center py-6 text-gray-400'>پرداختی ثبت نشده</td></tr>"
@@ -9802,15 +9981,14 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
         </div>
 
         <!-- درخت -->
-        <div class="card p-4 overflow-x-auto" style="min-height:300px">
+        <div class="card p-4 overflow-x-auto min-h-300">
           <div id="tree-root" class="min-w-max"><div class="text-center text-gray-400 py-12">در حال بارگذاری درخت…</div></div>
         </div>
 
         <!-- پنل اطلاعات (سمت راست) -->
-        <div id="tree-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70" onclick="treeCloseDrawer()"></div>
-        <div id="tree-drawer" class="card"
-          style="position:fixed;top:0;left:0;height:100vh;width:min(92vw,380px);z-index:400;transform:translateX(-105%);transition:transform .25s;overflow-y:auto;border-radius:0;padding:0;box-shadow:4px 0 24px rgba(0,0,0,.2)">
-          <div class="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white" style="z-index:1">
+        <div id="tree-overlay" class="hidden tree-overlay-fixed" onclick="treeCloseDrawer()"></div>
+        <div id="tree-drawer" class="card tree-drawer-fixed">
+          <div class="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white tree-drawer-header">
             <b class="text-gray-800">👤 اطلاعات همکار</b>
             <button onclick="treeCloseDrawer()" class="text-gray-400 hover:text-red-500 text-lg px-2">✕</button>
           </div>
@@ -9825,6 +10003,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
           color:#8A94A6;font-size:11px;transition:transform .18s;user-select:none}
         .tn-arrow.open{transform:rotate(-90deg)}
         .tn-arrow.leaf{visibility:hidden}
+        .tn-tier{font-size:15px}
         .tn-kids{border-right:2px solid #E7EBF2;margin-right:20px;padding-right:6px}
         body.sl-dark .tn-kids,body.dark-mode .tn-kids{border-right-color:#2B3A4C}
         .tn-badge{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap}
@@ -9863,7 +10042,7 @@ async def partners_list(request: Request, tab: str = "list", status_filter: str 
             row.className='tn-row'; row.id='tn-'+id;
             row.innerHTML=
               '<span class="tn-arrow'+(n.children.length?'':' leaf')+'" data-a>◀</span>'
-             +'<span style="font-size:15px">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</span>'
+             +'<span class="tn-tier">'+(n.tier==='—'?'👤':esc(n.tier.split(' ')[0]))+'</span>'
              +'<span class="font-medium text-gray-800">'+esc(n.name)+'</span>'
              +(n.username?'<span class="text-xs text-gray-400" dir="ltr">@'+esc(n.username)+'</span>':'')
              +'<code class="text-xs no-fa" dir="ltr">'+n.id+'</code>'
@@ -11554,11 +11733,12 @@ async def webhook_management(request: Request, flash: str = ""):
 
     def _btn_mode(mode, label, icon, color, desc):
         is_current = (current_mode == mode)
-        disabled = 'disabled style="opacity:.5;pointer-events:none"' if is_current else ''
+        disabled = 'disabled' if is_current else ''
+        disabled_cls = ' disabled-visual--noclick' if is_current else ''
         return f"""
         <form method="post" action="/admin/webhook/switch" class="flex-1">
           <input type="hidden" name="mode" value="{mode}">
-          <button {disabled} class="w-full p-4 bg-{color}-50 border-2 border-{color}-200 hover:bg-{color}-100 rounded-xl text-right">
+          <button {disabled} class="w-full p-4 bg-{color}-50 border-2 border-{color}-200 hover:bg-{color}-100 rounded-xl text-right{disabled_cls}">
             <div class="text-2xl mb-1">{icon}</div>
             <div class="font-bold text-{color}-800 text-sm">{label}</div>
             <div class="text-[10px] text-{color}-600 mt-1">{desc}</div>
@@ -12273,7 +12453,7 @@ def _tutorial_form(it=None, categories=None):
         <div>
           <label class="block text-xs text-gray-500 mb-1">متن کامل آموزش</label>
           <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
-          <div id="quill-editor" style="height:280px;background:#fff" class="rounded-lg border"></div>
+          <div id="quill-editor" class="quill-editor-box rounded-lg border"></div>
           <textarea name="body" id="body-input" hidden></textarea>
         </div>
         <div>
