@@ -4251,6 +4251,10 @@ _IV_DEVICE_STEPS = {"series", "model", "capacity", "color", "part"}
 _IV_PRE_RESOLVE_STEPS = _IV_DEVICE_STEPS | {"grade"}
 _IV_REPAIR_STEPS = {"repair", "defms", "repms"}
 _IV_COND_CASCADE_STEPS = {"cond", "batt", "cos", "cable", "box", "reg", "feat", "repair", "defms", "repms"}
+# صفحهٔ خلاصه دیگه دکمهٔ ✏️ جدا برای هر بخش نداره (طبق تصمیم مالک پروژه — UX خلوت‌تر) —
+# فقط یه دکمهٔ عمومی «اصلاح گزینه‌ها» که کل ویزارد رو از اول (با حفظ مقادیر قبلی) باز
+# می‌کنه. این سنتینل بهانهٔ گروه ویرایش (_iv_edit_group_for) رو به «همهٔ مراحل» می‌ده.
+_IV_EDIT_ALL_SENTINEL = "__editall__"
 
 _IV_COEFF_STEP_MAP = {
     "grade": ("grade", "🏷 این آیفون کدوم سری اصالته؟"),
@@ -4428,6 +4432,8 @@ def _iv_edit_group_for(root_step):
     cascade — چون مثلاً ویرایش «وضعیت کلی» (cond) ممکنه چند مرحلهٔ تازه رو باز کنه
     (باتری/ظاهر/...) که باید همه‌شون پرسیده بشن، ولی ویرایش مستقیم «باتری» نباید
     بقیهٔ زنجیره رو هم بکشونه — با ترتیب چک اول-تخصصی‌ترین اینجا حل شده."""
+    if root_step == _IV_EDIT_ALL_SENTINEL:
+        return set(_IV_STEP_ORDER)
     if root_step in _IV_DEVICE_STEPS:
         return _IV_DEVICE_STEPS
     if root_step in _IV_REPAIR_STEPS:
@@ -4591,82 +4597,27 @@ def _iv_ask_city(chat_id, uid):
 
 
 def _iv_ask_summary(chat_id, uid):
-    """صفحهٔ خلاصه/ویرایش — قبل از محاسبهٔ نهایی همهٔ پاسخ‌ها رو نشون می‌ده، با یه دکمهٔ
-    ✏️ به‌ازای هر بخش (ivw_edit_{step_id}) که با state["editing"] کاربر رو به همون مرحله
-    برمی‌گردونه و بعد از یه پاسخ تازه دوباره به همین‌جا برش می‌گردونه (_iv_step_done)."""
-    import iphone_valuation.db as ivdb
+    """صفحهٔ خلاصه/ویرایش — قبل از محاسبهٔ نهایی. طبق تصمیم صریح مالک پروژه، این صفحه دیگه
+    هیچ‌کدوم از گزینه‌های انتخاب‌شده رو نشون نمی‌ده (UX خلوت‌تر، بدون تغییر در منطق
+    کارشناسی/قیمت) — فقط سه دکمه: تأیید و محاسبه (راست)، اصلاح گزینه‌ها (چپ)، انصراف (زیر).
+    «اصلاح گزینه‌ها» با state["editing"]=_IV_EDIT_ALL_SENTINEL کل ویزارد رو از مرحلهٔ اول
+    (با حفظ مقادیر قبلی در state) دوباره باز می‌کنه و بعد از آخرین سؤال (شهر) خودکار به
+    همین صفحه برمی‌گرده (_iv_step_done + _iv_edit_group_for)."""
     state = user_states.get(uid)
     if not state:
         return
-    model = ivdb.get_model(state.get("model_id")) or {}
-    series = ivdb.get_series(model.get("series_id")) if model.get("series_id") else None
-    sel = state.get("selections", {})
-
-    def _coeff_label(category, key):
-        if not key:
-            return "—"
-        opts = ivdb.list_coefficients(category=category, active_only=False)
-        row = next((o for o in opts if o["option_key"] == key), None)
-        return row["option_label"] if row else key
-
-    def _ms_labels(category):
-        keys = sel.get(category) or []
-        if not keys:
-            return "—"
-        opts = ivdb.list_coefficients(category=category, active_only=False)
-        by_key = {o["option_key"]: o["option_label"] for o in opts}
-        return "، ".join(by_key.get(k, k) for k in keys)
-
-    lines = [
-        "📋 <b>خلاصهٔ کارشناسی — قبل از محاسبهٔ قیمت بررسی کن</b>\n",
-        f"📱 <b>{html.escape(model.get('name') or '')}</b>" + (f" ({html.escape(series['name'])})" if series else ""),
-        f"💾 ظرفیت: {html.escape(state.get('capacity_label') or '—')}",
-    ]
-    if not _iv_step_skip("color", state):
-        lines.append(f"🎨 رنگ: {html.escape(state.get('color') or '—')}")
-    if not _iv_step_skip("part", state):
-        part_map = {p["code"]: p["label"] for p in ivdb.list_parts(active_only=False)}
-        lines.append(f"🔠 پارت: {html.escape(part_map.get(state.get('part_number') or '', 'سایر'))}")
-
-    edit_targets = [("series", "✏️ مدل دستگاه (سری/مدل/ظرفیت/رنگ/پارت)")]
-    for step_id in ("grade", "cond", "batt", "cos", "cable", "box", "reg"):
-        if _iv_step_skip(step_id, state):
-            continue
-        category, _t = _IV_COEFF_STEP_MAP[step_id]
-        val = _coeff_label(category, sel.get(category))
-        if step_id == "grade":
-            # ارقام لاتین سری‌های ۳/۴/۵ توی متن پیام (برخلاف دکمه‌ها که خودشون دست‌نخورده
-            # می‌مونن) باید از پچ اعداد فارسی سراسری در امان بمونن — با <code> که همون
-            # الگوی استثنای موجود پچه (bot.py: _FA_SKIP_RE).
-            val = re.sub(r"(\d+)", r"<code>\1</code>", html.escape(val))
-        lines.append(f"{_IV_STEP_LABELS[step_id]}: {val}")
-        edit_targets.append((step_id, f"✏️ {_IV_STEP_LABELS[step_id]}"))
-
-    if not _iv_step_skip("feat", state):
-        lines.append(f"📶 امکانات سالم: {'بله' if state.get('features_ok') else 'خیر'}")
-        edit_targets.append(("feat", "✏️ تست امکانات"))
-
-    for step_id in ("repair", "defms", "repms"):
-        if _iv_step_skip(step_id, state):
-            continue
-        if step_id in _IV_MULTISELECT_STEP_MAP:
-            category, _t = _IV_MULTISELECT_STEP_MAP[step_id]
-            val = _ms_labels(category)
-        else:
-            category, _t = _IV_COEFF_STEP_MAP[step_id]
-            val = _coeff_label(category, sel.get(category))
-        lines.append(f"{_IV_STEP_LABELS[step_id]}: {val}")
-        edit_targets.append((step_id, f"✏️ {_IV_STEP_LABELS[step_id]}"))
-
-    lines.append(f"🏙 شهر: {html.escape(state.get('city') or 'ندارم')}")
-    edit_targets.append(("city", "✏️ شهر"))
-
+    state["editing"] = None
     kb = types.InlineKeyboardMarkup()
-    for step_id, label in edit_targets:
-        kb.add(types.InlineKeyboardButton(label, callback_data=f"ivw_edit_{step_id}"))
-    kb.add(types.InlineKeyboardButton("✅💚 تایید و محاسبهٔ قیمت", callback_data="ivw_summary_confirm"))
+    kb.row(
+        types.InlineKeyboardButton("✏️ اصلاح گزینه‌ها", callback_data="ivw_summary_editall"),
+        types.InlineKeyboardButton("✅ تایید و محاسبهٔ قیمت", callback_data="ivw_summary_confirm"),
+    )
     kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="ivw_summary_cancel"))
-    bot.send_message(chat_id, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
+    bot.send_message(
+        chat_id,
+        "📋 <b>خلاصهٔ کارشناسی آماده است</b>\n\nبرای دیدن قیمت نهایی «تایید» رو بزن، یا برای بازبینی جواب‌ها «اصلاح گزینه‌ها» رو بزن.",
+        reply_markup=kb, parse_mode="HTML"
+    )
 
 
 def _iv_strip_html(text):
@@ -4913,6 +4864,11 @@ def _iv_wizard_callback(call):
             return
         state["editing"] = step_id
         _iv_goto(chat_id, uid, step_id)
+        return
+
+    if data == "ivw_summary_editall":
+        state["editing"] = _IV_EDIT_ALL_SENTINEL
+        _iv_goto(chat_id, uid, "series")
         return
 
     if data == "ivw_summary_confirm":
