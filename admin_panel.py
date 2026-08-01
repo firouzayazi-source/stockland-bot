@@ -686,7 +686,7 @@ def _layout(title: str, body: str, admin_info=None,
           </div>
         </header>"""
 
-    css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items()) + ";"
+    css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items())
 
     html_response = HTMLResponse(f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl" data-saved-dark="{saved_dark}" data-saved-classic="{saved_classic}">
@@ -1256,7 +1256,7 @@ def _layout(title: str, body: str, admin_info=None,
     .login-form {{ display:flex; flex-direction:column; gap:14px; }}
     .field-label {{ font-size:12px; font-weight:600; color:var(--txt-muted); display:block; margin-bottom:6px; }}
     .login-submit {{
-      width:100%; padding:12px; background:var(--clr-primary); color:#fff;
+      width:100%; padding:12px; background:var(--primary); color:#fff;
       font-weight:700; font-size:14px; border:none; border-radius:var(--r-md);
       cursor:pointer; margin-top:4px;
     }}
