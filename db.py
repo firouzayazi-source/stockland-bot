@@ -344,6 +344,14 @@ def init_db(db_path=None):
             cur.execute("ALTER TABLE orders ADD COLUMN returned_at TEXT;")
         except sqlite3.OperationalError:
             pass
+        # لینک دوطرفهٔ سفارش قدیم↔جدید در «تعویض کالا» — سفارش قدیم با status='returned'
+        # (دقیقاً همون مکانیزم برگشت موجود، بدون نیاز به مقدار تازه‌ای برای status، پس
+        # همهٔ ~۱۰ جای کد که از قبل «returned» رو از دید کاربر/گزارش مخفی می‌کنن دست‌نخورده
+        # درست کار می‌کنن) + exchange_pair_id به سفارش جدید اشاره می‌کنه و برعکس.
+        try:
+            cur.execute("ALTER TABLE orders ADD COLUMN exchange_pair_id INTEGER;")
+        except sqlite3.OperationalError:
+            pass
 
         # جدول تراکنشهای زرینپال
         cur.execute(
@@ -2600,6 +2608,155 @@ def order_mark_returned_advanced(
     except Exception as ex:
         conn.rollback()
         return {"ok": False, "error": str(ex)[:100]}
+    finally:
+        conn.close()
+
+
+def exchange_order(
+    old_order_id: int,
+    new_product_id: int,
+    old_product_action: str = "restore",   # 'restore' | 'delete'
+    wallet_delta: int = 0,                 # مثبت = بازگشت به کاربر (قیمت جدید ارزون‌تر)، منفی = کسر (قیمت جدید گرون‌تر)
+) -> dict:
+    """
+    تعویض کالا — سفارش قدیم رو با همون مکانیزم برگشت موجود می‌بنده (status='returned'،
+    یعنی همهٔ جاهایی که از قبل «returned» رو از دید کاربر/گزارش مالی مخفی می‌کنن،
+    بدون هیچ تغییری درست کار می‌کنن)، یک آیتم تازه از محصول مقصد claim می‌کنه، یک
+    سفارش کاملاً جدید براش می‌سازه (خودش با status='active' عادی در فروش/حسابداری
+    لحاظ می‌شه)، و دو سفارش رو با exchange_pair_id به هم لینک می‌کنه. اختلاف قیمت
+    (wallet_delta) مستقیم روی کیف‌پول اعمال می‌شه — دقیقاً همون الگوی مقداردهی مستقیم
+    order_mark_returned_advanced (نه subtract_wallet_balance، چون این یه override
+    دستی ادمینه، نه خرید خودکار کاربر).
+    """
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        old = conn.execute("SELECT * FROM orders WHERE id=? LIMIT 1;", (old_order_id,)).fetchone()
+        if not old:
+            return {"ok": False, "error": "سفارش یافت نشد"}
+        if (old["status"] or "active") != "active":
+            return {"ok": False, "error": "این سفارش قبلاً برگشت/تعویض شده"}
+
+        new_product = conn.execute("SELECT * FROM products WHERE id=?;", (new_product_id,)).fetchone()
+        if not new_product:
+            return {"ok": False, "error": "محصول مقصد یافت نشد"}
+
+        # claim اتمیک یه آیتم تازه از محصول مقصد — قبل از هر تغییری روی سفارش قدیم،
+        # چون اگه موجودی نبود باید همون‌جا با خطای واضح متوقف بشیم (سفارش قدیم دست‌نخورده بمونه)
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute(
+            "SELECT id, data FROM product_feed WHERE product_id=? AND delivered=0 ORDER BY id ASC LIMIT 1;",
+            (new_product_id,)
+        )
+        feed_row = cur.fetchone()
+        if not feed_row:
+            conn.rollback()
+            return {"ok": False, "error": "موجودی محصول مقصد خالی است"}
+        new_feed_id, new_feed_data = feed_row["id"], feed_row["data"]
+
+        old_user_id = old["user_id"]
+        old_price = int(old["price"] or 0)
+        new_price = int(new_product["price"] or 0)
+
+        # feed قدیم — دقیقاً همون منطق order_mark_returned_advanced
+        try:
+            old_feed_id = old["feed_id"]
+        except Exception:
+            old_feed_id = None
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_messages (
+                feed_id INTEGER PRIMARY KEY, order_id INTEGER,
+                chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
+            );
+        """)
+        if not old_feed_id:
+            dm = cur.execute("SELECT feed_id FROM delivery_messages WHERE order_id=? LIMIT 1;", (old_order_id,)).fetchone()
+            if dm:
+                old_feed_id = dm["feed_id"]
+        old_chat_id = old_message_id = None
+        if old_feed_id:
+            dmsg = cur.execute("SELECT chat_id,message_id FROM delivery_messages WHERE feed_id=? LIMIT 1;", (old_feed_id,)).fetchone()
+            if dmsg:
+                old_chat_id, old_message_id = dmsg["chat_id"], dmsg["message_id"]
+            if old_product_action == "restore":
+                cur.execute("UPDATE product_feed SET delivered=0, order_id=NULL, delivered_at=NULL WHERE id=?;", (int(old_feed_id),))
+            else:
+                cur.execute("DELETE FROM product_feed WHERE id=?;", (int(old_feed_id),))
+
+        now = datetime.utcnow().isoformat()
+        cur.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;", (now, old_order_id))
+
+        # سفارش جدید
+        cur.execute(
+            "INSERT INTO orders (user_id, category, product_id, title, price, created_at, buyer_type, status, feed_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?);",
+            (old_user_id, new_product["category"], str(new_product_id),
+             new_product["title"], new_price, now, old["buyer_type"], new_feed_id)
+        )
+        new_order_id = cur.lastrowid
+        cur.execute("UPDATE product_feed SET delivered=1, order_id=?, delivered_at=? WHERE id=?;",
+                    (new_order_id, now, new_feed_id))
+
+        # لینک دوطرفه
+        cur.execute("UPDATE orders SET exchange_pair_id=? WHERE id=?;", (new_order_id, old_order_id))
+        cur.execute("UPDATE orders SET exchange_pair_id=? WHERE id=?;", (old_order_id, new_order_id))
+
+        # تسویهٔ اختلاف قیمت روی کیف‌پول
+        if wallet_delta != 0:
+            existing = cur.execute("SELECT balance FROM wallets WHERE user_id=?;", (old_user_id,)).fetchone()
+            if existing:
+                new_bal = max(0, int(existing["balance"]) + wallet_delta)
+                cur.execute("UPDATE wallets SET balance=?, updated_at=datetime('now') WHERE user_id=?;", (new_bal, old_user_id))
+            else:
+                new_bal = max(0, wallet_delta)
+                cur.execute("INSERT INTO wallets (user_id, balance, updated_at) VALUES (?,?,datetime('now'));", (old_user_id, new_bal))
+
+        conn.commit()
+        return {
+            "ok": True,
+            "old_order_id": old_order_id, "new_order_id": new_order_id,
+            "old_chat_id": old_chat_id, "old_message_id": old_message_id,
+            "user_id": old_user_id, "old_title": old["title"], "new_title": new_product["title"],
+            "old_price": old_price, "new_price": new_price, "wallet_delta": wallet_delta,
+            "new_feed_data": new_feed_data,
+        }
+    except Exception as ex:
+        conn.rollback()
+        return {"ok": False, "error": str(ex)[:150]}
+    finally:
+        conn.close()
+
+
+def get_exchange_pair(order_id: int) -> dict | None:
+    """اگه این سفارش طرف یه تعویض بود، جزئیات سفارش جفتش رو برمی‌گردونه."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("""
+            SELECT o2.* FROM orders o1 JOIN orders o2 ON o2.id = o1.exchange_pair_id
+            WHERE o1.id=? AND o1.exchange_pair_id IS NOT NULL;
+        """, (order_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_exchanges(limit: int = 100) -> list:
+    """گزارش تعویض‌ها — سفارش‌های قدیمِ برگشتی که واقعاً یه سفارش جدید جایگزینشون شده
+    (exchange_pair_id ست شده)، برای صفحهٔ گزارش‌گیری پنل."""
+    conn = _get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("""
+            SELECT o1.id AS old_order_id, o1.title AS old_title, o1.price AS old_price,
+                   o1.returned_at AS exchanged_at, o1.user_id,
+                   o2.id AS new_order_id, o2.title AS new_title, o2.price AS new_price
+            FROM orders o1
+            JOIN orders o2 ON o2.id = o1.exchange_pair_id
+            WHERE o1.status='returned' AND o1.exchange_pair_id IS NOT NULL AND o1.id < o2.id
+            ORDER BY o1.id DESC LIMIT ?;
+        """, (limit,)).fetchall()]
     finally:
         conn.close()
 

@@ -5562,9 +5562,9 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
         <input type="hidden" name="batch_notes" id="file_bn" value="">
         <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center">
           <div class="text-3xl mb-2">📁</div>
-          <div class="text-sm font-semibold text-gray-700 mb-1">آپلود فایل (CSV / TXT)</div>
-          <div class="text-xs text-gray-400 mb-4">هر خط یک آیتم</div>
-          <input type="file" name="file" accept=".txt,.csv" required
+          <div class="text-sm font-semibold text-gray-700 mb-1">آپلود فایل (TXT / CSV / Excel)</div>
+          <div class="text-xs text-gray-400 mb-4">هر خط یک آیتم — یا فایل CSV/Excel با ستون data/item/account</div>
+          <input type="file" name="file" accept=".txt,.csv,.xlsx,.xlsm" required
             class="block w-full text-sm text-gray-600 mb-4 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
           <button type="submit"
             class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
@@ -5762,26 +5762,43 @@ async def feed_bulk_upload(request: Request, pid: int, background_tasks: Backgro
 
     try:
         raw = await file.read()
-        text = raw.decode("utf-8", errors="ignore")
     except Exception:
         return _redir(f"/admin/feed/{pid}?flash=خطا+در+خواندن+فایل")
 
-    # پشتیبانی از دو فرمت:
+    fname_lower = (file.filename or "").lower()
     items = []
-    if "***" in text:
-        parts = text.split("***")
-        for part in parts:
-            item = part.strip()
-            if item and item not in ("", "\n"):
-                items.append(item)
-    else:
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            item = line.split(",")[0].strip()
+    if fname_lower.endswith(".csv") or fname_lower.endswith(".xlsx") or fname_lower.endswith(".xlsm"):
+        # مسیر تازه (CSV/Excel) — از پارسر عمومی import_utils استفاده می‌کنه؛ ستون آیتم
+        # با چند اسم رایج تطبیق داده می‌شه، وگرنه اولین ستون موجود در ردیف.
+        try:
+            from import_utils import parse_uploaded_rows, pick
+            rows = parse_uploaded_rows(file.filename, raw)
+        except Exception:
+            return _redir(f"/admin/feed/{pid}?flash=خطا+در+خواندن+فایل")
+        for row in rows:
+            item = pick(row, "data", "item", "account", "content", "متن", "آیتم", "دیتا")
+            if not item and row:
+                item = next(iter(row.values()), "")
+            item = (item or "").strip()
             if item:
                 items.append(item)
+    else:
+        # مسیر قدیمی — TXT، دو فرمت پشتیبانی‌شده (بدون تغییر رفتار)
+        text = raw.decode("utf-8", errors="ignore")
+        if "***" in text:
+            parts = text.split("***")
+            for part in parts:
+                item = part.strip()
+                if item and item not in ("", "\n"):
+                    items.append(item)
+        else:
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                item = line.split(",")[0].strip()
+                if item:
+                    items.append(item)
 
     if not items:
         return _redir(f"/admin/feed/{pid}?flash=فایل+خالی+است")
@@ -6462,7 +6479,8 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
         if not is_returned:
             action_btns = f"""
             <a href="/admin/orders/{o['id']}/edit" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">✏️ ویرایش</a>
-            <a href="/admin/orders/{o['id']}/return" class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">↩️ برگشت</a>"""
+            <a href="/admin/orders/{o['id']}/return" class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">↩️ برگشت</a>
+            <a href="/admin/orders/{o['id']}/exchange" class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded hover:bg-amber-100">🔄 تعویض</a>"""
         else:
             action_btns = '<span class="text-xs text-gray-400">برگشت خورده</span>'
 
@@ -6827,6 +6845,147 @@ async def order_resend_post(request: Request, oid: int):
 
     _log(request, "ارسال مجدد", "سفارش‌ها", f"سفارش #{oid} | feed_item:{feed_id}")
     return _redir(f"/admin/orders?flash=محصول+جدید+برای+سفارش+{oid}+ارسال+شد")
+
+
+@router.get("/orders/{oid}/exchange", response_class=HTMLResponse)
+async def order_exchange_form(request: Request, oid: int, flash: str = ""):
+    """تعویض کالا — برخلاف «ارسال مجدد» (که فقط همون محصول رو دوباره تحویل می‌ده)،
+    اینجا می‌شه به یه محصول دیگه (با قیمت متفاوت) تعویض کرد؛ سفارش قدیم با همون
+    مکانیزم برگشت موجود می‌بنده (status='returned') و یه سفارش کاملاً جدید ساخته
+    می‌شه — طبق db.exchange_order. اختلاف قیمت روی کیف‌پول کاربر تسویه می‌شه."""
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    conn = _db()
+    conn.row_factory = sqlite3.Row
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
+        if not order:
+            return _redir("/admin/orders?flash=سفارش+یافت+نشد")
+        if (order["status"] or "active") != "active":
+            return _redir(f"/admin/orders/{oid}?flash=این+سفارش+فعال+نیست،+قابل+تعویض+نیست")
+        wallet = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (order["user_id"],)).fetchone()
+        wallet_balance = int(wallet["balance"] if wallet else 0)
+        products = conn.execute("""
+            SELECT p.id, p.title, p.price, COUNT(pf.id) AS stock
+            FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id AND pf.delivered=0
+            WHERE p.is_active=1
+            GROUP BY p.id HAVING stock>0
+            ORDER BY p.title;
+        """).fetchall()
+    finally:
+        conn.close()
+
+    price = int(order["price"] or 0)
+    prod_opts = "".join(
+        f'<option value="{p["id"]}" data-price="{int(p["price"] or 0)}">{e(p["title"])} — {int(p["price"] or 0):,} تومان (موجودی: {p["stock"]})</option>'
+        for p in products
+    )
+
+    body = f"""
+    <div class="max-w-640">
+      <div class="page-header">
+        <h1>🔄 تعویض کالا — سفارش #{oid}</h1>
+        <p>محصول فعلی: {e(order["title"] or "")} — {price:,} تومان — کاربر: {order["user_id"]}</p>
+      </div>
+      <form method="post" action="/admin/orders/{oid}/exchange">
+        <div class="card card-p mb-14">
+          <h2 class="section-title">تکلیف محصول قدیم</h2>
+          <div class="flex-col-10">
+            <label class="perm-label option-card">
+              <input type="radio" name="old_product_action" value="restore" checked class="option-radio">
+              <div><strong>بازگشت به موجودی</strong><div class="option-hint">محصول قدیم مجدداً قابل فروش می‌شود</div></div>
+            </label>
+            <label class="perm-label option-card">
+              <input type="radio" name="old_product_action" value="delete" class="option-radio">
+              <div><strong>حذف دائم از فید</strong></div>
+            </label>
+          </div>
+        </div>
+
+        <div class="card card-p mb-14">
+          <h2 class="section-title">محصول جایگزین</h2>
+          {f'''<select name="new_product_id" id="exch-prod" required class="w-full border rounded-lg px-3 py-2 text-sm mb-2" onchange="document.getElementById('exch-diff').textContent=(parseInt(this.selectedOptions[0].dataset.price||0)-{price}).toLocaleString('en-US')">
+            <option value="">انتخاب محصول جایگزین...</option>
+            {prod_opts}
+          </select>
+          <div class="info-box">اختلاف قیمت (جدید − قدیم): <strong id="exch-diff">۰</strong> تومان — مثبت یعنی باید از کاربر دریافت شود، منفی یعنی باید بازگردانده شود.</div>''' if prod_opts else '<p class="text-red-500 text-sm">هیچ محصول دیگری با موجودی فعال نیست</p>'}
+        </div>
+
+        <div class="card card-p mb-14">
+          <h2 class="section-title">تسویهٔ اختلاف قیمت روی کیف‌پول</h2>
+          <div class="info-box">موجودی فعلی کیف‌پول: <strong>{wallet_balance:,} تومان</strong></div>
+          <div class="flex-col-10">
+            <label class="perm-label option-card">
+              <input type="radio" name="wallet_mode" value="auto" checked class="option-radio">
+              <div><strong>خودکار بر اساس اختلاف قیمت</strong><div class="option-hint">اگر جدید گران‌تر بود کسر، اگر ارزان‌تر بود بازگشت — دقیقاً به اندازهٔ اختلاف</div></div>
+            </label>
+            <label class="perm-label option-card">
+              <input type="radio" name="wallet_mode" value="none" class="option-radio">
+              <div><strong>بدون تغییر کیف‌پول</strong><div class="option-hint">اختلاف قیمت به‌صورت جدا/دستی تسویه می‌شود</div></div>
+            </label>
+          </div>
+        </div>
+
+        <div class="btn-row-12">
+          {_btn("ثبت تعویض","",color="indigo")}
+          <a href="/admin/orders/{oid}" class="btn btn-slate">انصراف</a>
+        </div>
+      </form>
+    </div>"""
+    return _layout(f"تعویض کالا #{oid}", body, adm, flash=flash)
+
+
+@router.post("/orders/{oid}/exchange")
+async def order_exchange_post(request: Request, oid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "orders")
+    if guard: return guard
+    form = await request.form()
+    new_product_id = int(form.get("new_product_id") or 0)
+    old_product_action = str(form.get("old_product_action", "restore"))
+    wallet_mode = str(form.get("wallet_mode", "auto"))
+    if not new_product_id:
+        return _redir(f"/admin/orders/{oid}/exchange?flash=محصول+جایگزین+انتخاب+نشد")
+
+    from db import exchange_order
+    conn = _db()
+    try:
+        old_order = conn.execute("SELECT price FROM orders WHERE id=?;", (oid,)).fetchone()
+        new_product = conn.execute("SELECT price FROM products WHERE id=?;", (new_product_id,)).fetchone()
+    finally:
+        conn.close()
+    if not old_order or not new_product:
+        return _redir(f"/admin/orders/{oid}/exchange?flash=خطا:+داده+یافت+نشد")
+
+    wallet_delta = 0
+    if wallet_mode == "auto":
+        wallet_delta = int(old_order["price"] or 0) - int(new_product["price"] or 0)
+
+    result = exchange_order(oid, new_product_id, old_product_action=old_product_action, wallet_delta=wallet_delta)
+    if not result.get("ok"):
+        return _redir(f"/admin/orders/{oid}/exchange?flash={result.get('error','خطا')}")
+
+    if result.get("old_chat_id") and result.get("old_message_id"):
+        await run_in_threadpool(_tg_delete_message, result["old_chat_id"], result["old_message_id"])
+
+    if result.get("user_id"):
+        delta = result.get("wallet_delta", 0)
+        delta_msg = ""
+        if delta > 0:
+            delta_msg = f"\n💰 مبلغ {delta:,} تومان به کیف‌پول شما بازگردانده شد."
+        elif delta < 0:
+            delta_msg = f"\n💳 مبلغ {abs(delta):,} تومان بابت اختلاف قیمت از کیف‌پول شما کسر شد."
+        await run_in_threadpool(_tg_send, int(result["user_id"]),
+            f"🔄 سفارش شما تعویض شد.\n\n"
+            f"محصول قبلی: <b>{html.escape(str(result.get('old_title') or ''))}</b>\n"
+            f"محصول جدید: <b>{html.escape(str(result.get('new_title') or ''))}</b>\n\n"
+            f"<code>{html.escape(str(result.get('new_feed_data') or ''))}</code>{delta_msg}")
+
+    _log(request, "تعویض کالا", "سفارش‌ها",
+         f"سفارش #{oid}→#{result.get('new_order_id')} | محصول قدیم:{old_product_action} | اختلاف کیف‌پول:{wallet_delta}",
+         admin_info=adm)
+    return _redir(f"/admin/orders?flash=✅+تعویض+ثبت+شد+(سفارش+جدید+#{result.get('new_order_id')})")
 
 
 # ─────────────────────────── Wallets ───────────────────────────────────────
@@ -8941,6 +9100,7 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
         <a href="/admin/accounting/cashflow" class="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">🔄 گردش مالی</a>
         <a href="/admin/accounting/products" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg">📦 محصولات</a>
         <a href="/admin/accounting/partners" class="px-3 py-1.5 text-xs bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">🤝 همکاران</a>
+        <a href="/admin/accounting/exchanges" class="px-3 py-1.5 text-xs bg-orange-50 text-orange-700 border border-orange-200 rounded-lg">🔄 تعویض‌ها</a>
       </div>
     </div>
     {{filter_html}}
@@ -9103,6 +9263,21 @@ async def accounting_expenses(request: Request, cat: str="", df: str="", dt: str
         <div class="flex flex-wrap gap-1">{" ".join(f'<span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">{c}</span>' for c in cats)}</div>
       </div>
     </div>
+    <div class="card p-6 mb-6">
+      <h2 class="font-bold text-gray-700 mb-1">📁 وارد کردن دسته‌ای از فایل</h2>
+      <p class="text-xs text-gray-400 mb-4">فایل TXT/CSV/Excel با ستون‌های عنوان، مبلغ، دسته (اختیاری)، تاریخ (اختیاری)، توضیحات (اختیاری) — هر ردیف یک هزینه/پرداخت ثبت می‌کنه.</p>
+      <form method="post" action="/admin/accounting/expenses/import" enctype="multipart/form-data" class="flex flex-wrap items-center gap-3">
+        <input type="file" name="file" accept=".txt,.csv,.xlsx,.xlsm" required
+          class="flex-1 min-w-[200px] text-sm text-gray-600 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+        <select name="default_payment_type" class="border rounded-lg px-3 py-2 text-sm">
+          <option value="expense">💳 پیش‌فرض: هزینه عمومی</option>
+          <option value="salary">👤 پیش‌فرض: حقوق پرسنل</option>
+          <option value="partner_payout">🤝 پیش‌فرض: پرداخت همکار</option>
+          <option value="other">📌 پیش‌فرض: سایر</option>
+        </select>
+        {_btn("⬆ وارد کردن","",color="indigo",small=True)}
+      </form>
+    </div>
     <div class="card overflow-hidden">
       <div class="px-4 py-3 bg-gray-50 border-b flex flex-wrap justify-between items-center gap-2">
         <form method="get" class="flex gap-2 flex-wrap">
@@ -9143,6 +9318,54 @@ async def accounting_expense_new(request: Request):
                          payee_name=str(form.get("payee_name","")).strip())
     _log(request, "ثبت پرداخت", "حسابداری", f"id:{eid} نوع:{ptype}", admin_info=adm)
     return _redir("/admin/accounting/expenses?flash=✅+پرداخت+ثبت+شد")
+
+
+@router.post("/accounting/expenses/import")
+async def accounting_expenses_import(request: Request, file: UploadFile = None):
+    """وارد کردن دسته‌ای هزینه/پرداخت از فایل TXT/CSV/Excel — با import_utils.parse_uploaded_rows
+    (همون پارسر مشترکی که آپلود موجودی محصول هم استفاده می‌کنه). ستون‌های عنوان/مبلغ
+    اجباری‌ان (فارسی یا انگلیسی، هرکدوم بود)؛ بقیه اختیاری با پیش‌فرض منطقی."""
+    adm = _get_admin(request); guard = _require(adm, "accounting")
+    if guard: return guard
+    if not file or not file.filename:
+        return _redir("/admin/accounting/expenses?flash=فایلی+انتخاب+نشد")
+    form = await request.form()
+    default_ptype = str(form.get("default_payment_type", "expense"))
+    if default_ptype not in ("expense", "salary", "partner_payout", "other"):
+        default_ptype = "expense"
+
+    try:
+        raw = await file.read()
+        from import_utils import parse_uploaded_rows, pick
+        rows = parse_uploaded_rows(file.filename, raw)
+    except Exception as ex:
+        return _redir(f"/admin/accounting/expenses?flash=خطا+در+خواندن+فایل:+{str(ex)[:60]}")
+
+    from db import create_expense, ensure_accounting_schema
+    ensure_accounting_schema()
+    created, skipped = 0, 0
+    for row in rows:
+        title = pick(row, "title", "عنوان", "raw")
+        amount_raw = pick(row, "amount", "مبلغ", "price", "قیمت")
+        try:
+            amount = int(float(str(amount_raw).replace(",", "").strip())) if amount_raw else 0
+        except Exception:
+            amount = 0
+        if not title or amount <= 0:
+            skipped += 1
+            continue
+        category = pick(row, "category", "دسته", "دسته‌بندی", default="سایر")
+        date_ = pick(row, "date", "تاریخ", "expense_date")
+        desc = pick(row, "description", "توضیحات", "توضیح")
+        payee = pick(row, "payee", "payee_name", "گیرنده", "نام گیرنده")
+        ptype = pick(row, "payment_type", "نوع") or default_ptype
+        if ptype not in ("expense", "salary", "partner_payout", "other"):
+            ptype = default_ptype
+        create_expense(title, category, amount, date_, desc, payment_type=ptype, payee_name=payee)
+        created += 1
+
+    _log(request, "وارد کردن دسته‌ای هزینه", "حسابداری", f"فایل:{file.filename} | ثبت:{created} | رد:{skipped}", admin_info=adm)
+    return _redir(f"/admin/accounting/expenses?flash=✅+{created}+ردیف+ثبت+شد" + (f"+—+{skipped}+ردیف+ناقص+رد+شد" if skipped else ""))
 
 
 @router.post("/accounting/expenses/{eid}/delete")
@@ -9249,6 +9472,56 @@ async def accounting_partners_report(request: Request):
       </tr></thead><tbody>{rows or "<tr><td colspan='5' class='text-center py-6 text-gray-400'>داده‌ای یافت نشد</td></tr>"}</tbody>
     </table></div></div>"""
     return _layout("گزارش همکاران", body, adm)
+
+
+@router.get("/accounting/exchanges", response_class=HTMLResponse)
+async def accounting_exchanges_report(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "accounting")
+    if guard: return guard
+    from db import list_exchanges
+    exchanges = list_exchanges(200)
+    rows = "".join(f'''<tr class="border-b hover:bg-gray-50 text-sm">
+      <td class="px-3 py-2 text-xs text-gray-400">{fa_date(x["exchanged_at"] or "", with_time=True)}</td>
+      <td class="px-3 py-2 font-mono text-xs"><code>{e(x["user_id"])}</code></td>
+      <td class="px-3 py-2">{e(x["old_title"])} <span class="text-xs text-gray-400 no-fa">({int(x["old_price"] or 0):,} ت)</span></td>
+      <td class="px-3 py-2 text-gray-400">←</td>
+      <td class="px-3 py-2">{e(x["new_title"])} <span class="text-xs text-gray-400 no-fa">({int(x["new_price"] or 0):,} ت)</span></td>
+      <td class="px-3 py-2 font-bold no-fa {"text-red-600" if int(x["new_price"] or 0) > int(x["old_price"] or 0) else "text-emerald-600" if int(x["new_price"] or 0) < int(x["old_price"] or 0) else "text-gray-400"}">{int(x["new_price"] or 0) - int(x["old_price"] or 0):,}</td>
+      <td class="px-3 py-2"><a href="/admin/orders/{x["new_order_id"]}" class="text-xs text-indigo-600 hover:underline">سفارش جدید #{x["new_order_id"]}</a></td>
+    </tr>''' for x in exchanges)
+    body = f"""<div class="flex items-center gap-3 mb-6">
+      {_btn("← حسابداری","/admin/accounting","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">🔄 گزارش تعویض‌ها</h1>
+      <a href="/admin/accounting/exchanges/export" class="px-3 py-1.5 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg mr-auto">⬇ Excel</a>
+    </div>
+    <div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-right min-w-max">
+      <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
+        <th class="px-3 py-2">تاریخ</th><th class="px-3 py-2">کاربر</th><th class="px-3 py-2">محصول قبلی</th><th></th>
+        <th class="px-3 py-2">محصول جدید</th><th class="px-3 py-2">اختلاف قیمت</th><th class="px-3 py-2">سفارش جدید</th>
+      </tr></thead><tbody>{rows or "<tr><td colspan='7' class='text-center py-6 text-gray-400'>تعویضی ثبت نشده</td></tr>"}</tbody>
+    </table></div></div>"""
+    return _layout("گزارش تعویض‌ها", body, adm)
+
+
+@router.get("/accounting/exchanges/export")
+async def export_exchanges(request: Request):
+    adm = _get_admin(request); guard = _require(adm, "accounting")
+    if guard: return guard
+    from db import list_exchanges
+    exchanges = list_exchanges(1000)
+    try:
+        import io, openpyxl
+        from fastapi.responses import StreamingResponse
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "تعویض‌ها"
+        ws.append(["تاریخ", "کاربر", "محصول قبلی", "قیمت قبلی", "محصول جدید", "قیمت جدید", "اختلاف", "سفارش جدید"])
+        for x in exchanges:
+            ws.append([str(x["exchanged_at"] or ""), x["user_id"], x["old_title"], int(x["old_price"] or 0),
+                       x["new_title"], int(x["new_price"] or 0), int(x["new_price"] or 0)-int(x["old_price"] or 0), x["new_order_id"]])
+        buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=exchanges.xlsx"})
+    except ImportError:
+        return _redir("/admin/accounting/exchanges?flash=openpyxl+نصب+نیست")
 
 
 @router.get("/accounting/expenses/export")
