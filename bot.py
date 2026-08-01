@@ -4251,11 +4251,6 @@ _IV_DEVICE_STEPS = {"series", "model", "capacity", "color", "part"}
 _IV_PRE_RESOLVE_STEPS = _IV_DEVICE_STEPS | {"grade"}
 _IV_REPAIR_STEPS = {"repair", "defms", "repms"}
 _IV_COND_CASCADE_STEPS = {"cond", "batt", "cos", "cable", "box", "reg", "feat", "repair", "defms", "repms"}
-# صفحهٔ خلاصه دیگه دکمهٔ ✏️ جدا برای هر بخش نداره (طبق تصمیم مالک پروژه — UX خلوت‌تر) —
-# فقط یه دکمهٔ عمومی «اصلاح گزینه‌ها» که کل ویزارد رو از اول (با حفظ مقادیر قبلی) باز
-# می‌کنه. این سنتینل بهانهٔ گروه ویرایش (_iv_edit_group_for) رو به «همهٔ مراحل» می‌ده.
-_IV_EDIT_ALL_SENTINEL = "__editall__"
-
 _IV_COEFF_STEP_MAP = {
     "grade": ("grade", "🏷 این آیفون کدوم سری اصالته؟"),
     "cond": ("condition", "🔧 وضعیت کلی دستگاه چطوره؟"),
@@ -4364,6 +4359,8 @@ def _iv_render_step(step_id, chat_id, uid):
         return _iv_ask_color(chat_id, uid)
     if step_id == "part":
         return _iv_ask_part(chat_id, uid)
+    if step_id == "grade":
+        return _iv_ask_grade(chat_id, uid)
     if step_id in _IV_COEFF_STEP_MAP:
         return _iv_ask_coeff(chat_id, uid, step_id)
     if step_id in _IV_MULTISELECT_STEP_MAP:
@@ -4432,8 +4429,6 @@ def _iv_edit_group_for(root_step):
     cascade — چون مثلاً ویرایش «وضعیت کلی» (cond) ممکنه چند مرحلهٔ تازه رو باز کنه
     (باتری/ظاهر/...) که باید همه‌شون پرسیده بشن، ولی ویرایش مستقیم «باتری» نباید
     بقیهٔ زنجیره رو هم بکشونه — با ترتیب چک اول-تخصصی‌ترین اینجا حل شده."""
-    if root_step == _IV_EDIT_ALL_SENTINEL:
-        return set(_IV_STEP_ORDER)
     if root_step in _IV_DEVICE_STEPS:
         return _IV_DEVICE_STEPS
     if root_step in _IV_REPAIR_STEPS:
@@ -4445,10 +4440,11 @@ def _iv_edit_group_for(root_step):
 
 def _iv_step_done(chat_id, uid):
     """بعد از ثبت جواب مرحلهٔ فعلی صدا زده می‌شه. حالت عادی: برو مرحلهٔ بعدِ ترتیب ثابت
-    (با رد شدن خودکار از رد-شونده‌ها، داخل _iv_goto). حالت ویرایش از صفحهٔ خلاصه
-    (state["editing"] = مرحله‌ای که کاربر روش ✏️ زده): تا وقتی مرحلهٔ بعدی هنوز داخل
-    گروه همون ریشه‌ست (_iv_edit_group_for) ادامهٔ خطی می‌ره، وگرنه بلافاصله برمی‌گرده
-    به خلاصه — نه ادامهٔ کل زنجیره."""
+    (با رد شدن خودکار از رد-شونده‌ها، داخل _iv_goto). حالت ویرایش از لیست تفصیلی
+    (state["editing"] = مرحله‌ای که کاربر روش ✏️ زده، از _iv_ask_edit_list): تا وقتی
+    مرحلهٔ بعدی هنوز داخل گروه همون ریشه‌ست (_iv_edit_group_for) ادامهٔ خطی می‌ره،
+    وگرنه بلافاصله به همون لیست تفصیلی برمی‌گرده — نه صفحهٔ خلاصهٔ مینیمال، نه ادامهٔ
+    کل زنجیره."""
     state = user_states.get(uid)
     if not state:
         return
@@ -4461,7 +4457,7 @@ def _iv_step_done(chat_id, uid):
         group = _iv_edit_group_for(editing_root)
         if nxt not in group:
             state["editing"] = None
-            return _iv_goto(chat_id, uid, "summary")
+            return _iv_ask_edit_list(chat_id, uid)
     _iv_goto(chat_id, uid, nxt)
 
 
@@ -4540,6 +4536,40 @@ def _iv_ask_part(chat_id, uid):
     bot.send_message(chat_id, "🔠 پارت نامبر دستگاه؟ (آخر پک یا زیر تنظیمات > عمومی > اطلاعات دستگاه)", reply_markup=kb)
 
 
+_IV_GRADE_PRIMARY_KEYS = ("grade_m", "grade_n", "grade_5")
+
+
+def _iv_ask_grade(chat_id, uid, message_id=None, expanded=False):
+    """سؤال «سری اصالت» — طبق درخواست صریح مالک پروژه فقط سه گزینهٔ پرکاربرد (M/N/۵)
+    مستقیم نشون داده می‌شه؛ بقیه (F/P/۳/۴) پشت دکمهٔ «سایر سری‌ها» جمع می‌شن تا صفحه
+    شلوغ نشه. هر دو حالت از همون کالبک عمومی ivw_opt_grade_{id} استفاده می‌کنن —
+    این فقط یه تفکیک نمایشیه، هیچ اثری روی pricing_engine/scoring_engine نداره."""
+    import iphone_valuation.db as ivdb
+    options = ivdb.list_coefficients(category="grade", active_only=True)
+    by_key = {o["option_key"]: o for o in options}
+    others = [o for o in options if o["option_key"] not in _IV_GRADE_PRIMARY_KEYS]
+    title = "🏷 این آیفون کدوم سری اصالته؟"
+    kb = types.InlineKeyboardMarkup()
+    if expanded:
+        for o in others:
+            kb.add(types.InlineKeyboardButton(o["option_label"], callback_data=f"ivw_opt_grade_{o['id']}"))
+        kb.add(types.InlineKeyboardButton("‹ بازگشت", callback_data="ivw_grade_back"))
+    else:
+        for key in _IV_GRADE_PRIMARY_KEYS:
+            o = by_key.get(key)
+            if o:
+                kb.add(types.InlineKeyboardButton(o["option_label"], callback_data=f"ivw_opt_grade_{o['id']}"))
+        if others:
+            kb.add(types.InlineKeyboardButton("سایر سری‌ها", callback_data="ivw_grade_more"))
+    if message_id:
+        try:
+            bot.edit_message_text(title, chat_id, message_id, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, title, reply_markup=kb)
+
+
 def _iv_ask_coeff(chat_id, uid, step_id):
     import iphone_valuation.db as ivdb
     category, title = _IV_COEFF_STEP_MAP[step_id]
@@ -4597,12 +4627,11 @@ def _iv_ask_city(chat_id, uid):
 
 
 def _iv_ask_summary(chat_id, uid):
-    """صفحهٔ خلاصه/ویرایش — قبل از محاسبهٔ نهایی. طبق تصمیم صریح مالک پروژه، این صفحه دیگه
-    هیچ‌کدوم از گزینه‌های انتخاب‌شده رو نشون نمی‌ده (UX خلوت‌تر، بدون تغییر در منطق
-    کارشناسی/قیمت) — فقط سه دکمه: تأیید و محاسبه (راست)، اصلاح گزینه‌ها (چپ)، انصراف (زیر).
-    «اصلاح گزینه‌ها» با state["editing"]=_IV_EDIT_ALL_SENTINEL کل ویزارد رو از مرحلهٔ اول
-    (با حفظ مقادیر قبلی در state) دوباره باز می‌کنه و بعد از آخرین سؤال (شهر) خودکار به
-    همین صفحه برمی‌گرده (_iv_step_done + _iv_edit_group_for)."""
+    """صفحهٔ خلاصه — قبل از محاسبهٔ نهایی. طبق تصمیم صریح مالک پروژه، این صفحه هیچ‌کدوم
+    از گزینه‌های انتخاب‌شده رو نشون نمی‌ده (UX خلوت‌تر) — فقط سه دکمه: محاسبه قیمت (راست)،
+    اصلاح گزینه‌ها (چپ)، انصراف (زیر). «اصلاح گزینه‌ها» به‌جای شروع دوبارهٔ کل ویزارد،
+    مستقیم لیست تفصیلی قابل‌ویرایش (_iv_ask_edit_list) رو نشون می‌ده — کاربر فقط همون
+    فیلدی که می‌خواد رو عوض می‌کنه، نه همهٔ سؤال‌ها رو دوباره جواب بده."""
     state = user_states.get(uid)
     if not state:
         return
@@ -4610,14 +4639,94 @@ def _iv_ask_summary(chat_id, uid):
     kb = types.InlineKeyboardMarkup()
     kb.row(
         types.InlineKeyboardButton("✏️ اصلاح گزینه‌ها", callback_data="ivw_summary_editall"),
-        types.InlineKeyboardButton("✅ تایید و محاسبهٔ قیمت", callback_data="ivw_summary_confirm"),
+        types.InlineKeyboardButton("✅ محاسبه قیمت", callback_data="ivw_summary_confirm"),
     )
     kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="ivw_summary_cancel"))
     bot.send_message(
         chat_id,
-        "📋 <b>خلاصهٔ کارشناسی آماده است</b>\n\nبرای دیدن قیمت نهایی «تایید» رو بزن، یا برای بازبینی جواب‌ها «اصلاح گزینه‌ها» رو بزن.",
+        "📋 <b>خلاصهٔ کارشناسی آماده است</b>\n\nبرای دیدن قیمت نهایی «محاسبه قیمت» رو بزن، یا برای بازبینی جواب‌ها «اصلاح گزینه‌ها» رو بزن.",
         reply_markup=kb, parse_mode="HTML"
     )
+
+
+def _iv_ask_edit_list(chat_id, uid):
+    """لیست تفصیلی همهٔ پاسخ‌ها با دکمهٔ ✏️ به‌ازای هر بخش — فقط از «اصلاح گزینه‌ها»ی
+    صفحهٔ خلاصه (_iv_ask_summary) در دسترسه. زدن هر ✏️ کاربر رو به همون یک مرحله (یا
+    گروه وابسته‌اش، _iv_edit_group_for) می‌بره؛ بعد از ثبت جواب تازه، _iv_step_done
+    دوباره به همین لیست برمی‌گرده (نه به صفحهٔ خلاصه)."""
+    import iphone_valuation.db as ivdb
+    state = user_states.get(uid)
+    if not state:
+        return
+    model = ivdb.get_model(state.get("model_id")) or {}
+    series = ivdb.get_series(model.get("series_id")) if model.get("series_id") else None
+    sel = state.get("selections", {})
+
+    def _coeff_label(category, key):
+        if not key:
+            return "—"
+        opts = ivdb.list_coefficients(category=category, active_only=False)
+        row = next((o for o in opts if o["option_key"] == key), None)
+        return row["option_label"] if row else key
+
+    def _ms_labels(category):
+        keys = sel.get(category) or []
+        if not keys:
+            return "—"
+        opts = ivdb.list_coefficients(category=category, active_only=False)
+        by_key = {o["option_key"]: o["option_label"] for o in opts}
+        return "، ".join(by_key.get(k, k) for k in keys)
+
+    lines = [
+        "✏️ <b>اصلاح گزینه‌ها — روی هر بخش بزن تا فقط همون رو عوض کنی</b>\n",
+        f"📱 <b>{html.escape(model.get('name') or '')}</b>" + (f" ({html.escape(series['name'])})" if series else ""),
+        f"💾 ظرفیت: {html.escape(state.get('capacity_label') or '—')}",
+    ]
+    if not _iv_step_skip("color", state):
+        lines.append(f"🎨 رنگ: {html.escape(state.get('color') or '—')}")
+    if not _iv_step_skip("part", state):
+        part_map = {p["code"]: p["label"] for p in ivdb.list_parts(active_only=False)}
+        lines.append(f"🔠 پارت: {html.escape(part_map.get(state.get('part_number') or '', 'سایر'))}")
+
+    edit_targets = [("series", "✏️ مدل دستگاه (سری/مدل/ظرفیت/رنگ/پارت)")]
+    for step_id in ("grade", "cond", "batt", "cos", "cable", "box", "reg"):
+        if _iv_step_skip(step_id, state):
+            continue
+        category, _t = _IV_COEFF_STEP_MAP[step_id]
+        val = _coeff_label(category, sel.get(category))
+        if step_id == "grade":
+            # ارقام لاتین سری‌های ۳/۴/۵ توی متن پیام (برخلاف دکمه‌ها که خودشون دست‌نخورده
+            # می‌مونن) باید از پچ اعداد فارسی سراسری در امان بمونن — با <code> که همون
+            # الگوی استثنای موجود پچه (bot.py: _FA_SKIP_RE).
+            val = re.sub(r"(\d+)", r"<code>\1</code>", html.escape(val))
+        lines.append(f"{_IV_STEP_LABELS[step_id]}: {val}")
+        edit_targets.append((step_id, f"✏️ {_IV_STEP_LABELS[step_id]}"))
+
+    if not _iv_step_skip("feat", state):
+        lines.append(f"📶 امکانات سالم: {'بله' if state.get('features_ok') else 'خیر'}")
+        edit_targets.append(("feat", "✏️ تست امکانات"))
+
+    for step_id in ("repair", "defms", "repms"):
+        if _iv_step_skip(step_id, state):
+            continue
+        if step_id in _IV_MULTISELECT_STEP_MAP:
+            category, _t = _IV_MULTISELECT_STEP_MAP[step_id]
+            val = _ms_labels(category)
+        else:
+            category, _t = _IV_COEFF_STEP_MAP[step_id]
+            val = _coeff_label(category, sel.get(category))
+        lines.append(f"{_IV_STEP_LABELS[step_id]}: {val}")
+        edit_targets.append((step_id, f"✏️ {_IV_STEP_LABELS[step_id]}"))
+
+    lines.append(f"🏙 شهر: {html.escape(state.get('city') or 'ندارم')}")
+    edit_targets.append(("city", "✏️ شهر"))
+
+    kb = types.InlineKeyboardMarkup()
+    for step_id, label in edit_targets:
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"ivw_edit_{step_id}"))
+    kb.add(types.InlineKeyboardButton("✅ محاسبه قیمت", callback_data="ivw_summary_confirm"))
+    kb.add(types.InlineKeyboardButton("❌ انصراف", callback_data="ivw_summary_cancel"))
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
 
 
 def _iv_strip_html(text):
@@ -4866,9 +4975,16 @@ def _iv_wizard_callback(call):
         _iv_goto(chat_id, uid, step_id)
         return
 
+    if data == "ivw_grade_more":
+        _iv_ask_grade(chat_id, uid, message_id=call.message.message_id, expanded=True)
+        return
+
+    if data == "ivw_grade_back":
+        _iv_ask_grade(chat_id, uid, message_id=call.message.message_id, expanded=False)
+        return
+
     if data == "ivw_summary_editall":
-        state["editing"] = _IV_EDIT_ALL_SENTINEL
-        _iv_goto(chat_id, uid, "series")
+        _iv_ask_edit_list(chat_id, uid)
         return
 
     if data == "ivw_summary_confirm":
