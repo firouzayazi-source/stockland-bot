@@ -686,7 +686,7 @@ def _layout(title: str, body: str, admin_info=None,
           </div>
         </header>"""
 
-    css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items())
+    css_vars = ";".join(f"--{k.replace('_','-')}:{v}" for k,v in theme.items()) + ";"
 
     html_response = HTMLResponse(f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl" data-saved-dark="{saved_dark}" data-saved-classic="{saved_classic}">
