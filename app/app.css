@@ -262,9 +262,16 @@ html.dark .sl-me-c{
 .sl-wallet-glow{position:absolute;width:190px;height:190px;border-radius:50%;
  background:radial-gradient(circle,rgba(255,255,255,.16),transparent 70%);top:-70px;left:-40px}
 .sl-wallet-l{font-size:12px;opacity:.75;font-weight:600}
-.sl-wallet-b{font-size:30px;font-weight:800;margin-top:4px}
+.sl-wallet-b{font-size:30px;font-weight:800;margin-top:4px;direction:ltr;text-align:left}
 .sl-wallet-b small{font-size:13px;font-weight:500;opacity:.75}
 .sl-wallet-acts{display:flex;gap:9px;margin-top:16px}
+/* کیف‌پول پاداش (دوم) — فقط برای همکاران؛ داخل همون کادر آبی کیف‌پول اصلی، بالای
+   اون، با جداکنندهٔ کم‌رنگ تا با اعداد کیف‌پول اصلی قاطی نشه. اعداد سبز طبق درخواست
+   صریح مالک پروژه تا در نگاه اول از کیف‌پول اصلی متمایز باشه. */
+.sl-wallet-reward{margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,.18);position:relative;z-index:1}
+.sl-wallet-reward-l{font-size:11px;opacity:.75;font-weight:600}
+.sl-wallet-reward-b{font-size:17px;font-weight:800;margin-top:3px;color:#4ADE80;direction:ltr;text-align:left}
+.sl-wallet-reward-b small{font-size:10.5px;font-weight:500;opacity:.8;color:#fff}
 .sl-wallet-a{flex:1;text-align:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);
  border-radius:13px;padding:9px 0;font-size:12.5px;font-weight:700;cursor:pointer;color:#fff;text-decoration:none}
 .sl-checkin-card{margin:10px 20px 0;border-radius:14px;padding:9px 12px;display:flex;align-items:center;gap:8px;
@@ -339,8 +346,8 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
 .sl-pp-desc{padding:0 20px 20px;font-size:14.5px;line-height:2;color:var(--mu)}
 .sl-pp-stock{padding:0 20px 12px;font-size:13px;font-weight:600}
 .sl-pp-divider{height:1px;background:var(--ln);margin:0 20px 16px}
-.sl-stars{color:var(--mu);font-size:12.5px;white-space:nowrap}
-.sl-stars-ico{color:var(--pt);letter-spacing:1px}
+.sl-stars{color:var(--mu);font-size:12.5px;white-space:nowrap;direction:ltr}
+.sl-stars-ico{color:var(--pt);letter-spacing:1px;direction:ltr;unicode-bidi:isolate}
 .sl-stars b{color:var(--ink);font-weight:800}
 .sl-stars-sm{font-size:11px}
 .sl-pp-rating{margin-top:4px}
@@ -350,7 +357,7 @@ html.dark .sl-checkin-card.sl-checkin-done{background:linear-gradient(135deg,#0E
 .sl-review{background:var(--card);border-radius:14px;padding:11px 14px;box-shadow:var(--sh)}
 .sl-review-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .sl-review-top b{font-size:13px;font-weight:700}
-.sl-review-st{color:var(--pt);font-size:12px;letter-spacing:1px}
+.sl-review-st{color:var(--pt);font-size:12px;letter-spacing:1px;direction:ltr;unicode-bidi:isolate}
 .sl-review-txt{font-size:13.5px;color:var(--mu);margin-top:5px;line-height:1.8}
 .sl-pp-btn{margin:0 20px 24px;display:block;background:var(--br);color:#fff;text-align:center;
  font-size:15px;font-weight:700;border-radius:14px;padding:14px 0;border:none;width:calc(100% - 40px);cursor:pointer;text-decoration:none}
@@ -401,7 +408,7 @@ html.dark .sl-checkout-emoji{background:linear-gradient(135deg,#14213D,#1E3A8A)}
 .sl-checkout-sec{padding:18px 20px 6px;font-size:13px;font-weight:700;color:var(--mu)}
 .sl-rate-box{margin-top:10px;padding-top:10px;border-top:1px solid var(--ln)}
 .sl-rate-label{font-size:12.5px;font-weight:700;color:var(--mu);margin-bottom:6px}
-.sl-rate-stars{display:flex;gap:4px;font-size:24px;color:var(--pt);line-height:1;cursor:pointer;user-select:none}
+.sl-rate-stars{display:flex;gap:4px;font-size:24px;color:var(--pt);line-height:1;cursor:pointer;user-select:none;direction:ltr}
 .sl-rate-comment{width:100%;box-sizing:border-box;margin-top:8px;border:1px solid var(--ln);border-radius:12px;
  padding:9px 12px;font-size:13px;font-family:inherit;resize:none;background:var(--card);color:var(--ink)}
 .sl-checkout-wallet{margin:0 20px;background:var(--card);border-radius:14px;padding:14px 16px;

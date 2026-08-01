@@ -348,7 +348,12 @@ def _pending_card2card_count() -> int:
 def _pending_sell_requests_count() -> int:
     try:
         import iphone_valuation.db as ivdb
-        return ivdb.count_sell_requests("pending")
+        # ⚠️ رفع‌شده: iv_sell_requests.status پیش‌فرضش 'new' هست (نه 'pending') — هم
+        # ستون جدول (DEFAULT 'new') هم create_sell_request در bot.py صریحاً 'new' رو
+        # ثبت می‌کنن، و منطق تأیید ادمین هم به 'contacted' تغییرش می‌ده. چک قبلی
+        # دنبال 'pending' می‌گشت که هیچ‌وقت مقداردهی نمی‌شد — یعنی درخواست تازه هیچ‌وقت
+        # نوتیف بالای «خرید و بخش مالی» رو فعال نمی‌کرد.
+        return ivdb.count_sell_requests("new")
     except Exception:
         return 0
 
@@ -2066,7 +2071,7 @@ async def dashboard(request: Request, err: str = ""):
       .sparkline {{ position:absolute; right:15px; left:15px; bottom:11px; height:43px; opacity:.9; }} .sparkline path.line {{ fill:none; stroke:#06b6d4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }} .sparkline path.area {{ fill:url(#sparkFill); opacity:.55; }}
 
       .chart-card {{ padding:22px 24px 18px; }} .chart-toolbar {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }} .chart-legend {{ display:flex; align-items:center; gap:7px; color:var(--text-muted); font-size:10px; }} .chart-legend span {{ width:7px; height:7px; border-radius:50%; background:#00d7ff; box-shadow:0 0 0 4px rgba(0,215,255,.08); }} .chart-period {{ padding:7px 10px; border:1px solid var(--border); border-radius:10px; color:var(--text-muted); font-size:9px; background:var(--card-bg); }}
-      .chart-shell {{ position:relative; height:400px; }}
+      .chart-shell {{ position:relative; height:400px; direction:ltr; }}
       .two-column {{ display:grid; grid-template-columns:minmax(0,3fr) minmax(320px,2fr); gap:18px; }} .panel-card {{ overflow:hidden; }} .panel-header {{ min-height:68px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid var(--border); }} .panel-header h3 {{ margin:0; font-size:14px; }} .panel-header p {{ margin:3px 0 0; color:var(--text-muted); font-size:9.5px; }} .table-wrap {{ overflow:auto; max-height:500px; }}
       .order-id {{ color:#0891b2; font:700 11px/1 Inter,sans-serif !important; text-decoration:none; }} .table-product {{ display:flex; align-items:center; gap:9px; min-width:180px; }} .table-product>span {{ width:31px; height:31px; display:grid; place-items:center; border-radius:10px; background:#f1f5f9; color:#64748b; }} .table-product svg {{ width:15px; }} .table-product strong {{ font-size:11px; font-weight:600; }} .muted-cell {{ color:var(--text-muted); font-size:10px; }} .money-cell {{ display:block; font-size:11px; direction:ltr; text-align:left; }} .currency {{ color:var(--text-muted); font-size:8px; }}
       .status-badge {{ display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border-radius:999px; font-size:9px; font-weight:650; white-space:nowrap; }} .status-badge>span {{ width:5px; height:5px; border-radius:50%; }} .status-success {{ color:#15803d; background:#ecfdf3; }} .status-success>span {{ background:#22c55e; }} .status-warning {{ color:#a16207; background:#fffbeb; }} .status-warning>span {{ background:#f59e0b; }} .status-danger {{ color:#be123c; background:#fff1f2; }} .status-danger>span {{ background:#ef4444; }} .status-neutral {{ color:#475569; background:#f1f5f9; }} .status-neutral>span {{ background:#94a3b8; }}
@@ -8745,7 +8750,7 @@ async def broadcast_page(request: Request, flash: str = ""):
         status_html = f"""
         <div class="card p-5 mb-6 border-r-4 border-{status_color}-500">
           <h3 class="font-bold text-{status_color}-700 mb-2">{"✅ ارسال تمام شد" if st["done"] else "🔄 در حال ارسال..."}</h3>
-          <div class="bg-gray-100 rounded-full h-3 mb-2">
+          <div class="bg-gray-100 rounded-full h-3 mb-2 ltr-num">
             <div class="bg-{status_color}-500 h-3 rounded-full" style="width:{pct}%"></div>
           </div>
           <div class="text-sm text-gray-600">
