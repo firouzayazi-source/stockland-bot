@@ -4730,55 +4730,6 @@ def link_batch_to_feed(product_id: int, batch_id: int, offset: int, count: int):
         conn.close()
 
 
-def get_financial_report() -> dict:
-    """گزارش مالی کامل فروشگاه."""
-    conn = _get_connection()
-    try:
-        # مجموع فروش
-        total_sales = conn.execute(
-            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active';"
-        ).fetchone()[0]
-        # مجموع هزینه خرید
-        total_purchase = conn.execute(
-            "SELECT COALESCE(SUM(fb.purchase_price * fb.item_count + fb.side_cost),0) FROM feed_batches fb;"
-        ).fetchone()[0]
-        # پورسانت پرداختی
-        total_commission = conn.execute(
-            "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1;"
-        ).fetchone()[0]
-        # تسویههای تأیید شده
-        total_payouts = conn.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='approved';"
-        ).fetchone()[0]
-        # فروش مستقیم (غیر همکار)
-        direct_sales = conn.execute(
-            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active' AND (buyer_type!='partner' OR buyer_type IS NULL);"
-        ).fetchone()[0]
-        # فروش همکاری
-        partner_sales = conn.execute(
-            "SELECT COALESCE(SUM(price),0) FROM orders WHERE status='active' AND buyer_type='partner';"
-        ).fetchone()[0]
-
-        gross_profit   = int(total_sales or 0) - int(total_purchase or 0)
-        net_profit     = gross_profit - int(total_commission or 0)
-
-        return {
-            "total_sales":       int(total_sales or 0),
-            "total_purchase":    int(total_purchase or 0),
-            "gross_profit":      gross_profit,
-            "net_profit":        net_profit,
-            "direct_sales":      int(direct_sales or 0),
-            "partner_sales":     int(partner_sales or 0),
-            "total_commission":  int(total_commission or 0),
-            "total_payouts":     int(total_payouts or 0),
-            "store_profit":      net_profit - int(total_payouts or 0),
-        }
-    except Exception:
-        return {}
-    finally:
-        conn.close()
-
-
 # ─── migration آدرس در partner_bank_info ────────────────────────────────────
 
 def ensure_partner_bank_address():
@@ -4964,6 +4915,16 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             order_params
         ).fetchone()[0]
 
+        # فروش مستقیم در برابر فروش همکاری — قبلاً فقط توی صفحهٔ جداگانهٔ «گزارش مالی» بود
+        direct_sales = conn.execute(
+            f"SELECT COALESCE(SUM(price),0) FROM orders o WHERE status='active' AND (buyer_type!='partner' OR buyer_type IS NULL){where_order};",
+            order_params
+        ).fetchone()[0]
+        partner_sales = conn.execute(
+            f"SELECT COALESCE(SUM(price),0) FROM orders o WHERE status='active' AND buyer_type='partner'{where_order};",
+            order_params
+        ).fetchone()[0]
+
         # هزینه خرید — محصولات تحویل‌شده (با batch + بدون batch)
         try:
             # ۱) آیتم‌هایی که batch و purchase_price دارن
@@ -4991,13 +4952,21 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             no_batch_cost = 0
         total_cost = int(batch_cost) + int(no_batch_cost)
 
-        # پورسانت پرداختی
+        # پورسانت پرداختی — مجموع کامل واریزهای پورسانت به کیف‌پول همکاری، هم پاداش
+        # اولین خرید (process_referral_reward) هم پورسانت زنجیره‌ای هر خرید بعدی
+        # (process_referral_commission). قبلاً این عدد فقط از جدول referrals محاسبه
+        # می‌شد که تنها پاداش اولین خرید رو ثبت می‌کنه — پورسانت مستمر هر خرید بعدی
+        # (که مستقیم به partner_transactions واریز می‌شه، نه به referrals) اصلاً لحاظ
+        # نمی‌شد و «سود خالص» رو به‌طور واقعی بیشتر از واقعیت نشون می‌داد.
         try:
-            commission_q = "SELECT COALESCE(SUM(reward_amount),0) FROM referrals WHERE rewarded=1"
+            commission_q = "SELECT COALESCE(SUM(amount),0) FROM partner_transactions WHERE type='credit'"
             commission_params = []
             if date_from:
-                commission_q += " AND date(rewarded_at)>=?"
+                commission_q += " AND date(created_at)>=?"
                 commission_params.append(date_from)
+            if date_to:
+                commission_q += " AND date(created_at)<=?"
+                commission_params.append(date_to)
             total_commission = conn.execute(commission_q + ";", commission_params).fetchone()[0]
         except Exception:
             total_commission = 0
@@ -5042,6 +5011,8 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             "today_sales":       int(today_sales or 0),
             "month_sales":       int(month_sales or 0),
             "total_sales":       int(total_sales or 0),
+            "direct_sales":      int(direct_sales or 0),
+            "partner_sales":     int(partner_sales or 0),
             "total_orders":      int(total_orders or 0),
             "total_cost":        int(total_cost or 0),
             "total_commission":  int(total_commission or 0),
@@ -5049,9 +5020,11 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             "gross_profit":      gross_profit,
             "net_profit":        net_profit,
             "payout_count":      payout_count,
-            "total_payouts":     int(conn.execute(
-                "SELECT COALESCE(SUM(amount),0) FROM partner_payouts WHERE status='paid';"
-            ).fetchone()[0] or 0),
+            # ⚠️ رفع‌شده: قبلاً اینجا status='paid' چک می‌شد که هیچ‌وقت مقداردهی نمی‌شه
+            # (process_partner_payout فقط 'approved'/'rejected' ثبت می‌کنه) — یعنی
+            # «مانده صندوق» روی صفحهٔ حسابداری هیچ‌وقت واقعاً تسویه‌های پرداخت‌شده رو
+            # کم نمی‌کرد. مقدار صحیح همون payout_total (status='approved') هست.
+            "total_payouts":     payout_total,
             "payout_total":      payout_total,
             "stock_count":       int(stock_count or 0),
             "avg_profit":        avg_profit,

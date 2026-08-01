@@ -631,7 +631,6 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/discounts", "percent", "کدهای تخفیف", "discounts")}
             {nav_item("/admin/growth", "rocket", "رشد و فروش", "growth")}
             {nav_item("/admin/accounting", "calculator", "حسابداری", "accounting")}
-            {nav_item("/admin/reports", "bar-chart-2", "گزارش‌های مالی", "reports")}
             {nav_item("/admin/payment-gateways", "credit-card", "درگاه‌های پرداخت", "payment_gateways")}
             <div class="nav-divider"><span>محتوا</span></div>
             {nav_item("/admin/news-feed", "rss", "اخبار تکنولوژی", "news")}
@@ -1361,7 +1360,7 @@ def _layout(title: str, body: str, admin_info=None,
     .stat-card-sub {{ font-size:12px; color:var(--text-muted); margin-top:3px; }}
     .empty-result {{ display:block; padding:12px; color:var(--txt-muted); font-size:12px; }}
     .max-w-560 {{ max-width:560px; }}
-    .ltr-num {{ direction:ltr; text-align:right; }}
+    .ltr-num {{ direction:ltr; text-align:left; }}
     .ltr-left {{ direction:ltr; text-align:left; }}
     .scroll-anchor {{ scroll-margin-top:80px; }}
     .bidi-plain {{ unicode-bidi:plaintext; }}
@@ -2062,14 +2061,14 @@ async def dashboard(request: Request, err: str = ""):
       .kpi-grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }}
       .kpi-card {{ min-height:188px; padding:20px; overflow:hidden; position:relative; }} .kpi-card::after {{ content:""; position:absolute; top:-55px; left:-45px; width:130px; height:130px; border-radius:50%; background:rgba(0,215,255,.035); }}
       .kpi-top {{ display:flex; align-items:center; justify-content:space-between; }} .kpi-icon {{ width:40px; height:40px; display:grid; place-items:center; border-radius:13px; color:#0891b2; background:#ecfeff; }} .kpi-icon svg {{ width:19px; }}
-      .kpi-label {{ color:var(--text-muted); font-size:10.5px; font-weight:600; }} .kpi-value {{ margin:15px 0 3px; color:var(--text-main); font-size:25px; font-weight:800; letter-spacing:-.025em; direction:ltr; text-align:right; }} .kpi-unit {{ color:var(--text-muted); font-size:9px; font-weight:500; margin-right:3px; }}
+      .kpi-label {{ color:var(--text-muted); font-size:10.5px; font-weight:600; }} .kpi-value {{ margin:15px 0 3px; color:var(--text-main); font-size:25px; font-weight:800; letter-spacing:-.025em; direction:ltr; text-align:left; }} .kpi-unit {{ color:var(--text-muted); font-size:9px; font-weight:500; margin-right:3px; }}
       .trend {{ display:inline-flex; align-items:center; gap:3px; font-size:9px; font-weight:700; direction:ltr; }} .trend svg {{ width:12px; }} .trend-up {{ color:#16a34a; }} .trend-down {{ color:#e11d48; }} .trend-flat {{ color:#94a3b8; }}
       .sparkline {{ position:absolute; right:15px; left:15px; bottom:11px; height:43px; opacity:.9; }} .sparkline path.line {{ fill:none; stroke:#06b6d4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }} .sparkline path.area {{ fill:url(#sparkFill); opacity:.55; }}
 
       .chart-card {{ padding:22px 24px 18px; }} .chart-toolbar {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }} .chart-legend {{ display:flex; align-items:center; gap:7px; color:var(--text-muted); font-size:10px; }} .chart-legend span {{ width:7px; height:7px; border-radius:50%; background:#00d7ff; box-shadow:0 0 0 4px rgba(0,215,255,.08); }} .chart-period {{ padding:7px 10px; border:1px solid var(--border); border-radius:10px; color:var(--text-muted); font-size:9px; background:var(--card-bg); }}
       .chart-shell {{ position:relative; height:400px; }}
       .two-column {{ display:grid; grid-template-columns:minmax(0,3fr) minmax(320px,2fr); gap:18px; }} .panel-card {{ overflow:hidden; }} .panel-header {{ min-height:68px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; border-bottom:1px solid var(--border); }} .panel-header h3 {{ margin:0; font-size:14px; }} .panel-header p {{ margin:3px 0 0; color:var(--text-muted); font-size:9.5px; }} .table-wrap {{ overflow:auto; max-height:500px; }}
-      .order-id {{ color:#0891b2; font:700 11px/1 Inter,sans-serif !important; text-decoration:none; }} .table-product {{ display:flex; align-items:center; gap:9px; min-width:180px; }} .table-product>span {{ width:31px; height:31px; display:grid; place-items:center; border-radius:10px; background:#f1f5f9; color:#64748b; }} .table-product svg {{ width:15px; }} .table-product strong {{ font-size:11px; font-weight:600; }} .muted-cell {{ color:var(--text-muted); font-size:10px; }} .money-cell {{ display:block; font-size:11px; direction:ltr; text-align:right; }} .currency {{ color:var(--text-muted); font-size:8px; }}
+      .order-id {{ color:#0891b2; font:700 11px/1 Inter,sans-serif !important; text-decoration:none; }} .table-product {{ display:flex; align-items:center; gap:9px; min-width:180px; }} .table-product>span {{ width:31px; height:31px; display:grid; place-items:center; border-radius:10px; background:#f1f5f9; color:#64748b; }} .table-product svg {{ width:15px; }} .table-product strong {{ font-size:11px; font-weight:600; }} .muted-cell {{ color:var(--text-muted); font-size:10px; }} .money-cell {{ display:block; font-size:11px; direction:ltr; text-align:left; }} .currency {{ color:var(--text-muted); font-size:8px; }}
       .status-badge {{ display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border-radius:999px; font-size:9px; font-weight:650; white-space:nowrap; }} .status-badge>span {{ width:5px; height:5px; border-radius:50%; }} .status-success {{ color:#15803d; background:#ecfdf3; }} .status-success>span {{ background:#22c55e; }} .status-warning {{ color:#a16207; background:#fffbeb; }} .status-warning>span {{ background:#f59e0b; }} .status-danger {{ color:#be123c; background:#fff1f2; }} .status-danger>span {{ background:#ef4444; }} .status-neutral {{ color:#475569; background:#f1f5f9; }} .status-neutral>span {{ background:#94a3b8; }}
       .table-action {{ width:30px; height:30px; display:grid; place-items:center; border:1px solid var(--border); border-radius:9px; color:#64748b; }} .table-action svg {{ width:14px; }}
       .tasks-list {{ padding:8px 12px 12px; }} .task-row {{ min-height:67px; display:grid; grid-template-columns:38px 1fr 16px; align-items:center; gap:10px; padding:7px 8px; border-bottom:1px solid #eef0f3; text-decoration:none; transition:160ms; }} .task-row:last-child {{ border:0; }} .task-row:hover {{ background:var(--page-bg); border-radius:12px; }} .task-row>svg {{ width:14px; color:#b1b7c2; }} .task-row strong,.task-row small {{ display:block; }} .task-row strong {{ color:var(--text-main); font-size:10.5px; }} .task-row small {{ color:var(--text-muted); font-size:8.5px; margin-top:3px; }}
@@ -5684,6 +5683,13 @@ async def feed_upload(request: Request, pid: int, items: str=Form(""),
     if dispatched:
         msg += f"+و+{dispatched}+سفارش+معلق+تحویل+داده+شد"
     _log(request, f"افزودن {len(blocks)} آیتم به موجودی", "موجودی", f"product:{pid}")
+
+    # اگر قیمت خرید ثبت نشده → صفحه قیمت‌گذاری batch باز شود (دقیقاً همون الزامی که
+    # مسیر آپلود فایل از قبل داشت — این مسیر «افزودن متنی» تا این نشست همچین چکی
+    # نداشت و آیتم بدون هیچ batch/قیمت خریدی بی‌صدا درج می‌شد، یعنی هزینهٔ خریدش
+    # هیچ‌وقت در حسابداری لحاظ نمی‌شد)
+    if purchase_price <= 0:
+        return _redir(f"/admin/feed/{pid}/batch-pricing?n={len(blocks)}")
     return _redir(f"/admin/feed/{pid}?flash={msg}")
 
 def _notify_restock_subscribers(pid: int, was_out_of_stock: bool) -> None:
@@ -8842,48 +8848,11 @@ def _start_auto_backup_thread() -> None:
 
 
 @router.get("/reports", response_class=HTMLResponse)
-async def financial_report(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "reports")
-    if guard: return guard
-    from db import get_financial_report, ensure_feed_batch_schema
-    ensure_feed_batch_schema()
-    r = get_financial_report()
-
-    def _c(n): return f"{n:,}" if isinstance(n, int) else "۰"
-
-    body = f"""
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">📊 گزارش مالی</h1>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {_card("مجموع فروش", _c(r.get("total_sales",0)), "تومان", "indigo")}
-      {_card("هزینه خرید", _c(r.get("total_purchase",0)), "تومان", "red")}
-      {_card("سود ناخالص", _c(r.get("gross_profit",0)), "تومان", "green")}
-      {_card("سود خالص", _c(r.get("net_profit",0)), "تومان", "emerald")}
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {_card("فروش مستقیم", _c(r.get("direct_sales",0)), "تومان", "blue")}
-      {_card("فروش همکاری", _c(r.get("partner_sales",0)), "تومان", "purple")}
-      {_card("پورسانت پرداختی", _c(r.get("total_commission",0)), "تومان", "amber")}
-      {_card("سود نهایی فروشگاه", _c(r.get("store_profit",0)), "تومان", "slate")}
-    </div>
-    <div class="card p-6">
-      <h2 class="font-bold text-gray-700 mb-4">📈 خلاصه حسابداری</h2>
-      <table class="w-full text-right text-sm">
-        <tbody>
-          {''.join(f'<tr class="border-b"><td class="py-2 text-gray-500">{k}</td><td class="py-2 font-bold text-gray-800">{_c(v)} تومان</td></tr>' for k,v in [
-            ("مجموع فروش", r.get("total_sales",0)),
-            ("− هزینه خرید موجودی", r.get("total_purchase",0)),
-            ("= سود ناخالص", r.get("gross_profit",0)),
-            ("− پورسانت معرفی", r.get("total_commission",0)),
-            ("= سود خالص", r.get("net_profit",0)),
-            ("− تسویه‌های پرداخت‌شده", r.get("total_payouts",0)),
-            ("= سود نهایی فروشگاه", r.get("store_profit",0)),
-          ])}
-        </tbody>
-      </table>
-      <p class="text-xs text-gray-400 mt-4">⚠️ هزینه خرید فقط برای موجودی‌هایی محاسبه می‌شود که با اطلاعات Batch ثبت شده‌اند.</p>
-    </div>"""
-    return _layout("گزارش مالی", body, adm, flash=flash)
+async def financial_report(request: Request):
+    """آدرس قدیمی «گزارش‌های مالی» — طبق درخواست صریح مالک پروژه محتوایش با صفحهٔ
+    حسابداری (که فرمول‌های دقیق‌تری داره، مثلاً هزینه خرید فقط روی کالای واقعاً
+    تحویل‌شده) ادغام شد؛ این مسیر فقط برای لینک/بوکمارک‌های قدیمی نگه داشته شده."""
+    return _redir("/admin/accounting")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -8981,12 +8950,24 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
       <div class="flex items-center justify-between flex-wrap gap-2">
         <div>
           <div class="text-xs text-gray-500 mb-1">مانده صندوق</div>
-          <div class="text-3xl font-bold text-emerald-700">{_m(max(0,kpis["net_profit"]-kpis.get("total_payouts",0)))} <span class="text-sm font-normal text-gray-400">تومان</span></div>
+          <div class="text-3xl font-bold text-emerald-700 no-fa ltr-left">{_m(max(0,kpis["net_profit"]-kpis.get("total_payouts",0)))} <span class="text-sm font-normal text-gray-400">تومان</span></div>
         </div>
         <div class="text-xs text-gray-500 leading-6 text-left">
-          <div>سود خالص: <b class="text-gray-700">{_m(kpis["net_profit"])}</b></div>
-          <div>پرداخت‌شده: <b class="text-gray-700">-{_m(kpis.get("total_payouts",0))}</b></div>
+          <div>سود خالص: <b class="text-gray-700 no-fa">{_m(kpis["net_profit"])}</b></div>
+          <div>پرداخت‌شده: <b class="text-gray-700 no-fa">-{_m(kpis.get("total_payouts",0))}</b></div>
         </div>
+      </div>
+    </div>
+
+    <!-- فروش مستقیم در برابر همکاری -->
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div class="card p-3">
+        <div class="text-[10px] text-gray-400 mb-1">🔵 فروش مستقیم</div>
+        <div class="font-bold text-blue-700 no-fa ltr-left">{_m(kpis.get("direct_sales",0))} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+      </div>
+      <div class="card p-3">
+        <div class="text-[10px] text-gray-400 mb-1">🤝 فروش همکاری</div>
+        <div class="font-bold text-purple-700 no-fa ltr-left">{_m(kpis.get("partner_sales",0))} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
       </div>
     </div>
 
@@ -9012,20 +8993,20 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
       <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
         <div class="p-2 border-l border-gray-100">
           <div class="text-[10px] text-gray-400 mb-1">فروش امروز</div>
-          <div class="font-bold text-blue-700 no-fa">{_m(kpis["today_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+          <div class="font-bold text-blue-700 no-fa ltr-left">{_m(kpis["today_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
         </div>
         <div class="p-2 border-l border-gray-100">
           <div class="text-[10px] text-gray-400 mb-1">فروش این ماه</div>
-          <div class="font-bold text-indigo-700 no-fa">{_m(kpis["month_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+          <div class="font-bold text-indigo-700 no-fa ltr-left">{_m(kpis["month_sales"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
         </div>
         <div class="p-2 border-l border-gray-100">
           <div class="text-[10px] text-gray-400 mb-1">میانگین سود/سفارش</div>
-          <div class="font-bold text-teal-700 no-fa">{_m(kpis["avg_profit"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
+          <div class="font-bold text-teal-700 no-fa ltr-left">{_m(kpis["avg_profit"])} <span class="text-[10px] font-normal text-gray-400">ت</span></div>
         </div>
         <div class="p-2">
           <div class="text-[10px] text-gray-400 mb-1">موجودی انبار</div>
-          <div class="font-bold text-slate-700">{_m(kpis["stock_count"])} <span class="text-[10px] font-normal text-gray-400">آیتم</span></div>
-          <div class="text-[10px] text-gray-400 mt-0.5">ارزش: {_m(kpis.get("stock_value",0))} ت</div>
+          <div class="font-bold text-slate-700 no-fa ltr-left">{_m(kpis["stock_count"])} <span class="text-[10px] font-normal text-gray-400">آیتم</span></div>
+          <div class="text-[10px] text-gray-400 mt-0.5 no-fa ltr-left">ارزش: {_m(kpis.get("stock_value",0))} ت</div>
         </div>
       </div>
     </div>
@@ -9036,7 +9017,7 @@ async def accounting_dashboard(request: Request, df: str = "", dt: str = "", df_
         <span class="text-lg">💸</span>
         <div>
           <div class="text-xs text-gray-500">مجموع تسویه‌های پرداخت‌شده به همکاران</div>
-          <div class="font-bold text-purple-700 no-fa">{_m(kpis.get("total_payouts",0))} تومان</div>
+          <div class="font-bold text-purple-700 no-fa ltr-left">{_m(kpis.get("total_payouts",0))} تومان</div>
         </div>
       </div>
       <a href="/admin/partners?tab=payouts" class="text-xs text-purple-600 hover:underline">مشاهده تسویه‌ها →</a>
