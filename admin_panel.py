@@ -2035,7 +2035,7 @@ async def dashboard(request: Request, err: str = ""):
       .command-title svg {{ width:18px; }} .command-title h3 {{ margin:0; font-size:15px; }} .command-title p {{ margin:3px 0 0; color:#74849a; font-size:9.5px; }}
       .live-pill {{ display:flex; align-items:center; gap:7px; padding:7px 10px; border-radius:999px; color:#9de9bd; background:rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.12); font-size:9px; }}
       .live-pill span {{ width:6px; height:6px; border-radius:50%; background:#22c55e; box-shadow:0 0 10px #22c55e; }}
-      .command-grid {{ position:relative; display:grid; grid-template-columns:repeat(7,minmax(145px,1fr)); gap:9px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin; }}
+      .command-grid {{ position:relative; display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:9px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin; }}
       .command-item {{ min-width:145px; min-height:142px; display:flex; flex-direction:column; position:relative; padding:15px; border:1px solid rgba(255,255,255,.07); border-radius:18px; background:rgba(255,255,255,.035); text-decoration:none; transition:200ms; }}
       .command-item:hover {{ background:rgba(255,255,255,.065); border-color:rgba(0,215,255,.18); transform:translateY(-2px); }}
       .command-icon {{ width:33px; height:33px; display:grid; place-items:center; border-radius:11px; background:rgba(0,215,255,.08); color:#42e2ff; }} .command-icon svg {{ width:17px; }}
@@ -2064,7 +2064,7 @@ async def dashboard(request: Request, err: str = ""):
       .activity-row {{ min-height:58px; display:grid; grid-template-columns:35px 1fr; align-items:center; gap:9px; padding:7px 16px; }} .activity-icon {{ width:34px; height:34px; display:grid; place-items:center; border-radius:50%; color:#0891b2; background:#ecfeff; position:relative; }} .activity-icon svg {{ width:15px; }} .activity-row strong,.activity-row small {{ display:block; }} .activity-row strong {{ font-size:9.5px; }} .activity-row small {{ color:var(--text-muted); font-size:8px; margin-top:3px; }} .empty-state {{ padding:38px 18px; color:var(--text-muted); text-align:center; font-size:10px; }}
       body.dark-mode .kpi-icon,body.dark-mode .table-product>span,body.dark-mode .rank-number {{ background:#172330; }} body.dark-mode .task-row,body.dark-mode .panel-header {{ border-color:#273244; }} body.dark-mode .status-success {{ background:rgba(34,197,94,.1); }} body.dark-mode .status-warning {{ background:rgba(245,158,11,.1); }} body.dark-mode .status-danger {{ background:rgba(239,68,68,.1); }}
       @media(max-width:1200px) {{ .kpi-grid {{ grid-template-columns:repeat(2,1fr); }} .three-column {{ grid-template-columns:1fr 1fr; }} .three-column>*:last-child {{ grid-column:1/-1; }} }}
-      @media(max-width:940px) {{ .two-column {{ grid-template-columns:1fr; }} .command-grid {{ grid-template-columns:repeat(7,155px); }} }}
+      @media(max-width:940px) {{ .two-column {{ grid-template-columns:1fr; }} .command-grid {{ grid-template-columns:none; grid-auto-flow:column; grid-auto-columns:155px; }} }}
       /* فاز ۵: حالت Classic — مرکز فرمان روشن و ساده */
       body.sl-classic .command-center {{ background:#FFFFFF !important; box-shadow:0 1px 4px rgba(0,0,0,.06) !important; border:1px solid #E5E7EB !important; }}
       body.sl-classic .command-center::before {{ display:none !important; }}
@@ -12911,7 +12911,7 @@ async def iphone_prices_page(request: Request, flash: str = "", edit: str = ""):
     """صفحهٔ مستقل و ساده فقط برای ثبت/ویرایش/حذف قیمت — یک فرم واحد با دراپ‌داون‌های
     آبشاری (مدل → ظرفیت → رنگ/پارت/سری اصالت چند‌انتخابی) بالای صفحه، و لیست تخت همهٔ
     قیمت‌های ثبت‌شده (شبیه لیست تیکت‌ها) پایینش — هر ردیف یعنی یک رکورد قیمت مستقل.
-    ادیت جدای صفحه نداره — طبق درخواست صریح مالک پروژه، زدن «✏️ ادیت» همین فرم بالا رو
+    ادیت جدای صفحه نداره — طبق درخواست صریح مالک پروژه، زدن «✏️ ویرایش» همین فرم بالا رو
     با تمام تنظیمات اون ردیف (مدل/ظرفیت/رنگ/پارت/سری اصالت/قیمت) از پیش پر می‌کنه، دقیقاً
     مثل زمان تعریف اولیه — با همون قابلیت چند‌انتخابی."""
     adm = _get_admin(request)
@@ -13020,7 +13020,7 @@ async def iphone_prices_page(request: Request, flash: str = "", edit: str = ""):
         <input type="text" inputmode="numeric" dir="ltr" name="fx_ref_rate" class="border rounded p-1.5 text-xs" placeholder="نرخ ارز مرجع (خالی=فعلی)">
         <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs">💾 ذخیره</button>
       </form>
-      <p class="text-[10px] text-gray-400 mt-2">چک‌باکس‌های خاکستری/خط‌خورده یعنی این ترکیب دقیق قبلاً برای همین ظرفیت ثبت شده — برای ویرایشش از لیست پایین «✏️ ادیت» بزن.</p>
+      <p class="text-[10px] text-gray-400 mt-2">چک‌باکس‌های خاکستری/خط‌خورده یعنی این ترکیب دقیق قبلاً برای همین ظرفیت ثبت شده — برای ویرایشش از لیست پایین «✏️ ویرایش» بزن.</p>
       <div class="flex flex-wrap gap-3 mt-4 pt-4 border-t" id="iv-p-toggles-row" style="display:none">
         <div class="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2 flex-1 min-w-[200px]" id="iv-p-colorpricing-wrap">
           <span class="text-xs text-gray-600 flex-1">🎨 اثر رنگ روی قیمت این مدل</span>
@@ -13300,7 +13300,7 @@ async def iphone_prices_page(request: Request, flash: str = "", edit: str = ""):
           <td class="px-3 py-2 text-xs whitespace-nowrap">{html.escape(c.get('grade_label') or '') or '—'}</td>
           <td class="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{fa_date(c['updated_at'] or '', with_time=True)}</td>
           <td class="px-3 py-2 whitespace-nowrap">
-            <a href="/admin/iphone/prices?edit={c['id']}#iv-p-editform" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded inline-block">✏️ ادیت</a>
+            <a href="/admin/iphone/prices?edit={c['id']}#iv-p-editform" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded inline-block">✏️ ویرایش</a>
             <button type="submit" form="iv-pd-{c['id']}" class="px-2 py-1 text-xs bg-red-50 text-red-500 border border-red-200 rounded mr-1">🗑 حذف</button>
           </td>
         </tr>"""
@@ -13353,7 +13353,7 @@ async def iphone_prices_upsert(request: Request):
     یه ترکیب دقیقاً از قبل برای یه ردیف *دیگه* (نه همون ردیفی که با edit_cap_id داریم
     ویرایشش می‌کنیم) ثبت شده باشه، **رد می‌شه و توی پیام نهایی گزارش می‌شه** — تا ادمین
     سهواً قیمت یه ترکیب موجود رو بدون اطلاع بازنویسی نکنه. برای عوض‌کردن قیمت یه ترکیب
-    از قبل ثبت‌شده، باید از دکمهٔ «✏️ ادیت» همون ردیف استفاده کرد (که edit_cap_id رو ست
+    از قبل ثبت‌شده، باید از دکمهٔ «✏️ ویرایش» همون ردیف استفاده کرد (که edit_cap_id رو ست
     می‌کنه و دقیقاً همون ترکیب رو مجاز به آپدیت می‌کنه، نه رد)."""
     adm = _get_admin(request)
     guard = _require(adm, "ai_pricing")
