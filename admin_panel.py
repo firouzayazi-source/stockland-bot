@@ -11371,9 +11371,9 @@ async def growth_page(request: Request, flash: str = ""):
     <div class="grid md:grid-cols-2 gap-5 mb-5">
       <div class="card p-5">
         <h2 class="font-bold text-gray-700 mb-3">📣 کیت تبلیغاتی همکار</h2>
-        <label class="text-xs text-gray-500 block mb-1">متن آماده — متغیر: {{link}}</label>
+        <label class="text-xs text-gray-500 block mb-1">متن آماده — متغیرها: {{name}} (نام دعوت‌کننده)، {{link}} (اختیاری — لینک از قبل جدا هم فرستاده می‌شه)</label>
         <textarea name="pr_text" rows="6" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(pr.get('text',''))}</textarea>
-        <p class="text-xs text-gray-400 mt-2">این متن هم داخل ربات هم در اشتراک‌گذاری تلگرام/مینی‌اپ استفاده می‌شه — سطح اشتراک‌گذاری تلگرام متن ساده‌ست (بدون بولد/تگ HTML)، پس از تگ‌هایی مثل &lt;b&gt; استفاده نکنید؛ در غیر این صورت همون‌جا خام نمایش داده می‌شه.</p>
+        <p class="text-xs text-gray-400 mt-2">این متن هم داخل ربات هم در اشتراک‌گذاری تلگرام/مینی‌اپ استفاده می‌شه — سطح اشتراک‌گذاری تلگرام متن ساده‌ست (بدون بولد/تگ HTML)، پس از تگ‌هایی مثل &lt;b&gt; استفاده نکنید. لینک دعوت جدا از این متن هم به‌صورت خودکار همراه پیام فرستاده می‌شه؛ نیازی به نوشتن {{link}} داخل متن نیست مگه بخواید صراحتاً توی متن هم تکرار بشه.</p>
       </div>
       <div class="card p-5">
         <h2 class="font-bold text-gray-700 mb-3">🛍 فروشگاه Mini App</h2>
