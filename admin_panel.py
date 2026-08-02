@@ -5568,7 +5568,7 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
         <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center">
           <div class="text-3xl mb-2">📁</div>
           <div class="text-sm font-semibold text-gray-700 mb-1">آپلود فایل (TXT / CSV / Excel)</div>
-          <div class="text-xs text-gray-400 mb-4">هر خط یک آیتم — یا فایل CSV/Excel با ستون data/item/account</div>
+          <div class="text-xs text-gray-400 mb-4">TXT/CSV: هر خط یک آیتم (یا ستون data/item/account) — Excel: ردیف اول = عنوان ستون‌ها، هر ردیف بعدی یک محصول کامل (همهٔ ستون‌های اون ردیف با هم ترکیب می‌شن)</div>
           <input type="file" name="file" accept=".txt,.csv,.xlsx,.xlsm" required
             class="block w-full text-sm text-gray-600 mb-4 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
           <button type="submit"
@@ -5772,9 +5772,19 @@ async def feed_bulk_upload(request: Request, pid: int, background_tasks: Backgro
 
     fname_lower = (file.filename or "").lower()
     items = []
-    if fname_lower.endswith(".csv") or fname_lower.endswith(".xlsx") or fname_lower.endswith(".xlsm"):
-        # مسیر تازه (CSV/Excel) — از پارسر عمومی import_utils استفاده می‌کنه؛ ستون آیتم
-        # با چند اسم رایج تطبیق داده می‌شه، وگرنه اولین ستون موجود در ردیف.
+    if fname_lower.endswith(".xlsx") or fname_lower.endswith(".xlsm"):
+        # مسیر اختصاصی اکسل — طبق درخواست صریح مالک پروژه، جدا از CSV/TXT: ردیف اول
+        # هدر ستون‌هاست، هر ردیف بعدی یک محصول کامل که اطلاعاتش توی چند ستون (چپ به
+        # راست) پخش شده، نه یک ستون. هر ردیف به یک آیتم چندخطی «برچسب: مقدار» تبدیل
+        # می‌شه (دقیقاً فرمت *** ورودی متنی).
+        try:
+            from import_utils import parse_xlsx_labeled_items
+            items = parse_xlsx_labeled_items(raw)
+        except Exception:
+            return _redir(f"/admin/feed/{pid}?flash=خطا+در+خواندن+فایل")
+    elif fname_lower.endswith(".csv"):
+        # مسیر CSV — از پارسر عمومی import_utils استفاده می‌کنه؛ ستون آیتم با چند اسم
+        # رایج تطبیق داده می‌شه، وگرنه اولین ستون موجود در ردیف.
         try:
             from import_utils import parse_uploaded_rows, pick
             rows = parse_uploaded_rows(file.filename, raw)
