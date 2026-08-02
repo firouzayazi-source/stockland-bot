@@ -3641,13 +3641,14 @@ def cb_partner_ref_link(call):
     """🔗 نمای ادغام‌شده: لینک معرفی + آمار + متن تبلیغاتی آماده + اشتراک یک‌لمسی."""
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    from db import get_referral_stats_for, get_referral_settings, get_promo_settings
+    from db import get_referral_stats_for, get_referral_settings, get_promo_settings, get_user_full_name
     settings = get_referral_settings()
     stats    = get_referral_stats_for(uid)
     bot_username = _bot_username() or "your_bot"
     link = f"https://t.me/{bot_username}?start=ref_{uid}"
     reward = settings.get("reward_amount", 5000)
-    promo  = str(get_promo_settings().get("text") or "").format(link=link)
+    sender_name = (call.from_user.first_name or "").strip() or get_user_full_name(uid) or "یک دوست"
+    promo  = str(get_promo_settings().get("text") or "").format(link=link, name=sender_name)
 
     text = (
         f"🔗 <b>لینک معرفی و ابزار تبلیغ</b>\n\n"
@@ -3657,16 +3658,17 @@ def cb_partner_ref_link(call):
         f"📊 آمار تیم فروش شما:\n"
         f"• کل دعوت‌شده‌ها: <b>{stats['total']}</b>\n"
         f"• پاداش دریافتی: <b>{stats['total_reward']:,}</b> تومان\n\n"
-        f"📣 <b>متن آماده تبلیغ</b> (کپی یا فوروارد کنید):\n"
+        f"📣 <b>متن آماده تبلیغ</b> (برای ارسال دستی در سایر پیام‌رسان‌ها کپی کنید):\n"
         f"➖➖➖➖➖➖➖➖\n"
-        f"{promo}\n"
+        f"{promo}\n{link}\n"
         f"➖➖➖➖➖➖➖➖"
     )
     import urllib.parse as _up
-    # عمداً بدون پارامتر url= — تلگرام خودش مقدار url رو جدا بالای پیام اضافه می‌کنه
-    # و چون لینک از قبل داخل promo (متغیر {link}) جاسازی شده، اضافه‌کردنش اینجا هم
-    # باعث تکرار لینک در پیام نهایی می‌شد.
-    share_url = "https://t.me/share/url?text=" + _up.quote(promo)
+    # url= لازمه تا دکمه واقعاً شیت اشتراک‌گذاری بومی تلگرام رو باز کنه (بدونش، بعضی
+    # کلاینت‌ها این لینک رو به‌جای شیت اشتراک‌گذاری، مثل یه صفحهٔ وب معمولی باز می‌کنن).
+    # چون promo دیگه خودش {link} رو نداره (بالا، پاراگراف جدید)، ترکیب url=link با
+    # text=promo باعث تکرار لینک توی پیام نهایی نمی‌شه — دقیقاً یک‌بار دیده می‌شه.
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
@@ -7282,7 +7284,7 @@ def handle_admin_backup_restore_document(message):
 
 def _send_invite_view(chat_id, uid):
     """🎁 دعوت دوستان — برای همه کاربران: لینک + پاداش + متن آماده + اشتراک."""
-    from db import get_referral_settings, get_referral_stats_for, get_promo_settings
+    from db import get_referral_settings, get_referral_stats_for, get_promo_settings, get_user_full_name
     settings = get_referral_settings()
     try:
         stats = get_referral_stats_for(uid)
@@ -7297,7 +7299,8 @@ def _send_invite_view(chat_id, uid):
 
     if is_partner:
         link = f"https://t.me/{bot_username}?start=ref_{uid}"
-        promo = str(get_promo_settings().get("text") or "").format(link=link)
+        sender_name = get_user_full_name(uid) or stats.get("name") or "یک دوست"
+        promo = str(get_promo_settings().get("text") or "").format(link=link, name=sender_name)
         text = (
             "🔗 <b>لینک معرفی شما</b>\n\n"
             f"👤 {stats.get('name', 'همکار')} — <code>{uid}</code>\n\n"
@@ -7308,12 +7311,13 @@ def _send_invite_view(chat_id, uid):
             "💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
             f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
             + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
-            + "\n\n📣 متن آماده تبلیغ:\n➖➖➖➖➖➖➖➖\n"
-            + promo + "\n➖➖➖➖➖➖➖➖"
+            + "\n\n📣 متن آماده تبلیغ (برای ارسال دستی در سایر پیام‌رسان‌ها):\n➖➖➖➖➖➖➖➖\n"
+            + promo + "\n" + link + "\n➖➖➖➖➖➖➖➖"
         )
         import urllib.parse as _up
-        # عمداً بدون پارامتر url= — لینک از قبل داخل promo جاسازی شده (بخش ۳۱.۲ CLAUDE.md)
-        share_url = "https://t.me/share/url?text=" + _up.quote(promo)
+        # url= لازمه تا دکمه واقعاً شیت اشتراک‌گذاری بومی تلگرام رو باز کنه (بخش ۳۱.۳
+        # CLAUDE.md)؛ چون promo دیگه {link} رو نداره، تکراری هم پیش نمیاد.
+        share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
     else:
         # کاربر عادی: فقط معرفی ربات بدون لینک شخصی
         bot_link = f"https://t.me/{bot_username}"

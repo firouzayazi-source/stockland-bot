@@ -1423,9 +1423,10 @@ function _ptInvite(){
     var link=d.referral_link||'';
     var promo=d.promo_text||'';
     var stats=d.stats||{};
-    // عمداً بدون پارامتر url= — لینک از قبل داخل promo جاسازی شده (متغیر {link} سمت سرور)،
-    // اضافه‌کردنش اینجا هم باعث تکرار لینک در پیام نهایی می‌شد (بخش ۳۱.۲ CLAUDE.md)
-    var shareUrl='https://t.me/share/url?text='+encodeURIComponent(promo);
+    // url= لازمه تا دکمهٔ اشتراک‌گذاری واقعاً شیت بومی تلگرام رو باز کنه — بدونش بعضی
+    // کلاینت‌ها این لینک رو مثل یه صفحهٔ وب معمولی باز می‌کنن، نه شیت اشتراک‌گذاری
+    // (بخش ۳۱.۳ CLAUDE.md). چون promo دیگه {link} رو نداره (سمت سرور)، تکراری هم پیش نمیاد.
+    var shareUrl='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(promo);
     b2.innerHTML=_ptBackHtml()+
       '<div class="sl-ref-hero">'+
         '<div class="sl-ref-hero-ico">🎁</div>'+
@@ -1457,8 +1458,8 @@ function _ptInvite(){
         '<div class="sl-ref-step"><span class="sl-ref-step-n">۲</span><span class="sl-ref-step-t">دوستان شما عضو شوند</span></div>'+
         '<div class="sl-ref-step"><span class="sl-ref-step-n">۳</span><span class="sl-ref-step-t">از مزایا استفاده کنید</span></div>'+
       '</div>'+
-      (promo?('<div class="sl-ref-promo-title">📣 متن آماده تبلیغ</div>'+
-        '<div class="sl-ref-promo-box">'+nl2br(promo)+'</div>'):'');
+      (promo?('<div class="sl-ref-promo-title">📣 متن آماده تبلیغ (برای ارسال دستی در سایر پیام‌رسان‌ها)</div>'+
+        '<div class="sl-ref-promo-box">'+nl2br(promo+'\n'+link)+'</div>'):'');
     _ptWireBack();
     var cb=document.getElementById('pt-inv-copy-btn');
     if(cb)cb.addEventListener('click',function(){

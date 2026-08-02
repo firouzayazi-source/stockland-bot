@@ -696,9 +696,10 @@ async def api_me_invite(request: Request):
 
     settings = get_referral_settings()
     link = f"https://t.me/{username}?start=ref_{uid}"
-    from db import get_promo_settings
+    from db import get_promo_settings, get_user_full_name
     try:
-        promo_text = str(get_promo_settings().get("text") or "").format(link=link)
+        sender_name = get_user_full_name(uid) or "یک دوست"
+        promo_text = str(get_promo_settings().get("text") or "").format(link=link, name=sender_name)
     except Exception:
         promo_text = link
     return {
