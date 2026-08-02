@@ -11373,6 +11373,7 @@ async def growth_page(request: Request, flash: str = ""):
         <h2 class="font-bold text-gray-700 mb-3">📣 کیت تبلیغاتی همکار</h2>
         <label class="text-xs text-gray-500 block mb-1">متن آماده — متغیر: {{link}}</label>
         <textarea name="pr_text" rows="6" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(pr.get('text',''))}</textarea>
+        <p class="text-xs text-gray-400 mt-2">این متن هم داخل ربات هم در اشتراک‌گذاری تلگرام/مینی‌اپ استفاده می‌شه — سطح اشتراک‌گذاری تلگرام متن ساده‌ست (بدون بولد/تگ HTML)، پس از تگ‌هایی مثل &lt;b&gt; استفاده نکنید؛ در غیر این صورت همون‌جا خام نمایش داده می‌شه.</p>
       </div>
       <div class="card p-5">
         <h2 class="font-bold text-gray-700 mb-3">🛍 فروشگاه Mini App</h2>
