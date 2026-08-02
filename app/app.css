@@ -575,6 +575,53 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
 /* لینک «‹ بازگشت» بالای هر زیرصفحهٔ پنل همکاری — ناوبری تودرتو بدون بستن popup */
 .sl-pt-back{display:inline-flex;align-items:center;gap:2px;color:var(--br);font-size:13px;
  font-weight:700;margin-bottom:10px;text-decoration:none;padding:4px 0}
+
+/* ═══ صفحهٔ دعوت دوستان (Referral) — طراحی Premium، فقط UI/UX (۲۰۲۶-۰۸-۰۲) ═══ */
+.sl-ref-hero{text-align:center;padding:4px 4px 18px}
+.sl-ref-hero-ico{width:60px;height:60px;border-radius:50%;margin:0 auto 12px;
+ background:linear-gradient(135deg,#0A63FF,#7C3AED);display:flex;align-items:center;justify-content:center;
+ font-size:28px;box-shadow:0 8px 20px rgba(10,99,255,.28)}
+.sl-ref-hero-t{font-size:19px;font-weight:800;color:var(--ink)}
+.sl-ref-hero-s{font-size:12.5px;color:var(--mu);margin-top:6px;line-height:1.8;padding:0 10px}
+.sl-ref-card{position:relative;overflow:hidden;border-radius:24px;padding:20px 18px;margin-top:2px;
+ background:linear-gradient(135deg,#151B4D 0%,#2B3A8F 55%,#7C3AED 100%);color:#fff;
+ box-shadow:0 14px 30px rgba(76,29,220,.22);animation:slRefIn .45s ease both}
+@keyframes slRefIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.sl-ref-card::before{content:'';position:absolute;width:220px;height:220px;border-radius:50%;
+ background:radial-gradient(circle,rgba(255,255,255,.18),transparent 70%);top:-90px;left:-60px}
+.sl-ref-card::after{content:'';position:absolute;width:180px;height:180px;border-radius:50%;
+ background:radial-gradient(circle,rgba(255,255,255,.13),transparent 70%);bottom:-70px;right:-50px}
+.sl-ref-card-l{position:relative;z-index:1;font-size:12px;font-weight:700;opacity:.82}
+.sl-ref-link-box{position:relative;z-index:1;margin-top:8px;background:rgba(255,255,255,.14);
+ border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:12px 14px;font-size:12.5px;
+ direction:ltr;text-align:center;word-break:break-all;backdrop-filter:blur(6px)}
+.sl-ref-card-btns{position:relative;z-index:1;margin-top:14px;display:flex;flex-direction:column;gap:10px}
+.sl-ref-btn-primary{display:block;width:100%;box-sizing:border-box;padding:14px;border:none;border-radius:14px;
+ background:#fff;color:#151B4D;font-family:inherit;font-size:14.5px;font-weight:800;text-align:center;
+ text-decoration:none;cursor:pointer;transition:transform .15s,opacity .15s}
+.sl-ref-btn-primary:active{transform:scale(.97);opacity:.9}
+.sl-ref-btn-secondary{display:block;width:100%;box-sizing:border-box;padding:12.5px;border-radius:14px;
+ border:1.5px solid rgba(255,255,255,.35);background:rgba(255,255,255,.08);color:#fff;
+ font-family:inherit;font-size:13.5px;font-weight:700;text-align:center;cursor:pointer;
+ transition:transform .15s,opacity .15s}
+.sl-ref-btn-secondary:active{transform:scale(.97);opacity:.85}
+.sl-ref-stats{display:flex;gap:10px;margin:16px 0 0}
+.sl-ref-stat{flex:1;min-width:0;background:var(--card);border-radius:16px;padding:14px 6px;
+ text-align:center;box-shadow:var(--sh)}
+.sl-ref-stat-ico{font-size:18px;margin-bottom:6px}
+.sl-ref-stat-val{font-size:16.5px;font-weight:800;color:var(--ink);direction:ltr}
+.sl-ref-stat-label{font-size:10.5px;color:var(--mu);margin-top:3px;font-weight:600}
+.sl-ref-how{margin:18px 0 0;background:var(--card);border-radius:18px;padding:15px 16px 4px;box-shadow:var(--sh)}
+.sl-ref-how-title{font-size:13.5px;font-weight:800;color:var(--ink);margin-bottom:6px}
+.sl-ref-step{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:.5px solid var(--ln)}
+.sl-ref-step:last-child{border-bottom:0}
+.sl-ref-step-n{width:25px;height:25px;border-radius:50%;flex:none;direction:ltr;
+ background:linear-gradient(135deg,#0A63FF,#7C3AED);color:#fff;font-size:12px;font-weight:800;
+ display:flex;align-items:center;justify-content:center}
+.sl-ref-step-t{font-size:13px;font-weight:600;color:var(--ink)}
+.sl-ref-promo-title{margin:18px 0 8px;font-size:13px;font-weight:700;color:var(--mu)}
+.sl-ref-promo-box{background:var(--card);border-radius:14px;padding:14px 16px;box-shadow:var(--sh);
+ white-space:pre-wrap;font-size:12.5px;line-height:1.9;color:var(--ink)}
 /* ═══ برش عکس پروفایل ═══ */
 .sl-crop-view{width:240px;height:240px;border-radius:50%;overflow:hidden;position:relative;
  margin:4px auto 0;background:#111;touch-action:none;box-shadow:0 0 0 4000px rgba(0,0,0,.5)}

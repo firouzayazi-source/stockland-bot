@@ -1408,28 +1408,55 @@ function _ptTransfer(balance){
   if(ab)ab.addEventListener('click',function(){doTransfer({all:true})});
 }
 
-/* ─── دعوت و تبلیغ — لینک اختصاصی + متن آماده + اشتراک‌گذاری تلگرام، معادل
+/* ─── دعوت دوستان (Referral) — لینک اختصاصی + متن آماده + اشتراک‌گذاری تلگرام، معادل
    cb_partner_ref_link در بات. تنها راه دسترسی به لینک دعوت در مینی‌اپ همینه —
-   ردیف مستقل «دعوت دوستان» طبق دستور مالک پروژه از تب حساب حذف شده. ─── */
+   ردیف مستقل «دعوت دوستان» طبق دستور مالک پروژه از تب حساب حذف شده.
+   طراحی Premium-محور (۲۰۲۶-۰۸-۰۲): فقط UI/UX — همون /me/invite موجود، همون فیلدها
+   (referral_link/promo_text/stats.rewarded/stats.earned/stats.total)، بدون هیچ
+   API/دیتای تازه. ─── */
 function _ptInvite(){
-  _ptTitle('دعوت و تبلیغ');
+  _ptTitle('دعوت دوستان');
   var b=_accBody();if(!b)return;
-  b.innerHTML=_ptBackHtml()+skel(2);_ptWireBack();
+  b.innerHTML=_ptBackHtml()+skel(3);_ptWireBack();
   window._slApi('/me/invite',true).then(function(d){
     var b2=_accBody();if(!b2)return;
     var link=d.referral_link||'';
     var promo=d.promo_text||'';
+    var stats=d.stats||{};
     var shareUrl='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(promo);
     b2.innerHTML=_ptBackHtml()+
-      '<div style="text-align:center;padding:8px 0 4px"><span style="font-size:40px">🔗</span>'+
-      '<p style="margin:8px 0 0;font-size:13px;color:var(--mu)">لینک اختصاصی خودتون رو با مشتری‌ها و دوست‌ها به اشتراک بذارید</p></div>'+
-      '<div class="sl-pay-box" style="direction:ltr;text-align:center;word-break:break-all;font-size:12px">'+window._slEsc(link)+'</div>'+
-      '<div class="sl-checkout-btns"><button class="sl-checkout-btn sl-checkout-btn-wallet" id="pt-inv-copy-btn">📋 کپی لینک</button>'+
-      '<a class="sl-checkout-btn sl-checkout-btn-combined" style="text-decoration:none;box-sizing:border-box" href="'+esc(shareUrl)+'" target="_blank" rel="noopener">📤 ارسال به دوستان و گروه‌ها</a></div>'+
-      '<div class="sl-checkout-sec">📣 متن آماده تبلیغ</div>'+
-      '<div class="sl-pay-box" style="white-space:pre-wrap;font-size:12.5px;line-height:1.9">'+nl2br(promo)+'</div>'+
-      '<div class="sl-checkout-wallet" style="margin-top:14px"><div class="sl-checkout-wallet-info">جمع درآمد از دعوت</div>'+
-      '<div class="sl-checkout-wallet-bal">'+window._slFmt((d.stats&&d.stats.earned)||0)+' تومان</div></div>';
+      '<div class="sl-ref-hero">'+
+        '<div class="sl-ref-hero-ico">🎁</div>'+
+        '<div class="sl-ref-hero-t">دعوت دوستان</div>'+
+        '<div class="sl-ref-hero-s">دوستان خود را دعوت کنید و از مزایای ویژه بهره‌مند شوید</div>'+
+      '</div>'+
+      '<div class="sl-ref-card">'+
+        '<div class="sl-ref-card-l">🔗 لینک اختصاصی شما</div>'+
+        '<div class="sl-ref-link-box">'+window._slEsc(link)+'</div>'+
+        '<div class="sl-ref-card-btns">'+
+          '<a class="sl-ref-btn-primary" href="'+esc(shareUrl)+'" target="_blank" rel="noopener">🚀 اشتراک‌گذاری لینک دعوت</a>'+
+          '<button class="sl-ref-btn-secondary" id="pt-inv-copy-btn">📋 کپی لینک</button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="sl-ref-stats">'+
+        '<div class="sl-ref-stat"><div class="sl-ref-stat-ico">✅</div>'+
+          '<div class="sl-ref-stat-val">'+window._slFmt(stats.rewarded||0)+'</div>'+
+          '<div class="sl-ref-stat-label">دعوت موفق</div></div>'+
+        '<div class="sl-ref-stat"><div class="sl-ref-stat-ico">💰</div>'+
+          '<div class="sl-ref-stat-val">'+window._slFmt(stats.earned||0)+'</div>'+
+          '<div class="sl-ref-stat-label">پاداش دریافتی</div></div>'+
+        '<div class="sl-ref-stat"><div class="sl-ref-stat-ico">👥</div>'+
+          '<div class="sl-ref-stat-val">'+window._slFmt(stats.total||0)+'</div>'+
+          '<div class="sl-ref-stat-label">دعوت‌شده</div></div>'+
+      '</div>'+
+      '<div class="sl-ref-how">'+
+        '<div class="sl-ref-how-title">💡 چطور کار می‌کند؟</div>'+
+        '<div class="sl-ref-step"><span class="sl-ref-step-n">۱</span><span class="sl-ref-step-t">لینک خود را ارسال کنید</span></div>'+
+        '<div class="sl-ref-step"><span class="sl-ref-step-n">۲</span><span class="sl-ref-step-t">دوستان شما عضو شوند</span></div>'+
+        '<div class="sl-ref-step"><span class="sl-ref-step-n">۳</span><span class="sl-ref-step-t">از مزایا استفاده کنید</span></div>'+
+      '</div>'+
+      (promo?('<div class="sl-ref-promo-title">📣 متن آماده تبلیغ</div>'+
+        '<div class="sl-ref-promo-box">'+nl2br(promo)+'</div>'):'');
     _ptWireBack();
     var cb=document.getElementById('pt-inv-copy-btn');
     if(cb)cb.addEventListener('click',function(){
