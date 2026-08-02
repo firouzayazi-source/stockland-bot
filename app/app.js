@@ -1423,7 +1423,9 @@ function _ptInvite(){
     var link=d.referral_link||'';
     var promo=d.promo_text||'';
     var stats=d.stats||{};
-    var shareUrl='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(promo);
+    // عمداً بدون پارامتر url= — لینک از قبل داخل promo جاسازی شده (متغیر {link} سمت سرور)،
+    // اضافه‌کردنش اینجا هم باعث تکرار لینک در پیام نهایی می‌شد (بخش ۳۱.۲ CLAUDE.md)
+    var shareUrl='https://t.me/share/url?text='+encodeURIComponent(promo);
     b2.innerHTML=_ptBackHtml()+
       '<div class="sl-ref-hero">'+
         '<div class="sl-ref-hero-ico">🎁</div>'+
