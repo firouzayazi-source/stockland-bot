@@ -3663,7 +3663,10 @@ def cb_partner_ref_link(call):
         f"➖➖➖➖➖➖➖➖"
     )
     import urllib.parse as _up
-    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
+    # عمداً بدون پارامتر url= — تلگرام خودش مقدار url رو جدا بالای پیام اضافه می‌کنه
+    # و چون لینک از قبل داخل promo (متغیر {link}) جاسازی شده، اضافه‌کردنش اینجا هم
+    # باعث تکرار لینک در پیام نهایی می‌شد.
+    share_url = "https://t.me/share/url?text=" + _up.quote(promo)
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
@@ -7309,7 +7312,8 @@ def _send_invite_view(chat_id, uid):
             + promo + "\n➖➖➖➖➖➖➖➖"
         )
         import urllib.parse as _up
-        share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
+        # عمداً بدون پارامتر url= — لینک از قبل داخل promo جاسازی شده (بخش ۳۱.۲ CLAUDE.md)
+        share_url = "https://t.me/share/url?text=" + _up.quote(promo)
     else:
         # کاربر عادی: فقط معرفی ربات بدون لینک شخصی
         bot_link = f"https://t.me/{bot_username}"
