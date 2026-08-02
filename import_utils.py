@@ -76,6 +76,54 @@ def parse_uploaded_rows(filename: str, raw: bytes) -> list[dict]:
     return [{"raw": ln.strip()} for ln in lines]
 
 
+def parse_xlsx_labeled_items(raw: bytes) -> list[str]:
+    """
+    فرمت اختصاصی آپلود موجودی محصول از اکسل — با parse_uploaded_rows فرق داره:
+    ردیف اول = عنوان ستون‌ها (برچسب هر فیلد)، هر ردیف بعدی = **یک محصول کامل** که
+    اطلاعاتش به‌جای یک ستون، توی چند ستون (چپ به راست) پخش شده. هر ردیف به یک آیتم
+    چندخطی «برچسب: مقدار» تبدیل می‌شه — دقیقاً همون فرمتی که ورودی متنی *** ازش
+    پشتیبانی می‌کنه (هر آیتم می‌تونه چندخطی باشه)، طبق درخواست صریح مالک پروژه.
+
+    برخلاف parse_uploaded_rows، این‌جا متن اصلی هدر (بدون lower/تغییر) و ترتیب دقیق
+    ستون‌ها حفظ می‌شه — چون این متن مستقیم به خریدار تحویل داده می‌شه (کاربر داخل
+    <code> می‌بینتش)، هر تغییر ظاهری‌ای (حروف بزرگ/کوچک، ترتیب) توش قابل مشاهده‌ست.
+
+    ستون‌هایی که هدرشون خالیه، یا مقدارشون توی یه ردیف خاص خالیه، از اون خط رد می‌شن
+    (نه این‌که با برچسب مبهم مثل «col3:» نشون داده بشن).
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
+        return []
+    headers = [str(h).strip() if h is not None else "" for h in header_row]
+
+    def cell_str(v):
+        if v is None:
+            return ""
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        return str(v).strip()
+
+    items = []
+    for row in rows_iter:
+        if row is None or all(cell_str(v) == "" for v in row):
+            continue
+        lines = []
+        for i, h in enumerate(headers):
+            if not h:
+                continue
+            v = cell_str(row[i]) if i < len(row) else ""
+            if v:
+                lines.append(f"{h}: {v}")
+        if lines:
+            items.append("\n".join(lines))
+    return items
+
+
 def pick(row: dict, *keys: str, default: str = "") -> str:
     """اولین کلیدی که توی row مقدار غیرخالی داشت رو برمی‌گردونه — برای تطبیق نام
     ستون‌های مختلف (فارسی/انگلیسی) بدون نیاز به فرمت ثابت فایل ورودی."""
