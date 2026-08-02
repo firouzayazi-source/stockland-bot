@@ -4820,8 +4820,8 @@ def _iv_finalize(chat_id, uid):
     txt = (
         f"📱 <b>{result['model_name']} {result['capacity_label']}</b> "
         f"({html.escape(part_display)} · 🎨 {html.escape(color_display)} · 📡 {sim_label})\n\n"
-        f"💵 ارزش فروش کالا: <b>{result['market_price']:,}</b> تومان\n"
-        f"⚖️ قیمت منصفانه کالا: <b>{result['fair_price']:,}</b> تومان\n"
+        f"💵 ارزش نسخهٔ اصلی (آک، باتری ۹۵ تا ۱۰۰٪): <b>{result['market_price']:,}</b> تومان\n"
+        f"⚖️ قیمت منصفانه با شرایط دستگاه شما: <b>{result['fair_price']:,}</b> تومان\n"
         f"🏬 قیمت خرید فروشگاه از شما: <b>{result['buy_price']:,}</b> تومان\n\n"
         f"⭐️ امتیاز استوک‌لند: <b>{result['score']} از ۱۰۰</b>\n\n"
         f"{result['verdict_emoji']} <b>{result['verdict_text']}</b>\n\n"
