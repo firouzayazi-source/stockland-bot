@@ -1779,8 +1779,9 @@ def _input(name, placeholder="", value="", type_="text", required=False):
     req = "required" if required else ""
     return f'<input type="{type_}" name="{name}" value="{e(value)}" placeholder="{e(placeholder)}" {req}>'
 
-def _textarea(name, placeholder="", value="", rows=4):
-    return f'<textarea name="{name}" rows="{rows}" placeholder="{e(placeholder)}">{e(value)}</textarea>'
+def _textarea(name, placeholder="", value="", rows=4, ltr=False):
+    dir_attr = ' dir="ltr" style="text-align:left"' if ltr else ''
+    return f'<textarea name="{name}" rows="{rows}" placeholder="{e(placeholder)}"{dir_attr}>{e(value)}</textarea>'
 
 # ─────────────────────────── Login / Logout ────────────────────────────────
 
@@ -5503,7 +5504,7 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
         items_html += f"""
         <tr class="border-b hover:bg-gray-50 text-sm">
           <td class="px-4 py-2 text-gray-400 font-mono">#{item["id"]}</td>
-          <td class="px-4 py-2 font-mono text-xs truncate max-w-xs">{e(preview)}{dup_badge}</td>
+          <td class="px-4 py-2 font-mono text-xs truncate max-w-xs" dir="ltr" style="text-align:left">{e(preview)}{dup_badge}</td>
           <td class="px-4 py-2">{badge}</td>
           <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(item["created_at"] or "")}</td>
           <td class="px-4 py-2 flex gap-1">
@@ -5569,6 +5570,10 @@ async def feed_detail(request: Request, pid: int, page: int=0, flash: str=""):
           <div class="text-3xl mb-2">📁</div>
           <div class="text-sm font-semibold text-gray-700 mb-1">آپلود فایل (TXT / CSV / Excel)</div>
           <div class="text-xs text-gray-400 mb-4">TXT/CSV: هر خط یک آیتم (یا ستون data/item/account) — Excel: ردیف اول = عنوان ستون‌ها، هر ردیف بعدی یک محصول کامل (همهٔ ستون‌های اون ردیف با هم ترکیب می‌شن)</div>
+          <div class="text-right mb-3">
+            <label class="text-xs text-gray-500 block mb-1">📝 توضیحات مشترک (اختیاری) — به انتهای هر آیتم این آپلود اضافه می‌شه</label>
+            {_textarea("common_suffix", "مثلاً: لطفاً پس از تحویل، Find My را از تنظیمات آیفون خاموش کنید.", rows=2)}
+          </div>
           <input type="file" name="file" accept=".txt,.csv,.xlsx,.xlsm" required
             class="block w-full text-sm text-gray-600 mb-4 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
           <button type="submit"
@@ -5815,6 +5820,14 @@ async def feed_bulk_upload(request: Request, pid: int, background_tasks: Backgro
                 if item:
                     items.append(item)
 
+    # توضیحات مشترک (اختیاری) — به انتهای هر آیتم همین آپلود اضافه می‌شه، مستقل از
+    # فرمت فایل (TXT/CSV/Excel)؛ طبق درخواست صریح مالک پروژه — مثلاً یادآوری خاموش
+    # کردن Find My برای هر اکانت اپل آیدی. فقط برای همین یک آپلود اعمال می‌شه، جایی
+    # ذخیره نمی‌شه.
+    common_suffix = str(form.get("common_suffix") or "").strip()
+    if common_suffix and items:
+        items = [f"{item}\n{common_suffix}" for item in items]
+
     if not items:
         return _redir(f"/admin/feed/{pid}?flash=فایل+خالی+است")
 
@@ -6053,7 +6066,7 @@ async def feed_item_edit_get(request: Request, fid: int, flash: str = ""):
       <form method="post" action="/admin/feed/item/{fid}/edit" class="space-y-4">
         <div>
           <label class="text-sm font-medium text-gray-700 block mb-1">محتوای آیتم</label>
-          {_textarea("data", "", str(item["data"] or ""), rows=6)}
+          {_textarea("data", "", str(item["data"] or ""), rows=6, ltr=True)}
         </div>
         <div class="flex items-center gap-3">
           <label class="text-sm font-medium text-gray-700">تحویل داده شده</label>
