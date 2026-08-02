@@ -1423,10 +1423,11 @@ function _ptInvite(){
     var link=d.referral_link||'';
     var promo=d.promo_text||'';
     var stats=d.stats||{};
-    // عمداً بدون url= — طبق دستور صریح مالک پروژه لینک باید پایین متن دیده بشه، نه
-    // بالای پیام (جایی که تلگرام url= رو خودکار می‌ذاره)؛ promo از قبل {link} رو
-    // در انتها داره (سمت سرور resolve می‌شه).
-    var shareUrl='https://t.me/share/url?text='+encodeURIComponent(promo);
+    // الگوی استاندارد/رسمی دکمهٔ اشتراک‌گذاری تلگرام: url= (خودِ لینک) + text= (کپشن) —
+    // تنها ترکیبی که همهٔ کلاینت‌های تلگرام رو مطمئن مجبور به باز کردن شیت اشتراک‌گذاری
+    // بومی می‌کنه، نه بازشدن مثل یه صفحهٔ وب معمولی (بخش ۳۱.۵ CLAUDE.md). چون promo
+    // سمت سرور دیگه {link} رو نداره، تکراری هم پیش نمیاد.
+    var shareUrl='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(promo);
     b2.innerHTML=_ptBackHtml()+
       '<div class="sl-ref-hero">'+
         '<div class="sl-ref-hero-ico">🎁</div>'+

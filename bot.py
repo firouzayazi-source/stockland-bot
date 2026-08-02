@@ -3657,16 +3657,19 @@ def cb_partner_ref_link(call):
         f"📊 آمار تیم فروش شما:\n"
         f"• کل دعوت‌شده‌ها: <b>{stats['total']}</b>\n"
         f"• پاداش دریافتی: <b>{stats['total_reward']:,}</b> تومان\n\n"
-        f"📣 <b>متن آماده تبلیغ</b> (کپی یا فوروارد کنید):\n"
+        f"🔗 لینک اختصاصی شما:\n<code>{link}</code>\n\n"
+        f"📣 <b>متن آماده تبلیغ</b>:\n"
         f"➖➖➖➖➖➖➖➖\n"
         f"{promo}\n"
         f"➖➖➖➖➖➖➖➖"
     )
     import urllib.parse as _up
-    # عمداً بدون پارامتر url= — طبق دستور صریح مالک پروژه، لینک باید همون‌جایی که توی
-    # متن قرار داره (پایین) دیده بشه، نه بالای پیام (جایی که تلگرام url= رو خودکار
-    # می‌ذاره). چون promo از قبل خودش {link} رو در انتها داره، همین کافیه.
-    share_url = "https://t.me/share/url?text=" + _up.quote(promo)
+    # الگوی استاندارد/رسمی دکمهٔ اشتراک‌گذاری تلگرام: url= (خودِ لینک) + text= (کپشن).
+    # این تنها ترکیبی‌ه که همهٔ کلاینت‌های تلگرام رو مطمئن مجبور به باز کردن شیت
+    # اشتراک‌گذاری بومی می‌کنه (بدون url=، بعضی کلاینت‌ها این لینک رو مثل صفحهٔ وب
+    # معمولی باز می‌کنن). چون promo دیگه خودش {link} رو نداره (بالا)، هیچ تکراری
+    # پیش نمیاد — دقیقاً یک لینک، بالای پیام، از پارامتر url=.
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="partner_back"))
@@ -7308,14 +7311,14 @@ def _send_invite_view(chat_id, uid):
             "💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
             f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
             + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
+            + f"\n\n🔗 لینک اختصاصی شما:\n<code>{link}</code>"
             + "\n\n📣 متن آماده تبلیغ:\n➖➖➖➖➖➖➖➖\n"
             + promo + "\n➖➖➖➖➖➖➖➖"
         )
         import urllib.parse as _up
-        # عمداً بدون url= — طبق دستور صریح مالک پروژه لینک باید پایین متن دیده بشه،
-        # نه بالای پیام (جایی که تلگرام url= رو خودکار می‌ذاره). promo از قبل {link}
-        # رو در انتها داره.
-        share_url = "https://t.me/share/url?text=" + _up.quote(promo)
+        # الگوی استاندارد دکمهٔ اشتراک‌گذاری تلگرام: url= (بخش ۳۱.۵ CLAUDE.md) — تنها
+        # ترکیبی که در همهٔ کلاینت‌ها شیت اشتراک‌گذاری بومی رو تضمین می‌کنه.
+        share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
     else:
         # کاربر عادی: فقط معرفی ربات بدون لینک شخصی
         bot_link = f"https://t.me/{bot_username}"

@@ -11371,9 +11371,9 @@ async def growth_page(request: Request, flash: str = ""):
     <div class="grid md:grid-cols-2 gap-5 mb-5">
       <div class="card p-5">
         <h2 class="font-bold text-gray-700 mb-3">📣 کیت تبلیغاتی همکار</h2>
-        <label class="text-xs text-gray-500 block mb-1">متن آماده — متغیر: {{link}} (لینک دعوت — دقیقاً همون‌جایی که توی متن قرارش می‌دید نمایش داده می‌شه، مثلاً انتهای متن)</label>
+        <label class="text-xs text-gray-500 block mb-1">متن آماده — کپشن دعوت (لینک به‌صورت خودکار و جداگانه همراه پیام فرستاده می‌شه، نیازی به نوشتنش توی متن نیست)</label>
         <textarea name="pr_text" rows="6" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" dir="rtl">{e(pr.get('text',''))}</textarea>
-        <p class="text-xs text-gray-400 mt-2">این متن هم داخل ربات هم در اشتراک‌گذاری تلگرام/مینی‌اپ استفاده می‌شه — سطح اشتراک‌گذاری تلگرام متن ساده‌ست (بدون بولد/تگ HTML)، پس از تگ‌هایی مثل &lt;b&gt; استفاده نکنید. حتماً {{link}} رو جایی توی متن بذارید (پیشنهاد: انتهای متن) — بدونش دعوت‌شده لینک عضویت رو نمی‌بینه.</p>
+        <p class="text-xs text-gray-400 mt-2">این متن هم داخل ربات هم در اشتراک‌گذاری تلگرام/مینی‌اپ استفاده می‌شه — سطح اشتراک‌گذاری تلگرام متن ساده‌ست (بدون بولد/تگ HTML)، پس از تگ‌هایی مثل &lt;b&gt; استفاده نکنید. متغیر اختیاری {{link}} هم در دسترسه اگه صراحتاً بخواید لینک رو داخل خود متن هم بیارید.</p>
       </div>
       <div class="card p-5">
         <h2 class="font-bold text-gray-700 mb-3">🛍 فروشگاه Mini App</h2>
