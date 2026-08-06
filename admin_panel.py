@@ -1316,7 +1316,7 @@ def _layout(title: str, body: str, admin_info=None,
     .chat-row--user {{ justify-content:flex-start; }}
     .chat-col {{ max-width:80%; }}
     .chat-bubble {{ padding:10px 14px; font-size:13.5px; word-break:break-word; white-space:pre-wrap; }}
-    .chat-bubble--admin {{ background:var(--clr-primary); color:#fff; border-radius:18px 4px 18px 18px; box-shadow:0 1px 2px rgba(0,0,0,.1); }}
+    .chat-bubble--admin {{ background:var(--primary); color:#fff; border-radius:18px 4px 18px 18px; box-shadow:0 1px 2px rgba(0,0,0,.1); }}
     .chat-bubble--user {{ background:var(--bg-card); border:1px solid var(--bdr); border-radius:4px 18px 18px 18px; box-shadow:0 1px 2px rgba(0,0,0,.06); }}
     body.sl-dark .chat-bubble--user, body.dark-mode .chat-bubble--user {{ background:#1B2530; border-color:#2B3A4C; }}
     .chat-meta {{ font-size:10px; color:#aaa; margin-top:3px; }}
