@@ -1368,6 +1368,28 @@ def safe_int(text):
         return None
 
 
+# جداکنندهٔ هزارگان رایج در ورودی مبلغ کاربر — لاتین (,)، عربی (٬ U+066C)، عربی (، U+060C).
+# رقم فارسی/عربی نیازی به تبدیل دستی نداره — int() پایتون خودش از هر رقم یونیکد دستهٔ Nd
+# (هم ۰۱۲۳۴۵۶۷۸۹ فارسی هم ٠١٢٣٤٥٦٧٨٩ عربی) پشتیبانی می‌کنه؛ فقط جداکننده باید حذف بشه.
+_AMOUNT_SEPARATORS = str.maketrans("", "", ",،٬")
+
+
+def parse_amount(text) -> int | None:
+    """مبلغ وارد‌شدهٔ کاربر رو به int تبدیل می‌کنه — صرف‌نظر از رقم فارسی/عربی/لاتین و
+    جداکنندهٔ هزارگان. قبلاً هر هندلر مبلغ (شارژ کیف‌پول/کارت‌به‌کارت/رمزارز) یه زیرمجموعهٔ
+    ناقص و متفاوت از این سه جداکننده رو دستی strip می‌کرد (بخش ۷ CLAUDE.md) — الان هر سه
+    از همین یه تابع استفاده می‌کنن."""
+    if text is None:
+        return None
+    cleaned = str(text).strip().translate(_AMOUNT_SEPARATORS)
+    if not cleaned:
+        return None
+    try:
+        return int(cleaned)
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_feed_bulk_items(raw: str) -> list[str]:
     """Parse admin bulk feed input."""
     raw = raw or ""
@@ -1522,8 +1544,7 @@ def process_wallet_charge_amount(message):
         bot.send_message(message.chat.id, "عملیات شارژ لغو شد.", reply_markup=main_menu(user_id=uid))
         return
 
-    text_clean = text.replace(",", "").replace("،", "")
-    amount = safe_int(text_clean)
+    amount = parse_amount(text)
 
     if amount is None:
         bot.reply_to(message, tf("MSG_WALLET_AMOUNT_INVALID"))
@@ -7114,11 +7135,10 @@ def handle_callbacks(call: types.CallbackQuery):
 )
 def handle_card2card_amount(message):
     uid = message.from_user.id
-    txt = (message.text or "").strip().replace(",", "").replace("٬", "")
-    if not txt.isdigit() or int(txt) < 1000:
+    amount = parse_amount(message.text)
+    if amount is None or amount < 1000:
         bot.reply_to(message, "❌ مبلغ نامعتبر — حداقل ۱,۰۰۰ تومان.\nدوباره وارد کنید:")
         return
-    amount = int(txt)
     user_states[uid] = {"mode": "card2card_receipt", "amount": amount}
     from db import get_card2card_settings
     c2c = get_card2card_settings()
@@ -7396,15 +7416,15 @@ def cb_crypto_network(call):
 def handle_crypto_amount(message):
     uid = message.from_user.id
     st = user_states.get(uid, {})
-    raw = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "")
-    if not raw.isdigit() or int(raw) <= 0:
+    amount = parse_amount(message.text)
+    if amount is None or amount <= 0:
         bot.reply_to(message, "❌ مبلغ نامعتبر است. یک عدد به تومان وارد کنید:")
         return
-    st["amount"] = int(raw)
+    st["amount"] = amount
     st["mode"] = "crypto_txid"
     user_states[uid] = st
     bot.reply_to(message,
-        f"مبلغ: <b>{int(raw):,}</b> تومان ✅\n\n"
+        f"مبلغ: <b>{amount:,}</b> تومان ✅\n\n"
         "حالا <b>TXID</b> (هش تراکنش) را ارسال کنید:", parse_mode="HTML")
 
 

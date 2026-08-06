@@ -57,6 +57,15 @@ function formatBody(s){
   return t.replace(/\r?\n/g,'<br>');
 }
 function fmt(n){return Number(n).toLocaleString('fa-IR')}
+/* تبدیل ارقام فارسی/عربی به لاتین + حذف جداکننده‌ها — هر ورودی عددی/مبلغ کاربر باید از
+   این عبور کنه، نه مستقیم replace(/[^0-9]/g,'')، وگرنه تایپ با کیبورد فارسی (۱۰۰۰۰) کلاً
+   خالی می‌شه (ارقام فارسی توی بازهٔ 0-9 اسکی نیستن، پس با اون رجکس مستقیم حذف می‌شدن). */
+function digitsOnly(s){
+  s=String(s==null?'':s);
+  s=s.replace(/[۰-۹]/g,function(d){return String(d.charCodeAt(0)-1776)});
+  s=s.replace(/[٠-٩]/g,function(d){return String(d.charCodeAt(0)-1632)});
+  return s.replace(/[^0-9]/g,'');
+}
 function starsHtml(avg,count,size){
   if(!count)return '';
   var full=Math.round(avg||0);
@@ -1040,7 +1049,7 @@ function startCharge(){
   var inp=document.getElementById('charge-amount');
   var nb=document.getElementById('charge-next-btn');
   function goNext(){
-    var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
+    var amount=parseInt(digitsOnly(inp.value),10);
     if(!amount||amount<10000){window._slApp.dialog.alert('حداقل مبلغ شارژ ۱۰٬۰۰۰ تومان است','خطا');return}
     showPaymentMethods(amount);
   }
@@ -1400,7 +1409,7 @@ function _ptTransfer(balance){
   }
   var sb=document.getElementById('pt-tr-submit-btn');
   if(sb)sb.addEventListener('click',function(){
-    var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
+    var amount=parseInt(digitsOnly(inp.value),10);
     if(!amount||amount<=0){window._slApp.dialog.alert('مبلغ رو وارد کنید','خطا');return}
     doTransfer({amount:amount});
   });
@@ -1498,7 +1507,7 @@ function renderPayoutBankForm(info){
   var sb=document.getElementById('pb-save-btn');
   if(sb)sb.addEventListener('click',function(){
     var full_name=(document.getElementById('pb-name').value||'').trim();
-    var card_number=(document.getElementById('pb-card').value||'').replace(/[^0-9]/g,'');
+    var card_number=digitsOnly(document.getElementById('pb-card').value);
     var iban=(document.getElementById('pb-iban').value||'').trim();
     if(full_name.length<3){window._slApp.dialog.alert('نام صاحب حساب رو کامل وارد کنید','خطا');return}
     if(card_number.length<16){window._slApp.dialog.alert('شمارهٔ کارت باید ۱۶ رقم باشه','خطا');return}
@@ -1531,7 +1540,7 @@ function renderPayoutAmountForm(info){
   _ptWireBack(_ptWallet);
   var inp=document.getElementById('po-amount'),sb=document.getElementById('po-submit-btn');
   if(sb)sb.addEventListener('click',function(){
-    var amount=parseInt((inp.value||'').replace(/[^0-9]/g,''),10);
+    var amount=parseInt(digitsOnly(inp.value),10);
     if(!amount||amount<=0){window._slApp.dialog.alert('مبلغ رو وارد کنید','خطا');return}
     sb.disabled=true;sb.textContent='در حال ثبت…';
     fetch('/api/v1/partner/payout',{
