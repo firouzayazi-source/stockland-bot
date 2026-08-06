@@ -7545,6 +7545,42 @@ def _tg_send_photo(chat_id: int, photo_url: str, caption: str = "",
         return False
 
 
+def _tg_send_document(chat_id: int, file_bytes: bytes, filename: str, caption: str = "",
+                       as_photo: bool = False, reply_markup: dict | None = None) -> dict:
+    """آپلود مستقیم فایل/عکس (بایت خام، نه URL) به تلگرام — برای ارسال پیوست ادمین از پنل.
+    برمی‌گردونه {"ok": bool, "file_id": str|None} — file_id برای ذخیره در ticket_messages لازمه
+    تا بعداً همون الگوی پروکسی/دانلود موجود (بخش ۳۴ CLAUDE.md) روش کار کنه."""
+    token = _env("BOT_TOKEN")
+    if not token:
+        return {"ok": False, "file_id": None}
+    method = "sendPhoto" if as_photo else "sendDocument"
+    field = "photo" if as_photo else "document"
+    try:
+        data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup)
+        r = _requests.post(
+            f"https://api.telegram.org/bot{token}/{method}",
+            data=data,
+            files={field: (filename, file_bytes)},
+            timeout=30,
+        )
+        j = r.json()
+        if not j.get("ok"):
+            _tg_logger.error("Telegram %s failed: %s", method, str(j)[:300])
+            return {"ok": False, "file_id": None}
+        result = j.get("result", {})
+        if as_photo:
+            photos = result.get("photo") or []
+            fid = photos[-1]["file_id"] if photos else None
+        else:
+            fid = (result.get("document") or {}).get("file_id")
+        return {"ok": True, "file_id": fid}
+    except Exception as ex:
+        _tg_logger.exception("_tg_send_document error: %s", ex)
+        return {"ok": False, "file_id": None}
+
+
 def _tg_delete_message(chat_id: int, message_id: int) -> bool:
     """حذف یک پیام از چت کاربر (برای برگشت محصول)."""
     token = _env("BOT_TOKEN")
@@ -8188,14 +8224,20 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
     if not is_closed:
         reply_form = f"""
         <div class="card p-4 mt-4">
-          <form method="post" action="/admin/tickets/{tid}/reply" id="reply-form">
+          <form method="post" action="/admin/tickets/{tid}/reply" id="reply-form" enctype="multipart/form-data">
             <div class="mb-3">
               <label class="text-xs text-gray-500 block mb-1">
                 پاسخ به کاربر <code class="bg-gray-100 px-1 rounded">{user_id_val}</code>
               </label>
-              <textarea name="text" id="reply-text" rows="3" required
-                placeholder="متن پاسخ را بنویسید..."
+              <textarea name="text" id="reply-text" rows="3"
+                placeholder="متن پاسخ را بنویسید (در صورت پیوست فایل، اختیاری است)..."
                 class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-300"></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="text-xs text-gray-500 block mb-1">📎 پیوست عکس/فایل (اختیاری)</label>
+              <input type="file" name="attachment" id="reply-attachment"
+                accept="image/*,.pdf,.doc,.docx,.zip,.rar,.txt,.xlsx,.xls"
+                class="w-full border border-gray-200 rounded-xl px-3 py-1.5 text-xs">
             </div>
             <div class="flex justify-between items-center">
               <span class="text-xs text-gray-300">Ctrl+Enter برای ارسال سریع</span>
@@ -8446,7 +8488,8 @@ async def ticket_deliver_product(request: Request, tid: int):
 
 
 @router.post("/tickets/{tid}/reply")
-async def ticket_reply(request: Request, tid: int, text: str = Form("")):
+async def ticket_reply(request: Request, tid: int, text: str = Form(""),
+                        attachment: UploadFile = None):
     adm = _get_admin(request)
     if not adm:
         return _redir("/admin/login")
@@ -8454,8 +8497,22 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
     if guard: return guard
 
     text = text.strip()
-    if not text:
-        return _redir(f"/admin/tickets/{tid}?flash=متن+خالی+است")
+    has_attachment = bool(attachment and attachment.filename)
+    if not text and not has_attachment:
+        return _redir(f"/admin/tickets/{tid}?flash=متن+یا+پیوست+لازم+است")
+
+    attach_bytes = None
+    attach_name = None
+    as_photo = False
+    if has_attachment:
+        try:
+            attach_bytes = await attachment.read()
+        except Exception:
+            return _redir(f"/admin/tickets/{tid}?flash=خطا+در+خواندن+فایل+پیوست")
+        if not attach_bytes:
+            return _redir(f"/admin/tickets/{tid}?flash=فایل+پیوست+خالی+است")
+        attach_name = attachment.filename
+        as_photo = (attachment.content_type or "").startswith("image/")
 
     conn = _db()
     try:
@@ -8463,8 +8520,10 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
             "SELECT user_id, status FROM tickets WHERE id=? LIMIT 1;", (tid,)
         ).fetchone()
         if not ticket:
+            conn.close()
             return _redir("/admin/tickets?flash=تیکت+یافت+نشد")
         if ticket["status"] == "closed":
+            conn.close()
             return _redir(f"/admin/tickets/{tid}?flash=تیکت+بسته+است")
         user_id = int(ticket["user_id"])
 
@@ -8478,21 +8537,57 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
                 conn.execute(f"ALTER TABLE ticket_messages ADD COLUMN {col} {typedef};")
             except Exception:
                 pass
+        try:
+            conn.execute("ALTER TABLE ticket_messages ADD COLUMN file_name TEXT;")
+        except Exception:
+            pass
+    except Exception as ex:
+        conn.close()
+        _tg_logger.error("ticket_reply migration error: %s", ex)
+        return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)}")
 
-        # ذخیره در ticket_messages
+    # ─── ارسال به کاربر از طریق Telegram API — با دکمه «ادامه گفتگو» ────────
+    continue_kb = {
+        "inline_keyboard": [[
+            {"text": "💬 ادامه گفتگو", "callback_data": f"ticket_v2_continue_{tid}"}
+        ]]
+    }
+    token = _env("BOT_TOKEN", "")
+    ok = False
+    tg_file_id = None
+    media_type = None
+
+    if has_attachment:
+        caption = f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid}):\n\n{html.escape(text)}" if text else f"💬 <b>پیوست پشتیبانی</b> (تیکت #{tid})"
+        res = await run_in_threadpool(
+            _tg_send_document, user_id, attach_bytes, attach_name, caption, as_photo, continue_kb
+        )
+        ok = res.get("ok", False)
+        tg_file_id = res.get("file_id")
+        media_type = "photo" if as_photo else "document"
+    else:
+        msg_text = f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid}):\n\n{html.escape(text)}"
+        try:
+            r = await run_in_threadpool(
+                _requests.post,
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": user_id, "text": msg_text,
+                      "parse_mode": "HTML", "reply_markup": continue_kb},
+                timeout=8
+            )
+            ok = r.json().get("ok", False)
+        except Exception:
+            ok = await run_in_threadpool(_tg_send, user_id, msg_text)
+
+    # ─── ذخیره در ticket_messages (بعد از تلاش ارسال، تا media_file_id واقعی رو داشته باشیم) ──
+    try:
         now = datetime.now().isoformat()
-        # بررسی وجود ستون source
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(ticket_messages);").fetchall()]
-        if "source" in cols:
-            conn.execute(
-                "INSERT INTO ticket_messages (ticket_id, sender, text, source, created_at) VALUES (?,?,?,?,?);",
-                (tid, "admin", text, "panel", now)
-            )
-        else:
-            conn.execute(
-                "INSERT INTO ticket_messages (ticket_id, sender, text, created_at) VALUES (?,?,?,?);",
-                (tid, "admin", text, now)
-            )
+        stored_text = text if text else f"[{media_type or 'text'}]"
+        conn.execute(
+            "INSERT INTO ticket_messages (ticket_id, sender, text, media_type, media_file_id, file_name, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?);",
+            (tid, "admin", stored_text, media_type, tg_file_id, attach_name, "panel", now)
+        )
 
         # آپدیت وضعیت تیکت
         ticket_cols = [r[1] for r in conn.execute("PRAGMA table_info(tickets);").fetchall()]
@@ -8511,31 +8606,6 @@ async def ticket_reply(request: Request, tid: int, text: str = Form("")):
         return _redir(f"/admin/tickets/{tid}?flash=خطای+پایگاه+داده:+{str(ex)}")
     finally:
         conn.close()
-
-    # ارسال به کاربر از طریق Telegram API — با دکمه «ادامه گفتگو»
-    msg_text = f"💬 <b>پاسخ پشتیبانی</b> (تیکت #{tid}):\n\n{html.escape(text)}"
-    continue_kb = {
-        "inline_keyboard": [[
-            {"text": "💬 ادامه گفتگو", "callback_data": f"ticket_v2_continue_{tid}"}
-        ]]
-    }
-    import json as _json
-    token = _env("BOT_TOKEN", "")
-    ok = False
-    if token:
-        try:
-            r = await run_in_threadpool(
-                _requests.post,
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": user_id, "text": msg_text,
-                      "parse_mode": "HTML", "reply_markup": continue_kb},
-                timeout=8
-            )
-            ok = r.json().get("ok", False)
-        except Exception:
-            ok = await run_in_threadpool(_tg_send, user_id, msg_text)
-    else:
-        ok = await run_in_threadpool(_tg_send, user_id, msg_text)
 
     if ok:
         _log(request, "پاسخ تیکت", "تیکت‌ها", f"ticket #{tid}")
