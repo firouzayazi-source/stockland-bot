@@ -807,6 +807,8 @@ def create_order(user_id: int, category: str, title: str, price: int, product_id
 
 
 def get_recent_orders_by_user(user_id: int, limit: int = 10):
+    """۵ خرید آخر برای «🛒 خریدهای من» — سفارش‌های برگشت‌خورده مثل بقیهٔ لیست‌های
+    مشابه پروژه (get_user_orders) از دید کاربر مخفی می‌مانند (قانون ۷ پروژه)."""
     conn = _get_connection()
     try:
         cur = conn.cursor()
@@ -815,6 +817,7 @@ def get_recent_orders_by_user(user_id: int, limit: int = 10):
             SELECT id, title, price, created_at
             FROM orders
             WHERE CAST(user_id AS INTEGER) = ?
+              AND COALESCE(status,'active') != 'returned'
             ORDER BY id DESC
             LIMIT ?;
             """,
@@ -2598,6 +2601,19 @@ def order_mark_returned_advanced(
 
         now = _dt.utcnow().isoformat()
         conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;", (now, order_id))
+
+        # بستن تیکت(های) راه‌اندازی محصول وابسته به این سفارش — طبق درخواست صریح
+        # مالک پروژه («وقتی محصول عودت میخوره باید از صفحه چت هم پاک بشه انگار
+        # اصلا نخریده»). محتوای قدیمی تیکت (مثلاً اطلاعات اکانتی که قبلاً تحویل
+        # داده شده) دست‌نخورده در دیتابیس می‌مونه (برای ادمین/تاریخچه)، ولی بستن
+        # تیکت یعنی کاربر دیگه نمی‌تونه از طریق دکمهٔ «💬 ادامه گفتگو»/«ارسال
+        # اطلاعات» قدیمی وارد اون مکالمه بشه — همون مسیر استانداردی که برای هر
+        # تیکت بستهٔ دیگه از قبل در _ticket_v2_handle_user_message رعایت می‌شه.
+        conn.execute(
+            "UPDATE tickets SET status='closed', closed_at=?, updated_at=? "
+            "WHERE order_id=? AND status != 'closed';",
+            (now, now, order_id)
+        )
         conn.commit()
 
         return {
@@ -2687,6 +2703,13 @@ def exchange_order(
 
         now = datetime.utcnow().isoformat()
         cur.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;", (now, old_order_id))
+
+        # بستن تیکت راه‌اندازی محصولِ سفارش قدیم — دقیقاً همون منطق order_mark_returned_advanced
+        cur.execute(
+            "UPDATE tickets SET status='closed', closed_at=?, updated_at=? "
+            "WHERE order_id=? AND status != 'closed';",
+            (now, now, old_order_id)
+        )
 
         # سفارش جدید
         cur.execute(
