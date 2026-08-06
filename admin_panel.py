@@ -102,6 +102,7 @@ ALL_PERMISSIONS = {
     "mini_app":   "مینی اپ",
     "panel_appearance": "ظاهر و قالب پنل",
     "notifications": "اعلان‌ها و تعامل کاربر (چک‌این/امتیازها)",
+    "cache_cleanup": "پاکسازی کش و فایل‌های موقت",
 }
 
 # سازگاری با ادمین‌های قدیمی: کلید جدید ← والد قدیمی — یعنی ادمینی که قبلاً «والد» رو
@@ -123,6 +124,7 @@ PERM_LEGACY = {
     "mini_app": "settings",
     "panel_appearance": "settings",
     "notifications": "settings",
+    "cache_cleanup": "database",
 }
 
 # ─────────────────────────── DB Schema for Admins ──────────────────────────
@@ -653,6 +655,7 @@ def _layout(title: str, body: str, admin_info=None,
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
+            {nav_item("/admin/system-cache", "trash-2", "پاکسازی کش", "cache_cleanup")}
             {nav_item("/admin/admins", "shield-check", "ادمین‌ها", "admins")}
             {nav_item("/admin/logs", "activity", "گزارش فعالیت", "logs")}
             {nav_item("/admin/notes", "edit-3", "یادداشت مدیران", "notes")}
@@ -9013,6 +9016,341 @@ _MAX_BACKUPS = 6
 _auto_backup_started = False
 
 
+# ─────────────────────────── پاکسازی خودکار کش و فایل‌های موقت ────────────────
+# طبق درخواست صریح مالک پروژه: فقط داده‌های غیرضروری/حجیم پاک بشن، هرگز
+# دیتابیس/بکاپ‌ها (_BACKUP_DIR بالا)/.env/تنظیمات/کاربران. بررسی مستقیم کد نشون
+# داد این پروژه تقریباً هیچ کش/فایل‌موقت واقعی نداره (نه پوشهٔ staging آپلود، نه
+# فایل لاگ روی دیسک، `_tempfile` وارد‌شده در فایل حتی هیچ‌جا استفاده نمی‌شه) — پس
+# اسکوپ واقع‌بینانه فقط دو هدف واقعاً بی‌خطره:
+#   ۱) __pycache__ — کش بایت‌کد پایتون، پایتون خودش دوباره می‌سازتش، صفر ریسک.
+#   ۲) آواتار یتیم (app_media/avatars) — در عمل نادر (آپلود آواتار خودش موقع
+#      جایگزینی، فایل قدیمی رو با پسوند دیگه پاک می‌کنه؛ تنها سناریوی واقعی
+#      باقی‌موندن یتیم یعنی رایتِ ناقص دیتابیس بعد از نوشتن فایل روی دیسک) —
+#      همچنان به‌عنوان یه شبکهٔ ایمنی نگه داشته شده، نه چون انتظار می‌ره چیز
+#      زیادی پیدا کنه.
+# بقیهٔ زیرپوشه‌های app_media (تصویر محصول/کاور آموزش/گالری) عمداً اسکن نمی‌شن —
+# چون DB reference هرکدوم شکل متفاوتی داره (بعضی JSON، بعضی ستون ساده) و ریسک
+# حذف اشتباه یک فایل زندهٔ نمایش داده‌شده به کاربر واقعی، بیشتر از فایدهٔ آزاد
+# کردن چند مگابایته — اگه لازم شد، باید جدا و با بررسی دقیق‌تر طراحی بشه.
+
+_cache_cleanup_started = False
+
+
+def _dir_size_and_count(path: str) -> tuple:
+    total = 0
+    count = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+                count += 1
+            except OSError:
+                pass
+    return total, count
+
+
+def run_cache_cleanup() -> dict:
+    """پاکسازی واقعی — هم از دکمهٔ «پاکسازی فوری» هم از ترد زمان‌بندی‌شده صدا زده می‌شه."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    freed_bytes = 0
+    details = {}
+
+    # ۱) __pycache__
+    py_freed = 0
+    py_count = 0
+    try:
+        for root, dirs, _files in os.walk(base_dir):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            if "__pycache__" in dirs:
+                pc_path = os.path.join(root, "__pycache__")
+                sz, cnt = _dir_size_and_count(pc_path)
+                try:
+                    shutil.rmtree(pc_path, ignore_errors=True)
+                    py_freed += sz
+                    py_count += cnt
+                except Exception:
+                    pass
+                dirs.remove("__pycache__")
+    except Exception as ex:
+        _tg_logger.error("cache cleanup __pycache__ error: %s", ex)
+    freed_bytes += py_freed
+    details["pycache"] = {"freed_bytes": py_freed, "files": py_count}
+
+    # ۲) آواتارهای یتیم
+    av_freed = 0
+    av_count = 0
+    try:
+        avatars_dir = os.path.join(base_dir, "app_media", "avatars")
+        if os.path.isdir(avatars_dir):
+            conn = _db()
+            try:
+                kept = set()
+                for row in conn.execute(
+                    "SELECT avatar_url FROM users WHERE avatar_url IS NOT NULL AND avatar_url != '';"
+                ):
+                    url = row[0] or ""
+                    kept.add(os.path.basename(url.split("?")[0]))
+            finally:
+                conn.close()
+            cutoff = time.time() - 48 * 3600  # حاشیهٔ ایمنی در برابر race با آپلود تازه
+            for fname in os.listdir(avatars_dir):
+                fpath = os.path.join(avatars_dir, fname)
+                if not os.path.isfile(fpath) or fname in kept:
+                    continue
+                try:
+                    if os.path.getmtime(fpath) > cutoff:
+                        continue
+                    sz = os.path.getsize(fpath)
+                    os.remove(fpath)
+                    av_freed += sz
+                    av_count += 1
+                except OSError:
+                    pass
+    except Exception as ex:
+        _tg_logger.error("cache cleanup avatars error: %s", ex)
+    freed_bytes += av_freed
+    details["orphan_avatars"] = {"freed_bytes": av_freed, "files": av_count}
+
+    now_iso = datetime.now().isoformat()
+    report = {"ran_at": now_iso, "freed_bytes": freed_bytes, "details": details}
+    try:
+        from db import set_cfg
+        set_cfg("CACHE_CLEANUP_LAST_RUN", now_iso)
+        set_cfg("CACHE_CLEANUP_LAST_REPORT", json.dumps(report, ensure_ascii=False))
+    except Exception:
+        pass
+    _tg_logger.info("Cache cleanup done: %s bytes freed (%s)", freed_bytes, details)
+    return report
+
+
+def _start_cache_cleanup_thread() -> None:
+    global _cache_cleanup_started
+    if _cache_cleanup_started:
+        return
+    _cache_cleanup_started = True
+
+    def _runner():
+        import datetime as _dt
+        from db import get_cfg
+        while True:
+            try:
+                enabled = get_cfg("CACHE_CLEANUP_ENABLED", "0") == "1"
+            except Exception:
+                enabled = False
+            if not enabled:
+                _time.sleep(3600)  # هر ساعت چک کن که از پنل فعال شده یا نه
+                continue
+
+            mode = get_cfg("CACHE_CLEANUP_MODE", "daily")
+
+            if mode == "interval":
+                try:
+                    hours = max(1, int(get_cfg("CACHE_CLEANUP_INTERVAL_HOURS", "24") or "24"))
+                except Exception:
+                    hours = 24
+                _time.sleep(hours * 3600)
+                try:
+                    if get_cfg("CACHE_CLEANUP_ENABLED", "0") == "1":
+                        run_cache_cleanup()
+                except Exception as ex:
+                    _tg_logger.error("cache cleanup scheduled run error: %s", ex)
+                continue
+
+            now = _dt.datetime.now()
+            try:
+                hour = max(0, min(23, int(get_cfg("CACHE_CLEANUP_HOUR", "4") or "4")))
+            except Exception:
+                hour = 4
+            target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+            if mode == "weekly":
+                try:
+                    weekday = max(0, min(6, int(get_cfg("CACHE_CLEANUP_WEEKDAY", "0") or "0")))
+                except Exception:
+                    weekday = 0
+                days_ahead = (weekday - now.weekday()) % 7
+                target += _dt.timedelta(days=days_ahead)
+                if target <= now:
+                    target += _dt.timedelta(days=7)
+            else:  # daily
+                if target <= now:
+                    target += _dt.timedelta(days=1)
+
+            sleep_secs = max(60, (target - now).total_seconds())
+            _time.sleep(sleep_secs)
+            try:
+                if get_cfg("CACHE_CLEANUP_ENABLED", "0") == "1":
+                    run_cache_cleanup()
+            except Exception as ex:
+                _tg_logger.error("cache cleanup scheduled run error: %s", ex)
+
+    _threading.Thread(target=_runner, name="cache-cleanup", daemon=True).start()
+
+
+def _fmt_bytes(n: int) -> str:
+    n = int(n or 0)
+    if n < 1024:
+        return f"{n} بایت"
+    if n < 1024 * 1024:
+        return f"{n/1024:.1f} KB"
+    return f"{n/1024/1024:.1f} MB"
+
+
+@router.get("/system-cache", response_class=HTMLResponse)
+async def system_cache_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "cache_cleanup")
+    if guard: return guard
+    from db import get_cfg
+
+    enabled = get_cfg("CACHE_CLEANUP_ENABLED", "0") == "1"
+    mode = get_cfg("CACHE_CLEANUP_MODE", "daily")
+    hour = get_cfg("CACHE_CLEANUP_HOUR", "4")
+    weekday = get_cfg("CACHE_CLEANUP_WEEKDAY", "0")
+    interval_hours = get_cfg("CACHE_CLEANUP_INTERVAL_HOURS", "24")
+    last_run = get_cfg("CACHE_CLEANUP_LAST_RUN", "")
+
+    last_report_html = '<div class="text-sm text-gray-400">هنوز اجرا نشده.</div>'
+    try:
+        raw = get_cfg("CACHE_CLEANUP_LAST_REPORT", "")
+        if raw:
+            rep = json.loads(raw)
+            freed = _fmt_bytes(rep.get("freed_bytes", 0))
+            det = rep.get("details", {})
+            py = det.get("pycache", {})
+            av = det.get("orphan_avatars", {})
+            last_report_html = f"""
+              <div class="text-sm space-y-1">
+                <div>🕐 آخرین اجرا: <b class="ltr-num">{e(fa_date(rep.get('ran_at',''), with_time=True))}</b></div>
+                <div>💾 فضای آزادشده: <b class="text-emerald-600 ltr-num">{e(freed)}</b></div>
+                <div class="text-xs text-gray-400">کش پایتون: {py.get('files',0)} فایل ({_fmt_bytes(py.get('freed_bytes',0))}) —
+                  آواتار یتیم: {av.get('files',0)} فایل ({_fmt_bytes(av.get('freed_bytes',0))})</div>
+              </div>"""
+    except Exception:
+        pass
+
+    # Python weekday(): دوشنبه=۰ ... یکشنبه=۶ (میلادی) — چون _cache_cleanup_runner از
+    # همین datetime.weekday() استفاده می‌کنه، ترتیب برچسب‌ها باید دقیقاً همین باشه.
+    weekday_opts = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یکشنبه"]
+    weekday_select = "".join(
+        f'<option value="{i}" {"selected" if str(i)==weekday else ""}>{lbl}</option>'
+        for i, lbl in enumerate(weekday_opts)
+    )
+    hour_select = "".join(
+        f'<option value="{h}" {"selected" if str(h)==hour else ""}>ساعت {h}:۰۰</option>'
+        for h in range(24)
+    )
+
+    body = f"""
+    <div class="text-xs text-gray-400 mb-4">
+      پاکسازی خودکار فقط داده‌های غیرضروری/حجیم (کش بایت‌کد پایتون + آواتار یتیم) رو حذف می‌کنه —
+      دیتابیس، بکاپ‌ها، تنظیمات و اطلاعات کاربران هرگز دست‌نخورده می‌مونن. این پروژه در عمل کش/فایل
+      موقت زیادی تولید نمی‌کنه، پس انتظار نداشته باشید عدد بزرگی آزاد بشه — این ابزار برای نظافت
+      دوره‌ایه، نه رفع مشکل کمبود فضا.
+    </div>
+
+    <div class="card p-5 mb-4">
+      <h3 class="font-bold text-sm mb-3">📊 آخرین اجرا</h3>
+      {last_report_html}
+      <form method="post" action="/admin/system-cache/run-now" class="mt-4">
+        <button class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
+          🧹 پاکسازی فوری کش
+        </button>
+      </form>
+    </div>
+
+    <div class="card p-5">
+      <h3 class="font-bold text-sm mb-3">⚙️ زمان‌بندی خودکار</h3>
+      <form method="post" action="/admin/system-cache/save-settings" class="space-y-4">
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="enabled" value="1" {"checked" if enabled else ""}>
+          فعال‌سازی پاکسازی خودکار
+        </label>
+
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">بازهٔ اجرا</label>
+          <select name="mode" id="cc-mode" onchange="
+            document.getElementById('cc-daily-hour').style.display = this.value!=='interval' ? 'block':'none';
+            document.getElementById('cc-weekday').style.display = this.value==='weekly' ? 'block':'none';
+            document.getElementById('cc-interval').style.display = this.value==='interval' ? 'block':'none';
+          " class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm">
+            <option value="daily" {"selected" if mode=="daily" else ""}>روزانه</option>
+            <option value="weekly" {"selected" if mode=="weekly" else ""}>هفتگی</option>
+            <option value="interval" {"selected" if mode=="interval" else ""}>بازهٔ سفارشی (هر N ساعت)</option>
+          </select>
+        </div>
+
+        <div id="cc-daily-hour" style="display:{'block' if mode!='interval' else 'none'}">
+          <label class="text-xs text-gray-500 block mb-1">ساعت اجرا</label>
+          <select name="hour" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm">{hour_select}</select>
+        </div>
+
+        <div id="cc-weekday" style="display:{'block' if mode=='weekly' else 'none'}">
+          <label class="text-xs text-gray-500 block mb-1">روز هفته (فقط برای حالت هفتگی)</label>
+          <select name="weekday" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm">{weekday_select}</select>
+        </div>
+
+        <div id="cc-interval" style="display:{'block' if mode=='interval' else 'none'}">
+          <label class="text-xs text-gray-500 block mb-1">هر چند ساعت یک‌بار</label>
+          <input type="text" inputmode="numeric" name="interval_hours" value="{e(interval_hours)}"
+            class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm ltr-num" style="direction:ltr;text-align:left">
+        </div>
+
+        <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
+          💾 ذخیرهٔ تنظیمات
+        </button>
+      </form>
+    </div>"""
+    return _layout("پاکسازی کش و فایل‌های موقت", body, adm, flash=flash)
+
+
+@router.post("/system-cache/save-settings")
+async def system_cache_save_settings(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "cache_cleanup")
+    if guard: return guard
+    from db import set_cfg
+
+    form = await request.form()
+    enabled = "1" if form.get("enabled") == "1" else "0"
+    mode = str(form.get("mode") or "daily")
+    if mode not in ("daily", "weekly", "interval"):
+        mode = "daily"
+    try:
+        hour = max(0, min(23, int(form.get("hour") or 4)))
+    except Exception:
+        hour = 4
+    try:
+        weekday = max(0, min(6, int(form.get("weekday") or 0)))
+    except Exception:
+        weekday = 0
+    try:
+        interval_hours = max(1, int(form.get("interval_hours") or 24))
+    except Exception:
+        interval_hours = 24
+
+    set_cfg("CACHE_CLEANUP_ENABLED", enabled)
+    set_cfg("CACHE_CLEANUP_MODE", mode)
+    set_cfg("CACHE_CLEANUP_HOUR", str(hour))
+    set_cfg("CACHE_CLEANUP_WEEKDAY", str(weekday))
+    set_cfg("CACHE_CLEANUP_INTERVAL_HOURS", str(interval_hours))
+
+    _log(request, "ذخیرهٔ تنظیمات پاکسازی کش", "سیستم", f"enabled={enabled} mode={mode}", admin_info=adm)
+    return _redir(f"/admin/system-cache?flash={e('✅ تنظیمات ذخیره شد')}")
+
+
+@router.post("/system-cache/run-now")
+async def system_cache_run_now(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "cache_cleanup")
+    if guard: return guard
+
+    report = await run_in_threadpool(run_cache_cleanup)
+    _log(request, "پاکسازی فوری کش", "سیستم", f"freed={report.get('freed_bytes',0)} bytes", admin_info=adm)
+    freed_str = _fmt_bytes(report.get("freed_bytes", 0)).replace(" ", "+")
+    return _redir(f"/admin/system-cache?flash=✅+پاکسازی+انجام+شد+—+{freed_str}+آزاد+شد")
+
+
 def _do_auto_backup() -> None:
     """بکاپ خودکار روزانه با stbak_engine (SQLite — دیتابیس واقعی تولید) + آپلود به مقاصد فعال.
     ⚠️ قبلاً این تابع pg_backup.create_backup() (مخصوص Postgres) رو صدا می‌زد که روی نصب
@@ -9111,7 +9449,9 @@ def _start_auto_backup_thread() -> None:
                 _tg_logger.error("low-stock check error: %s", ex)
 
     _threading.Thread(target=_stock_runner, name="stock-check", daemon=True).start()
-    _tg_logger.info("Scheduler started (backup:24h, low-stock:2h)")
+
+    _start_cache_cleanup_thread()
+    _tg_logger.info("Scheduler started (backup:24h, low-stock:2h, cache-cleanup:configurable)")
 
 
 @router.get("/reports", response_class=HTMLResponse)
