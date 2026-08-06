@@ -352,6 +352,14 @@ def init_db(db_path=None):
             cur.execute("ALTER TABLE orders ADD COLUMN exchange_pair_id INTEGER;")
         except sqlite3.OperationalError:
             pass
+        # علامت «اصلاح‌شده» — وقتی ادمین از صفحهٔ «ارسال مجدد» یه آیتم جایگزین از
+        # همون محصول می‌فرسته (بدون تغییر قیمت/سفارش، فقط جایگزینی محتوای معیوب/اشتباه)،
+        # این ستون ست می‌شه تا در لیست سفارش‌ها روشن باشه این تحویل پرداخت اضافی نداشته
+        # (بخش ۴۱ CLAUDE.md — «استاندارد» درخواستی مالک پروژه برای وضوح وضعیت پرداخت).
+        try:
+            cur.execute("ALTER TABLE orders ADD COLUMN resent_at TEXT;")
+        except sqlite3.OperationalError:
+            pass
 
         # جدول تراکنشهای زرینپال
         cur.execute(

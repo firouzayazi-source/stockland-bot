@@ -6503,6 +6503,27 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
             return '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">برگشتی</span>'
         return '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">فعال</span>'
 
+    def payment_note(o):
+        """استاندارد وضعیت پرداخت — طبق درخواست صریح مالک پروژه («تکلیف برگشتی کالا
+        مشخص باشه، آیا کاربر بابت این کالا پرداخت کرده یا نه»، بخش ۴۱ CLAUDE.md):
+        سفارش اصلاح‌شده (ارسال مجدد) = بدون پرداخت اضافی (همون سفارش/قیمت قبلی)؛
+        سفارش طرفِ جدید یک تعویض = مبلغش با wallet_delta موقع تعویض تسویه شده؛
+        بقیه = سفارش عادی، مبلغ ستون «مبلغ» دقیقاً همونیه که پرداخت شده."""
+        try:
+            resent = o["resent_at"] if "resent_at" in o.keys() else None
+        except Exception:
+            resent = None
+        try:
+            pair_id = o["exchange_pair_id"] if "exchange_pair_id" in o.keys() else None
+        except Exception:
+            pair_id = None
+        st = o["status"] if "status" in o.keys() and o["status"] else "active"
+        if resent:
+            return '<div class="mt-1"><span class="px-1.5 py-0.5 text-[10px] rounded bg-blue-50 text-blue-600 border border-blue-200">♻️ اصلاح‌شده — بدون پرداخت اضافی</span></div>'
+        if pair_id and st != "returned":
+            return f'<div class="mt-1"><span class="px-1.5 py-0.5 text-[10px] rounded bg-amber-50 text-amber-700 border border-amber-200">🔁 از تعویض سفارش #{pair_id}</span></div>'
+        return ""
+
     rows = ""
     for o in orders:
         st = o["status"] if "status" in o.keys() and o["status"] else "active"
@@ -6522,7 +6543,7 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
           <td class="px-4 py-2 font-mono text-xs"><code>{e(o["user_id"])}</code></td>
           <td class="px-4 py-2">{e(o["title"])}</td>
           <td class="px-4 py-2 text-green-700 font-medium">{int(o["price"]):,} ت</td>
-          <td class="px-4 py-2">{order_status_badge(st)}</td>
+          <td class="px-4 py-2">{order_status_badge(st)}{payment_note(o)}</td>
           <td class="px-4 py-2 text-gray-400 text-xs">{fa_date(o["created_at"] or "", with_time=True)}</td>
           <td class="px-4 py-2 flex gap-1 items-center">{action_btns}</td>
         </tr>"""
@@ -6859,11 +6880,14 @@ async def order_resend_post(request: Request, oid: int):
         title   = order["title"]
         data    = feed["data"]
 
-        # علامت‌گذاری feed به عنوان تحویل‌شده
+        # علامت‌گذاری feed به عنوان تحویل‌شده — یعنی این آیتم از موجودی کم می‌شه (همون
+        # چیزی که با گزینهٔ «بازگشت به موجودی» موقع برگشت قبلی برگردونده بودیم)
         conn.execute("UPDATE product_feed SET delivered=1, order_id=?, delivered_at=datetime('now') WHERE id=?;",
                      (oid, feed_id))
-        # آپدیت order با feed_id جدید
-        conn.execute("UPDATE orders SET feed_id=?, status='active' WHERE id=?;", (feed_id, oid))
+        # آپدیت order با feed_id جدید + علامت resent_at — تا در لیست سفارش‌ها روشن
+        # باشه این یه اصلاح/جایگزینیه (بدون پرداخت اضافی، همون سفارش/قیمت قبلی)، نه
+        # یه تحویل تازهٔ مستقل (بخش ۴۱ CLAUDE.md)
+        conn.execute("UPDATE orders SET feed_id=?, status='active', resent_at=datetime('now') WHERE id=?;", (feed_id, oid))
         conn.commit()
     finally:
         conn.close()
@@ -6903,8 +6927,11 @@ async def order_resend_post(request: Request, oid: int):
         except Exception:
             _tg_logger.exception("resend delivery_messages insert failed")
 
-    _log(request, "ارسال مجدد", "سفارش‌ها", f"سفارش #{oid} | feed_item:{feed_id}")
-    return _redir(f"/admin/orders?flash=محصول+جدید+برای+سفارش+{oid}+ارسال+شد")
+    _log(request, "ارسال مجدد", "سفارش‌ها", f"سفارش #{oid} | feed_item:{feed_id} | از موجودی کم شد | بدون پرداخت اضافی")
+    return _redir(
+        f"/admin/orders?flash=✅+محصول+جدید+برای+سفارش+{oid}+ارسال+شد+"
+        "(آیتم+از+موجودی+کم+شد،+بدون+پرداخت+اضافی+از+کاربر)"
+    )
 
 
 @router.get("/orders/{oid}/exchange", response_class=HTMLResponse)
