@@ -7323,43 +7323,48 @@ def _send_invite_view(chat_id, uid):
     bot_username = _bot_username() or "your_bot"
     reward = int(settings.get("reward_amount") or 0)
 
-    # اگه همکار تأییدشده‌ست: لینک اختصاصی + پورسانت + آمار
-    # اگه کاربر عادیه: فقط دعوت ساده با نام ربات
+    # ⚠️ هر دو حالت (همکار/کاربر عادی) لینک شخصی واقعی و قابل‌ردیابی می‌گیرن — دقیقاً
+    # هماهنگ با GET /me/invite در api.py که از قبل «چه همکار باشد چه کاربر عادی»
+    # همین لینک رو می‌ده (بخش ۳۹ CLAUDE.md). قبلاً این تابع فقط برای همکار لینک
+    # واقعی می‌ساخت؛ کاربر عادی هیچ لینک شخصی‌ای نمی‌گرفت، یعنی دعوت‌های کاربر عادی
+    # اصلاً وارد جدول referrals نمی‌شد — «توچرخه» نبودن واقعی همون این بود، نه فقط
+    # یه محدودیت نمایشی. تنها فرقی که بین دو حالت باقی می‌مونه، فقط پیام/تأکید مالیه:
+    # پورسانت/پاداش فقط برای همکار تأییدشده محاسبه می‌شه (این گیت‌ها از قبل هم توی
+    # process_referral_commission هم توی pay_signup_referral_reward درستن).
     is_partner = is_partner_approved(uid)
+    link = f"https://t.me/{bot_username}?start=ref_{uid}"
+    promo = str(get_promo_settings().get("text") or "").format(link=link)
 
     if is_partner:
-        link = f"https://t.me/{bot_username}?start=ref_{uid}"
-        promo = str(get_promo_settings().get("text") or "").format(link=link)
         text = (
             "🔗 <b>لینک معرفی شما</b>\n\n"
             f"👤 {stats.get('name', 'همکار')} — <code>{uid}</code>\n\n"
         )
         if settings.get("is_active") and reward > 0:
             text += f"💰 پاداش هر عضویت: <b>{reward:,}</b> تومان\n"
-        text += (
-            "💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
-            f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
-            + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
-            + f"\n\n🔗 لینک اختصاصی شما:\n<code>{link}</code>"
-            + "\n\n📣 متن آماده تبلیغ:\n➖➖➖➖➖➖➖➖\n"
-            + promo + "\n➖➖➖➖➖➖➖➖"
-        )
-        import urllib.parse as _up
-        # الگوی استاندارد دکمهٔ اشتراک‌گذاری تلگرام: url= (بخش ۳۱.۵ CLAUDE.md) — تنها
-        # ترکیبی که در همهٔ کلاینت‌ها شیت اشتراک‌گذاری بومی رو تضمین می‌کنه.
-        share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
+        text += "💸 + پورسانت از هر خرید دعوت‌شده‌ها (بر اساس سطح شما)\n\n"
     else:
-        # کاربر عادی: فقط معرفی ربات بدون لینک شخصی
-        bot_link = f"https://t.me/{bot_username}"
+        # کاربر عادی: لینک واقعی می‌گیره (دقیقاً مثل همکار)، ولی پاداش/پورسانتی
+        # محاسبه نمی‌شه تا وقتی درخواست همکاری بده و تأیید بشه — دعوت‌هاش همین حالا
+        # ثبت می‌شن، فقط بعد از همکار شدن پاداش‌شون حساب می‌شه (خودکار، بخش ۳۹).
         text = (
-            "🎁 <b>معرفی ربات به دوستان</b>\n\n"
-            f"با ارسال لینک زیر، دوستانتان را به ربات دعوت کنید:\n"
-            f"<code>{bot_link}</code>\n\n"
-            "💡 برای دریافت لینک اختصاصی + پاداش و پورسانت،\n"
-            "درخواست همکاری ثبت کنید."
+            "🎁 <b>دعوت دوستان</b>\n\n"
+            "همین حالا با لینک اختصاصی زیر دوستانتان را دعوت کنید.\n"
+            "💡 برای دریافت پاداش و پورسانت از این دعوت‌ها، کافیست درخواست همکاری ثبت کنید — "
+            "بعد از تأیید، حتی دعوت‌های همین الان هم محاسبه می‌شود.\n\n"
         )
-        import urllib.parse as _up
-        share_url = "https://t.me/share/url?url=" + _up.quote(bot_link)
+
+    text += (
+        f"📊 دعوت‌های شما: <b>{stats['total']}</b> نفر"
+        + (f" | پاداش: <b>{stats['total_reward']:,}</b> ت" if stats.get("total_reward") else "")
+        + f"\n\n🔗 لینک اختصاصی شما:\n<code>{link}</code>"
+        + "\n\n📣 متن آماده تبلیغ:\n➖➖➖➖➖➖➖➖\n"
+        + promo + "\n➖➖➖➖➖➖➖➖"
+    )
+    import urllib.parse as _up
+    # الگوی استاندارد دکمهٔ اشتراک‌گذاری تلگرام: url= (بخش ۳۱.۵ CLAUDE.md) — تنها
+    # ترکیبی که در همهٔ کلاینت‌ها شیت اشتراک‌گذاری بومی رو تضمین می‌کنه.
+    share_url = "https://t.me/share/url?url=" + _up.quote(link) + "&text=" + _up.quote(promo)
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📤 ارسال به دوستان و گروه‌ها", url=share_url))
     bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")

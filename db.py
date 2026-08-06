@@ -1688,7 +1688,32 @@ def approve_partner(tg_user_id: int):
         changed = cur.rowcount
     finally:
         conn.close()
+    if changed > 0:
+        _pay_pending_referral_rewards_for(tg_user_id)
     return changed > 0
+
+
+def _pay_pending_referral_rewards_for(referrer_id: int) -> None:
+    """بعد از تأیید همکاری، پاداش عضویت معرفی‌های قبلی این کاربر (از زمانی که هنوز
+    همکار نبود، پس پاداش‌شون به‌عمد رد شده بود توسط pay_signup_referral_reward) رو
+    الان که همکار تأییدشده، حساب می‌کنه — طبق درخواست صریح مالک پروژه («وقتی که
+    درخواست همکاری داد و همکار شد بیاد تو چرخه و پاداش... براش محاسبه بشه»)."""
+    try:
+        conn = _get_connection()
+        try:
+            pending = conn.execute(
+                "SELECT referred_id FROM referrals WHERE referrer_id=? AND rewarded=0;",
+                (referrer_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+        for row in pending:
+            try:
+                pay_signup_referral_reward(referrer_id, int(row[0]))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 def reject_partner(tg_user_id: int):
     conn = _get_connection()
@@ -6664,8 +6689,19 @@ def reset_invite_cap_after_purchase(user_id: int):
 
 def pay_signup_referral_reward(referrer_id: int, referred_id: int) -> dict:
     """پاداش ثابت معرفی — همان لحظه عضویت، فقط یک‌بار (قفل با پرچم rewarded).
-    Returns: {paid, amount, wallet}"""
+    Returns: {paid, amount, wallet}
+
+    ⚠️ فقط همکار تأییدشده پاداش دعوت می‌گیرد — طبق درخواست صریح مالک پروژه («برای
+    کاربر عادی غیرفعال، با همکار شدن فعال بشه»، بخش ۳۹ CLAUDE.md). این چک قبل از
+    مقداردهی پرچم `rewarded=1` انجام می‌شه (نه بعدش، مثل نسخهٔ قبلی) — چون قبلاً
+    اگه معرف همکار نبود، ردیف همچنان `rewarded=1` می‌شد بدون واریز واقعی، یعنی
+    اگه بعداً همون کاربر همکار می‌شد، دیگه هیچ‌وقت واجد شرایط این پاداش نمی‌شد
+    (چون شرط `rewarded=0` دیگه true نبود) — دقیقاً برعکس خواستهٔ مالک پروژه.
+    مسیر جبرانی: `approve_partner()` بعد از تأیید، خودش این تابع رو برای همهٔ
+    معرفی‌های قبلی هنوز-جایزه‌نگرفتهٔ همون کاربر دوباره صدا می‌زنه."""
     ensure_referral_schema()
+    if not _is_approved_partner(referrer_id):
+        return {"paid": False}
     settings = get_referral_settings()
     if not settings.get("is_active"):
         return {"paid": False}
@@ -6679,7 +6715,6 @@ def pay_signup_referral_reward(referrer_id: int, referred_id: int) -> dict:
             "SELECT id FROM referrals WHERE referrer_id=? AND referred_id=? AND rewarded=0 LIMIT 1;",
             (referrer_id, referred_id)).fetchone()
         if not row:
-            conn.close()
             return {"paid": False}
         conn.execute(
             "UPDATE referrals SET rewarded=1, reward_amount=?, rewarded_at=datetime('now','localtime') "
@@ -6687,11 +6722,7 @@ def pay_signup_referral_reward(referrer_id: int, referred_id: int) -> dict:
             (amount, referrer_id, referred_id))
         conn.commit()
     finally:
-        try: conn.close()
-        except Exception: pass
-    # ← مورد ۱۰: فقط همکار تأییدشده پاداش دعوت می‌گیرد
-    if not _is_approved_partner(referrer_id):
-        return {"paid": False}
+        conn.close()
     wallet = credit_referrer(referrer_id, amount,
                              note=f"پاداش معرفی کاربر {referred_id}")
     return {"paid": True, "amount": amount, "wallet": wallet}

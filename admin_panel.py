@@ -11587,12 +11587,12 @@ async def partner_approve(request: Request, uid: int):
     adm = _get_admin(request)
     guard = _require(adm, "partners")
     if guard: return guard
-    conn = _db()
-    try:
-        conn.execute("UPDATE partners SET status='approved', approved_at=? WHERE tg_user_id=?;", (datetime.utcnow().isoformat(), uid))
-        conn.commit()
-    finally:
-        conn.close()
+    # از db.approve_partner() استفاده می‌کنه (نه UPDATE خام قبلی) — تا پاداش عضویت
+    # معرفی‌های قبلی این کاربر (وقتی هنوز همکار نبود) هم خودکار حساب بشه (بخش ۳۹
+    # CLAUDE.md). قبلاً این مسیر جدا از bot.py:approve_partner بود و این کچ‌آپ رو
+    # نداشت — الان هر دو مسیر تأیید همکار (بات/پنل) دقیقاً یک منطق دارن.
+    from db import approve_partner as _approve_partner
+    _approve_partner(uid)
     try:
         import json as _json, requests as _rq
         token = _env("BOT_TOKEN","")
