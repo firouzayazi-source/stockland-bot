@@ -1844,7 +1844,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         feed_id, feed_data = feed_item
 
         # تحویل عادی
-        bot.send_message(
+        _delivery_msg = bot.send_message(
             call.message.chat.id,
             f"سفارش ثبت و تحویل شد ✅\n\n"
             f"شماره سفارش: #{order_id}\n"
@@ -1854,6 +1854,31 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
             f"<code>{html.escape(str(feed_data))}</code>",
             parse_mode="HTML"
         )
+        # ذخیرهٔ محل پیام تحویل + لینک feed_id↔order — بدون این دو، دکمهٔ «برگشت» پنل
+        # نه می‌تونه پیام تحویل رو از چت کاربر پاک کنه نه محصول رو به موجودی برگردونه
+        # (بخش ۴۰ CLAUDE.md — قبلاً این مسیر خرید مستقیم بات هیچ‌کدوم رو ثبت نمی‌کرد).
+        try:
+            from db import order_set_feed_id
+            order_set_feed_id(int(order_id), int(feed_id))
+            _c = sqlite3.connect(DB_FULL_PATH)
+            try:
+                _c.execute("""
+                    CREATE TABLE IF NOT EXISTS delivery_messages (
+                        feed_id INTEGER PRIMARY KEY, order_id INTEGER,
+                        chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
+                    );
+                """)
+                _c.execute(
+                    "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                    "VALUES (?,?,?,?,?);",
+                    (int(feed_id), int(order_id), int(call.message.chat.id), int(_delivery_msg.message_id),
+                     datetime.utcnow().isoformat())
+                )
+                _c.commit()
+            finally:
+                _c.close()
+        except Exception as _dm_ex:
+            logger.error("delivery_messages insert failed (finalize_product_order): %s", _dm_ex)
         # ارسال درخواست امتیازدهی
         try:
             _send_rating_request(call.message.chat.id, uid, order_id, pid, title)

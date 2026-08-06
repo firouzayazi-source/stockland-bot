@@ -911,8 +911,13 @@ def _finalize_paid_tx(conn, tx, ref_id, authority, extra: dict | None = None):
     if feed_item:
         feed_id, feed_data = feed_item
         conn.commit()
-        send_telegram_message(
-            chat_id,
+        # send_telegram_message_with_id به‌جای wrapper معمولی — message_id لازمه تا
+        # ذخیره بشه در delivery_messages؛ بدونش «برگشت» پنل نه می‌تونه این پیام رو از
+        # چت کاربر پاک کنه نه (برای این مسیر گیت‌وی) می‌تونست feed رو به موجودی برگردونه
+        # (بخش ۴۰ CLAUDE.md).
+        from tg_notify import send_telegram_message_with_id
+        _ok, _msg_id = send_telegram_message_with_id(
+            BOT_TOKEN, chat_id,
             (
                 "سفارش شما ثبت و تحویل شد.\n\n"
                 f"شماره سفارش: #{order_id}\n"
@@ -923,6 +928,28 @@ def _finalize_paid_tx(conn, tx, ref_id, authority, extra: dict | None = None):
             ),
             parse_mode="HTML",
         )
+        try:
+            from db import order_set_feed_id
+            order_set_feed_id(order_id, feed_id)
+            if _msg_id:
+                _dc = db_connect()
+                try:
+                    _dc.execute("""
+                        CREATE TABLE IF NOT EXISTS delivery_messages (
+                            feed_id INTEGER PRIMARY KEY, order_id INTEGER,
+                            chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
+                        );
+                    """)
+                    _dc.execute(
+                        "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                        "VALUES (?,?,?,?,?);",
+                        (int(feed_id), int(order_id), int(chat_id), int(_msg_id), now_iso())
+                    )
+                    _dc.commit()
+                finally:
+                    _dc.close()
+        except Exception:
+            logger.exception("delivery_messages insert failed (_finalize_paid_tx)")
         if ADMIN_ID:
             send_telegram_message(
                 ADMIN_ID,

@@ -440,7 +440,18 @@ def init_db(db_path=None):
         except sqlite3.OperationalError:
             pass
 
-
+        # لینک پیام تحویل ↔ سفارش/فید — لازمه تا «برگشت» پنل بتونه پیام تحویل رو از چت
+        # کاربر پاک کنه (بخش ۴۰ CLAUDE.md). قبلاً این جدول فقط لیزی، داخل خودِ
+        # order_mark_returned_advanced ساخته می‌شد — یعنی روی یه دیتابیس کاملاً تازه،
+        # اگه اولین خرید قبل از اولین «برگشت» ادمین اتفاق می‌افتاد، INSERT مسیرهای
+        # تحویل (بات/درگاه/مینی‌اپ) با «no such table» بی‌صدا شکست می‌خورد. الان طبق
+        # قاعدهٔ پروژه برای جدول‌های هسته، ایگر اینجاست.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_messages (
+                feed_id INTEGER PRIMARY KEY, order_id INTEGER,
+                chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
+            );
+        """)
 
         # تنظیمات هشدار کمبود موجودی فید (برای هر محصول)
         cur.execute(
@@ -2574,18 +2585,26 @@ def order_mark_returned_advanced(
 
         price = int(order["price"] or 0)
 
-        # feed_id
-        try:
-            feed_id = order["feed_id"]
-        except Exception:
-            feed_id = None
-
         conn.execute("""
             CREATE TABLE IF NOT EXISTS delivery_messages (
                 feed_id INTEGER PRIMARY KEY, order_id INTEGER,
                 chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
             );
         """)
+
+        # feed_id — اولویت با reverse lookup مستقیم روی product_feed.order_id (بخش ۴۰
+        # CLAUDE.md). این ستون همیشه توسط claim_next_feed_item ست می‌شه، برخلاف
+        # orders.feed_id/delivery_messages که فقط بعضی از سه مسیر تحویل (بات/درگاه/
+        # مینی‌اپ) واقعاً پرش می‌کردن — قبلاً همین باعث می‌شد «بازگشت به موجودی» برای
+        # سفارش‌های تحویل‌شده از مسیر خرید مستقیم بات (finalize_product_order) کاملاً
+        # بی‌اثر باشه، بدون هیچ خطایی.
+        fr = conn.execute("SELECT id FROM product_feed WHERE order_id=? LIMIT 1;", (order_id,)).fetchone()
+        feed_id = fr["id"] if fr else None
+        if not feed_id:
+            try:
+                feed_id = order["feed_id"]
+            except Exception:
+                feed_id = None
         if not feed_id:
             dm = conn.execute("SELECT feed_id FROM delivery_messages WHERE order_id=? LIMIT 1;", (order_id,)).fetchone()
             if dm:
@@ -2701,17 +2720,21 @@ def exchange_order(
         old_price = int(old["price"] or 0)
         new_price = int(new_product["price"] or 0)
 
-        # feed قدیم — دقیقاً همون منطق order_mark_returned_advanced
-        try:
-            old_feed_id = old["feed_id"]
-        except Exception:
-            old_feed_id = None
+        # feed قدیم — دقیقاً همون منطق order_mark_returned_advanced (بخش ۴۰ CLAUDE.md):
+        # اولویت با reverse lookup مستقیم روی product_feed.order_id
         cur.execute("""
             CREATE TABLE IF NOT EXISTS delivery_messages (
                 feed_id INTEGER PRIMARY KEY, order_id INTEGER,
                 chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
             );
         """)
+        ofr = cur.execute("SELECT id FROM product_feed WHERE order_id=? LIMIT 1;", (old_order_id,)).fetchone()
+        old_feed_id = ofr["id"] if ofr else None
+        if not old_feed_id:
+            try:
+                old_feed_id = old["feed_id"]
+            except Exception:
+                old_feed_id = None
         if not old_feed_id:
             dm = cur.execute("SELECT feed_id FROM delivery_messages WHERE order_id=? LIMIT 1;", (old_order_id,)).fetchone()
             if dm:

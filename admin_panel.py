@@ -6746,13 +6746,16 @@ async def order_return(request: Request, oid: int):
     if result.get("chat_id") and result.get("message_id"):
         await run_in_threadpool(_tg_delete_message, result["chat_id"], result["message_id"])
 
-    # نوتیف به کاربر
+    # نوتیف به کاربر — از wallet_delta واقعی result استفاده می‌کنه (نه بازسازی از
+    # wallet_action/custom_amount ورودی فرم) تا هر سه حالت (بازگشت کامل/افزایش دلخواه/
+    # کسر دلخواه) درست پوشش داده بشن؛ قبلاً custom_deduct هیچ پیامی نداشت.
     if notify_user and result.get("user_id"):
+        delta = result.get("wallet_delta", 0)
         wallet_msg = ""
-        if wallet_action == "full":
-            wallet_msg = f"\n💰 مبلغ {result.get('price',0):,} تومان به کیف‌پول شما افزوده شد."
-        elif wallet_action == "custom_add" and custom_amount:
-            wallet_msg = f"\n💰 مبلغ {custom_amount:,} تومان به کیف‌پول شما افزوده شد."
+        if delta > 0:
+            wallet_msg = f"\n💰 مبلغ {delta:,} تومان به کیف‌پول شما افزوده شد."
+        elif delta < 0:
+            wallet_msg = f"\n💳 مبلغ {abs(delta):,} تومان از کیف‌پول شما کسر شد."
         await run_in_threadpool(_tg_send, int(result["user_id"]),
             f"⚠️ سفارش #{oid} (<b>{html.escape(str(result.get('title') or ''))}</b>) "
             f"توسط پشتیبانی برگشت داده شد.{wallet_msg}\n"
@@ -6865,15 +6868,40 @@ async def order_resend_post(request: Request, oid: int):
     finally:
         conn.close()
 
-    # ارسال به کاربر
+    # ارسال به کاربر — از send_telegram_message_with_id استفاده می‌کنه (نه _tg_send)
+    # تا message_id رو هم بگیریم و در delivery_messages ذخیره کنیم؛ وگرنه اگه این
+    # سفارش بعداً دوباره برگشت بخوره، پیامِ همین ارسال مجدد قابل حذف از چت نیست
+    # (بخش ۴۰ CLAUDE.md).
     if notify:
         try:
             import html as _html
-            await run_in_threadpool(_tg_send, user_id,
+            from tg_notify import send_telegram_message_with_id
+            token = _env("BOT_TOKEN")
+            ok, msg_id = await run_in_threadpool(
+                send_telegram_message_with_id, token, user_id,
                 f"📦 محصول جدید برای سفارش #{oid} ارسال شد:\n\n"
-                f"<code>{_html.escape(str(data))}</code>")
+                f"<code>{_html.escape(str(data))}</code>",
+                "HTML"
+            )
+            if ok and msg_id:
+                conn2 = _db()
+                try:
+                    conn2.execute("""
+                        CREATE TABLE IF NOT EXISTS delivery_messages (
+                            feed_id INTEGER PRIMARY KEY, order_id INTEGER,
+                            chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
+                        );
+                    """)
+                    conn2.execute(
+                        "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                        "VALUES (?,?,?,?,datetime('now'));",
+                        (feed_id, oid, user_id, msg_id)
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()
         except Exception:
-            pass
+            _tg_logger.exception("resend delivery_messages insert failed")
 
     _log(request, "ارسال مجدد", "سفارش‌ها", f"سفارش #{oid} | feed_item:{feed_id}")
     return _redir(f"/admin/orders?flash=محصول+جدید+برای+سفارش+{oid}+ارسال+شد")

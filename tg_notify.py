@@ -27,3 +27,29 @@ def send_telegram_message(bot_token: str, chat_id: int, text: str,
     except Exception:
         logger.exception("Telegram sendMessage failed")
         return False
+
+
+def send_telegram_message_with_id(bot_token: str, chat_id: int, text: str,
+                                   parse_mode: str | None = None, timeout: int = 10) -> tuple[bool, int | None]:
+    """مثل send_telegram_message ولی message_id واقعی رو هم برمی‌گردونه — برای پیام‌
+    تحویل محصول لازمه، تا بعداً اگه ادمین سفارش رو برگشت زد بشه از چت کاربر حذفش کرد
+    (بخش ۴۰ CLAUDE.md). امضای send_telegram_message عمداً دست‌نخورده موند — چند
+    caller دیگه فقط bool می‌خوان، تغییرش اونا رو می‌شکست."""
+    if not bot_token:
+        return False, None
+    payload = {"chat_id": int(chat_id), "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json=payload,
+            timeout=timeout,
+        )
+        j = r.json()
+        if j.get("ok"):
+            return True, (j.get("result") or {}).get("message_id")
+        return False, None
+    except Exception:
+        logger.exception("Telegram sendMessage (with_id) failed")
+        return False, None

@@ -1317,13 +1317,16 @@ def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price
     پول به کیف‌پول برمی‌گرده، نه صف انتظار. برمی‌گردونه: True اگه همون لحظه تحویل شد."""
     from db import claim_next_feed_item, order_set_feed_id, add_wallet_balance
     from config import BOT_TOKEN
-    from tg_notify import send_telegram_message
+    from tg_notify import send_telegram_message_with_id
 
     item = claim_next_feed_item(pid, order_id=order_id)
     if item:
         feed_id, feed_data = item
         order_set_feed_id(order_id, feed_id)
-        ok = send_telegram_message(BOT_TOKEN, uid,
+        # send_telegram_message_with_id به‌جای نسخهٔ bool-only — message_id لازمه تا در
+        # delivery_messages ذخیره بشه، وگرنه «برگشت» پنل نمی‌تونه این پیام رو از چت
+        # کاربر پاک کنه (بخش ۴۰ CLAUDE.md). چت خصوصی تلگرام: chat_id == user_id.
+        ok, msg_id = send_telegram_message_with_id(BOT_TOKEN, uid,
             ("✅ <b>سفارش شما ثبت و تحویل شد.</b>\n\n"
              f"شماره سفارش: #{order_id}\n"
              f"سرویس: {title}\n"
@@ -1331,6 +1334,27 @@ def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price
              f"<code>{feed_data}</code>"), parse_mode="HTML")
         if not ok:
             logger.exception("Failed to send delivery message for order %s", order_id)
+        elif msg_id:
+            try:
+                from db import _get_connection as _gc
+                _c = _gc()
+                try:
+                    _c.execute("""
+                        CREATE TABLE IF NOT EXISTS delivery_messages (
+                            feed_id INTEGER PRIMARY KEY, order_id INTEGER,
+                            chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, created_at TEXT NOT NULL
+                        );
+                    """)
+                    _c.execute(
+                        "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                        "VALUES (?,?,?,?,datetime('now'));",
+                        (int(feed_id), int(order_id), int(uid), int(msg_id))
+                    )
+                    _c.commit()
+                finally:
+                    _c.close()
+            except Exception:
+                logger.exception("delivery_messages insert failed (_deliver_or_queue_order)")
         return True
 
     add_wallet_balance(uid, price)
