@@ -469,7 +469,12 @@ def _ensure_theme_table():
 
 
 def _log(request: Request, action: str, section: str = "", details: str = "", admin_info=None, result: str = "ok"):
-    """ثبت فعالیت ادمین — هیچ‌وقت exception نمی‌ده."""
+    """ثبت فعالیت ادمین — هیچ‌وقت exception نمی‌ده.
+    ⚠️ قبلاً این تابع خودش هیچ‌وقت جدول admin_logs رو نمی‌ساخت — فقط به این تکیه
+    می‌کرد که یکی از ۳ روت دیگه (که _ensure_theme_table رو صدا می‌زنن) قبلش اجرا
+    شده باشه؛ روی نصب کاملاً تازه، اگه هیچ‌کدوم از اون ۳ روت هنوز باز نشده بودن،
+    هر INSERT اینجا با «no such table» شکست می‌خورد و بی‌صدا قورت داده می‌شد —
+    یعنی هیچ لاگی ثبت نمی‌شد، بدون هیچ نشونه‌ای. الان خودش صریح گارد می‌کنه."""
     try:
         adm = admin_info or _get_admin(request)
         if not adm:
@@ -477,6 +482,18 @@ def _log(request: Request, action: str, section: str = "", details: str = "", ad
         ip   = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or (request.client.host if request.client else "—")
         name = adm[3] if len(adm) > 3 else f"admin#{adm[0]}"
         conn = _db()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id   INTEGER,
+                admin_name TEXT,
+                action     TEXT NOT NULL,
+                section    TEXT,
+                details    TEXT,
+                ip         TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            );
+        """)
         # اضافه کردن ستون result اگه وجود نداشت
         try:
             conn.execute("ALTER TABLE admin_logs ADD COLUMN result TEXT DEFAULT 'ok';")
@@ -1986,12 +2003,12 @@ async def dashboard(request: Request, err: str = ""):
 
     recent_rows = "".join(f"""
     <tr>
-      <td><a class="order-id" href="/admin/orders/{o['id']}/edit">#{o['id']}</a></td>
+      <td><a class="order-id" href="/admin/orders/{o['id']}">#{o['id']}</a></td>
       <td><div class="table-product"><span><i data-lucide="package"></i></span><strong>{e(o['title'][:34])}</strong></div></td>
       <td><code class="no-fa text-xs">{o['user_id']}</code></td>
       <td><strong class="money-cell">{int(o['price']):,}</strong><small class="currency">تومان</small></td>
       <td>{status_badge(o['status'] or 'active')}</td>
-      <td><a class="table-action" href="/admin/orders/{o['id']}/edit" aria-label="مشاهده سفارش"><i data-lucide="arrow-up-left"></i></a></td>
+      <td><a class="table-action" href="/admin/orders/{o['id']}" aria-label="مشاهده سفارش"><i data-lucide="arrow-up-left"></i></a></td>
     </tr>""" for o in recent)
 
     # مشتق‌شده از همان سفارش‌های اخیر؛ بدون query یا تغییر منطق داده.
@@ -6493,6 +6510,7 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
                               params_q+(PAGE, page*PAGE)).fetchall()
         # آمار برگشتی
         returned_total = conn.execute("SELECT COUNT(*) FROM orders WHERE status='returned';").fetchone()[0]
+        recent_logs = _fetch_order_logs(conn, oid=None, limit=15)
     finally:
         conn.close()
 
@@ -6528,14 +6546,9 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
     for o in orders:
         st = o["status"] if "status" in o.keys() and o["status"] else "active"
         is_returned = st == "returned"
-        action_btns = ""
-        if not is_returned:
-            action_btns = f"""
-            <a href="/admin/orders/{o['id']}/edit" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">✏️ ویرایش</a>
-            <a href="/admin/orders/{o['id']}/return" class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">↩️ برگشت</a>
-            <a href="/admin/orders/{o['id']}/exchange" class="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded hover:bg-amber-100">🔄 تعویض</a>"""
-        else:
-            action_btns = '<span class="text-xs text-gray-400">برگشت خورده</span>'
+        # سه دکمهٔ قدیمی (ویرایش/برگشت/تعویض) ادغام شدن توی یک دکمهٔ «وضعیت سفارش»
+        # که همه‌شون رو یه‌جا نشون می‌ده (بخش ۴۲ CLAUDE.md)
+        action_btns = f'<a href="/admin/orders/{o["id"]}" class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100">🧾 وضعیت سفارش</a>'
 
         rows += f"""
         <tr class="border-b hover:bg-gray-50 text-sm {'bg-red-50/30' if is_returned else ''}">
@@ -6576,49 +6589,348 @@ async def orders_list(request: Request, page: int=0, q: str="", flash: str=""):
         </table>
       </div>
       {pager}
+    </div>
+
+    <div class="card p-6 mt-6">
+      <h2 class="font-bold text-gray-700 mb-2">🕓 آخرین فعالیت‌های سفارش‌ها</h2>
+      <div class="text-xs text-gray-400 mb-3">برگشت/تعویض/ارسال مجدد/ویرایش — همهٔ اتفاقاتی که روی سفارش‌ها افتاده، با دلیل و جزئیات.</div>
+      <div>{"".join(_order_log_row_html(r) for r in recent_logs) or '<div class="text-xs text-gray-400 text-center py-4">فعالیتی ثبت نشده</div>'}</div>
     </div>"""
 
     return _layout("سفارش‌ها", body, adm, flash=flash)
 
 
-@router.get("/orders/{oid}/edit", response_class=HTMLResponse)
-async def order_edit_get(request: Request, oid: int, flash: str=""):
+_ORDER_LOG_ICONS = {
+    "برگشت سفارش": "↩️", "تعویض کالا": "🔄", "ارسال مجدد": "📦", "ویرایش سفارش": "✏️",
+}
+
+
+def _order_log_row_html(row) -> str:
+    icon = _ORDER_LOG_ICONS.get(row["action"], "🕓")
+    return f"""
+    <div class="flex items-start gap-2 py-2 border-b last:border-0 text-xs">
+      <span class="text-base leading-none">{icon}</span>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-medium text-gray-700">{e(row["action"])}</span>
+          <span class="text-gray-400">{fa_date(row["created_at"] or "", with_time=True)}</span>
+          <span class="text-gray-400">— {e(row["admin_name"] or "")}</span>
+        </div>
+        <div class="text-gray-500 mt-0.5 break-words">{e(row["details"] or "")}</div>
+      </div>
+    </div>"""
+
+
+def _fetch_order_logs(conn, oid: int = None, limit: int = 20):
+    """جدول admin_logs قبلاً فقط از داخل ۳ روت خاص (نه اینجا) لیزی ساخته می‌شد — روی
+    نصب کاملاً تازه‌ای که هنوز هیچ‌کدوم از اونا صدا زده نشده، این کوئری با «no such
+    table» شکست می‌خورد (دقیقاً همون کلاس مشکلی که _log() هم داشت، فقط اونجا با
+    try/except بیرونی خاموش قورت داده می‌شد). اینجا صریح گارد شده."""
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id   INTEGER,
+                admin_name TEXT,
+                action     TEXT NOT NULL,
+                section    TEXT,
+                details    TEXT,
+                ip         TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            );
+        """)
+        if oid is None:
+            return conn.execute(
+                "SELECT * FROM admin_logs WHERE section=? ORDER BY id DESC LIMIT ?;",
+                ("سفارش‌ها", limit)
+            ).fetchall()
+        return conn.execute(
+            "SELECT * FROM admin_logs WHERE section=? AND (details LIKE ? OR details LIKE ? OR details LIKE ?) "
+            "ORDER BY id DESC LIMIT ?;",
+            ("سفارش‌ها", f"سفارش #{oid} %", f"سفارش #{oid}→%", f"%→#{oid} |%", limit)
+        ).fetchall()
+    except Exception:
+        return []
+
+
+@router.get("/orders/{oid}", response_class=HTMLResponse)
+async def order_status_page(request: Request, oid: int, flash: str = ""):
+    """🧾 وضعیت سفارش — صفحهٔ یکپارچهٔ ویرایش/برگشت/تعویض/ارسال مجدد + تاریخچهٔ همین
+    سفارش. قبلاً این ۴ قابلیت روی ۴ صفحهٔ جدا بودن (بدون هیچ صفحهٔ خلاصه‌ای که با
+    /admin/orders/{oid} برسه بهش — همون آدرسی که دکمه‌های «انصراف» صفحات برگشت/تعویض
+    بهش لینک می‌دادن ولی هیچ‌وقت وجود نداشت، یعنی همیشه ۴۰۴ می‌گرفتن). طبق درخواست
+    صریح مالک پروژه ادغام شدن (بخش ۴۲ CLAUDE.md)."""
     adm = _get_admin(request)
     guard = _require(adm, "orders")
     if guard: return guard
 
     conn = _db()
+    conn.row_factory = sqlite3.Row
     try:
-        o = conn.execute("SELECT * FROM orders WHERE id=? LIMIT 1;", (oid,)).fetchone()
+        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
+        if not order:
+            return _redir("/admin/orders?flash=سفارش+یافت+نشد")
+        wallet = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (order["user_id"],)).fetchone()
+        wallet_balance = int(wallet["balance"] if wallet else 0)
+
+        resend_items = conn.execute("""
+            SELECT pf.id, pf.data FROM product_feed pf
+            JOIN products p ON p.id=pf.product_id
+            WHERE p.title=? AND pf.delivered=0
+            ORDER BY pf.id LIMIT 5;
+        """, (order["title"],)).fetchall()
+
+        exch_products = conn.execute("""
+            SELECT p.id, p.title, p.price, COUNT(pf.id) AS stock
+            FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id AND pf.delivered=0
+            WHERE p.is_active=1
+            GROUP BY p.id HAVING stock>0
+            ORDER BY p.title;
+        """).fetchall()
+
+        exchange_pair = None
+        try:
+            pair_id = order["exchange_pair_id"] if "exchange_pair_id" in order.keys() else None
+        except Exception:
+            pair_id = None
+        if pair_id:
+            exchange_pair = conn.execute("SELECT id, title, price, status FROM orders WHERE id=?;", (pair_id,)).fetchone()
+
+        logs = _fetch_order_logs(conn, oid)
     finally:
         conn.close()
-    if not o:
-        return _redir("/admin/orders?flash=سفارش+یافت+نشد")
 
-    body = f"""
-    <a href="/admin/orders" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به سفارش‌ها</a>
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">✏️ ویرایش سفارش #{oid}</h1>
-    <div class="card p-6 max-w-xl">
-      <form method="post" action="/admin/orders/{oid}/edit" class="space-y-4">
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">کاربر</label>
-          <code class="bg-gray-100 px-2 py-1 rounded text-sm">{e(o["user_id"])}</code>
-        </div>
+    st = order["status"] if "status" in order.keys() and order["status"] else "active"
+    is_active = st == "active"
+    is_returned = st == "returned"
+    price = int(order["price"] or 0)
+
+    try:
+        resent = order["resent_at"] if "resent_at" in order.keys() else None
+    except Exception:
+        resent = None
+
+    status_badge = (
+        '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">برگشتی</span>' if is_returned
+        else '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">فعال</span>'
+    )
+    extra_badges = ""
+    if resent:
+        extra_badges += ' <span class="px-2 py-0.5 text-xs rounded-full bg-blue-50 text-blue-600 border border-blue-200">♻️ اصلاح‌شده — بدون پرداخت اضافی</span>'
+    if exchange_pair:
+        extra_badges += f' <span class="px-2 py-0.5 text-xs rounded-full bg-amber-50 text-amber-700 border border-amber-200">🔁 جفتِ تعویض: سفارش #{exchange_pair["id"]}</span>'
+
+    info_card = f"""
+    <div class="card p-6">
+      <h2 class="font-bold text-gray-700 mb-4">📦 اطلاعات سفارش</h2>
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between"><span class="text-gray-400">شماره</span><span>#{oid}</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">محصول</span><span>{e(order["title"] or "")}</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">کاربر</span><code>{order["user_id"]}</code></div>
+        <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span>{price:,} تومان</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">موجودی کیف‌پول کاربر</span><span>{wallet_balance:,} تومان</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{status_badge}{extra_badges}</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">تاریخ ثبت</span><span>{fa_date(order["created_at"] or "", with_time=True)}</span></div>
+      </div>
+    </div>"""
+
+    edit_card = f"""
+    <div class="card card-p mb-14">
+      <h2 class="section-title">✏️ ویرایش اطلاعات پایه</h2>
+      <form method="post" action="/admin/orders/{oid}/edit" class="space-y-3">
         <div>
           <label class="text-xs text-gray-500 block mb-1">عنوان محصول</label>
-          {_input("title", "", str(o["title"] or ""), required=True)}
+          {_input("title", "", str(order["title"] or ""), required=True)}
         </div>
         <div>
           <label class="text-xs text-gray-500 block mb-1">مبلغ (تومان)</label>
-          {_input("price", "", str(o["price"] or 0), type_="number", required=True)}
+          {_input("price", "", str(order["price"] or 0), type_="number", required=True)}
         </div>
-        <div class="flex gap-3">
-          {_btn("ذخیره تغییرات", color="green")}
-          {_btn("انصراف", "/admin/orders", "slate")}
-        </div>
+        {_btn("ذخیره تغییرات", color="green")}
       </form>
     </div>"""
-    return _layout(f"ویرایش سفارش #{oid}", body, adm, flash=flash)
+
+    return_card = ""
+    if is_active:
+        return_card = f"""
+        <div class="card card-p mb-14">
+          <h2 class="section-title">↩️ برگشت</h2>
+          <form method="post" action="/admin/orders/{oid}/return">
+            <div class="mb-3">
+              <div class="text-xs text-gray-500 mb-1">تکلیف محصول</div>
+              <div class="flex-col-10">
+                <label class="perm-label option-card">
+                  <input type="radio" name="product_action" value="restore" checked class="option-radio">
+                  <div><strong>بازگشت به موجودی</strong><div class="option-hint">محصول مجدداً قابل فروش می‌شود</div></div>
+                </label>
+                <label class="perm-label option-card">
+                  <input type="radio" name="product_action" value="delete" class="option-radio">
+                  <div><strong>حذف دائم از فید</strong><div class="option-hint">محصول از چرخه فروش خارج می‌شود</div></div>
+                </label>
+              </div>
+            </div>
+            <div class="mb-3">
+              <div class="text-xs text-gray-500 mb-1">تکلیف کیف‌پول کاربر</div>
+              <div class="flex-col-10">
+                <label class="perm-label option-card">
+                  <input type="radio" name="wallet_action" value="none" checked class="option-radio">
+                  <div><strong>بدون تغییر کیف‌پول</strong></div>
+                </label>
+                <label class="perm-label option-card option-card--success">
+                  <input type="radio" name="wallet_action" value="full" class="option-radio">
+                  <div><strong>بازگشت کامل — {price:,} تومان</strong></div>
+                </label>
+                <label class="perm-label option-card">
+                  <input type="radio" name="wallet_action" value="custom_add" class="option-radio">
+                  <div><strong>افزایش مبلغ دلخواه</strong></div>
+                </label>
+                <label class="perm-label option-card option-card--danger">
+                  <input type="radio" name="wallet_action" value="custom_deduct" class="option-radio">
+                  <div><strong>کسر از کیف‌پول</strong></div>
+                </label>
+              </div>
+              <div class="mt-2">
+                <label class="text-xs text-gray-500">مبلغ (تومان) — فقط برای گزینه‌های دلخواه</label>
+                {_input("custom_amount", f"مثلاً: {price}", type_="number")}
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="text-xs text-gray-500 block mb-1">علت برگشت</label>
+              <select name="reason" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <option value="wrong_product">ارسال محصول اشتباه</option>
+                <option value="replacement">جایگزینی محصول</option>
+                <option value="order_fix">اصلاح سفارش</option>
+                <option value="customer_request">درخواست مشتری</option>
+                <option value="other">سایر</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="text-xs text-gray-500 block mb-1">توضیحات اضافه (اختیاری)</label>
+              {_input("note", "توضیح بیشتر...")}
+            </div>
+            <label class="perm-label option-toggle-label mb-3">
+              <input type="checkbox" name="notify_user" value="1" checked class="option-check-sm">
+              ارسال نوتیف به کاربر
+            </label>
+            {_btn("ثبت برگشت","",color="red")}
+          </form>
+        </div>"""
+
+    exchange_card = ""
+    if is_active:
+        exch_opts = "".join(
+            f'<option value="{p["id"]}" data-price="{int(p["price"] or 0)}">{e(p["title"])} — {int(p["price"] or 0):,} تومان (موجودی: {p["stock"]})</option>'
+            for p in exch_products
+        )
+        exchange_card = f"""
+        <div class="card card-p mb-14">
+          <h2 class="section-title">🔄 تعویض کالا</h2>
+          <form method="post" action="/admin/orders/{oid}/exchange">
+            <div class="mb-3">
+              <div class="text-xs text-gray-500 mb-1">تکلیف محصول قدیم</div>
+              <div class="flex-col-10">
+                <label class="perm-label option-card">
+                  <input type="radio" name="old_product_action" value="restore" checked class="option-radio">
+                  <div><strong>بازگشت به موجودی</strong></div>
+                </label>
+                <label class="perm-label option-card">
+                  <input type="radio" name="old_product_action" value="delete" class="option-radio">
+                  <div><strong>حذف دائم از فید</strong></div>
+                </label>
+              </div>
+            </div>
+            <div class="mb-3">
+              <div class="text-xs text-gray-500 mb-1">محصول جایگزین</div>
+              {f'''<select name="new_product_id" id="exch-prod-{oid}" required class="w-full border rounded-lg px-3 py-2 text-sm mb-2" onchange="document.getElementById('exch-diff-{oid}').textContent=(parseInt(this.selectedOptions[0].dataset.price||0)-{price}).toLocaleString('en-US')">
+                <option value="">انتخاب محصول جایگزین...</option>
+                {exch_opts}
+              </select>
+              <div class="info-box">اختلاف قیمت (جدید − قدیم): <strong id="exch-diff-{oid}">۰</strong> تومان</div>''' if exch_opts else '<p class="text-red-500 text-sm">هیچ محصول دیگری با موجودی فعال نیست</p>'}
+            </div>
+            <div class="mb-3">
+              <div class="text-xs text-gray-500 mb-1">تسویهٔ اختلاف قیمت روی کیف‌پول</div>
+              <div class="flex-col-10">
+                <label class="perm-label option-card">
+                  <input type="radio" name="wallet_mode" value="auto" checked class="option-radio">
+                  <div><strong>خودکار بر اساس اختلاف قیمت</strong></div>
+                </label>
+                <label class="perm-label option-card">
+                  <input type="radio" name="wallet_mode" value="none" class="option-radio">
+                  <div><strong>بدون تغییر کیف‌پول</strong></div>
+                </label>
+              </div>
+            </div>
+            {_btn("ثبت تعویض","",color="indigo")}
+          </form>
+        </div>"""
+
+    resend_opts = "".join(
+        f'<option value="{f["id"]}">{f["id"]} — {str(f["data"] or "")[:50]}</option>'
+        for f in resend_items
+    )
+    resend_card = f"""
+    <div class="card card-p mb-14">
+      <h2 class="section-title">📦 ارسال کالای جایگزین</h2>
+      {f'''<form method="post" action="/admin/orders/{oid}/resend">
+        <div class="mb-3">
+          <label class="text-xs text-gray-500 block mb-1">انتخاب آیتم از موجودی (همون محصول)</label>
+          <select name="feed_id" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+            <option value="">انتخاب کنید...</option>
+            {resend_opts}
+          </select>
+        </div>
+        <div class="mb-3">
+          <div class="text-xs text-gray-500 mb-1">تکلیف کیف‌پول کاربر</div>
+          <div class="flex-col-10">
+            <label class="perm-label option-card">
+              <input type="radio" name="wallet_action" value="none" checked class="option-radio">
+              <div><strong>بدون تغییر کیف‌پول</strong></div>
+            </label>
+            <label class="perm-label option-card">
+              <input type="radio" name="wallet_action" value="custom_add" class="option-radio">
+              <div><strong>افزایش مبلغ دلخواه</strong></div>
+            </label>
+            <label class="perm-label option-card option-card--danger">
+              <input type="radio" name="wallet_action" value="custom_deduct" class="option-radio">
+              <div><strong>کسر از کیف‌پول</strong></div>
+            </label>
+          </div>
+          <div class="mt-2">
+            <label class="text-xs text-gray-500">مبلغ (تومان) — فقط برای گزینه‌های دلخواه</label>
+            {_input("custom_amount", "مثلاً: 5000", type_="number")}
+          </div>
+        </div>
+        <label class="perm-label option-toggle-label mb-3">
+          <input type="checkbox" name="notify_user" value="1" checked class="option-check-sm">
+          اطلاع‌رسانی به کاربر
+        </label>
+        {_btn("ارسال محصول جدید","",color="green")}
+      </form>''' if resend_opts else '<p class="text-red-500 text-sm">موجودی در دسترس نیست</p>'}
+    </div>"""
+
+    history_html = "".join(_order_log_row_html(r) for r in logs) or '<div class="text-xs text-gray-400 text-center py-4">فعالیتی ثبت نشده</div>'
+    history_card = f"""
+    <div class="card p-6">
+      <h2 class="font-bold text-gray-700 mb-2">🕓 تاریخچهٔ این سفارش</h2>
+      <div>{history_html}</div>
+    </div>"""
+
+    body = f"""
+    <a href="/admin/orders" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به سفارش‌ها</a>
+    <h1 class="text-xl font-bold text-gray-800 mb-6">🧾 وضعیت سفارش #{oid}</h1>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="space-y-4">
+        {info_card}
+        {edit_card}
+        {return_card}
+        {exchange_card}
+      </div>
+      <div class="space-y-4">
+        {resend_card}
+        {history_card}
+      </div>
+    </div>"""
+    return _layout(f"وضعیت سفارش #{oid}", body, adm, flash=flash)
 
 
 @router.post("/orders/{oid}/edit")
@@ -6631,107 +6943,9 @@ async def order_edit_post(request: Request, oid: int, title: str=Form(""), price
         order_update(oid, title=title.strip(), price=int(price or 0))
     except Exception as ex:
         _tg_logger.error("order_edit error: %s", ex)
-        return _redir(f"/admin/orders/{oid}/edit?flash=خطا+در+ذخیره")
-    return _redir("/admin/orders?flash=سفارش+ویرایش+شد")
-
-
-@router.get("/orders/{oid}/return", response_class=HTMLResponse)
-async def order_return_form(request: Request, oid: int):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    conn = _db()
-    try:
-        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
-        if not order:
-            return _redir(f"/admin/orders?flash=سفارش+یافت+نشد")
-        wallet = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (order["user_id"],)).fetchone()
-        wallet_balance = int(wallet["balance"] if wallet else 0)
-        price = int(order["price"] or 0)
-    finally:
-        conn.close()
-
-    body = f"""
-    <div class="max-w-640">
-      <div class="page-header">
-        <h1>برگشت سفارش #{oid}</h1>
-        <p>محصول: {e(order["title"] or "")} — کاربر: {order["user_id"]}</p>
-      </div>
-      <form method="post" action="/admin/orders/{oid}/return">
-        <div class="card card-p mb-14">
-          <h2 class="section-title">تکلیف محصول</h2>
-          <div class="flex-col-10">
-            <label class="perm-label option-card">
-              <input type="radio" name="product_action" value="restore" checked class="option-radio">
-              <div><strong>بازگشت به موجودی</strong><div class="option-hint">محصول مجدداً قابل فروش می‌شود</div></div>
-            </label>
-            <label class="perm-label option-card">
-              <input type="radio" name="product_action" value="delete" class="option-radio">
-              <div><strong>حذف دائم از فید</strong><div class="option-hint">محصول از چرخه فروش خارج می‌شود</div></div>
-            </label>
-          </div>
-        </div>
-
-        <div class="card card-p mb-14">
-          <h2 class="section-title">تکلیف کیف‌پول کاربر</h2>
-          <div class="info-box">
-            موجودی فعلی: <strong>{wallet_balance:,} تومان</strong> — مبلغ سفارش: <strong>{price:,} تومان</strong>
-          </div>
-          <div class="flex-col-10">
-            <label class="perm-label option-card">
-              <input type="radio" name="wallet_action" value="none" checked class="option-radio">
-              <div><strong>بدون تغییر کیف‌پول</strong></div>
-            </label>
-            <label class="perm-label option-card option-card--success">
-              <input type="radio" name="wallet_action" value="full" class="option-radio">
-              <div><strong>بازگشت کامل — {price:,} تومان</strong><div class="option-hint">مبلغ کامل سفارش به کیف‌پول اضافه می‌شود</div></div>
-            </label>
-            <label class="perm-label option-card">
-              <input type="radio" name="wallet_action" value="custom_add" class="option-radio">
-              <div><strong>افزایش مبلغ دلخواه</strong></div>
-            </label>
-            <label class="perm-label option-card option-card--danger">
-              <input type="radio" name="wallet_action" value="custom_deduct" class="option-radio">
-              <div><strong>کسر از کیف‌پول</strong></div>
-            </label>
-          </div>
-          <div class="mt-14">
-            <label>مبلغ (تومان) — فقط برای گزینه‌های دلخواه</label>
-            {_input("custom_amount", f"مثلاً: {price}", type_="number")}
-          </div>
-        </div>
-
-        <div class="card card-p mb-14">
-          <h2 class="section-title">اطلاعات تکمیلی</h2>
-          <div class="mb-14">
-            <label>علت برگشت</label>
-            <select name="reason">
-              <option value="wrong_product">ارسال محصول اشتباه</option>
-              <option value="replacement">جایگزینی محصول</option>
-              <option value="order_fix">اصلاح سفارش</option>
-              <option value="customer_request">درخواست مشتری</option>
-              <option value="other">سایر</option>
-            </select>
-          </div>
-          <div>
-            <label>توضیحات اضافه (اختیاری)</label>
-            {_input("note", "توضیح بیشتر...")}
-          </div>
-          <div class="mt-14">
-            <label class="perm-label option-toggle-label">
-              <input type="checkbox" name="notify_user" value="1" checked class="option-check-sm">
-              ارسال نوتیف به کاربر
-            </label>
-          </div>
-        </div>
-
-        <div class="btn-row-12">
-          {_btn("ثبت برگشت","",color="red")}
-          <a href="/admin/orders/{oid}" class="btn btn-slate">انصراف</a>
-        </div>
-      </form>
-    </div>"""
-    return _layout(f"برگشت سفارش #{oid}", body, adm)
+        return _redir(f"/admin/orders/{oid}?flash=خطا+در+ذخیره")
+    _log(request, "ویرایش سفارش", "سفارش‌ها", f"سفارش #{oid} | عنوان:{title.strip()} | مبلغ:{price}", admin_info=adm)
+    return _redir(f"/admin/orders/{oid}?flash=✅+سفارش+ویرایش+شد")
 
 
 @router.post("/orders/{oid}/return")
@@ -6758,10 +6972,10 @@ async def order_return(request: Request, oid: int):
         )
     except Exception as ex:
         _tg_logger.error("order_return error: %s", ex)
-        return _redir(f"/admin/orders?flash=خطا:+{str(ex)[:50]}")
+        return _redir(f"/admin/orders/{oid}?flash=خطا:+{str(ex)[:50]}")
 
     if not result.get("ok"):
-        return _redir(f"/admin/orders?flash={result.get('error','خطا')}")
+        return _redir(f"/admin/orders/{oid}?flash={result.get('error','خطا')}")
 
     # حذف پیام تحویل
     if result.get("chat_id") and result.get("message_id"):
@@ -6786,76 +7000,7 @@ async def order_return(request: Request, oid: int):
     _log(request, "برگشت سفارش", "سفارش‌ها",
          f"سفارش #{oid} | محصول: {product_action} | کیف‌پول: {wallet_action} | علت: {reason} | {note[:80]}")
 
-    # redirect به صفحه ارسال مجدد
-    return _redir(f"/admin/orders/{oid}/resend?flash=برگشت+ثبت+شد")
-
-
-@router.get("/orders/{oid}/resend", response_class=HTMLResponse)
-async def order_resend_page(request: Request, oid: int, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    conn = _db()
-    import sqlite3 as _sq_rsnd; conn.row_factory = _sq_rsnd.Row
-    try:
-        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
-        if not order:
-            return _redir("/admin/orders?flash=سفارش+یافت+نشد")
-        order = dict(order)
-        # موجودی محصول مشابه
-        feed_items = conn.execute("""
-            SELECT pf.id, pf.data, p.title
-            FROM product_feed pf
-            JOIN products p ON p.id=pf.product_id
-            WHERE p.title=? AND pf.delivered=0
-            ORDER BY pf.id LIMIT 5;
-        """, (order['title'],)).fetchall()
-    finally:
-        conn.close()
-
-    items_opts = "".join(
-        f'<option value="{f["id"]}">{f["id"]} — {str(f["data"] or "")[:50]}</option>'
-        for f in feed_items
-    )
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← سفارش‌ها", "/admin/orders", "slate", small=True)}
-      <h1 class="text-xl font-bold text-gray-800">♻️ ارسال مجدد سفارش #{oid}</h1>
-    </div>
-
-    <div class="grid md:grid-cols-2 gap-4">
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">📦 اطلاعات سفارش</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between"><span class="text-gray-400">محصول</span><span>{e(order['title'])}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">وضعیت</span><span>{order['status']}</span></div>
-          <div class="flex justify-between"><span class="text-gray-400">کاربر</span><code>{order['user_id']}</code></div>
-          <div class="flex justify-between"><span class="text-gray-400">مبلغ</span><span>{int(order['price'] or 0):,} تومان</span></div>
-        </div>
-      </div>
-
-      <div class="card p-6">
-        <h2 class="font-bold text-gray-700 mb-4">🔄 ارسال محصول جدید (معاوضه)</h2>
-        {f"""<form method="post" action="/admin/orders/{oid}/resend">
-          <div class="mb-3">
-            <label class="text-sm font-medium text-gray-700 block mb-1">انتخاب آیتم از موجودی</label>
-            <select name="feed_id" required class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <option value="">انتخاب کنید...</option>
-              {items_opts}
-            </select>
-          </div>
-          <div class="mb-4">
-            <label class="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" name="notify_user" value="1" checked>
-              اطلاع‌رسانی به کاربر
-            </label>
-          </div>
-          {_btn("ارسال محصول جدید","",color="green")}
-        </form>""" if items_opts else '<p class="text-red-500 text-sm">موجودی در دسترس نیست</p>'}
-      </div>
-    </div>"""
-    return _layout(f"ارسال مجدد #{oid}", body, adm, flash=flash)
+    return _redir(f"/admin/orders/{oid}?flash=✅+برگشت+ثبت+شد+—+می‌توانید+کالای+جایگزین+ارسال+کنید")
 
 
 @router.post("/orders/{oid}/resend")
@@ -6864,17 +7009,19 @@ async def order_resend_post(request: Request, oid: int):
     guard = _require(adm, "orders")
     if guard: return guard
     form = await request.form()
-    feed_id = int(form.get("feed_id") or 0)
-    notify  = form.get("notify_user") == "1"
+    feed_id       = int(form.get("feed_id") or 0)
+    notify        = form.get("notify_user") == "1"
+    wallet_action = str(form.get("wallet_action", "none"))  # none | custom_add | custom_deduct
+    custom_amount = int(form.get("custom_amount") or 0)
     if not feed_id:
-        return _redir(f"/admin/orders/{oid}/resend?flash=آیتم+انتخاب+نشد")
+        return _redir(f"/admin/orders/{oid}?flash=آیتم+انتخاب+نشد")
 
     conn = _db()
     try:
         order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
         feed  = conn.execute("SELECT * FROM product_feed WHERE id=? AND delivered=0;", (feed_id,)).fetchone()
         if not order or not feed:
-            return _redir(f"/admin/orders/{oid}/resend?flash=خطا:+داده+یافت+نشد")
+            return _redir(f"/admin/orders/{oid}?flash=خطا:+داده+یافت+نشد")
 
         user_id = int(order["user_id"])
         title   = order["title"]
@@ -6885,9 +7032,25 @@ async def order_resend_post(request: Request, oid: int):
         conn.execute("UPDATE product_feed SET delivered=1, order_id=?, delivered_at=datetime('now') WHERE id=?;",
                      (oid, feed_id))
         # آپدیت order با feed_id جدید + علامت resent_at — تا در لیست سفارش‌ها روشن
-        # باشه این یه اصلاح/جایگزینیه (بدون پرداخت اضافی، همون سفارش/قیمت قبلی)، نه
-        # یه تحویل تازهٔ مستقل (بخش ۴۱ CLAUDE.md)
+        # باشه این یه اصلاح/جایگزینیه، نه یه تحویل تازهٔ مستقل (بخش ۴۱ CLAUDE.md)
         conn.execute("UPDATE orders SET feed_id=?, status='active', resent_at=datetime('now') WHERE id=?;", (feed_id, oid))
+
+        # تکلیف کیف‌پول — طبق درخواست صریح مالک پروژه («باید بپرسه که از کاربر پول کم
+        # بشه یا نه یا افزایش پیدا کنه یا نه»، بخش ۴۲ CLAUDE.md) — همون سه گزینهٔ فرم
+        # برگشت (بدون «بازگشت کامل»، چون ارسال مجدد جایگزینی همون‌قیمته، نه لغو سفارش).
+        wallet_delta = 0
+        if wallet_action == "custom_add" and custom_amount:
+            wallet_delta = abs(custom_amount)
+        elif wallet_action == "custom_deduct" and custom_amount:
+            wallet_delta = -abs(custom_amount)
+        if wallet_delta != 0:
+            wrow = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (user_id,)).fetchone()
+            if wrow:
+                new_bal = max(0, int(wrow["balance"]) + wallet_delta)
+                conn.execute("UPDATE wallets SET balance=?, updated_at=datetime('now') WHERE user_id=?;", (new_bal, user_id))
+            else:
+                conn.execute("INSERT INTO wallets (user_id, balance, updated_at) VALUES (?,?,datetime('now'));",
+                             (user_id, max(0, wallet_delta)))
         conn.commit()
     finally:
         conn.close()
@@ -6899,12 +7062,17 @@ async def order_resend_post(request: Request, oid: int):
     if notify:
         try:
             import html as _html
+            wallet_msg = ""
+            if wallet_delta > 0:
+                wallet_msg = f"\n💰 مبلغ {wallet_delta:,} تومان به کیف‌پول شما افزوده شد."
+            elif wallet_delta < 0:
+                wallet_msg = f"\n💳 مبلغ {abs(wallet_delta):,} تومان از کیف‌پول شما کسر شد."
             from tg_notify import send_telegram_message_with_id
             token = _env("BOT_TOKEN")
             ok, msg_id = await run_in_threadpool(
                 send_telegram_message_with_id, token, user_id,
                 f"📦 محصول جدید برای سفارش #{oid} ارسال شد:\n\n"
-                f"<code>{_html.escape(str(data))}</code>",
+                f"<code>{_html.escape(str(data))}</code>{wallet_msg}",
                 "HTML"
             )
             if ok and msg_id:
@@ -6927,100 +7095,16 @@ async def order_resend_post(request: Request, oid: int):
         except Exception:
             _tg_logger.exception("resend delivery_messages insert failed")
 
-    _log(request, "ارسال مجدد", "سفارش‌ها", f"سفارش #{oid} | feed_item:{feed_id} | از موجودی کم شد | بدون پرداخت اضافی")
-    return _redir(
-        f"/admin/orders?flash=✅+محصول+جدید+برای+سفارش+{oid}+ارسال+شد+"
-        "(آیتم+از+موجودی+کم+شد،+بدون+پرداخت+اضافی+از+کاربر)"
-    )
-
-
-@router.get("/orders/{oid}/exchange", response_class=HTMLResponse)
-async def order_exchange_form(request: Request, oid: int, flash: str = ""):
-    """تعویض کالا — برخلاف «ارسال مجدد» (که فقط همون محصول رو دوباره تحویل می‌ده)،
-    اینجا می‌شه به یه محصول دیگه (با قیمت متفاوت) تعویض کرد؛ سفارش قدیم با همون
-    مکانیزم برگشت موجود می‌بنده (status='returned') و یه سفارش کاملاً جدید ساخته
-    می‌شه — طبق db.exchange_order. اختلاف قیمت روی کیف‌پول کاربر تسویه می‌شه."""
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    conn = _db()
-    conn.row_factory = sqlite3.Row
-    try:
-        order = conn.execute("SELECT * FROM orders WHERE id=?;", (oid,)).fetchone()
-        if not order:
-            return _redir("/admin/orders?flash=سفارش+یافت+نشد")
-        if (order["status"] or "active") != "active":
-            return _redir(f"/admin/orders/{oid}?flash=این+سفارش+فعال+نیست،+قابل+تعویض+نیست")
-        wallet = conn.execute("SELECT balance FROM wallets WHERE user_id=?;", (order["user_id"],)).fetchone()
-        wallet_balance = int(wallet["balance"] if wallet else 0)
-        products = conn.execute("""
-            SELECT p.id, p.title, p.price, COUNT(pf.id) AS stock
-            FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id AND pf.delivered=0
-            WHERE p.is_active=1
-            GROUP BY p.id HAVING stock>0
-            ORDER BY p.title;
-        """).fetchall()
-    finally:
-        conn.close()
-
-    price = int(order["price"] or 0)
-    prod_opts = "".join(
-        f'<option value="{p["id"]}" data-price="{int(p["price"] or 0)}">{e(p["title"])} — {int(p["price"] or 0):,} تومان (موجودی: {p["stock"]})</option>'
-        for p in products
-    )
-
-    body = f"""
-    <div class="max-w-640">
-      <div class="page-header">
-        <h1>🔄 تعویض کالا — سفارش #{oid}</h1>
-        <p>محصول فعلی: {e(order["title"] or "")} — {price:,} تومان — کاربر: {order["user_id"]}</p>
-      </div>
-      <form method="post" action="/admin/orders/{oid}/exchange">
-        <div class="card card-p mb-14">
-          <h2 class="section-title">تکلیف محصول قدیم</h2>
-          <div class="flex-col-10">
-            <label class="perm-label option-card">
-              <input type="radio" name="old_product_action" value="restore" checked class="option-radio">
-              <div><strong>بازگشت به موجودی</strong><div class="option-hint">محصول قدیم مجدداً قابل فروش می‌شود</div></div>
-            </label>
-            <label class="perm-label option-card">
-              <input type="radio" name="old_product_action" value="delete" class="option-radio">
-              <div><strong>حذف دائم از فید</strong></div>
-            </label>
-          </div>
-        </div>
-
-        <div class="card card-p mb-14">
-          <h2 class="section-title">محصول جایگزین</h2>
-          {f'''<select name="new_product_id" id="exch-prod" required class="w-full border rounded-lg px-3 py-2 text-sm mb-2" onchange="document.getElementById('exch-diff').textContent=(parseInt(this.selectedOptions[0].dataset.price||0)-{price}).toLocaleString('en-US')">
-            <option value="">انتخاب محصول جایگزین...</option>
-            {prod_opts}
-          </select>
-          <div class="info-box">اختلاف قیمت (جدید − قدیم): <strong id="exch-diff">۰</strong> تومان — مثبت یعنی باید از کاربر دریافت شود، منفی یعنی باید بازگردانده شود.</div>''' if prod_opts else '<p class="text-red-500 text-sm">هیچ محصول دیگری با موجودی فعال نیست</p>'}
-        </div>
-
-        <div class="card card-p mb-14">
-          <h2 class="section-title">تسویهٔ اختلاف قیمت روی کیف‌پول</h2>
-          <div class="info-box">موجودی فعلی کیف‌پول: <strong>{wallet_balance:,} تومان</strong></div>
-          <div class="flex-col-10">
-            <label class="perm-label option-card">
-              <input type="radio" name="wallet_mode" value="auto" checked class="option-radio">
-              <div><strong>خودکار بر اساس اختلاف قیمت</strong><div class="option-hint">اگر جدید گران‌تر بود کسر، اگر ارزان‌تر بود بازگشت — دقیقاً به اندازهٔ اختلاف</div></div>
-            </label>
-            <label class="perm-label option-card">
-              <input type="radio" name="wallet_mode" value="none" class="option-radio">
-              <div><strong>بدون تغییر کیف‌پول</strong><div class="option-hint">اختلاف قیمت به‌صورت جدا/دستی تسویه می‌شود</div></div>
-            </label>
-          </div>
-        </div>
-
-        <div class="btn-row-12">
-          {_btn("ثبت تعویض","",color="indigo")}
-          <a href="/admin/orders/{oid}" class="btn btn-slate">انصراف</a>
-        </div>
-      </form>
-    </div>"""
-    return _layout(f"تعویض کالا #{oid}", body, adm, flash=flash)
+    _log(request, "ارسال مجدد", "سفارش‌ها",
+         f"سفارش #{oid} | feed_item:{feed_id} | از موجودی کم شد | کیف‌پول:{wallet_action}({wallet_delta:+,})")
+    wallet_note = ""
+    if wallet_delta > 0:
+        wallet_note = f"+{wallet_delta:,}+ت+به+کیف‌پول+اضافه+شد"
+    elif wallet_delta < 0:
+        wallet_note = f"+{abs(wallet_delta):,}+ت+از+کیف‌پول+کسر+شد"
+    else:
+        wallet_note = "+بدون+پرداخت+اضافی"
+    return _redir(f"/admin/orders/{oid}?flash=✅+محصول+جدید+ارسال+شد+(آیتم+از+موجودی+کم+شد{wallet_note})")
 
 
 @router.post("/orders/{oid}/exchange")
@@ -7033,7 +7117,7 @@ async def order_exchange_post(request: Request, oid: int):
     old_product_action = str(form.get("old_product_action", "restore"))
     wallet_mode = str(form.get("wallet_mode", "auto"))
     if not new_product_id:
-        return _redir(f"/admin/orders/{oid}/exchange?flash=محصول+جایگزین+انتخاب+نشد")
+        return _redir(f"/admin/orders/{oid}?flash=محصول+جایگزین+انتخاب+نشد")
 
     from db import exchange_order
     conn = _db()
@@ -7043,7 +7127,7 @@ async def order_exchange_post(request: Request, oid: int):
     finally:
         conn.close()
     if not old_order or not new_product:
-        return _redir(f"/admin/orders/{oid}/exchange?flash=خطا:+داده+یافت+نشد")
+        return _redir(f"/admin/orders/{oid}?flash=خطا:+داده+یافت+نشد")
 
     wallet_delta = 0
     if wallet_mode == "auto":
@@ -7051,7 +7135,7 @@ async def order_exchange_post(request: Request, oid: int):
 
     result = exchange_order(oid, new_product_id, old_product_action=old_product_action, wallet_delta=wallet_delta)
     if not result.get("ok"):
-        return _redir(f"/admin/orders/{oid}/exchange?flash={result.get('error','خطا')}")
+        return _redir(f"/admin/orders/{oid}?flash={result.get('error','خطا')}")
 
     if result.get("old_chat_id") and result.get("old_message_id"):
         await run_in_threadpool(_tg_delete_message, result["old_chat_id"], result["old_message_id"])
@@ -7072,7 +7156,7 @@ async def order_exchange_post(request: Request, oid: int):
     _log(request, "تعویض کالا", "سفارش‌ها",
          f"سفارش #{oid}→#{result.get('new_order_id')} | محصول قدیم:{old_product_action} | اختلاف کیف‌پول:{wallet_delta}",
          admin_info=adm)
-    return _redir(f"/admin/orders?flash=✅+تعویض+ثبت+شد+(سفارش+جدید+#{result.get('new_order_id')})")
+    return _redir(f"/admin/orders/{result.get('new_order_id')}?flash=✅+تعویض+ثبت+شد+(سفارش+جدید+#{result.get('new_order_id')})")
 
 
 # ─────────────────────────── Wallets ───────────────────────────────────────
