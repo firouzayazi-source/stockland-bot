@@ -25,6 +25,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
+from urllib.parse import quote as _urlquote
 
 import requests as _requests
 from fastapi import APIRouter, BackgroundTasks, Form, Request, UploadFile
@@ -8095,9 +8096,12 @@ async def ticket_detail(request: Request, tid: int, flash: str = ""):
             except: fid = ""
             try: txt = (msg["text"] or "").strip()
             except: txt = ""
+            try: fname = (msg["file_name"] or "").strip()
+            except: fname = ""
 
+            proxy_qs = f"?fn={_urlquote(fname, safe='')}" if fname else ""
             caption = f'<div class="chat-caption">{e(txt)}</div>' if txt and not txt.startswith("[") else ""
-            proxy = f"/admin/tickets/media/{e(fid)}" if fid else ""
+            proxy = f"/admin/tickets/media/{e(fid)}{proxy_qs}" if fid else ""
 
             if mt == "photo" and proxy:
                 return (
@@ -8612,7 +8616,7 @@ async def ticket_messages_json(request: Request, tid: int, after: int = 0):
 
 
 @router.get("/tickets/media/{file_id}")
-async def ticket_media(request: Request, file_id: str):
+async def ticket_media(request: Request, file_id: str, fn: str = ""):
     """Proxy عکس‌های تیکت از Telegram."""
     from fastapi.responses import Response
     adm = _get_admin(request)
@@ -8635,7 +8639,13 @@ async def ticket_media(request: Request, file_id: str):
         r2 = await run_in_threadpool(
             _requests.get, f"https://api.telegram.org/file/bot{token}/{fp}", timeout=15)
         ct = r2.headers.get("content-type", "image/jpeg")
-        return Response(content=r2.content, media_type=ct)
+        headers = {}
+        if fn:
+            # نام فایل اصلی (پسوند واقعی) — بدونش مرورگر بعد از دانلود اسم/پسوند تلگرام
+            # (مثل هش file_path) رو جایگزین می‌کنه، نه اسم واقعی که کاربر آپلود کرده بود.
+            safe_fn = fn.replace('"', "").replace("\\", "").replace("\r", "").replace("\n", "")
+            headers["Content-Disposition"] = f'inline; filename="{safe_fn}"'
+        return Response(content=r2.content, media_type=ct, headers=headers)
     except Exception:
         return Response(status_code=502)
 

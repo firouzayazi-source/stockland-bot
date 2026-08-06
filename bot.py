@@ -973,12 +973,14 @@ def _ticket_v2_handle_user_message(message) -> None:
 
     media = message.content_type if message.content_type != "text" else None
     file_id = None
+    file_name = None
     if media:
         try:
             if message.content_type == "photo":
                 file_id = message.photo[-1].file_id
             elif message.content_type == "document":
                 file_id = message.document.file_id
+                file_name = message.document.file_name
             elif message.content_type == "video":
                 file_id = message.video.file_id
             elif message.content_type == "audio":
@@ -992,7 +994,8 @@ def _ticket_v2_handle_user_message(message) -> None:
         int(ticket_id), "user",
         txt or f"[{message.content_type}]",
         media_type=media,
-        media_file_id=file_id
+        media_file_id=file_id,
+        file_name=file_name
     )
     new_count = ticket_user_sent(int(ticket_id))
 

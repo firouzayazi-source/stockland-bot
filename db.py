@@ -2283,6 +2283,7 @@ def ticket_ensure_schema() -> None:
         for col, typedef in [
             ("source",        "TEXT NOT NULL DEFAULT 'telegram'"),
             ("media_file_id", "TEXT"),
+            ("file_name",     "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE ticket_messages ADD COLUMN {col} {typedef};")
@@ -2377,14 +2378,14 @@ def ticket_get_open_product(user_id: int, order_id: int):
 
 def ticket_add_message(ticket_id: int, sender: str, text: str | None,
                         media_type: str | None = None, source: str = "telegram",
-                        media_file_id: str | None = None) -> int:
+                        media_file_id: str | None = None, file_name: str | None = None) -> int:
     conn = _get_connection()
     try:
         now = datetime.utcnow().isoformat()
         cur = conn.execute(
-            "INSERT INTO ticket_messages (ticket_id, sender, text, media_type, media_file_id, source, created_at) "
-            "VALUES (?,?,?,?,?,?,?);",
-            (ticket_id, sender, text, media_type, media_file_id, source, now)
+            "INSERT INTO ticket_messages (ticket_id, sender, text, media_type, media_file_id, file_name, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?);",
+            (ticket_id, sender, text, media_type, media_file_id, file_name, source, now)
         )
         msg_id = cur.lastrowid
         conn.execute("UPDATE tickets SET updated_at=? WHERE id=?;", (now, ticket_id))
