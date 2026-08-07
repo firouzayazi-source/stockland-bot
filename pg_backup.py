@@ -40,10 +40,14 @@ def backup_filename() -> str:
     return f"pg_backup_{time.strftime('%Y%m%d_%H%M%S')}.stbak"
 
 
-def create_backup() -> str:
+def create_backup(tables: list = None) -> str:
     """
-    بکاپ کامل با pg_dump می‌گیرد، فشرده می‌کند، در BACKUP_DIR ذخیره می‌کند.
+    بکاپ با pg_dump می‌گیرد، فشرده می‌کند، در BACKUP_DIR ذخیره می‌کند.
     مسیر فایل ساخته‌شده را برمی‌گرداند.
+
+    tables: اگه داده بشه، فقط همین جدول‌ها dump می‌شن (بکاپ سفارشی/بخش‌بندی‌شده —
+    معادل Postgres همون «انتخاب سفارشی» که قبلاً فقط برای SQLite/.stbak وجود
+    داشت)؛ None یعنی بکاپ کامل دیتابیس (رفتار قبلی، بدون تغییر).
     """
     os.makedirs(BACKUP_DIR, exist_ok=True)
     creds = _parse_dsn()
@@ -60,6 +64,9 @@ def create_backup() -> str:
         "-U", creds["user"], "-d", creds["dbname"],
         "--no-owner", "--no-privileges", "--clean", "--if-exists",
     ]
+    if tables:
+        for t in tables:
+            cmd += ["-t", t]
     try:
         with gzip.open(fpath, "wb") as gz:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -143,13 +150,13 @@ def restore_backup(filepath: str) -> dict:
 # ─── بکاپ کامل + آپلود به مقاصد ابری (غیرهمزمان) ─────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
 
-def run_full_backup() -> dict:
+def run_full_backup(tables: list = None) -> dict:
     """
-    بکاپ می‌گیرد + به مقاصد ابری فعال آپلود می‌کند (غیرهمزمان).
-    برای اجرای خودکار روزانه و دکمه دستی پنل.
+    بکاپ می‌گیرد (کامل یا سفارشی، بسته به tables) + به مقاصد ابری فعال آپلود
+    می‌کند (غیرهمزمان). برای اجرای خودکار روزانه و دکمه دستی پنل.
     """
     try:
-        fpath = create_backup()
+        fpath = create_backup(tables=tables)
     except Exception as ex:
         logger.error("backup failed: %s", ex)
         return {"ok": False, "error": str(ex)[:200]}

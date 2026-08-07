@@ -3467,12 +3467,8 @@ async def database_page(request: Request, flash: str = ""):
     from stbak_engine import MODULES, SECTION_LABELS
     import glob as _gl, os as _os
 
-    # لیست بکاپ‌های خودکار — بر اساس DB_DIALECT سوییچ می‌کنه.
-    # ⚠️ رفع‌شده (ممیزی کامل پروژه، پاک‌سازی SQLite): این کامنت قبلاً می‌گفت
-    # «stbak_engine همون چیزیه که تولید روش کار می‌کنه» — اون فرض دیگه درست
-    # نیست. اگه پروژه واقعاً روی Postgres مهاجرت کرده، stbak_engine فقط از فایل
-    # SQLite فانتومِ دیگه استفاده‌نشده بکاپ می‌گیره (نه دادهٔ واقعی) — pg_backup
-    # (بر پایهٔ pg_dump/psql) جایگزین درستشه.
+    # لیست بکاپ‌های موجود — بر اساس DB_DIALECT سوییچ می‌کنه (فایل SQLite/.stbak
+    # یا pg_dump/.stbak، هرکدوم که واقعاً دادهٔ زندهٔ پروژه رو پوشش می‌ده).
     import db_conn as _dbc_page
     _is_pg = _dbc_page.is_postgres()
     try:
@@ -3484,60 +3480,15 @@ async def database_page(request: Request, flash: str = ""):
             _auto_list = _list_stbak(_BACKUP_DIR)[:_MAX_BACKUPS]
     except Exception:
         _auto_list = []
-    _auto_files = [b["path"] for b in _auto_list]
-    _auto_rows = ""
-    for _b in _auto_list:
-        _fn  = _b["name"]
-        _sz  = _b["size"]
-        _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
-        try:
-            from datetime import datetime as _dt
-            from db import fa_date as _fad
-            _iso = _dt.fromtimestamp(_b["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
-            _tfa = _fad(_iso, with_time=True)  # شمسی + اعداد فارسی
-        except Exception:
-            _tfa = _fn
-        _auto_rows += f"""<tr class="border-b hover:bg-gray-50">
-          <td class="px-4 py-3 text-sm">{_tfa}</td>
-          <td class="px-4 py-3 text-xs text-gray-400">خودکار</td>
-          <td class="px-4 py-3 text-xs text-gray-500">{_szs}</td>
-          <td class="px-4 py-3">
-            <a href="/admin/database/download/{e(_fn)}"
-               class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded">⬇ دانلود</a>
-          </td>
-        </tr>"""
 
-    # این بخش همیشه رندر می‌شه (حتی وقتی لیست خالیه) — قبلاً وقتی هیچ بکاپی توی
-    # _BACKUP_DIR نبود، کل کارت اصلاً نمایش داده نمی‌شد؛ یعنی ادمین نمی‌تونست تشخیص
-    # بده که فیچر خرابه یا صرفاً هنوز بکاپی نساخته.
-    if _auto_files:
-        _auto_body = f"""<div class="overflow-x-auto">
-            <table class="w-full text-right min-w-max">
-              <thead><tr class="text-xs text-gray-500 border-b bg-gray-50">
-                <th class="px-4 py-3">تاریخ و ساعت</th>
-                <th class="px-4 py-3">نوع</th>
-                <th class="px-4 py-3">حجم</th>
-                <th class="px-4 py-3">دانلود</th>
-              </tr></thead>
-              <tbody>{_auto_rows}</tbody>
-            </table>
-          </div>"""
-    else:
-        _auto_body = """<div class="px-5 py-6 text-center text-sm text-gray-400">
-            هنوز هیچ بکاپی ساخته نشده — دکمهٔ «ساخت بکاپ» رو از بخش پشتیبان‌گیری بزن تا اینجا لیست بشه.
-          </div>"""
-
-    _auto_section = f"""<div class="card overflow-hidden mb-4">
-          <div class="w-full px-5 py-4 flex items-center justify-between bg-gray-50 text-sm font-medium text-gray-700">
-            <span>🕐 بکاپ‌های خودکار <span class="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">{len(_auto_files)}</span></span>
-          </div>
-          {_auto_body}
-        </div>"""
-
-    # لیست بکاپ‌های خودکار برای dropdown بازیابی
-    _restore_options = ""
-    for _b in _auto_list:
+    # آخرین ۵ بکاپ برای بخش «بازیابی» (کشویی) — هم برای نمایش هم برای دکمهٔ
+    # بازیابی مستقیم هر ردیف.
+    _last5 = _auto_list[:5]
+    _restore_rows = ""
+    for _b in _last5:
         _fn = _b["name"]
+        _sz = _b["size"]
+        _szs = f"{_sz//1024} KB" if _sz < 1024*1024 else f"{_sz/1024/1024:.1f} MB"
         try:
             from datetime import datetime as _dt2
             from db import fa_date as _fad2
@@ -3545,25 +3496,40 @@ async def database_page(request: Request, flash: str = ""):
             _label = _fad2(_iso, with_time=True)  # شمسی + اعداد فارسی
         except Exception:
             _label = _fn
-        _sz = _b["size"]
-        _szs = f"{_sz//1024} KB"
-        _restore_options += f'<option value="{e(_fn)}">{_label} ({_szs})</option>'
+        _restore_rows += f"""
+          <div class="flex items-center justify-between gap-2 py-2 px-3 border-b border-gray-100 last:border-0">
+            <div class="text-sm text-gray-700">{_label}<span class="text-xs text-gray-400 mr-2">({_szs})</span></div>
+            <div class="flex gap-1.5 shrink-0">
+              <a href="/admin/database/download/{e(_fn)}"
+                 class="px-2 py-1 text-xs bg-gray-50 text-gray-600 border border-gray-200 rounded-lg">⬇</a>
+              <button onclick="doRestoreFile('{e(_fn)}')"
+                class="px-2 py-1 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg">♻️ بازیابی</button>
+            </div>
+          </div>"""
+    if not _restore_rows:
+        _restore_rows = '<div class="px-3 py-4 text-center text-sm text-gray-400">هنوز هیچ بکاپی ساخته نشده</div>'
 
-    def _chk(name, checked=True):
-        mods_html = "".join(
+    def _mod_checks(name, checked=True):
+        """چک‌باکس‌های ماژول برای بکاپ سفارشی — فقط ماژول‌های واقعی، بدون
+        چک‌باکس تکراری/جدا برای «حسابداری» (که قبلاً هیچ اثری هم روی بکاپ
+        نداشت، فقط روی ریست — ماژول «accounting» خودش همون داده‌ها رو پوشش
+        می‌ده)."""
+        return "".join(
             f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-gray-50 transition">'
             f'<input type="checkbox" name="{name}" value="{k}"'
             f'{" checked" if checked else ""} class="w-4 h-4 rounded">'
             f'<span>{v["label"]}</span></label>'
             for k, v in MODULES.items()
         )
+
+    def _chk(name, checked=True):
         acc_chk = (f'<label class="flex items-center gap-2 text-sm cursor-pointer py-1.5 px-2 rounded-lg hover:bg-red-50 transition col-span-2 border-t border-dashed border-red-100 mt-1">'
                    f'<input type="checkbox" name="{name}" value="__accounting__"'
                    f'{" checked" if checked else ""} class="w-4 h-4 rounded text-red-500">'
                    f'<span class="text-red-600 font-medium">💰 داده‌های حسابداری (هزینه‌ها + قیمت خرید)</span></label>')
-        return mods_html + acc_chk
+        return _mod_checks(name, checked) + acc_chk
 
-    backup_checks = _chk("sections", checked=True)
+    backup_checks = _mod_checks("sections", checked=True)
     reset_checks  = _chk("reset_sections", checked=False)
 
     _js = """
@@ -3637,22 +3603,24 @@ async def database_page(request: Request, flash: str = ""):
       }catch(err){ovResult(false,'عملیات ناموفق',err.message||'خطا');}
       finally{_busy=false;}
     }
-    async function runAutoRestore(){
-      var sel=document.getElementById('auto-restore-select');
-      if(!sel||!sel.value){alert('یک بکاپ انتخاب کنید');return;}
-      if(!confirm('⚠️ این عملیات داده‌های فعلی را با بکاپ جایگزین می‌کند. ادامه؟'))return;
+    async function doRestoreFile(filename){
+      if(!confirm('⚠️ این عملیات داده‌های فعلی را با این بکاپ جایگزین می‌کند. ادامه؟'))return;
       if(_busy)return;_busy=true;
-      ovShow('بازیابی بکاپ خودکار','شروع...');
+      ovShow('در حال بازیابی...','شروع...');
       try{
-        var fd=new FormData(); fd.append('filename',sel.value);
-        var r=await fetch('/admin/database/restore-auto',{method:'POST',body:fd});
+        var fd=new FormData(); fd.append('filename',filename);
+        var r=await fetch(RESTORE_URL,{method:'POST',body:fd});
         var start=await r.json();
-        if(start.error){ovResult(false,'خطا',start.error);return;}
-        var job=await pollJob(start.job_id);
-        if(job.status!=='done'){ovResult(false,'خطا',job.message||'مشکلی پیش آمد');return;}
-        var d=job.result||{};
-        if(d.errors&&d.errors.length) ovResult(true,'بازیابی با هشدار',(d.total||0)+' رکورد — '+d.errors.length+' خطای جدولی');
-        else ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');
+        if(start.error) throw new Error(start.error);
+        if(start.job_id){
+          var job=await pollJob(start.job_id);
+          if(job.status!=='done') throw new Error(job.message||'خطا در بازیابی');
+          var d=job.result||{};
+          if(d.errors&&d.errors.length) ovResult(true,'بازیابی با هشدار',(d.total||0)+' رکورد — '+d.errors.length+' خطای جدولی');
+          else ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');
+        }else{
+          ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');
+        }
       }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
       finally{_busy=false;}
     }
@@ -3660,108 +3628,42 @@ async def database_page(request: Request, flash: str = ""):
       if(_busy)return;
       var file=document.getElementById('restore-file').files[0];
       if(!file){alert('فایل انتخاب نشده');return;}
-      if(!file.name.endsWith('.stbak')){alert('فقط فایل .stbak مجاز است');return;}
+      if(!file.name.endsWith('.stbak')){alert('فقط فایل بکاپ (.stbak) مجاز است');return;}
       _busy=true;ovShow('در حال بازیابی...','شروع...');
       try{
         var fd=new FormData();fd.append('backup_file',file);
-        var r=await fetch('/admin/database/restore/start',{method:'POST',body:fd});
+        var r=await fetch(RESTORE_UPLOAD_URL,{method:'POST',body:fd});
         var start=await r.json();
         if(start.error) throw new Error(start.error);
-        var job=await pollJob(start.job_id);
-        if(job.status!=='done') throw new Error(job.message||'خطا در بازیابی');
-        var d=job.result||{};
-        if(d.errors&&d.errors.length) ovResult(true,'بازیابی با هشدار',(d.total||0)+' رکورد بازیابی شد — '+d.errors.length+' خطای جدولی');
-        else ovResult(true,'بازیابی موفق',(d.total||0)+' رکورد بازیابی شد');
+        if(start.job_id){
+          var job=await pollJob(start.job_id);
+          if(job.status!=='done') throw new Error(job.message||'خطا در بازیابی');
+          var d=job.result||{};
+          if(d.errors&&d.errors.length) ovResult(true,'بازیابی با هشدار',(d.total||0)+' رکورد بازیابی شد — '+d.errors.length+' خطای جدولی');
+          else ovResult(true,'بازیابی موفق',(d.total||0)+' رکورد بازیابی شد');
+        }else{
+          ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');
+        }
       }catch(err){ovResult(false,'بازیابی ناموفق',err.message||'خطا');}
       finally{_busy=false;}
     }
-    async function runRecovery(){
-      if(_busy)return;
-      if(!confirm('⚠️ این عملیات جدیدترین بکاپ محلی سالم رو پیدا و جایگزین داده‌های فعلی می‌کنه. ادامه؟'))return;
-      _busy=true;ovShow('در حال بازگردانی اضطراری...','در حال جست‌وجوی آخرین بکاپ سالم...');
-      try{
-        var r=await fetch('/admin/database/recover-latest',{method:'POST'});
-        var d=await r.json();
-        if(d.error) throw new Error(d.error+(d.details?' — '+d.details.join('، '):''));
-        ovResult(true,'بازگردانی موفق','از «'+d.restored_from+'» — '+(d.total||0)+' رکورد بازیابی شد');
-      }catch(err){ovResult(false,'بازگردانی ناموفق',err.message||'خطا');}
-      finally{_busy=false;}
-    }
     """
-
-    # کارت مخصوص Postgres — طبق ممیزی کامل پروژه (پاک‌سازی SQLite): کارت‌های
-    # پایین‌تر (پشتیبان‌گیری/بازیابی/ریست بخش‌بندی‌شده) همه از stbak_engine
-    # استفاده می‌کنن که فقط روی فایل SQLite کار می‌کنه — اگه پروژه واقعاً روی
-    # Postgres مهاجرت کرده، این کارت‌ها دیگه رو دادهٔ واقعی اثر ندارن (روت‌های
-    # POST متناظرشون هم با _stbak_pg_guard مسدود شدن). این کارت جایگزین واقعی
-    # (pg_dump/psql از طریق pg_backup.py) رو ارائه می‌ده.
-    _pg_backup_card = ""
-    if _is_pg:
-        _pg_restore_opts = "".join(
-            f'<option value="{e(_b["name"])}">{e(_b["name"])} ({_b["size"]//1024} KB)</option>'
-            for _b in _auto_list
-        )
-        _pg_backup_card = f"""
-        <div class="card p-6 mb-4 border-2 border-sky-200">
-          <div class="flex items-center gap-3 mb-4">
-            <span class="w-10 h-10 bg-sky-100 text-sky-700 rounded-xl flex items-center justify-center text-xl">🐘</span>
-            <div><h2 class="font-bold text-gray-800 text-lg">بکاپ/بازیابی Postgres (pg_dump)</h2>
-                 <p class="text-xs text-gray-400">این پروژه به Postgres مهاجرت کرده — کارت‌های SQLite (.stbak) پایین‌تر دیگر دادهٔ واقعی را پوشش نمی‌دهند و مسدود شده‌اند.</p></div>
-          </div>
-          <div id="pg-result" class="text-sm mb-3"></div>
-          <button onclick="pgBackupRun()" class="w-full py-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-sm font-semibold transition mb-4">
-            💾 ساخت بکاپ کامل Postgres الان
-          </button>
-          <div class="flex gap-2">
-            <select id="pg-restore-select" class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm">
-              <option value="">— انتخاب بکاپ برای بازیابی —</option>
-              {_pg_restore_opts}
-            </select>
-            <button onclick="pgBackupRestore()" class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold transition">♻️ بازیابی</button>
-          </div>
-        </div>
-        <script>
-        async function pgBackupRun(){{
-          var box=document.getElementById('pg-result');
-          box.innerHTML='⏳ در حال ساخت بکاپ...';
-          try{{
-            var r=await fetch('/admin/database/pg-backup/run',{{method:'POST'}});
-            var d=await r.json();
-            if(d.error){{box.innerHTML='<span class="text-red-600">❌ '+d.error+'</span>';return;}}
-            box.innerHTML='<span class="text-green-600">✅ بکاپ ساخته شد: '+d.file+'</span>';
-            setTimeout(()=>location.reload(),1500);
-          }}catch(err){{box.innerHTML='<span class="text-red-600">❌ '+(err.message||'خطا')+'</span>';}}
-        }}
-        async function pgBackupRestore(){{
-          var sel=document.getElementById('pg-restore-select');
-          if(!sel.value){{alert('یک بکاپ انتخاب کنید');return;}}
-          if(!confirm('⚠️ این عملیات دادهٔ فعلی Postgres را با محتوای این بکاپ جایگزین می‌کند. ادامه؟'))return;
-          var box=document.getElementById('pg-result');
-          box.innerHTML='⏳ در حال بازیابی...';
-          try{{
-            var fd=new FormData(); fd.append('filename',sel.value);
-            var r=await fetch('/admin/database/pg-backup/restore',{{method:'POST',body:fd}});
-            var d=await r.json();
-            if(d.error){{box.innerHTML='<span class="text-red-600">❌ '+d.error+'</span>';return;}}
-            box.innerHTML='<span class="text-green-600">✅ بازیابی موفق</span>';
-          }}catch(err){{box.innerHTML='<span class="text-red-600">❌ '+(err.message||'خطا')+'</span>';}}
-        }}
-        </script>
-        """
+    _restore_urls_js = f"""
+    var RESTORE_URL = {"'/admin/database/pg-backup/restore'" if _is_pg else "'/admin/database/restore-auto'"};
+    var RESTORE_UPLOAD_URL = {"'/admin/database/pg-backup/restore-upload'" if _is_pg else "'/admin/database/restore/start'"};
+    """
+    _js = _restore_urls_js + _js
 
     body = f"""
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold text-gray-800">💾 پشتیبان‌گیری و بازیابی</h1>
     </div>
 
-    {_pg_backup_card}
-
-    <!-- پشتیبان‌گیری -->
+    <!-- بکاپ -->
     <div class="card p-6 mb-4">
       <div class="flex items-center gap-3 mb-5">
         <span class="w-10 h-10 bg-indigo-100 text-indigo-700 rounded-xl flex items-center justify-center text-xl">📦</span>
-        <div><h2 class="font-bold text-gray-800 text-lg">پشتیبان‌گیری</h2>
-             <p class="text-xs text-gray-400">فرمت اختصاصی .stbak — با checksum و manifest</p></div>
+        <h2 class="font-bold text-gray-800 text-lg">بکاپ</h2>
       </div>
       <label class="flex items-center gap-2 cursor-pointer mb-4 select-none p-3 bg-gray-50 rounded-xl">
         <input type="checkbox" id="b-toggle" onchange="toggle('b-secs',this)"
@@ -3780,54 +3682,31 @@ async def database_page(request: Request, flash: str = ""):
       </button>
     </div>
 
-    <!-- بکاپ‌های خودکار -->
-    {_auto_section}
-
     <!-- بازیابی -->
     <div class="card p-6 mb-4">
       <div class="flex items-center gap-3 mb-5">
         <span class="w-10 h-10 bg-green-100 text-green-700 rounded-xl flex items-center justify-center text-xl">♻️</span>
-        <div><h2 class="font-bold text-gray-800 text-lg">بازیابی پشتیبان</h2>
-             <p class="text-xs text-gray-400">فقط فایل‌های .stbak پذیرفته می‌شوند</p></div>
+        <h2 class="font-bold text-gray-800 text-lg">بازیابی</h2>
       </div>
 
-      {f'''<!-- بکاپ‌های خودکار موجود -->
-      <div class="mb-4">
-        <label class="text-sm font-medium text-gray-700 block mb-2">🕐 بازیابی از بکاپ خودکار</label>
-        <div class="flex gap-2">
-          <select id="auto-restore-select" class="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white">
-            <option value="">انتخاب بکاپ خودکار...</option>
-            {_restore_options}
-          </select>
-          <button onclick="runAutoRestore()"
-            class="px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition whitespace-nowrap">
-            ♻️ بازیابی
-          </button>
+      <details class="mb-4 group">
+        <summary class="cursor-pointer select-none p-3 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 flex items-center justify-between">
+          <span>🕐 ۵ بکاپ آخر</span>
+          <span class="text-xs text-gray-400 group-open:rotate-180 transition">▾</span>
+        </summary>
+        <div class="mt-2 border border-gray-100 rounded-xl overflow-hidden">
+          {_restore_rows}
         </div>
-      </div>
-      <div class="border-t border-gray-100 my-4"><p class="text-xs text-gray-400 text-center mt-3">یا بارگذاری فایل دستی</p></div>''' if _restore_options else ''}
+      </details>
 
+      <div class="border-t border-gray-100 my-4"><p class="text-xs text-gray-400 text-center mt-3">یا بارگذاری فایل بکاپ از روی سیستم</p></div>
       <div class="border-2 border-dashed border-gray-200 rounded-xl p-5 text-center mb-4">
-        <p class="text-sm text-gray-400 mb-3">فایل .stbak را انتخاب کنید</p>
         <input type="file" id="restore-file" accept=".stbak"
           class="text-sm text-gray-600 file:ml-2 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:bg-green-50 file:text-green-700">
       </div>
       <button onclick="runRestore()"
         class="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition">
         ♻️ بازیابی از فایل
-      </button>
-    </div>
-
-    <!-- بازگردانی اضطراری (Recovery) -->
-    <div class="card p-6 mb-4 border-2 border-amber-100">
-      <div class="flex items-center gap-3 mb-5">
-        <span class="w-10 h-10 bg-amber-100 text-amber-700 rounded-xl flex items-center justify-center text-xl">🆘</span>
-        <div><h2 class="font-bold text-gray-800 text-lg">بازگردانی اضطراری</h2>
-             <p class="text-xs text-gray-400">در صورت خرابی دیتابیس/تنظیمات — بدون نیاز به انتخاب فایل، خودکار جدیدترین بکاپ محلی سالم را پیدا و بازیابی می‌کند</p></div>
-      </div>
-      <button onclick="runRecovery()"
-        class="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold transition">
-        🆘 بازگردانی به آخرین بکاپ سالم
       </button>
     </div>
 
@@ -4019,33 +3898,6 @@ async def database_page(request: Request, flash: str = ""):
     return _layout("پشتیبان‌گیری", body, adm, flash=flash)
 
 
-@router.post("/database/pg-backup/run")
-async def pg_backup_run(request: Request):
-    """بکاپ کامل Postgres (pg_dump) — جایگزین مسیرهای stbak_engine وقتی
-    DB_DIALECT=postgres. مستقیماً pg_backup.run_full_backup() رو صدا می‌زنه
-    (بکاپ محلی + آپلود به مقاصد ابری فعال، دقیقاً همون الگوی بکاپ خودکار روزانه)."""
-    from fastapi.responses import JSONResponse
-    adm = _get_admin(request)
-    guard = _require(adm, "backup")
-    if guard: return JSONResponse({"error": "unauthorized"})
-    import db_conn
-    if not db_conn.is_postgres():
-        return JSONResponse({"error": "این مسیر فقط برای حالت Postgres است"})
-
-    def _run():
-        import pg_backup
-        return pg_backup.run_full_backup()
-
-    try:
-        rep = await run_in_threadpool(_run)
-        if not rep.get("ok"):
-            return JSONResponse({"error": rep.get("error", "خطای نامشخص")})
-        _log(request, "بکاپ کامل Postgres", "دیتابیس", rep.get("file", ""), admin_info=adm)
-        return JSONResponse({"ok": True, "file": rep.get("file"), "size": rep.get("size")})
-    except Exception as ex:
-        return JSONResponse({"error": str(ex)[:200]})
-
-
 @router.post("/database/pg-backup/restore")
 async def pg_backup_restore(request: Request):
     """بازیابی از بکاپ Postgres محلی (فایل .stbak ساخته‌شده با pg_dump/pg_backup.py)."""
@@ -4074,6 +3926,45 @@ async def pg_backup_restore(request: Request):
         if not rep.get("ok"):
             return JSONResponse({"error": rep.get("error", "خطای نامشخص")})
         _log(request, "بازیابی بکاپ Postgres", "دیتابیس", filename, admin_info=adm)
+        return JSONResponse({"ok": True})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:200]})
+
+
+@router.post("/database/pg-backup/restore-upload")
+async def pg_backup_restore_upload(request: Request, backup_file: UploadFile = None):
+    """بازیابی Postgres از یک فایل بکاپ آپلودشده از روی سیستم ادمین (نه از
+    لیست بکاپ‌های محلی سرور) — معادل Postgres همون /database/restore/start."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "restore")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    import db_conn
+    if not db_conn.is_postgres():
+        return JSONResponse({"error": "این مسیر فقط برای حالت Postgres است"})
+    if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
+        return JSONResponse({"error": "فقط فایل بکاپ (.stbak) مجاز است"})
+    raw = await backup_file.read()
+
+    def _run():
+        import pg_backup
+        import tempfile as _tf
+        tmp_path = None
+        try:
+            with _tf.NamedTemporaryFile(suffix=".stbak", delete=False) as tf:
+                tf.write(raw)
+                tmp_path = tf.name
+            return pg_backup.restore_backup(tmp_path)
+        finally:
+            if tmp_path:
+                try: os.remove(tmp_path)
+                except Exception: pass
+
+    try:
+        rep = await run_in_threadpool(_run)
+        if not rep.get("ok"):
+            return JSONResponse({"error": rep.get("error", "خطای نامشخص")})
+        _log(request, "بازیابی از فایل آپلودی", "دیتابیس", backup_file.filename, admin_info=adm)
         return JSONResponse({"ok": True})
     except Exception as ex:
         return JSONResponse({"error": str(ex)[:200]})
@@ -4252,14 +4143,44 @@ async def restore_sync(request: Request, backup_file: UploadFile = None):
         return JSONResponse({"error": str(ex)[:150]})
 
 
+def _generic_factory_reset(modules: list = None) -> dict:
+    """معادل دیالوگ‌آگاه stbak_engine.factory_reset — همون منطق (DELETE FROM
+    روی جدول‌های ماژول‌های انتخاب‌شده) ولی با db_conn.get_connection() که خودش
+    بین SQLite/Postgres مسیریابی می‌کنه، به‌جای sqlite3.connect() خام. برخلاف
+    نسخهٔ SQLite، دست به PRAGMA/sqlite_sequence نمی‌زنه (خاص SQLite و برای
+    درستی ریست ضروری نیست)."""
+    from stbak_engine import MODULES, resolve_reset
+    selected = list(MODULES.keys()) if modules is None else resolve_reset(modules)
+    tables = []
+    for mod in selected:
+        tables.extend(MODULES.get(mod, {}).get("tables", []))
+    tables = list(dict.fromkeys(tables))
+
+    import db_conn
+    conn = db_conn.get_connection(_DB_PATH())
+    cleared, errors = {}, []
+    try:
+        for t in tables:
+            try:
+                cnt = conn.execute(f'SELECT COUNT(*) FROM "{t}";').fetchone()[0]
+                conn.execute(f'DELETE FROM "{t}";')
+                conn.commit()
+                cleared[t] = cnt
+            except Exception as ex:
+                try: conn.rollback()
+                except Exception: pass
+                errors.append(f"{t}: {ex}")
+    finally:
+        conn.close()
+    return {"cleared": cleared, "errors": errors, "total_deleted": sum(cleared.values())}
+
+
 @router.post("/database/reset/sync")
 async def reset_sync(request: Request):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     guard = _require(adm, "database")
     if guard: return JSONResponse({"error": "unauthorized"})
-    _pgg = _stbak_pg_guard()
-    if _pgg: return JSONResponse(_pgg)
     form = await request.form()
     is_full = form.get("full") == "1"
     all_secs = form.getlist("reset_sections") or []
@@ -4268,11 +4189,16 @@ async def reset_sync(request: Request):
     reset_accounting = is_full or "__accounting__" in all_secs
     secs = None if is_full else ([s for s in all_secs if s != "__accounting__"] or None)
 
-    from stbak_engine import factory_reset
+    import db_conn
+    is_pg = db_conn.is_postgres()
 
     def _do_reset():
         total_deleted = 0
-        result = factory_reset(_DB_PATH(), modules=secs)
+        if is_pg:
+            result = _generic_factory_reset(modules=secs)
+        else:
+            from stbak_engine import factory_reset
+            result = factory_reset(_DB_PATH(), modules=secs)
         total_deleted += result["total_deleted"]
         # ریست حسابداری
         if reset_accounting:
@@ -4307,14 +4233,37 @@ async def backup_start(request: Request):
     adm = _get_admin(request)
     if not adm: return JSONResponse({"error": "unauthorized"})
     if not _has(adm, "backup"): return JSONResponse({"error": "unauthorized"})
-    _pgg = _stbak_pg_guard()
-    if _pgg: return JSONResponse(_pgg)
     form = await request.form()
     is_full = form.get("full") == "1"
-    sections = None if is_full else form.getlist("sections") or None
-    db = _DB_PATH()
-    from stbak_engine import create_stbak
-    job_id = _job_start(create_stbak, db, modules=sections)
+    all_secs = form.getlist("sections") or []
+
+    import db_conn
+    if db_conn.is_postgres():
+        # «انتخاب سفارشی» زیر Postgres: کلیدهای ماژول به لیست جدول‌های واقعی‌شون
+        # (stbak_engine.MODULES) ترجمه می‌شن و مستقیم به pg_dump -t پاس داده
+        # می‌شن — معادل کامل همون قابلیتی که قبلاً فقط برای SQLite بود.
+        tables = None
+        if not is_full and all_secs:
+            from stbak_engine import MODULES
+            tset = []
+            for s in all_secs:
+                tset.extend(MODULES.get(s, {}).get("tables", []))
+            tables = list(dict.fromkeys(tset)) or None
+
+        def _pg_job(progress_cb=None):
+            import pg_backup
+            if progress_cb: progress_cb(40)
+            fpath = pg_backup.create_backup(tables=tables)
+            if progress_cb: progress_cb(100)
+            return {"file": fpath}
+
+        job_id = _job_start(_pg_job)
+    else:
+        sections = None if is_full else (all_secs or None)
+        db = _DB_PATH()
+        from stbak_engine import create_stbak
+        job_id = _job_start(create_stbak, db, modules=sections)
+
     _log(request, "شروع بکاپ", "دیتابیس", f"job:{job_id} mode:{'full' if is_full else 'custom'}")
     return JSONResponse({"job_id": job_id})
 
@@ -4332,17 +4281,25 @@ async def backup_download_job(request: Request, job_id: str):
     if not fpath or not os.path.exists(fpath):
         return _redir("/admin/database?flash=فایل+بکاپ+یافت+نشد")
     raw = open(fpath, "rb").read()
-    from stbak_engine import stbak_filename, _rotate_local
-    fname = stbak_filename("full", _BACKUP_DIR)
-    # همون رفع مشترک با backup_full_sync — یه نسخه هم روی سرور ذخیره بشه تا توی
-    # لیست پنل دیده بشه و «بازگردانی اضطراری» بتونه پیداش کنه.
-    try:
-        os.makedirs(_BACKUP_DIR, exist_ok=True)
-        with open(os.path.join(_BACKUP_DIR, fname), "wb") as _f:
-            _f.write(raw)
-        _rotate_local(_BACKUP_DIR, _MAX_BACKUPS)
-    except Exception:
-        pass
+    import db_conn
+    if db_conn.is_postgres():
+        # pg_backup.create_backup() از قبل فایل رو مستقیم توی BACKUP_DIR خودش
+        # ساخته و چرخش (rotation) رو هم انجام داده — نیازی به ذخیرهٔ دوبارهٔ
+        # دستی با نام‌گذاری دیگه نیست (که قبلاً باعث می‌شد یه نسخهٔ اضافه توی
+        # مسیر SQLite ذخیره بشه، جایی که اصلاً خونده نمی‌شه).
+        fname = os.path.basename(fpath)
+    else:
+        from stbak_engine import stbak_filename, _rotate_local
+        fname = stbak_filename("full", _BACKUP_DIR)
+        # همون رفع مشترک با backup_full_sync — یه نسخه هم روی سرور ذخیره بشه تا توی
+        # لیست پنل دیده بشه و بشه از بخش «بازیابی» انتخابش کرد.
+        try:
+            os.makedirs(_BACKUP_DIR, exist_ok=True)
+            with open(os.path.join(_BACKUP_DIR, fname), "wb") as _f:
+                _f.write(raw)
+            _rotate_local(_BACKUP_DIR, _MAX_BACKUPS)
+        except Exception:
+            pass
     return FResponse(content=raw, media_type="application/octet-stream",
                      headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
