@@ -1890,7 +1890,7 @@ def get_stats() -> dict:
             "SELECT COUNT(*) c FROM iv_valuations WHERE date(created_at)=date('now');").fetchone()["c"]
         popular = conn.execute(
             "SELECT m.name, COUNT(*) cnt FROM iv_valuations v LEFT JOIN iv_models m ON m.id=v.model_id "
-            "GROUP BY v.model_id ORDER BY cnt DESC LIMIT 5;").fetchall()
+            "GROUP BY v.model_id, m.name ORDER BY cnt DESC LIMIT 5;").fetchall()
         avg_fair = conn.execute("SELECT AVG(fair_price) a FROM iv_valuations WHERE fair_price>0;").fetchone()["a"]
         avg_gap = conn.execute(
             "SELECT AVG((seller_price - fair_price) * 100.0 / fair_price) a FROM iv_valuations "

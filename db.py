@@ -5156,7 +5156,16 @@ def ensure_accounting_schema():
 
 
 def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
-    """محاسبه KPI های اصلی حسابداری."""
+    """محاسبه KPI های اصلی حسابداری.
+    ⚠️ رفع‌شده (کشف‌شده روی Postgres واقعی): این تابع feed_batches رو بدون صدا
+    زدن ensure_feed_batch_schema() اول کوئری می‌کرد — روی نصب تازه (جدول لیزی،
+    هنوز ساخته نشده) خطا می‌گرفت. روی SQLite این خطا فقط همون یک try/except رو
+    تحت تأثیر قرار می‌داد، ولی روی Postgres یک کوئری شکست‌خورده کل تراکنش رو
+    poison می‌کنه — هر کوئری بعدی روی همون conn (حتی توی try/except جدا) با
+    «current transaction is aborted» شکست می‌خورد. رفع: هم ensure_feed_batch_schema
+    اول صدا زده می‌شه (رفع ریشه‌ای، اکثر مواقع اصلاً به except نمی‌رسه)، هم هر
+    except این تابع صریحاً rollback می‌کنه (دفاع در عمق برای بقیهٔ سناریوها)."""
+    ensure_feed_batch_schema()
     conn = _get_connection()
     try:
         where_order = ""
@@ -5214,6 +5223,8 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
                 WHERE pf.delivered = 1;
             """).fetchone()[0]
         except Exception:
+            try: conn.rollback()
+            except Exception: pass
             batch_cost = 0
         try:
             # ۲) آیتم‌هایی بدون batch (txt import) — تعداد تحویل‌شده × قیمت محصول
@@ -5224,6 +5235,8 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
                 WHERE pf.delivered = 1 AND (pf.batch_id IS NULL OR pf.batch_id = 0);
             """).fetchone()[0]
         except Exception:
+            try: conn.rollback()
+            except Exception: pass
             no_batch_cost = 0
         total_cost = int(batch_cost) + int(no_batch_cost)
 
@@ -5244,6 +5257,8 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
                 commission_params.append(date_to)
             total_commission = conn.execute(commission_q + ";", commission_params).fetchone()[0]
         except Exception:
+            try: conn.rollback()
+            except Exception: pass
             total_commission = 0
 
         # هزینههای ثبتشده
@@ -5259,12 +5274,16 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
             payout_count = int(payouts_done[0] or 0)
             payout_total = int(payouts_done[1] or 0)
         except Exception:
+            try: conn.rollback()
+            except Exception: pass
             payout_count = payout_total = 0
 
         # موجودی انبار + ارزش
         try:
             stock_count = conn.execute("SELECT COUNT(*) FROM product_feed WHERE delivered=0;").fetchone()[0]
         except Exception:
+            try: conn.rollback()
+            except Exception: pass
             stock_count = 0
         try:
             stock_value = conn.execute("""
@@ -5274,6 +5293,8 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
                 WHERE pf.delivered = 0;
             """).fetchone()[0]
         except Exception:
+            try: conn.rollback()
+            except Exception: pass
             stock_value = 0
 
         gross_profit = int(total_sales or 0) - int(total_cost or 0)
@@ -5310,7 +5331,11 @@ def get_accounting_kpis(date_from: str = "", date_to: str = "") -> dict:
 
 
 def get_product_accounting(limit: int = 20) -> list:
-    """گزارش حسابداری به تفکیک محصول."""
+    """گزارش حسابداری به تفکیک محصول.
+    ⚠️ رفع‌شده (کشف‌شده روی Postgres واقعی): feed_batches جدول لیزیه (فقط با
+    ensure_feed_batch_schema ساخته می‌شه) — این تابع بدون صداکردنش مستقیم بهش
+    join می‌زد؛ روی نصب تازه با «relation does not exist» کرش می‌کرد."""
+    ensure_feed_batch_schema()
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
@@ -6020,6 +6045,11 @@ def update_card_receipt(rid: int, status: str, note: str = "", amount: int = Non
 # ─── آرشیو و حذف تیکتها ──────────────────────────────────────────────────────
 
 def ensure_ticket_archive_schema():
+    # روی نصب کاملاً تازه، اگه ادمین قبل از اولین تعامل بات با تیکت‌ها وارد
+    # پنل بشه، جدول tickets هنوز از ticket_ensure_schema() (فقط از bot.py صدا
+    # زده می‌شه) ساخته نشده — این‌جا هم صداش می‌زنیم (idempotent، CREATE TABLE
+    # IF NOT EXISTS) تا PRAGMA/ALTER زیر هیچ‌وقت روی جدول ناموجود شکست نخوره.
+    ticket_ensure_schema()
     conn = _get_connection()
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(tickets);").fetchall()]

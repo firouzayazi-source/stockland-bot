@@ -209,6 +209,18 @@ class _PgConnection:
         cur.executemany(sql, seq)
         return cur
 
+    def executescript(self, script):
+        """⚠️ رفع‌شده (کشف با تست): معادل sqlite3.Connection.executescript — چند
+        دستور DDL جداشده با ; رو یکجا اجرا می‌کنه (مثلاً ensure_referral_schema/
+        ensure_partner_system_schema در db.py). psycopg2 چند statement رو در یک
+        execute() قبول می‌کنه (بدون bind param، چون executescript در پروژه
+        همیشه بدون پارامتر صدا زده می‌شه)."""
+        import db_dialect
+        translated = db_dialect.translate(script)
+        cur = self._conn.cursor(cursor_factory=self._dict_factory)
+        cur.execute(translated)
+        return _PgCursor(cur)
+
     def cursor(self):
         return _PgCursor(self._conn.cursor(cursor_factory=self._dict_factory))
 

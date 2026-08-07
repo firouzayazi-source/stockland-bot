@@ -93,7 +93,17 @@ _DATE_PATTERNS = [
 ]
 
 # INSERT OR IGNORE / INSERT OR REPLACE
-_INSERT_IGNORE = re.compile(r"INSERT\s+OR\s+IGNORE\s+INTO", re.I)
+# ⚠️ رفع‌شده (کشف‌شده با تست executescript روی Postgres واقعی): نسخهٔ قبلی این
+# الگو فقط "INSERT OR IGNORE INTO" رو با regex ساده جایگزین می‌کرد و بعد
+# "ON CONFLICT DO NOTHING" رو به **انتهای کل رشتهٔ SQL** اضافه می‌کرد — برای یه
+# execute() تک‌دستوری این تصادفاً درست کار می‌کرد (چون کل رشته = همون یک دستور)،
+# ولی executescript() چند دستور رو با هم ترجمه می‌کنه (مثلاً یه INSERT OR IGNORE
+# وسط چند CREATE TABLE) — اونجا "انتهای رشته" اصلاً به همون INSERT مربوط نیست،
+# نتیجه SQL نامعتبر می‌شد. حالا هر دستور INSERT OR IGNORE به‌طور مستقل (تا اولین
+# ; خودش) پیدا و اصلاح می‌شه.
+_INSERT_IGNORE_STMT = re.compile(
+    r"INSERT\s+OR\s+IGNORE\s+INTO(.*?VALUES\s*\([^;]*?\))\s*;", re.I | re.S
+)
 _INSERT_REPLACE = re.compile(r"INSERT\s+OR\s+REPLACE\s+INTO", re.I)
 
 # AUTOINCREMENT
@@ -114,6 +124,17 @@ _ADD_COLUMN = re.compile(r"(ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\s+)(?!IF\s+NOT\s+
 # PRAGMA table_info(X) → information_schema query
 _PRAGMA_TABLE_INFO = re.compile(r"PRAGMA\s+table_info\(\s*(\w+)\s*\)", re.I)
 
+# `col IS ?` — الگوی NULL-safe مقایسه که چندجا (مثل iphone_valuation/db.py:
+# resolve_capacity/get_capacity_exact) عمداً به‌جای `=` استفاده شده، دقیقاً
+# چون NULL=NULL همیشه false ولی NULL IS NULL true است. روی SQLite، عملگر IS
+# یک NULL-safe equality عمومیه که با هر مقدار (نه فقط NULL) کار می‌کنه؛ روی
+# Postgres، IS فقط NULL/TRUE/FALSE رو می‌پذیره — `col IS 162` مستقیماً خطای
+# syntax می‌ده (کشف‌شده با تست مستقیم روی Postgres واقعی، نه با خوندن کد).
+# معادل پرتابل استاندارد SQL: `IS NOT DISTINCT FROM` — هم NULL-safe هم با
+# مقادیر غیر-NULL درست کار می‌کنه، هم روی Postgres هم (از SQLite 3.39+) روی
+# SQLite؛ چون این فقط برای Postgres صدا زده می‌شه، نگرانی نسخهٔ SQLite نیست.
+_IS_PLACEHOLDER = re.compile(r"(\w+(?:\.\w+)?)\s+IS\s+\?", re.I)
+
 
 def translate(sql: str) -> str:
     """کوئری SQLite را به Postgres ترجمه می‌کند. در حالت sqlite بدون تغییر."""
@@ -126,14 +147,16 @@ def translate(sql: str) -> str:
     for pat, repl in _DATE_PATTERNS:
         out = pat.sub(repl, out)
 
+    # ۱ب) col IS ? → col IS NOT DISTINCT FROM ? (باید قبل از تبدیل ? → %s باشه،
+    # چون این regex دنبال ? خامه)
+    out = _IS_PLACEHOLDER.sub(r"\1 IS NOT DISTINCT FROM ?", out)
+
     # ۲) placeholder ? → %s (با حفظ ? داخل رشته‌های نقل‌قولی نمی‌کنیم چون نادر است)
     out = _replace_placeholders(out)
 
-    # ۳) INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING
-    if _INSERT_IGNORE.search(out):
-        out = _INSERT_IGNORE.sub("INSERT INTO", out)
-        if "ON CONFLICT" not in out.upper():
-            out = out.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+    # ۳) INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING (per-statement،
+    # امن برای اسکریپت‌های چند-دستوری executescript؛ توضیح کامل بالای _INSERT_IGNORE_STMT)
+    out = _INSERT_IGNORE_STMT.sub(r"INSERT INTO\1 ON CONFLICT DO NOTHING;", out)
 
     # ۴) INSERT OR REPLACE → INSERT ... ON CONFLICT DO UPDATE (ساده: DO NOTHING)
     if _INSERT_REPLACE.search(out):

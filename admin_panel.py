@@ -5274,6 +5274,52 @@ async def product_new_post(request: Request,
         conn.close()
     return _redir("/admin/products?flash=محصول+اضافه+شد")
 
+@router.get("/products/duplicates", response_class=HTMLResponse)
+async def duplicate_products_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "feed")
+    if guard: return guard
+    import duplicate_products as dup
+    groups = dup.find_duplicate_groups()
+
+    def _pcard(p, is_original):
+        badge = ('<span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✅ اصل</span>' if is_original
+                 else '<span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">⚠️ تکراری</span>')
+        del_btn = "" if is_original else f'''
+          <form method="post" action="/admin/products/duplicates/{p['id']}/delete" onsubmit="return confirm('این نسخهٔ تکراری حذف بشه؟ موجودی/دسته‌بندی قیمت‌خرید و FAQهای این نسخه پاک می‌شن (نسخهٔ اصل و سفارش‌های قبلی دست‌نخورده می‌مونن).')">
+            <button class="text-xs text-red-600 border border-red-200 rounded-lg px-2 py-1 mt-2">🗑 حذف این تکراری</button>
+          </form>'''
+        return f"""
+        <div class="border rounded-lg p-3 {'bg-emerald-50/40' if is_original else 'bg-red-50/40'}">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <span class="text-xs text-gray-400">#{p['id']}</span>{badge}
+          </div>
+          <div class="text-xs text-gray-500">دسته: {e(p['category'])}</div>
+          <div class="text-xs text-gray-500">قیمت: {int(p['price'] or 0):,} ت</div>
+          <div class="text-xs text-gray-500">موجودی: {p['stock']} عدد</div>
+          <div class="text-xs text-gray-500">بچ خرید: {p['feed_batches_count']} ({int(p['feed_batches_cost']):,} ت)</div>
+          <div class="text-xs text-gray-500">سفارش‌های ثبت‌شده: {p['orders_count']}</div>
+          {del_btn}
+        </div>"""
+
+    groups_html = "".join(f"""
+      <div class="card p-4 mb-4">
+        <h3 class="font-bold text-gray-700 text-sm mb-3">📦 {e(g['title'])} <span class="text-xs text-gray-400 font-normal">({len(g['products'])} نسخه)</span></h3>
+        <div class="grid md:grid-cols-3 gap-3">
+          {"".join(_pcard(p, p['is_original']) for p in g['products'])}
+        </div>
+      </div>""" for g in groups) or '<div class="card p-10 text-center text-gray-400 text-sm">محصول تکراری‌ای (با تطابق دقیق عنوان) پیدا نشد. ✅</div>'
+
+    body = f"""
+    <div class="flex items-center gap-3 mb-6">
+      {_btn("← موجودی","/admin/feed","slate",small=True)}
+      <h1 class="text-2xl font-bold text-gray-800">🧬 بررسی محصولات تکراری</h1>
+    </div>
+    <div class="text-xs text-gray-400 mb-4">معیار تشخیص: تطابق دقیق عنوان محصول، مستقل از دسته‌بندی. در هر گروه، اولین محصول ثبت‌شده «اصل» در نظر گرفته می‌شه و بقیه «تکراری»‌ان. حذف هر تکراری فقط داده‌های همون نسخه (موجودی، بچ خرید، FAQ، امتیاز) رو پاک می‌کنه — نسخهٔ اصل و سفارش‌های قبلی دست‌نخورده می‌مونن.</div>
+    {groups_html}"""
+    return _layout("محصولات تکراری", body, adm, flash=flash)
+
+
 @router.get("/products/{pid}/faqs", response_class=HTMLResponse)
 async def product_faqs_page(request: Request, pid: int, flash: str = ""):
     adm = _get_admin(request)
@@ -5634,7 +5680,7 @@ async def feed_overview(request: Request):
             FROM products p
             LEFT JOIN product_feed pf ON pf.product_id=p.id
             LEFT JOIN feed_alert_settings fas ON fas.product_id=p.id
-            GROUP BY p.id ORDER BY avail ASC, p.title;
+            GROUP BY p.id, p.title, p.category, fas.threshold ORDER BY avail ASC, p.title;
         """).fetchall()
     finally:
         conn.close()
@@ -5683,51 +5729,6 @@ async def feed_overview(request: Request):
 # ══════════════════════════════════════════════════════════════════════════
 # ─── بررسی و حذف محصولات تکراری (بخش ۸ سند مینی‌اپ) ──────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
-
-@router.get("/products/duplicates", response_class=HTMLResponse)
-async def duplicate_products_page(request: Request, flash: str = ""):
-    adm = _get_admin(request)
-    guard = _require(adm, "feed")
-    if guard: return guard
-    import duplicate_products as dup
-    groups = dup.find_duplicate_groups()
-
-    def _pcard(p, is_original):
-        badge = ('<span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✅ اصل</span>' if is_original
-                 else '<span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">⚠️ تکراری</span>')
-        del_btn = "" if is_original else f'''
-          <form method="post" action="/admin/products/duplicates/{p['id']}/delete" onsubmit="return confirm('این نسخهٔ تکراری حذف بشه؟ موجودی/دسته‌بندی قیمت‌خرید و FAQهای این نسخه پاک می‌شن (نسخهٔ اصل و سفارش‌های قبلی دست‌نخورده می‌مونن).')">
-            <button class="text-xs text-red-600 border border-red-200 rounded-lg px-2 py-1 mt-2">🗑 حذف این تکراری</button>
-          </form>'''
-        return f"""
-        <div class="border rounded-lg p-3 {'bg-emerald-50/40' if is_original else 'bg-red-50/40'}">
-          <div class="flex items-center justify-between gap-2 mb-1">
-            <span class="text-xs text-gray-400">#{p['id']}</span>{badge}
-          </div>
-          <div class="text-xs text-gray-500">دسته: {e(p['category'])}</div>
-          <div class="text-xs text-gray-500">قیمت: {int(p['price'] or 0):,} ت</div>
-          <div class="text-xs text-gray-500">موجودی: {p['stock']} عدد</div>
-          <div class="text-xs text-gray-500">بچ خرید: {p['feed_batches_count']} ({int(p['feed_batches_cost']):,} ت)</div>
-          <div class="text-xs text-gray-500">سفارش‌های ثبت‌شده: {p['orders_count']}</div>
-          {del_btn}
-        </div>"""
-
-    groups_html = "".join(f"""
-      <div class="card p-4 mb-4">
-        <h3 class="font-bold text-gray-700 text-sm mb-3">📦 {e(g['title'])} <span class="text-xs text-gray-400 font-normal">({len(g['products'])} نسخه)</span></h3>
-        <div class="grid md:grid-cols-3 gap-3">
-          {"".join(_pcard(p, p['is_original']) for p in g['products'])}
-        </div>
-      </div>""" for g in groups) or '<div class="card p-10 text-center text-gray-400 text-sm">محصول تکراری‌ای (با تطابق دقیق عنوان) پیدا نشد. ✅</div>'
-
-    body = f"""
-    <div class="flex items-center gap-3 mb-6">
-      {_btn("← موجودی","/admin/feed","slate",small=True)}
-      <h1 class="text-2xl font-bold text-gray-800">🧬 بررسی محصولات تکراری</h1>
-    </div>
-    <div class="text-xs text-gray-400 mb-4">معیار تشخیص: تطابق دقیق عنوان محصول، مستقل از دسته‌بندی. در هر گروه، اولین محصول ثبت‌شده «اصل» در نظر گرفته می‌شه و بقیه «تکراری»‌ان. حذف هر تکراری فقط داده‌های همون نسخه (موجودی، بچ خرید، FAQ، امتیاز) رو پاک می‌کنه — نسخهٔ اصل و سفارش‌های قبلی دست‌نخورده می‌مونن.</div>
-    {groups_html}"""
-    return _layout("محصولات تکراری", body, adm, flash=flash)
 
 
 @router.post("/products/duplicates/{pid}/delete")
@@ -6577,7 +6578,6 @@ async def discount_delete(request: Request, cid: int):
         conn.close()
     _log(request, "حذف کد تخفیف", "تخفیف", f"id:{cid}")
     return _redir("/admin/discounts?flash=کد+حذف+شد")
-
 
 
 @router.get("/referrals", response_class=HTMLResponse)
@@ -7474,6 +7474,51 @@ async def order_exchange_post(request: Request, oid: int):
 
 # ─────────────────────────── Wallets ───────────────────────────────────────
 
+@router.get("/users/export.xlsx")
+async def users_export(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "users")
+    if guard: return guard
+    conn = _db()
+    try:
+        users = conn.execute("""
+            SELECT u.user_id, u.username, u.full_name, u.first_seen, u.last_seen,
+                   COALESCE(MAX(w.balance),0) AS balance, COUNT(DISTINCT o.id) AS orders
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id=u.user_id
+            LEFT JOIN orders o ON o.user_id = u.user_id
+            GROUP BY u.user_id ORDER BY u.last_seen DESC LIMIT 10000;
+        """).fetchall()
+    finally:
+        conn.close()
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from fastapi.responses import Response
+        import io
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "users"
+        ws.sheet_view.rightToLeft = True
+        headers = ["User ID","یوزرنیم","نام","اولین ورود","آخرین فعالیت","خریدها","کیف‌پول"]
+        hfill = PatternFill("solid", fgColor="2EC4B6")
+        for ci,h in enumerate(headers,1):
+            c = ws.cell(1,ci,h); c.fill=hfill; c.font=Font(bold=True,color="FFFFFF")
+        for ri,u in enumerate(users,2):
+            for ci,v in enumerate([u[0],u[1] or "",u[2] or "",str(u[3] or "")[:10],str(u[4] or "")[:10],u[6] or 0,u[5] or 0],1):
+                ws.cell(ri,ci,v)
+        buf=io.BytesIO(); wb.save(buf); buf.seek(0)
+        return Response(content=buf.read(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":"attachment; filename=users.xlsx"})
+    except ImportError:
+        from fastapi.responses import Response
+        lines=["\ufeffUser ID,یوزرنیم,نام,اولین ورود,آخرین فعالیت,خریدها,کیف‌پول"]
+        for u in users:
+            lines.append(f'{u[0]},{u[1] or ""},{u[2] or ""},{str(u[3] or "")[:10]},{str(u[4] or "")[:10]},{u[6] or 0},{u[5] or 0}')
+        return Response(content="\n".join(lines).encode("utf-8"),
+            media_type="text/csv;charset=utf-8",
+            headers={"Content-Disposition":"attachment; filename=users.csv"})
+
+
 @router.get("/users/{uid}", response_class=HTMLResponse)
 async def user_detail(request: Request, uid: int, flash: str = ""):
     adm = _get_admin(request)
@@ -7620,12 +7665,12 @@ async def users_list(request: Request, page: int = 0, q: str = "", sort: str = "
         total = conn.execute(f"SELECT COUNT(*) FROM users u {where};", params).fetchone()[0]
         users = conn.execute(f"""
             SELECT u.*,
-                   COALESCE(w.balance,0) AS balance,
+                   COALESCE(MAX(w.balance),0) AS balance,
                    COUNT(DISTINCT o.id) AS orders,
                    (SELECT 1 FROM partners p WHERE p.tg_user_id=u.user_id AND p.status='approved' LIMIT 1) AS is_partner
             FROM users u
             LEFT JOIN wallets w ON w.user_id=u.user_id
-            LEFT JOIN orders o ON o.user_id = CAST(u.user_id AS TEXT)
+            LEFT JOIN orders o ON o.user_id = u.user_id
             {where}
             GROUP BY u.user_id
             ORDER BY {sort_col} DESC
@@ -7701,51 +7746,6 @@ async def users_list(request: Request, page: int = 0, q: str = "", sort: str = "
       ) + '</div>' if pages > 1 else ''}
     </div>"""
     return _layout("کاربران", body, adm, flash=flash)
-
-
-@router.get("/users/export.xlsx")
-async def users_export(request: Request):
-    adm = _get_admin(request)
-    guard = _require(adm, "users")
-    if guard: return guard
-    conn = _db()
-    try:
-        users = conn.execute("""
-            SELECT u.user_id, u.username, u.full_name, u.first_seen, u.last_seen,
-                   COALESCE(w.balance,0) AS balance, COUNT(DISTINCT o.id) AS orders
-            FROM users u
-            LEFT JOIN wallets w ON w.user_id=u.user_id
-            LEFT JOIN orders o ON o.user_id = CAST(u.user_id AS TEXT)
-            GROUP BY u.user_id ORDER BY u.last_seen DESC LIMIT 10000;
-        """).fetchall()
-    finally:
-        conn.close()
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-        from fastapi.responses import Response
-        import io
-        wb = openpyxl.Workbook(); ws = wb.active; ws.title = "users"
-        ws.sheet_view.rightToLeft = True
-        headers = ["User ID","یوزرنیم","نام","اولین ورود","آخرین فعالیت","خریدها","کیف‌پول"]
-        hfill = PatternFill("solid", fgColor="2EC4B6")
-        for ci,h in enumerate(headers,1):
-            c = ws.cell(1,ci,h); c.fill=hfill; c.font=Font(bold=True,color="FFFFFF")
-        for ri,u in enumerate(users,2):
-            for ci,v in enumerate([u[0],u[1] or "",u[2] or "",str(u[3] or "")[:10],str(u[4] or "")[:10],u[6] or 0,u[5] or 0],1):
-                ws.cell(ri,ci,v)
-        buf=io.BytesIO(); wb.save(buf); buf.seek(0)
-        return Response(content=buf.read(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition":"attachment; filename=users.xlsx"})
-    except ImportError:
-        from fastapi.responses import Response
-        lines=["\ufeffUser ID,یوزرنیم,نام,اولین ورود,آخرین فعالیت,خریدها,کیف‌پول"]
-        for u in users:
-            lines.append(f'{u[0]},{u[1] or ""},{u[2] or ""},{str(u[3] or "")[:10]},{str(u[4] or "")[:10]},{u[6] or 0},{u[5] or 0}')
-        return Response(content="\n".join(lines).encode("utf-8"),
-            media_type="text/csv;charset=utf-8",
-            headers={"Content-Disposition":"attachment; filename=users.csv"})
 
 
 @router.get("/wallets", response_class=HTMLResponse)
@@ -8501,7 +8501,6 @@ async def tickets_list(request: Request, status_filter: str = "", type_filter: s
     </script>"""
 
     return _layout("تیکت‌ها", body, adm, flash=flash)
-
 
 
 @router.post("/tickets/{tid}/archive")
@@ -10109,7 +10108,6 @@ def _acbar(label, value, total, color):
     return f"""<div><div class="flex justify-between text-xs text-gray-500 mb-1">
       <span>{label}</span><span>{int(value):,} ت ({pct}٪)</span></div>
       <div class="h-2 bg-gray-100 rounded-full ltr-num"><div class="{color} h-2 rounded-full" style="width:{pct}%"></div></div></div>"""
-
 
 
 @router.get("/accounting/expenses", response_class=HTMLResponse)
@@ -14010,7 +14008,6 @@ async def iphone_toggle(request: Request):
     set_main_button_enabled("MAIN_BTN_IPHONE_VALUATION", not cur)
     _log(request, "فعال/غیرفعال‌سازی کارشناسی آیفون", "کارشناسی آیفون", "غیرفعال" if cur else "فعال", admin_info=adm)
     return _redir("/admin/iphone")
-
 
 
 @router.get("/iphone/prices", response_class=HTMLResponse)

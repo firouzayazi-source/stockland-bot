@@ -4,6 +4,40 @@
 
 ---
 
+## ۲۰۲۶-۰۸-۰۷ (دور پنجاه‌وسوم) — تکمیل مهاجرت Postgres: باگ‌های باقی‌ماندهٔ «موجودی کاربران» + «کارشناسی آیفون»
+
+مالک پروژه گزارش داد بخش «کاربران» و «کارشناسی آیفون» در پنل خطا می‌دن، و خواست همهٔ ردپاهای باقی‌ماندهٔ SQLite بررسی بشه. به‌جای حدس زدن، یک هارنس تست ساخته شد (`TestClient` روی `payment_service.app` + Postgres 16 واقعی نصب‌شده در سندباکس + دادهٔ seed واقعی) که هر ۶۵ مسیر GET استاتیک پنل رو با لاگین واقعی می‌گشت. این هارنس + بررسی مستقیم کد چند باگ واقعی پیدا کرد:
+
+### ۱) `feed_batches` جدول لیزیه، بدون `ensure_feed_batch_schema()` قبل از کوئری
+`get_accounting_kpis()`/`get_product_accounting()` (db.py) بدون صدا زدن `ensure_feed_batch_schema()` مستقیم به `feed_batches` کوئری می‌زدن — روی نصب تازه (جدول هنوز ساخته نشده) با «relation does not exist» شکست می‌خورد. بدتر: روی Postgres یک کوئری شکست‌خورده کل تراکنش رو poison می‌کنه، پس حتی try/exceptهای جدای بعدی همون تابع هم با «current transaction is aborted» شکست می‌خوردن. رفع: `ensure_feed_batch_schema()` اول تابع صدا زده می‌شه (رفع ریشه‌ای) + هر `except` داخلی `get_accounting_kpis` صریحاً `conn.rollback()` می‌کنه (دفاع در عمق).
+
+### ۲) صفحهٔ «کاربران» (`/admin/users`) — CAST اشتباه + GROUP BY ناقص
+`users_list`/`users_export` با `LEFT JOIN orders o ON o.user_id = CAST(u.user_id AS TEXT)` جوین می‌شدن — `orders.user_id` و `users.user_id` هر دو `INTEGER`ان، این CAST اضافه و اشتباهه. روی SQLite بی‌اثر بود (قوانین affinity نوع رو خودکار برمی‌گردوندن)، روی Postgres با `operator does not exist: integer = text` شکست می‌خورد. رفع: حذف CAST. علاوه بر این، `SELECT u.*, COALESCE(w.balance,0)...` با `GROUP BY u.user_id` روی Postgres چون `w.balance` از جدول دیگه‌ایه (نه تابعی از PK جدول `users`) نیاز به aggregate داشت — `COALESCE(w.balance,0)` به `COALESCE(MAX(w.balance),0)` تبدیل شد (۱:۱ join، بی‌خطر).
+
+### ۳) `/admin/feed` (موجودی) — HAVING/GROUP BY alias
+`GROUP BY p.id` با انتخاب `p.title`, `p.category`, `fas.threshold` (از جدول جوین‌شده) روی Postgres رد می‌شد؛ اصلاح به `GROUP BY p.id, p.title, p.category, fas.threshold`.
+
+### ۴) `/admin/iphone` — `GROUP BY v.model_id` با انتخاب `m.name`
+`iphone_valuation/db.py:get_stats()` (لیست «کارشناسی‌های پرتکرار» داشبورد آیفون) با `GROUP BY v.model_id` ولی `SELECT m.name` (جدول دیگه) روی Postgres شکست می‌خورد؛ اصلاح به `GROUP BY v.model_id, m.name`.
+
+### ۵) 🔴 باگ بزرگ — موتور قیمت‌گذاری آیفون کاملاً از کار افتاده بود روی Postgres
+`iphone_valuation/db.py`: `get_capacity_exact`/`resolve_capacity` (تنها راه پیدا کردن قیمت ثبت‌شده برای هر ترکیب مدل+ظرفیت+رنگ+پارت+سری‌اصالت، بخش ۲۲.۷/۲۲.۸ CLAUDE.md) از الگوی `storage_id IS ? AND part_id IS ? ...` برای مقایسهٔ NULL-safe استفاده می‌کردن. روی SQLite، عملگر `IS` یک NULL-safe equality *عمومیه* (با هر مقدار کار می‌کنه)؛ روی Postgres، `IS` فقط `NULL`/`TRUE`/`FALSE` رو می‌پذیره — `col IS 162` مستقیماً `SyntaxError` می‌داد. یعنی **هر ثبت/خواندن قیمت آیفون (`upsert_capacity`, `resolve_capacity`, و در نتیجه کل `service.valuate()` که پایهٔ ویزارد ربات و API کارشناسی است) روی Postgres تولید خطا می‌داد** — این دقیقاً همون چیزیه که مالک پروژه به‌عنوان «کارشناسی آیفون خطا داره» گزارش داد.
+
+رفع **در سطح ترجمهٔ دیالوگ** (نه فقط این دو تابع) — `db_dialect.py` حالا هر الگوی `col IS ?` رو قبل از تبدیل `?`→`%s` به `col IS NOT DISTINCT FROM ?` ترجمه می‌کنه (معادل استاندارد ANSI SQL، NULL-safe روی هر دو دیالوگ). این یعنی هر جای دیگهٔ پروژه (فعلی یا آینده) که همین الگو رو استفاده کنه، خودکار پوشش داده می‌شه — نه فقط این دو query.
+
+### ۶) روت‌های Excel/صفحهٔ غیرقابل‌دسترس — ترتیب ثبت route (بدون ربط به دیالوگ دیتابیس)
+هارنس مشخص کرد `GET /admin/users/export.xlsx` و `GET /admin/products/duplicates` همیشه `422` برمی‌گردوندن — چون FastAPI/Starlette روت‌ها رو به ترتیب ثبت در فایل matches می‌کنه، و `/users/{uid}` (با `uid: int`) و `/products/{pid}` **قبل از** این دو مسیر خاص در فایل تعریف شده بودن؛ درخواست به `/users/export.xlsx` اول با `/users/{uid}` تطبیق داده می‌شد (تلاش تبدیل `"export.xlsx"` به `int` → 422). یعنی **دکمهٔ خروجی اکسل کاربران و صفحهٔ محصولات تکراری هیچ‌وقت واقعاً کار نمی‌کردن** — نه در Postgres نه در SQLite، این یه باگ preexisting و دیالوگ‌مستقل بود. رفع: هر دو تعریف route به قبل از معادل پارامتری‌شونشون منتقل شدن (بدون تغییر منطق داخلی).
+
+### ۷) رفع دفاعی — `/admin/tickets` روی نصب کاملاً تازه
+`ensure_ticket_archive_schema()` مستقیم `PRAGMA table_info(tickets)`/`ALTER TABLE tickets ...` می‌زد بدون تضمین وجود جدول (که فقط با `ticket_ensure_schema()` از `bot.py` ساخته می‌شه — یعنی تا وقتی بات هیچ تعامل تیکتی نداشته، جدول نیست). روی نصب کاملاً تازه (چه SQLite چه Postgres) اگه ادمین قبل از هر تعامل بات با تیکت وارد پنل بشه، `/admin/tickets` کرش می‌کرد. رفع: `ensure_ticket_archive_schema()` اول خودش `ticket_ensure_schema()` (idempotent) رو صدا می‌زنه.
+
+### روش تست
+هارنس crawler مبتنی بر `starlette.testclient.TestClient` (نکتهٔ مهم کشف‌شده حین کار: باید `base_url="https://..."` باشه، نه `http`، چون کوکی سشن `Secure` است) + Postgres 16 واقعی + دادهٔ seed (کاربر، کیف‌پول، محصول، فید، سفارش، سری آیفون) — همهٔ ۶۵ مسیر GET استاتیک پنل بعد از هر رفع دوباره اجرا شد تا صفر خطا/exception باقی نمونه. علاوه بر پنل، `iphone_valuation.service.valuate()` (مسیر واقعی محاسبهٔ قیمت که ربات/API صدا می‌زنن) مستقیم با مدل/ظرفیت واقعی روی Postgres تست شد (قبل از رفع #۵: کرش؛ بعد: موفق + idempotency تأیید‌شده). رگرسیون کامل SQLite هم موازی هر مرحله دوباره اجرا شد — بدون تغییر رفتار.
+
+فایل‌های تغییرکرده: `db.py`، `admin_panel.py`، `db_dialect.py`، `iphone_valuation/db.py`.
+
+---
+
 ## ۲۰۲۶-۰۸-۰۷ (دور پنجاه‌ودوم) — رفع add_product/chat_enabled + تکمیل واقعی مهاجرت Postgres
 
 ### رفع دو مورد «اصلاحیه» باقی‌مانده از دور قبل
