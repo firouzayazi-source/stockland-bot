@@ -617,7 +617,7 @@ function loadMe(){if(_m)return;_m=1;
     '</div>'+
     (inTG?'':'<div class="sl-group" style="margin-top:12px"><a class="sl-row" href="#" id="me-logout-row"><span class="sl-ric" style="background:#EF4444">🚪</span><span class="sl-row-grow">خروج از حساب</span></a></div>')+
     foot;
-  api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(d.balance||0)+' <small>تومان</small>'}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
+  api('/me/wallet',true).then(function(d){var e=document.getElementById('me-bal');if(e)e.innerHTML='<small>تومان</small> '+fmt(d.balance||0)}).catch(function(){var e=document.getElementById('me-bal');if(e)e.textContent='—'});
   api('/me/partner',true).then(function(d){
     if(d.is_partner){
       var b=document.getElementById('me-pb');if(b)b.style.display='';
@@ -627,7 +627,7 @@ function loadMe(){if(_m)return;_m=1;
       if(rw){
         rw.style.display='';
         var rb=document.getElementById('me-reward-bal');
-        if(rb)rb.innerHTML=fmt(d.balance||0)+' <small>تومان</small>';
+        if(rb)rb.innerHTML='<small>تومان</small> '+fmt(d.balance||0);
       }
     }
     if(d.is_partner&&d.tier)setTierAvatar(d.tier.name,d.tier.icon);
@@ -800,7 +800,7 @@ function renderCheckinCard(){
             c.innerHTML='<div class="sl-checkin-card sl-checkin-done"><span class="sl-checkin-e">✅</span>'+
               '<div class="sl-checkin-txt"><b>'+fmt(res.reward)+' تومان به کیف‌پولت اضافه شد</b>'+
               '<span>رکورد سرزدن: '+fmt(res.streak)+' روز پشت‌سرهم</span></div></div>';
-            var e=document.getElementById('me-bal');if(e)e.innerHTML=fmt(res.balance||0)+' <small>تومان</small>';
+            var e=document.getElementById('me-bal');if(e)e.innerHTML='<small>تومان</small> '+fmt(res.balance||0);
             _clearMeBadge();
           }).catch(function(){btn.disabled=false;btn.textContent='دریافت'});
       });
