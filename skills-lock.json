@@ -13,6 +13,12 @@
       "skillPath": "plugins/backend-development/skills/architecture-patterns/SKILL.md",
       "computedHash": "a66aaa5aa49b75bec12b6270dcde8794b1f0cc75fbb9ecb999e43f8b723b461f"
     },
+    "code-review": {
+      "source": "hoangnguyen0403/agent-skills-standard",
+      "sourceType": "github",
+      "skillPath": ".codex/skills/code-review/SKILL.md",
+      "computedHash": "940079be8f4f34df8815f353d44272ee0d995e3d1ae3118809b1e50ee38fc1c4"
+    },
     "code-review-excellence": {
       "source": "wshobson/agents",
       "sourceType": "github",
