@@ -141,6 +141,16 @@ class _PgCursor:
     def fetchall(self):
         return self._cur.fetchall()
 
+    def __iter__(self):
+        """⚠️ رفع‌شده (کشف‌شده روی سرور تولید واقعی، نه سندباکس): sqlite3.Cursor
+        مستقیم iterable است (`for row in conn.execute(...)`) — الگویی که کد
+        موجود پروژه در چند جا استفاده می‌کنه (مثلاً payment_service.ensure_schema:
+        `{row["name"] for row in conn.execute("PRAGMA table_info(...)")}`). قبلاً
+        _PgCursor این متد رو نداشت → TypeError: '_PgCursor' object is not
+        iterable → کل سرویس در startup کرش می‌کرد. psycopg2 cursor خودش
+        native iterable است، فقط delegate می‌کنیم."""
+        return iter(self._cur)
+
     @property
     def lastrowid(self):
         """معادل sqlite3.Cursor.lastrowid.
