@@ -6699,8 +6699,8 @@ def _fetch_order_logs(conn, limit: int = 50):
 
 @router.get("/orders/{oid}", response_class=HTMLResponse)
 async def order_status_page(request: Request, oid: int, flash: str = ""):
-    """🧾 وضعیت سفارش — صفحهٔ یکپارچهٔ ویرایش/برگشت/تعویض/ارسال مجدد. قبلاً این ۴
-    قابلیت روی ۴ صفحهٔ جدا بودن (بدون هیچ صفحهٔ خلاصه‌ای که با /admin/orders/{oid}
+    """🧾 وضعیت سفارش — صفحهٔ یکپارچهٔ برگشت/تعویض/ارسال مجدد. قبلاً این قابلیت‌ها
+    روی چند صفحهٔ جدا بودن (بدون هیچ صفحهٔ خلاصه‌ای که با /admin/orders/{oid}
     برسه بهش — همون آدرسی که دکمه‌های «انصراف» صفحات برگشت/تعویض بهش لینک می‌دادن
     ولی هیچ‌وقت وجود نداشت، یعنی همیشه ۴۰۴ می‌گرفتن). طبق درخواست صریح مالک پروژه
     ادغام شدن (بخش ۴۲ CLAUDE.md).
@@ -6713,7 +6713,12 @@ async def order_status_page(request: Request, oid: int, flash: str = ""):
     دو یکیه: دادن یه آیتم متفاوت به کاربر — یا از همون محصول، یا محصولی کاملاً
     دیگه)؛ اگه فقط یکی از این دو واقعاً در دسترس باشه (مثلاً سفارش برگشتی فقط
     ارسال‌جایگزین رو پشتیبانی می‌کنه، نه تعویض)، انتخابگر نوع عملیات اصلاً نشون
-    داده نمی‌شه و مستقیم همون فرم می‌آد."""
+    داده نمی‌شه و مستقیم همون فرم می‌آد.
+
+    ⚠️ بازطراحی سوم (بخش ۴۴ CLAUDE.md، طبق درخواست صریح): کارت «ویرایش اطلاعات
+    پایه» (عنوان/قیمت سفارش) هم کاملاً حذف شد — اطلاعات پایهٔ محصول جای درستش
+    بخش محصول/موجودیه، نه اینجا. روت POST /orders/{oid}/edit هم چون بدون هیچ
+    فرمی که بهش لینک بده کد مرده می‌شد، حذف شد."""
     adm = _get_admin(request)
     guard = _require(adm, "orders")
     if guard: return guard
@@ -6751,22 +6756,6 @@ async def order_status_page(request: Request, oid: int, flash: str = ""):
         '<span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">برگشتی</span>' if is_returned
         else '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">فعال</span>'
     )
-
-    edit_card = f"""
-    <div class="card card-p mb-6">
-      <h2 class="section-title">✏️ ویرایش اطلاعات پایه</h2>
-      <form method="post" action="/admin/orders/{oid}/edit" class="space-y-3">
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">عنوان محصول</label>
-          {_input("title", "", str(order["title"] or ""), required=True)}
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">مبلغ (تومان)</label>
-          {_input("price", "", str(order["price"] or 0), type_="number", required=True)}
-        </div>
-        {_btn("ذخیره تغییرات", color="green")}
-      </form>
-    </div>"""
 
     # ── تب برگشت ────────────────────────────────────────────────────────────
     return_panel = ""
@@ -6981,25 +6970,9 @@ async def order_status_page(request: Request, oid: int, flash: str = ""):
       {status_badge}
     </div>
     <div class="max-w-2xl">
-      {edit_card}
       {tabs_card}
     </div>"""
     return _layout(f"وضعیت سفارش #{oid}", body, adm, flash=flash)
-
-
-@router.post("/orders/{oid}/edit")
-async def order_edit_post(request: Request, oid: int, title: str=Form(""), price: str=Form("0")):
-    adm = _get_admin(request)
-    guard = _require(adm, "orders")
-    if guard: return guard
-    try:
-        from db import order_update
-        order_update(oid, title=title.strip(), price=int(price or 0))
-    except Exception as ex:
-        _tg_logger.error("order_edit error: %s", ex)
-        return _redir(f"/admin/orders/{oid}?flash=خطا+در+ذخیره")
-    _log(request, "ویرایش سفارش", "سفارش‌ها", f"سفارش #{oid} | عنوان:{title.strip()} | مبلغ:{price}", admin_info=adm)
-    return _redir(f"/admin/orders/{oid}?flash=✅+سفارش+ویرایش+شد")
 
 
 @router.post("/orders/{oid}/return")
