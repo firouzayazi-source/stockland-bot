@@ -546,6 +546,21 @@ def _run_gateway_failover(amount_toman: int, description: str):
 @app.on_event("startup")
 def on_startup() -> None:
     ensure_schema()
+    try:
+        # ensure_schema کارشناسی آیفون قبلاً کاملاً lazy بود — فقط با اولین فراخوانی
+        # واقعی (مثلاً اولین بار که ادمینی روی /admin/iphone/* کلیک می‌کنه) اجرا
+        # می‌شد. مشکل: این تابع یه زنجیرهٔ مهاجرت/seed سنگین و یک‌باره‌ست (۱۴ CREATE
+        # TABLE + چند seed + ~۱۴ تابع _migrate_*)؛ اگه یه استثنای گذرا (مثلاً بلافاصله
+        # بعد از ری‌استارت سرویس/ری‌استور دیتابیس) وسط این زنجیره رخ بده، درخواست
+        # کاربر (نه فقط استارتاپ) با ۵۰۰ مواجه می‌شه — دقیقاً چیزی که باعث خطای
+        # «افزودن سری تازه» با موفقیت در تلاش دوم شد (هر تابع _migrate_* خودش کامیت/
+        # فلگ per-migration داره، پس تلاش دوم از همون‌جا که مونده بود ادامه می‌ده).
+        # حالا مثل بقیهٔ جدول‌های هستهٔ پروژه (بخش ۷ سند)، ایگر در استارتاپ اجرا می‌شه —
+        # اگه شکست بخوره همون‌جا لاگ می‌شه، نه وسط یه کلیک تصادفی ادمین.
+        import iphone_valuation.db as _ivdb
+        _ivdb.ensure_schema()
+    except Exception:
+        logger.exception("iphone_valuation.db.ensure_schema() در استارتاپ شکست خورد")
     maybe_start_bot_polling()
     try:
         from admin_panel import _start_auto_backup_thread
