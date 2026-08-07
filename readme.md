@@ -10,7 +10,7 @@
 
 - **مدیر پروژه:** فیروز ایازی — تنها توسعه‌دهنده و مدیر فنی پروژه. فایل‌ها را مستقیماً روی GitHub آپلود و سپس روی سرور Deploy می‌کند (بدون استفاده مستقیم از دستورات git در تعامل با Claude).
 - **سرور:** VPS آلمان — مسیر اپلیکیشن: `/opt/stockland/app/`
-- **دیتابیس:** SQLite — مسیر: `/opt/stockland/data/stockland.db`
+- **دیتابیس:** PostgreSQL (`DB_DIALECT=postgres` + `DATABASE_URL` در `.env`) — ⚠️ این سند قدیمیه و قبلاً SQLite رو دیتابیس تولید معرفی می‌کرد؛ پروژه از اون موقع کامل به Postgres مهاجرت کرده. برای جزئیات به `CLAUDE.md` بخش ۴۶ به بعد مراجعه کن — اون فایل مرجع به‌روز پروژه‌ست، نه این یکی.
 - **Stack:** Python (FastAPI برای پنل + python-telegram-bot/telebot برای ربات) + Uvicorn + systemd
 - **دامنه پنل مدیریت:** `https://panel.stland.ir/admin/`
 - **GitHub:** `https://github.com/firouzayazi-source/stockland-bot.git`

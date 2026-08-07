@@ -27,7 +27,7 @@ stockland-bot/
 ├── bot.py                    ~6,627 خط — کل منطق ربات تلگرام (همه handlerها)
 ├── admin_panel.py             ~11,098 خط — پنل مدیریت وب (FastAPI router، mount شده در payment_service)
 ├── payment_service.py         ~1,137 خط — اپ اصلی FastAPI/uvicorn؛ درگاه زرین‌پال + استارتِ polling ربات
-├── db.py                      ~5,711 خط — کل اسکیمای SQLite و توابع دیتابیس (لایه داده اصلی)
+├── db.py                      ~5,711 خط — کل اسکیمای دیتابیس و اکثر کوئری‌ها (لایه داده اصلی؛ پرتابل SQLite/Postgres از طریق db_conn.py/db_dialect.py — تولید Postgres است، بخش ۴۶)
 ├── db_conn.py                 لایهٔ انتزاعی اتصال (SQLite یا Postgres بر اساس DB_DIALECT)
 ├── db_dialect.py              مترجم SQL برای حالت Postgres (فقط وقتی DIALECT=postgres فعاله)
 ├── api.py                     REST API عمومی (/api/v1) برای PWA/موبایل — از core/ استفاده می‌کند
@@ -35,15 +35,15 @@ stockland-bot/
 ├── keyboards.py               سازنده‌های Reply/Inline Keyboard ربات
 ├── ui_texts.py                متن‌ها/برچسب‌های قابل‌ویرایش + تابع t()
 ├── state.py                   دیکشنری‌های in-memory وضعیت کاربر/ادمین (user_states, admin_states, reseller_signup)
-├── stbak_engine.py            موتور بکاپ/ریست ماژول‌محور فرمت .stbak (SQLite)
+├── stbak_engine.py            موتور بکاپ/ریست ماژول‌محور فرمت .stbak — دیالوگ‌آگاه (بخش ۴۹): هم SQLite هم Postgres رو پوشش می‌ده، از جمله بازیابی بکاپ‌های قدیمی ZIP-محور روی Postgres
 ├── duplicate_products.py      ماژول مستقل تشخیص/حذف محصولات تکراری (بخش ۸ سند مینی‌اپ، از ۲۰۲۶-۰۷-۳۱) — فقط توسط admin_panel.py استفاده می‌شود
 ├── rate_limit.py               ریت‌لیمیت سبک درون‌حافظه‌ای مشترک بین payment_service.py/api.py/iphone_valuation (از ۲۰۲۶-۰۷-۳۱، فاز ۱ ممیزی) — الگوی _login_attempts پنل، عمومی‌شده
 ├── image_utils.py               فشرده‌سازی/resize خودکار عکس آپلودی با Pillow (از ۲۰۲۶-۰۷-۳۱، فاز ۲ ممیزی)
 ├── html_sanitize.py             sanitizer whitelist-محور HTML برای بدنهٔ آموزش/محتوا (از ۲۰۲۶-۰۷-۳۱، فاز ۲ ممیزی)
 ├── backup_tools.py             بکاپ/ریست قدیمی (پسوند Robuser) — هنوز در bot.py ایمپورت می‌شود؛ رشته‌های فارسی‌اش mojibake/خراب هستند
 ├── backup_uploader.py          آپلود بکاپ به کانال تلگرام + Google Drive (async, thread-based)
-├── migrate_to_postgres.py      اسکریپت CLI یک‌بارهٔ مهاجرت SQLite→Postgres (دستی، در اپ وایر نشده)
-├── pg_backup.py                بکاپ Postgres با pg_dump/psql (سیستم بکاپ جدا از stbak_engine، برای آیندهٔ Postgres)
+├── migrate_to_postgres.py      اسکریپت CLI یک‌بارهٔ مهاجرت SQLite→Postgres (دستی، در اپ وایر نشده — قبلاً روی تولید یک‌بار اجرا شده، دیگه لازم نیست دوباره اجرا بشه)
+├── pg_backup.py                بکاپ Postgres با pg_dump/psql — موتور **فعال** بکاپ زیر تولید (بخش ۴۶/۴۸)
 ├── core/                       لایهٔ منطق تازه و نازک — **فقط توسط api.py استفاده می‌شود**، نه bot.py/admin_panel.py
 │   ├── __init__.py
 │   ├── products.py, orders.py, wallet.py, partners.py, referrals.py
@@ -61,7 +61,6 @@ stockland-bot/
 │   └── systemd/robuser-bot.service, robuser-internal-api.service
 ├── restore.sh                  بازیابی کامل روی سرور فعلی (stockland)
 ├── restore_backup.sh           اسکریپت بازیابی قدیمی مسیر /opt/Robuser
-├── database/bot.db             ⚠️ فایل SQLite باینری کامیت‌شده در گیت (۱۴ جدول، چند ردیف داده) — احتمالاً باقیماندهٔ توسعهٔ اولیه؛ **نباید در گیت باشد**
 ├── requirements.txt, Procfile, railway.json   وابستگی‌ها و دیپلوی جایگزین (Railway/Heroku-style، فعلاً استفاده نمی‌شود)
 ├── readme.md                   مستند قدیمی (نوشته‌شده قبل از این نشست) — ورک‌فلوی «هرگز git استفاده نکن» را توصیف می‌کند که دیگر صدق نمی‌کند (بخش ۲۰)
 ├── Claude.MD                   نسخهٔ قبلی این فایل (حروف کوچک/بزرگ متفاوت) — محتوایش در همین CLAUDE.md ادغام شده
@@ -81,7 +80,7 @@ stockland-bot/
 | `api.py` | REST API برای PWA/موبایل، مبتنی بر `core/`، auth با initData تلگرام |
 | `config.py` | env vars سراسری |
 | `keyboards.py` / `ui_texts.py` / `state.py` | کیبورد، متن قابل‌ویرایش، وضعیت مکالمه |
-| `stbak_engine.py` | ماژول‌های بکاپ/ریست SQLite |
+| `stbak_engine.py` | ماژول‌های بکاپ/ریست — دیالوگ‌آگاه، هم SQLite هم Postgres |
 
 ---
 
@@ -377,7 +376,7 @@ except Exception:
 - ساخت UI پنل برای `iphone_valuation.db.create_transaction()` (ثبت دستی معاملات واقعی برای یادگیری بازار)
 - انتقال کارشناسی آیفون به مینی‌اپ (فاز بعد، API از الان آماده‌ست)
 - تصمیم دربارهٔ دو Mini App موازی (`/admin/shop` در برابر `/app`)
-- خارج کردن `database/bot.db` از ردگیری گیت
+- ✅ **رفع‌شده (۲۰۲۶-۰۷-۳۱، بخش ۲۷):** خارج کردن `database/bot.db` از ردگیری گیت — کاملاً از تمام تاریخچهٔ گیت هم حذف شد
 - هش کردن (نه plaintext) هنگام تغییر رمز سوپرادمین؛ یکسان‌سازی پیش‌فرض `SESSION_SECRET`
 - افزودن CSRF token به فرم‌های پنل ادمین
 - ✅ **رفع‌شده (۲۰۲۶-۰۷-۲۶):** پارامتری‌کردن کوئری `get_card_receipts`
@@ -756,6 +755,8 @@ API (/api/v1/iphone/valuate) ──┼──> iphone_valuation.service.valuate(p
 ---
 
 ## ۲۳. Backup/Restore/Recovery، سیستم دسترسی ادمین، منطق خرید ناموجود (از ۲۰۲۶-۰۷-۲۶)
+
+⚠️ **تصحیح (۲۰۲۶-۰۸-۰۷):** زیربخش زیر («Backup/Restore/Recovery») مال زمانیه که تولید هنوز SQLite بود — اون فرض دیگه درست نیست (بخش ۴۶ به بعد). فریم‌بندی درست فعلی: **`pg_backup.py` موتور فعال بکاپ زیر تولید Postgresه، نه `stbak_engine.py`**؛ `stbak_engine.py` (بعد از بخش ۴۹) دیالوگ‌آگاه شده و برای بازیابی فرمت قدیمی ZIP-محور (حتی روی Postgres) و برای مسیر SQLite در dev/تست هنوز زنده و لازمه، ولی دیگه «تنها موتور زندهٔ SQLite» توصیف درستی نیست. برای وضعیت فعلی صفحهٔ پشتیبان‌گیری/بازیابی پنل، بخش‌های ۴۶، ۴۸ و ۴۹ رو ببین — جزئیات زیر (dry-run، discover_new_tables، و…) دربارهٔ خودِ فرمت `.stbak` هنوز درسته، فقط ادعای «SQLite تنها دیتابیس تولیده» دیگه صادق نیست.
 
 ### Backup/Restore/Recovery — `stbak_engine.py` تنها موتور زندهٔ SQLite است
 
