@@ -2372,6 +2372,8 @@ async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0")
                 PRIMARY KEY (admin_id, key)
             );
         """)
+        import db_conn as _dc
+        _dc.ensure_unique_constraint(conn, "admin_preferences", ["admin_id", "key"])
         # ⚠️ INSERT OR REPLACE (خاص SQLite) به ON CONFLICT تبدیل شد — کلید ترکیبی
         # (admin_id,key)، پرتابل بین SQLite/Postgres
         conn.execute(

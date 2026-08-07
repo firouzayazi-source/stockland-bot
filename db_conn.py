@@ -213,6 +213,78 @@ class _PgConnection:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# ─── رفع محدودیت یکتایی گمشده (کشف‌شده روی سرور تولید واقعی) ───────────────
+# ══════════════════════════════════════════════════════════════════════════
+
+_UNIQUE_CONSTRAINT_CHECKED: set = set()  # فلگ per-process، مثل الگوهای مشابه پروژه
+
+
+def ensure_unique_constraint(conn, table: str, columns: list) -> None:
+    """⚠️ فقط زیر Postgres معنی داره: کشف شد که بعضی جدول‌ها (مثل bot_config) روی
+    Postgres تولید واقعی از قبل (احتمالاً توسط migrate_to_postgres.py یا یه مسیر
+    دستی دیگه) بدون محدودیت یکتایی واقعی ساخته شده بودن — یعنی
+    `CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT)`
+    چون جدول از قبل با ستون‌های ساده (بدون PK واقعی) وجود داشت، بی‌اثر بود.
+    نتیجه: `ON CONFLICT(key)` با psycopg2.errors.InvalidColumnReference
+    («there is no unique or exclusion constraint») شکست می‌خورد — دقیقاً همون
+    خطایی که در iphone_valuation.db._migrate_registry_options_v2 → db.set_cfg
+    روی سرور واقعی رخ داد.
+
+    این تابع (idempotent، فلگ per-process) سعی می‌کنه محدودیت یکتایی رو اضافه
+    کنه؛ اگه داده‌های تکراری از قبل باشن (چون بدون constraint واقعی هیچ‌چیزی
+    جلوی درج تکراری رو نمی‌گرفت)، اول safe-dedup می‌کنه (فقط جدیدترین ردیف هر
+    ترکیب کلید رو نگه می‌داره، بر اساس ctid) و دوباره امتحان می‌کنه. هیچ‌وقت
+    exception پرتاب نمی‌کنه — بدترین حالت: constraint اضافه نمی‌شه و همون خطای
+    قبلی روی ON CONFLICT باقی می‌مونه، ولی بدون کرش کل مسیر migration."""
+    if not is_postgres():
+        return
+    cache_key = (table, tuple(columns))
+    if cache_key in _UNIQUE_CONSTRAINT_CHECKED:
+        return
+    # اگه جدول هنوز اصلاً وجود نداره (مثلاً یه ensure_* lazy دیگه هنوز صداش نشده)،
+    # بی‌صدا رد شو — این حالت طبیعیه، نه خطا؛ کش نمی‌کنیم چون ممکنه جدول بعداً ساخته بشه.
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name=?;", (table,)
+        ).fetchone()
+        if not exists:
+            return
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return
+    cname = f"{table}_{'_'.join(columns)}_uq"
+    cols_csv = ", ".join(columns)
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD CONSTRAINT {cname} UNIQUE ({cols_csv});")
+        conn.commit()
+        _UNIQUE_CONSTRAINT_CHECKED.add(cache_key)
+        return
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    # شکست اول یعنی یا constraint از قبل هست (بی‌خطر، کاری لازم نیست) یا دادهٔ
+    # تکراری داره (چون هیچ‌وقت واقعاً یکتایی اعمال نمی‌شد) — سعی در پاکسازی امن
+    try:
+        cond = " AND ".join(f"a.{c}=b.{c}" for c in columns)
+        conn.execute(f"DELETE FROM {table} a USING {table} b WHERE a.ctid < b.ctid AND {cond};")
+        conn.commit()
+        conn.execute(f"ALTER TABLE {table} ADD CONSTRAINT {cname} UNIQUE ({cols_csv});")
+        conn.commit()
+        _UNIQUE_CONSTRAINT_CHECKED.add(cache_key)
+    except Exception as ex:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.warning("ensure_unique_constraint(%s, %s) failed: %s", table, columns, ex)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # ─── نقطه ورود ─────────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
 

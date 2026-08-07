@@ -304,6 +304,8 @@ def ensure_schema() -> None:
             );
             """
         )
+        import db_conn as _dc
+        _dc.ensure_unique_constraint(conn, "pending_deliveries", ["order_id"])
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS admins (

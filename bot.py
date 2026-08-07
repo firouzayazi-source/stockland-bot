@@ -480,6 +480,8 @@ def ensure_pending_schema():
                 );
                 """
             )
+            import db_conn as _dc
+            _dc.ensure_unique_constraint(conn, "pending_deliveries", ["order_id"])
             # Add missing columns if table existed before (SQLite safe migration)
             # مهاجرت ستون‌ها — هر ALTER جدا (سازگار Postgres)
             needed = {

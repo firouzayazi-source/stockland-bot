@@ -612,7 +612,44 @@ def init_db(db_path=None):
     # ⚡ ساخت ایندکس‌ها برای سرعت — حیاتی برای عملکرد در حجم بالا
     ensure_indexes()
 
+    # ⚠️ کشف‌شده روی سرور تولید واقعی: بعضی جدول‌ها (bot_config، احتمالاً بقیهٔ
+    # جدول‌های زیر هم) روی Postgres تولید بدون محدودیت یکتایی واقعی ساخته شده
+    # بودن (احتمالاً از migrate_to_postgres.py) — یعنی همهٔ کوئری‌های ON CONFLICT
+    # پروژه (بخش ۴۶ سند) با psycopg2.errors.InvalidColumnReference شکست می‌خوردن.
+    # این‌جا یک‌بار برای همهٔ جدول‌های شناخته‌شدهٔ ON-CONFLICT-محور به‌طور مرکزی
+    # چک/رفع می‌شه (به‌جای پخش‌کردن چک در ۱۵+ نقطهٔ CREATE TABLE پراکنده).
+    _ensure_postgres_constraints()
+
     _DB_INIT_DONE_PATH = DB_FULL_PATH
+
+
+def _ensure_postgres_constraints() -> None:
+    """فقط زیر Postgres کاری می‌کنه (db_conn.ensure_unique_constraint خودش no-op
+    می‌شه زیر SQLite). لیست کامل جدول+ستون‌هایی که کد پروژه براشون ON CONFLICT
+    می‌زنه (بخش ۴۶ سند)."""
+    try:
+        import db_conn as _dc
+        if not _dc.is_postgres():
+            return
+        conn = _get_connection()
+        try:
+            for table, cols in [
+                ("bot_config", ["key"]),
+                ("users", ["user_id"]),
+                ("wallets", ["user_id"]),
+                ("admin_preferences", ["admin_id", "key"]),
+                ("delivery_messages", ["feed_id"]),
+                ("pending_deliveries", ["order_id"]),
+                ("partner_bank_info", ["user_id"]),
+            ]:
+                try:
+                    _dc.ensure_unique_constraint(conn, table, cols)
+                except Exception:
+                    pass
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
 
 _INDEXES_READY = False
@@ -4809,6 +4846,8 @@ def ensure_partner_bank_schema():
             );
         """)
         conn.commit()
+        import db_conn as _dc
+        _dc.ensure_unique_constraint(conn, "partner_bank_info", ["user_id"])
         # migration: ستون آدرس + صاحب حساب
         for _mc, _md in [("address", "TEXT DEFAULT ''"), ("owner_name", "TEXT DEFAULT ''")]:
             try:
@@ -5858,6 +5897,8 @@ def set_maintenance_mode(enabled: bool):
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
             (key TEXT PRIMARY KEY, value TEXT);""")
+        import db_conn as _dc
+        _dc.ensure_unique_constraint(conn, "bot_config", ["key"])
         # ⚠️ INSERT OR REPLACE (خاص SQLite) به ON CONFLICT تبدیل شد — پرتابل بین
         # SQLite/Postgres، بدون نیاز به ترجمهٔ db_dialect (بخش پاک‌سازی SQLite سند)
         conn.execute(
@@ -6058,6 +6099,8 @@ def get_cfg(key: str, default: str = "") -> str:
     conn = _get_connection()
     try:
         conn.execute("CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);")
+        import db_conn as _dc
+        _dc.ensure_unique_constraint(conn, "bot_config", ["key"])
         row = conn.execute("SELECT value FROM bot_config WHERE key=?;", (key,)).fetchone()
         if row is not None and row[0] is not None:
             val = str(row[0])
@@ -6073,6 +6116,8 @@ def set_cfg(key: str, value) -> None:
     conn = _get_connection()
     try:
         conn.execute("CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);")
+        import db_conn as _dc
+        _dc.ensure_unique_constraint(conn, "bot_config", ["key"])
         conn.execute(
             "INSERT INTO bot_config (key,value) VALUES (?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
