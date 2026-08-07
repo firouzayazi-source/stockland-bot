@@ -453,16 +453,76 @@ def validate_stbak(raw: bytes) -> dict:
 
 def _run_all_schema_migrations() -> list:
     """همهٔ توابع ensure_*/init_db شناخته‌شدهٔ پروژه رو صدا می‌زنه — تا ساختار
-    دیتابیس (ستون‌های تازه‌اضافه‌شده در نسخه‌های جدیدتر کد) قبل/بعد از Restore
-    کاملاً به‌روز باشه، حتی اگه بکاپ از یه نسخهٔ قدیمی‌تر از کد اومده باشه."""
+    دیتابیس (ستون‌های تازه‌اضافه‌شده در نسخه‌های جدیدتر کد + جدول‌های لیزی که
+    تا حالا صدا زده نشدن) قبل/بعد از Restore کاملاً به‌روز باشه، حتی اگه بکاپ
+    از یه نسخهٔ قدیمی‌تر از کد اومده باشه، یا (روی Postgres) هنوز هیچ‌کدوم از
+    مسیرهایی که این جدول‌های لیزی رو می‌سازن اجرا نشده باشن.
+
+    ⚠️ رفع‌شده (کشف‌شده با تست بازیابی یه بکاپ واقعی): نسخهٔ قبلی این تابع فقط
+    ۲-۳ تا از ~۲۷ تابع `ensure_*` واقعی پروژه رو صدا می‌زد — روی یه دیتابیس
+    Postgres که همهٔ مسیرهای لیزی (تیکت، تنظیمات پنل، چک‌این روزانه، علاقه‌مندی‌ها،
+    درگاه‌های پرداخت، آموزش‌ها، ...) هنوز حداقل یک‌بار اجرا نشدن، بازیابی روی
+    بیش از ۲۰ جدول با «relation does not exist» شکست می‌خورد. حالا تقریباً
+    هر `ensure_*` شناخته‌شدهٔ `db.py` صدا زده می‌شه (idempotent، دقیقاً همون
+    الگویی که خودِ اپ در طول اجرای عادی به‌تدریج صدا می‌زنه)."""
+    import db as _db
     done, errors = [], []
     calls = [
-        ("db.init_db", lambda: __import__("db").init_db()),
-        ("db.ensure_product_support_schema", lambda: __import__("db").ensure_product_support_schema()),
+        ("db.init_db", _db.init_db),
+        ("db.ensure_indexes", _db.ensure_indexes),
+        ("db.ensure_product_support_schema", _db.ensure_product_support_schema),
+        ("db.ensure_discount_table", _db.ensure_discount_table),
+        ("db.ensure_subscription_table", _db.ensure_subscription_table),
+        ("db.ensure_price_history_schema", _db.ensure_price_history_schema),
+        ("db.ensure_referral_schema", _db.ensure_referral_schema),
+        ("db.ensure_seller_schema", _db.ensure_seller_schema),
+        ("db.ensure_user_extra_schema", _db.ensure_user_extra_schema),
+        ("db.ensure_partner_system_schema", _db.ensure_partner_system_schema),
+        ("db.ensure_partner_wallet_schema", _db.ensure_partner_wallet_schema),
+        ("db.ensure_admin_notes_schema", _db.ensure_admin_notes_schema),
+        ("db.ensure_partner_tiers_extended", _db.ensure_partner_tiers_extended),
+        ("db.ensure_partner_bank_schema", _db.ensure_partner_bank_schema),
+        ("db.ensure_partner_bank_address", _db.ensure_partner_bank_address),
+        ("db.ensure_payout_settings_extended", _db.ensure_payout_settings_extended),
+        ("db.ensure_feed_batch_schema", _db.ensure_feed_batch_schema),
+        ("db.ensure_accounting_schema", _db.ensure_accounting_schema),
+        ("db.ensure_ratings_schema", _db.ensure_ratings_schema),
+        ("db.ensure_checkin_schema", _db.ensure_checkin_schema),
+        ("db.ensure_favorites_schema", _db.ensure_favorites_schema),
+        ("db.ensure_notifications_schema", _db.ensure_notifications_schema),
+        ("db.ensure_faq_schema", _db.ensure_faq_schema),
+        ("db.ensure_card_receipts_schema", _db.ensure_card_receipts_schema),
+        ("db.ticket_ensure_schema", _db.ticket_ensure_schema),
+        ("db.ensure_ticket_archive_schema", _db.ensure_ticket_archive_schema),
+        ("db.ensure_payment_gateways_schema", _db.ensure_payment_gateways_schema),
+        ("db.ensure_growth_schema", _db.ensure_growth_schema),
+        ("db.ensure_invite_cap_schema", _db.ensure_invite_cap_schema),
+        ("db.ensure_app_content_schema", _db.ensure_app_content_schema),
+        ("db.ensure_web_login_schema", _db.ensure_web_login_schema),
+        ("db.ensure_tutorials_schema", _db.ensure_tutorials_schema),
     ]
     try:
         import iphone_valuation.db as _ivdb
         calls.append(("iphone_valuation.db.ensure_schema", _ivdb.ensure_schema))
+    except Exception:
+        pass
+    try:
+        import payment_service as _ps
+        calls.append(("payment_service.ensure_schema", _ps.ensure_schema))
+    except Exception:
+        pass
+    try:
+        # admin_preferences/admins — تنها ۲ جدول لیزی که در admin_panel.py
+        # تعریف شدن نه db.py؛ import محلی (نه سطح ماژول) تا وابستگی
+        # چرخه‌ای بین stbak_engine و admin_panel پیش نیاد (این تابع فقط از
+        # داخل یه route در admin_panel.py صدا زده می‌شه، پس اون ماژول موقع
+        # اجرای واقعی این خط از قبل کامل لود شده).
+        import admin_panel as _ap
+        calls.append(("admin_panel.ensure_admins_table", _ap.ensure_admins_table))
+        calls.append(("admin_panel._ensure_theme_table", _ap._ensure_theme_table))
+        calls.append(("admin_panel.ensure_admin_preferences_schema", _ap.ensure_admin_preferences_schema))
+        calls.append(("admin_panel.ensure_wallet_admin_log_schema", _ap.ensure_wallet_admin_log_schema))
+        calls.append(("admin_panel.ensure_ticket_reply_columns", _ap.ensure_ticket_reply_columns))
     except Exception:
         pass
     for name, fn in calls:
@@ -472,6 +532,41 @@ def _run_all_schema_migrations() -> list:
         except Exception as ex:
             errors.append(f"{name}: {ex}")
     return errors
+
+
+def _widen_integer_columns(conn, table: str, target_type: str = "BIGINT") -> bool:
+    """فقط زیر Postgres معنی داره (SQLite همیشه ستون‌های INTEGER رو تا ۶۴بیت،
+    یا حتی مقدار متنی، بدون شکایت نگه می‌داره — type affinity). یه جدول
+    Postgres رو پیدا می‌کنه که ستون(های)ش هنوز INTEGER چهاربایتی‌ان و همون‌ها
+    رو به `target_type` عریض می‌کنه — گارد دو کلاس خطای واقعی که موقع بازیابی
+    یه بکاپ قدیمی (از دورهٔ SQLite که این محدودیت‌ها اصلاً وجود نداشت) کشف شد:
+    ۱) «integer out of range» — مثلاً شناسهٔ کاربر تلگرام که این روزها معمولاً
+       از ۲.۱ میلیارد (سقف INTEGER چهاربایتی) بیشتره → BIGINT.
+    ۲) «invalid input syntax for type integer» — یه مقدار کاملاً غیرعددی
+       (مثل شناسهٔ ویژهٔ متنی سوپرادمین بوت‌استرپ) توی ستونی که اشتباهاً
+       INTEGER تعریف شده بود (باید از اول TEXT می‌بود) → TEXT.
+    بدون نیاز به دونستن از قبل کدوم ستون‌ها/جدول‌ها ممکنه به این مشکل بخورن.
+    برمی‌گردونه True اگه واقعاً ستونی عریض شد (یعنی دوباره امتحان‌کردن insert
+    معنی داره)."""
+    try:
+        cols = conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name=? AND data_type='integer';", (table,)
+        ).fetchall()
+        if not cols:
+            return False
+        for row in cols:
+            col = row[0]
+            try:
+                conn.execute(f'ALTER TABLE "{table}" ALTER COLUMN "{col}" TYPE {target_type};')
+            except Exception:
+                pass
+        conn.commit()
+        return True
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+        return False
 
 
 def restore_stbak(raw: bytes, db_path: str, progress_cb=None,
@@ -485,9 +580,20 @@ def restore_stbak(raw: bytes, db_path: str, progress_cb=None,
     ۳) هر جدول جدا try/except می‌شه (یک جدول ناسازگار کل Restore رو متوقف نمی‌کنه) —
        ولی بر خلاف نسخهٔ قبلی، این خطاها دیگه بی‌صدا قورت داده نمی‌شن، توی errors
        برمی‌گردن و صراحتاً به ادمین نشون داده می‌شن.
-    """
+
+    ⚠️ دیالوگ‌آگاه (رفع‌شده): این تابع (فرمت قدیمی ZIP-محور .stbak که این ماژول
+    خودش تولید می‌کنه) قبلاً همیشه `sqlite3.connect(db_path)` خام می‌زد — یعنی
+    بکاپ‌های قدیمی/از دورهٔ قبل از مهاجرت به Postgres هیچ‌وقت روی دادهٔ واقعی
+    Postgres قابل بازیابی نبودن (حتی از طریق CLI مستقیم، نه فقط پنل). حالا از
+    `db_conn.get_connection()` استفاده می‌کنه — با هر دو دیالوگ کار می‌کنه.
+    `INSERT OR REPLACE` روی جدول تازه `DELETE`شده (بدون داده‌ای که واقعاً
+    conflict کنه) برای Postgres هم امنه، چون `db_dialect.translate()` این رو
+    به یک `INSERT` سادهٔ پرتابل تبدیل می‌کنه — نیازی به semantics واقعی REPLACE
+    نیست، چون جدول از قبل خالی شده."""
     manifest = validate_stbak(raw)
     buf = io.BytesIO(raw)
+    import db_conn as _dbc
+    is_pg = _dbc.is_postgres()
     with zipfile.ZipFile(buf, "r") as zf:
         data = json.loads(zf.read("data.json").decode())
         media_names = [n for n in zf.namelist() if n.startswith(_MEDIA_ZIP_PREFIX)]
@@ -496,41 +602,71 @@ def restore_stbak(raw: bytes, db_path: str, progress_cb=None,
         if safety_backup_dir:
             try:
                 os.makedirs(safety_backup_dir, exist_ok=True)
-                safety_raw = create_stbak(db_path, modules=None, include_media=False, validate=False)
-                safety_name = stbak_filename("auto", safety_backup_dir, prefix="pre_restore_safety_")
-                safety_backup_path = os.path.join(safety_backup_dir, safety_name)
-                with open(safety_backup_path, "wb") as f:
-                    f.write(safety_raw)
+                if is_pg:
+                    import pg_backup
+                    safety_backup_path = pg_backup.create_backup()
+                else:
+                    safety_raw = create_stbak(db_path, modules=None, include_media=False, validate=False)
+                    safety_name = stbak_filename("auto", safety_backup_dir, prefix="pre_restore_safety_")
+                    safety_backup_path = os.path.join(safety_backup_dir, safety_name)
+                    with open(safety_backup_path, "wb") as f:
+                        f.write(safety_raw)
             except Exception:
                 safety_backup_path = None  # نبود بکاپ ایمنی نباید جلوی خودِ Restore رو بگیره
 
         migration_errors_before = _run_all_schema_migrations()
 
-        conn = sqlite3.connect(db_path, timeout=30)
-        conn.execute("PRAGMA foreign_keys=OFF;")
+        conn = _dbc.get_connection(db_path)
+        if not is_pg:
+            conn.execute("PRAGMA foreign_keys=OFF;")
         restored, errors = {}, []
         mods = list(data.items())
         total = len(mods) + 1
         try:
-            with conn:
-                for i, (mod, sec_data) in enumerate(mods):
-                    for table, rows in sec_data.items():
-                        if not rows:
-                            continue
+            for i, (mod, sec_data) in enumerate(mods):
+                for table, rows in sec_data.items():
+                    if not rows:
+                        continue
+                    try:
+                        conn.execute(f'DELETE FROM "{table}";')
+                        cols  = list(rows[0].keys())
+                        ph    = ",".join("?" * len(cols))
+                        col_s = ",".join(f'"{c}"' for c in cols)
+                        insert_sql = f'INSERT OR REPLACE INTO "{table}" ({col_s}) VALUES ({ph});'
+                        insert_params = [[r.get(c) for c in cols] for r in rows]
                         try:
-                            conn.execute(f'DELETE FROM "{table}";')
-                            cols  = list(rows[0].keys())
-                            ph    = ",".join("?" * len(cols))
-                            col_s = ",".join(f'"{c}"' for c in cols)
-                            conn.executemany(
-                                f'INSERT OR REPLACE INTO "{table}" ({col_s}) VALUES ({ph});',
-                                [[r.get(c) for c in cols] for r in rows]
-                            )
-                            restored[table] = len(rows)
-                        except Exception as ex:
-                            errors.append(f"{table}: {ex}")
-                    if progress_cb:
-                        progress_cb(int(10 + (i + 1) / total * 70))
+                            conn.executemany(insert_sql, insert_params)
+                        except Exception as ex_insert:
+                            # ⚠️ رفع‌شده (کشف‌شده با بازیابی یه بکاپ واقعی روی Postgres):
+                            # دو کلاس خطای رایج وقتی بکاپی از دورهٔ SQLite (بدون هیچ
+                            # محدودیت نوع/اندازه) روی Postgres بازیابی می‌شه — توضیح
+                            # کامل بالای _widen_integer_columns. به‌جای شکست کامل،
+                            # ستون(های) INTEGER همین جدول رو عریض می‌کنیم و یک‌بار
+                            # دیگه امتحان می‌کنیم.
+                            msg = str(ex_insert).lower()
+                            target = None
+                            if is_pg and "out of range" in msg:
+                                target = "BIGINT"
+                            elif is_pg and "invalid input syntax for type integer" in msg:
+                                target = "TEXT"
+                            if target:
+                                try: conn.rollback()
+                                except Exception: pass
+                                if _widen_integer_columns(conn, table, target_type=target):
+                                    conn.execute(f'DELETE FROM "{table}";')
+                                    conn.executemany(insert_sql, insert_params)
+                                else:
+                                    raise
+                            else:
+                                raise
+                        conn.commit()
+                        restored[table] = len(rows)
+                    except Exception as ex:
+                        try: conn.rollback()
+                        except Exception: pass
+                        errors.append(f"{table}: {ex}")
+                if progress_cb:
+                    progress_cb(int(10 + (i + 1) / total * 70))
         finally:
             conn.close()
 

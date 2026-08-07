@@ -524,7 +524,7 @@ def _ensure_theme_table():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS admin_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_id   INTEGER,
+                admin_id   TEXT,
                 admin_name TEXT,
                 action     TEXT NOT NULL,
                 section    TEXT,
@@ -533,6 +533,89 @@ def _ensure_theme_table():
                 created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             );
         """)
+        try:
+            conn.execute("ALTER TABLE admin_logs ADD COLUMN result TEXT DEFAULT 'ok';")
+        except Exception:
+            pass
+        # ⚠️ رفع‌شده (کشف‌شده با بازیابی یه بکاپ واقعی): admin_id همیشه TEXT
+        # بوده منطقاً (_get_admin() همیشه رشته برمی‌گردونه، حتی برای سوپرادمین
+        # بوت‌استرپ که مقدارش literal "super" است، نه یه عدد) — ولی جدول قبلاً
+        # با ستون INTEGER ساخته می‌شد. روی SQLite بی‌اثر بود (type affinity هر
+        # مقداری رو قبول می‌کنه)، روی Postgres با «invalid input syntax for
+        # type integer: "super"» شکست می‌خورد — یعنی هر لاگ فعالیت سوپرادمین
+        # بوت‌استرپ روی Postgres بی‌صدا (`_log()` هیچ‌وقت exception نمی‌ده) گم
+        # می‌شد. جدول‌های از‌قبل‌موجود هم عریض می‌شن (فقط زیر Postgres لازمه،
+        # SQLite نیازی به ALTER نداره).
+        try:
+            import db_conn as _dc2
+            if _dc2.is_postgres():
+                conn.execute("ALTER TABLE admin_logs ALTER COLUMN admin_id TYPE TEXT;")
+        except Exception:
+            pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_admin_preferences_schema():
+    """جدول ترجیحات ادمین (تم روشن/تاریک، حالت کلاسیک) — قبلاً فقط داخل خودِ
+    route ذخیرهٔ تم (`save_theme_pref`) لیزی ساخته می‌شد. تابع مستقل تازه تا
+    مسیر مهاجرت مرکزی هم بتونه تضمینش کنه، بدون تغییر رفتار route اصلی."""
+    conn = _db()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_preferences (
+                admin_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT,
+                PRIMARY KEY (admin_id, key)
+            );
+        """)
+        import db_conn as _dc
+        _dc.ensure_unique_constraint(conn, "admin_preferences", ["admin_id", "key"])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_wallet_admin_log_schema():
+    """جدول لاگ تراکنش‌های دستی کیف‌پول — قبلاً فقط به‌صورت لیزی/تودرتو داخل
+    خودِ `wallet_adjust()` ساخته می‌شد. تابع مستقل تازه تا هم اون route هم
+    مسیر مهاجرت مرکزی (`stbak_engine._run_all_schema_migrations`) بتونن صداش
+    بزنن — رفتار `wallet_adjust` عوض نشده، فقط این تابع هم به همون DDL دسترسی داره."""
+    conn = _db()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wallet_admin_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER, op TEXT, amount INTEGER,
+                old_balance INTEGER, new_balance INTEGER,
+                admin_id TEXT, created_at TEXT
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_ticket_reply_columns():
+    """ستون‌های `tickets`/`ticket_messages` که قبلاً فقط داخل خودِ route پاسخ
+    تیکت پنل (`ticket_reply`) لیزی مهاجرت می‌شدن — نه در `db.ticket_ensure_schema`.
+    تابع مستقل تازه (بدون تغییر رفتار `ticket_reply`) تا مسیر مهاجرت مرکزی هم
+    بتونه این ستون‌ها رو تضمین کنه (مثلاً قبل از بازیابی یه بکاپ قدیمی)."""
+    conn = _db()
+    try:
+        for col, typedef in [("source", "TEXT"), ("media_file_id", "TEXT"), ("updated_at", "TEXT"), ("user_msg_count", "INTEGER DEFAULT 0")]:
+            try:
+                conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} {typedef};")
+            except Exception:
+                pass
+            try:
+                conn.execute(f"ALTER TABLE ticket_messages ADD COLUMN {col} {typedef};")
+            except Exception:
+                pass
+        try:
+            conn.execute("ALTER TABLE ticket_messages ADD COLUMN file_name TEXT;")
+        except Exception:
+            pass
         conn.commit()
     finally:
         conn.close()
@@ -3641,6 +3724,9 @@ async def database_page(request: Request, flash: str = ""):
           var d=job.result||{};
           if(d.errors&&d.errors.length) ovResult(true,'بازیابی با هشدار',(d.total||0)+' رکورد بازیابی شد — '+d.errors.length+' خطای جدولی');
           else ovResult(true,'بازیابی موفق',(d.total||0)+' رکورد بازیابی شد');
+        }else if(start.total!==undefined){
+          if(start.errors&&start.errors.length) ovResult(true,'بازیابی با هشدار',(start.total||0)+' رکورد بازیابی شد — '+start.errors.length+' خطای جدولی');
+          else ovResult(true,'بازیابی موفق',(start.total||0)+' رکورد بازیابی شد');
         }else{
           ovResult(true,'بازیابی موفق','بکاپ با موفقیت بازیابی شد');
         }
@@ -3934,7 +4020,15 @@ async def pg_backup_restore(request: Request):
 @router.post("/database/pg-backup/restore-upload")
 async def pg_backup_restore_upload(request: Request, backup_file: UploadFile = None):
     """بازیابی Postgres از یک فایل بکاپ آپلودشده از روی سیستم ادمین (نه از
-    لیست بکاپ‌های محلی سرور) — معادل Postgres همون /database/restore/start."""
+    لیست بکاپ‌های محلی سرور) — معادل Postgres همون /database/restore/start.
+
+    ⚠️ دو فرمت متفاوت پشت پسوند یکسان `.stbak` مخفی‌ان: بکاپ‌های تازهٔ Postgres
+    (این ماژول، `pg_backup.py`) یک gzip از خروجی pg_dump‌ان؛ بکاپ‌های قدیمی‌تر
+    (از قبل مهاجرت کامل، یا هر بکاپی که با فرمت اختصاصی خودِ `stbak_engine.py`
+    گرفته شده) یک ZIP هستن. به‌جای این‌که ادمین مجبور باشه بدونه کدوم رو داره،
+    این route خودش با چک ۲ بایت اول (`PK\\x03\\x04` = ZIP) تشخیص می‌ده و مسیر
+    درست رو صدا می‌زنه — `stbak_engine.restore_stbak()` حالا دیالوگ‌آگاهه
+    (بخش قبلی همین فایل، تابع restore_stbak) و روی Postgres هم درست کار می‌کنه."""
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     guard = _require(adm, "restore")
@@ -3945,8 +4039,13 @@ async def pg_backup_restore_upload(request: Request, backup_file: UploadFile = N
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل بکاپ (.stbak) مجاز است"})
     raw = await backup_file.read()
+    is_zip_format = raw[:2] == b"PK"
 
     def _run():
+        if is_zip_format:
+            from stbak_engine import restore_stbak
+            rep = restore_stbak(raw, _DB_PATH(), safety_backup_dir=_BACKUP_DIR)
+            return {"ok": True, "total": rep.get("total", 0), "errors": rep.get("errors", [])}
         import pg_backup
         import tempfile as _tf
         tmp_path = None
@@ -3965,7 +4064,7 @@ async def pg_backup_restore_upload(request: Request, backup_file: UploadFile = N
         if not rep.get("ok"):
             return JSONResponse({"error": rep.get("error", "خطای نامشخص")})
         _log(request, "بازیابی از فایل آپلودی", "دیتابیس", backup_file.filename, admin_info=adm)
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, "total": rep.get("total"), "errors": rep.get("errors")})
     except Exception as ex:
         return JSONResponse({"error": str(ex)[:200]})
 
