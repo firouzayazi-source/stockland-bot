@@ -10,3 +10,6 @@ Pillow>=10.0,<12
 anthropic>=0.120,<1
 openai>=1.30,<2
 google-genai>=0.3,<1
+# Postgres تولید (db_conn.py/db_dialect.py) — بدون این، مسیر DB_DIALECT=postgres
+# با ModuleNotFoundError شکست می‌خورد (این نبود قبلاً هیچ‌جا مستند/تست نشده بود)
+psycopg2-binary>=2.9,<3

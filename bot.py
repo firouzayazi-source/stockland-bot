@@ -450,8 +450,13 @@ def _remember_delivery(msg):
 # هدف: وقتی محصول محصول خالی است، سفارش در صف "pending" ثبت شود و به محض اضافه شدن محصول، خودکار تحویل گردد.
 
 def _db_conn():
-    import sqlite3
-    return sqlite3.connect(DB_FULL_PATH)
+    """اتصال دیتابیس مشترک برای توابع محلی bot.py.
+    ⚠️ رفع‌شده (ممیزی کامل پروژه): قبلاً همیشه sqlite3.connect خام می‌زد، مستقل
+    از DB_DIALECT. حالا از db_conn.get_connection() استفاده می‌کنه (SQLite یا
+    Postgres بر اساس env) — همون تابعی که db.py._get_connection() هم استفاده
+    می‌کنه، پس رفتار بین bot.py و db.py یکسانه."""
+    import db_conn
+    return db_conn.get_connection(DB_FULL_PATH)
 
 def ensure_pending_schema():
     """Create / migrate pending_deliveries table (best-effort, backward compatible)."""
@@ -513,9 +518,13 @@ def enqueue_pending_delivery(order_id: int, user_id: int, chat_id: int, product_
         try:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO pending_deliveries
+                INSERT INTO pending_deliveries
                     (order_id, user_id, chat_id, product_id, product_title, price, status, feed_id)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL);
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL)
+                ON CONFLICT(order_id) DO UPDATE SET
+                    user_id=excluded.user_id, chat_id=excluded.chat_id, product_id=excluded.product_id,
+                    product_title=excluded.product_title, price=excluded.price, status=excluded.status,
+                    feed_id=excluded.feed_id;
                 """,
                 (int(order_id), int(user_id), int(chat_id), int(product_id), str(title), int(price)),
             )
@@ -553,13 +562,14 @@ def _send_delivery_to_user(chat_id: int, order_id: int, pid: int, title: str, ef
 
     # ذخیره دائمی پیام تحویل برای امکان «برگشت» از پنل
     try:
-        import sqlite3 as _sq3
         from datetime import datetime as _dt2
-        _c = _sq3.connect(DB_FULL_PATH)
+        _c = _db_conn()
         try:
             _c.execute(
-                "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
-                "VALUES (?,?,?,?,?);",
+                "INSERT INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(feed_id) DO UPDATE SET "
+                "order_id=excluded.order_id, chat_id=excluded.chat_id, "
+                "message_id=excluded.message_id, created_at=excluded.created_at;",
                 (int(feed_id), int(order_id), int(chat_id), int(_delivery_msg.message_id), _dt2.utcnow().isoformat())
             )
             _c.commit()
@@ -673,7 +683,7 @@ def try_dispatch_pending_for_product(product_id: int, limit: int = 50) -> int:
 def _ensure_delivery_table():
     try:
         import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
+        _conn = _db_conn()
         try:
             _conn.execute(
                 """CREATE TABLE IF NOT EXISTS delivery_messages (
@@ -1849,7 +1859,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         try:
             from db import order_set_feed_id
             order_set_feed_id(int(order_id), int(feed_id))
-            _c = sqlite3.connect(DB_FULL_PATH)
+            _c = _db_conn()
             try:
                 _c.execute("""
                     CREATE TABLE IF NOT EXISTS delivery_messages (
@@ -1858,8 +1868,10 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
                     );
                 """)
                 _c.execute(
-                    "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
-                    "VALUES (?,?,?,?,?);",
+                    "INSERT INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(feed_id) DO UPDATE SET "
+                    "order_id=excluded.order_id, chat_id=excluded.chat_id, "
+                    "message_id=excluded.message_id, created_at=excluded.created_at;",
                     (int(feed_id), int(order_id), int(call.message.chat.id), int(_delivery_msg.message_id),
                      datetime.utcnow().isoformat())
                 )
@@ -1888,7 +1900,7 @@ def finalize_product_order(call, uid, product, category, eff_price, wallet_used=
         try:
             # 'returned' چون طبق قانون پروژه از دید کاربر کاملاً مخفیه (فقط ادمین می‌بینه)
             # — دقیقاً همون رفتاری که برای یک سفارش لغوشده/بازگشتی می‌خوایم.
-            _conn = sqlite3.connect(DB_FULL_PATH)
+            _conn = _db_conn()
             _conn.execute("UPDATE orders SET status='returned', returned_at=? WHERE id=?;",
                           (datetime.utcnow().isoformat(), order_id))
             _conn.commit()
@@ -2657,7 +2669,7 @@ def send_admin_product_detail(call_message, product, edit=False):
     pid = int(product[0])
     try:
         import sqlite3
-        _conn = sqlite3.connect(DB_FULL_PATH)
+        _conn = _db_conn()
         try:
             _row = _conn.execute(
                 'SELECT daily_limit_customer, daily_limit_partner FROM products WHERE id=?',
@@ -2841,7 +2853,7 @@ def admin_feed_panel_menu():
 
 def count_feed_items_global(delivered_filter: int | None, category_key: str | None = None):
     import sqlite3
-    conn = sqlite3.connect(DB_FULL_PATH)
+    conn = _db_conn()
     try:
         cur = conn.cursor()
 
@@ -2869,7 +2881,7 @@ def count_feed_items_global(delivered_filter: int | None, category_key: str | No
 
 def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset: int = 0, category_key: str | None = None):
     import sqlite3
-    conn = sqlite3.connect(DB_FULL_PATH)
+    conn = _db_conn()
     try:
         cur = conn.cursor()
 
@@ -2903,7 +2915,7 @@ def list_feed_items_global(delivered_filter: int | None, limit: int = 50, offset
 def get_feed_stats_by_category():
     """Return list of dicts: category, total, delivered, undelivered."""
     import sqlite3
-    conn = sqlite3.connect(DB_FULL_PATH)
+    conn = _db_conn()
     try:
         cur = conn.cursor()
         cur.execute(
@@ -3108,7 +3120,7 @@ def send_admin_feed_panel_list(chat_id: int, page: int = 0, mode: int = 0, messa
 def send_admin_feed_panel_view(chat_id: int, feed_id: int, page: int = 0, mode: int = 0, message_id: int | None = None, category_key: str | None = None):
     import sqlite3
     fid = int(feed_id)
-    conn = sqlite3.connect(DB_FULL_PATH)
+    conn = _db_conn()
     try:
         row = conn.execute(
             '''
@@ -3315,10 +3327,7 @@ def cb_order_detail(call):
     except ValueError:
         return
 
-    import sqlite3 as _sq
-    from config import DB_PATH as _DBP
-    conn = _sq.connect(_DBP)
-    conn.row_factory = _sq.Row
+    conn = _db_conn()
     try:
         order = conn.execute(
             "SELECT * FROM orders WHERE id=? AND CAST(user_id AS INTEGER)=? "
@@ -3483,9 +3492,7 @@ def _show_partner_dashboard(chat_id, uid):
     conn = None
     partner_total = 0
     try:
-        import sqlite3 as _sq
-        from config import DB_PATH as _DBP
-        conn = _sq.connect(_DBP)
+        conn = _db_conn()
         row = conn.execute(
             "SELECT COALESCE(SUM(price),0) FROM orders WHERE CAST(user_id AS INTEGER)=? AND buyer_type='partner';",
             (uid,)).fetchone()
@@ -3546,11 +3553,9 @@ def cb_partner_profile(call):
 def _show_partner_profile(chat_id, uid, edit_msg=None):
     from db import get_partner_bank_info, ensure_partner_bank_schema, ensure_partner_bank_address
     ensure_partner_bank_schema(); ensure_partner_bank_address()
-    import sqlite3 as _sq4
-    from config import DB_PATH as _DBP4
     partner = None
     try:
-        _c = _sq4.connect(_DBP4); _c.row_factory = _sq4.Row
+        _c = _db_conn()
         try:
             partner = _c.execute("SELECT * FROM partners WHERE tg_user_id=?;", (uid,)).fetchone()
         finally:
@@ -3613,11 +3618,9 @@ def cb_pedit(call):
     bot.send_message(call.message.chat.id, f"✏️ <b>{label}</b> را وارد کنید:", parse_mode="HTML")
 
 def _pedit_save(uid, chat_id, table, col, val):
-    import sqlite3 as _sqe
-    from config import DB_PATH as _DBPe
     from db import ensure_partner_bank_schema, ensure_partner_bank_address, get_partner_bank_info
     ensure_partner_bank_schema(); ensure_partner_bank_address()
-    conn = _sqe.connect(_DBPe)
+    conn = _db_conn()
     try:
         if table == "partners":
             conn.execute(f"UPDATE partners SET {col}=? WHERE tg_user_id=?;", (val, uid))
@@ -3626,7 +3629,10 @@ def _pedit_save(uid, chat_id, table, col, val):
             if bank:
                 conn.execute(f"UPDATE partner_bank_info SET {col}=?,updated_at=datetime('now') WHERE user_id=?;", (val, uid))
             else:
-                conn.execute(f"INSERT OR REPLACE INTO partner_bank_info (user_id,{col}) VALUES (?,?);", (uid, val))
+                conn.execute(
+                    f"INSERT INTO partner_bank_info (user_id,{col}) VALUES (?,?) "
+                    f"ON CONFLICT(user_id) DO UPDATE SET {col}=excluded.{col};",
+                    (uid, val))
         conn.commit()
     finally:
         conn.close()
@@ -3719,14 +3725,11 @@ def cb_partner_sub_stats(call):
     """نمای تیم فروش — کاربر بالا، دعوت‌شده‌ها با آمار خرید زیرش"""
     uid = call.from_user.id
     bot.answer_callback_query(call.id)
-    import sqlite3 as _sq
-    from config import DB_PATH as _DBP
 
     my_name = (call.from_user.first_name or "شما").strip()
     subs, total_orders, total_purchase = [], 0, 0
     try:
-        conn = _sq.connect(_DBP)
-        conn.row_factory = _sq.Row
+        conn = _db_conn()
         # زیرمجموعه‌ها + آمار خرید هرکدام + تعداد زیرمجموعه‌ی خودشان (سطح ۲)
         subs = conn.execute("""
             SELECT r.referred_id AS sid,
@@ -3923,8 +3926,6 @@ def handle_payout_collect_bank(message):
         return
 
     from db import ensure_partner_bank_schema, ensure_partner_bank_address
-    import sqlite3 as _sq
-    from config import DB_PATH as _DBP
     ensure_partner_bank_schema(); ensure_partner_bank_address()
 
     if step == "owner_name":
@@ -4056,9 +4057,7 @@ def cb_partner_support(call):
     # اگه تیکت همکاری باز داره، ادامه بده
     existing = None
     try:
-        import sqlite3 as _sq
-        from config import DB_PATH as _DBP
-        _c = _sq.connect(_DBP); _c.row_factory = _sq.Row
+        _c = _db_conn()
         try:
             existing = _c.execute(
                 "SELECT * FROM tickets WHERE user_id=? AND type='partner_support' AND status!='closed' ORDER BY id DESC LIMIT 1;",
@@ -5738,9 +5737,7 @@ def handle_rating_comment(message):
         from db import save_rating
         # آپدیت کامنت
         try:
-            import sqlite3 as _sqr
-            from config import DB_PATH as _DBPR
-            conn = _sqr.connect(_DBPR)
+            conn = _db_conn()
             conn.execute("UPDATE product_ratings SET comment=? WHERE order_id=?;",
                          (comment, st["order_id"]))
             conn.commit(); conn.close()
@@ -5800,8 +5797,8 @@ def handle_callbacks(call: types.CallbackQuery):
             return
         service_key = data.replace("toggle_other_", "")
 
-        import sqlite3
-        with sqlite3.connect(DB_PATH) as conn:
+        conn = _db_conn()
+        try:
             cur = conn.cursor()
             cur.execute("""
                 UPDATE other_services
@@ -5809,6 +5806,8 @@ def handle_callbacks(call: types.CallbackQuery):
                 WHERE service_key = ?
             """, (service_key,))
             conn.commit()
+        finally:
+            conn.close()
 
         bot.answer_callback_query(call.id, "وضعیت دسته تغییر کرد")
         return
@@ -6266,7 +6265,7 @@ def handle_callbacks(call: types.CallbackQuery):
         # toggle delivered flag only (safely)
         try:
             import sqlite3
-            conn = sqlite3.connect(DB_FULL_PATH)
+            conn = _db_conn()
             try:
                 cur = conn.cursor()
                 cur.execute("SELECT delivered FROM product_feed WHERE id=?", (fid,))
@@ -6315,7 +6314,7 @@ def handle_callbacks(call: types.CallbackQuery):
             return
         try:
             import sqlite3
-            conn = sqlite3.connect(DB_FULL_PATH)
+            conn = _db_conn()
             try:
                 # اگر پیام تحویل برای این محصول ذخیره شده، قبل از حذف آیتم تلاش کن آن پیام را پاک کنی
                 _info = _get_delivery_message(int(fid))
@@ -6546,7 +6545,7 @@ def handle_callbacks(call: types.CallbackQuery):
         skey = data.replace("admin_other_toggle_", "")
 
         import sqlite3
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         try:
             row = conn.execute(
                 "SELECT is_active FROM other_services WHERE service_key=?",
@@ -6665,7 +6664,7 @@ def handle_callbacks(call: types.CallbackQuery):
         row = list_feed_items(pid, None, limit=1, offset=0)
         try:
             import sqlite3
-            _conn = sqlite3.connect(DB_FULL_PATH)
+            _conn = _db_conn()
             try:
                 _r = _conn.execute(
                     "SELECT id, data, delivered, created_at FROM product_feed WHERE id=? AND product_id=?;",
@@ -6716,7 +6715,7 @@ def handle_callbacks(call: types.CallbackQuery):
         mode = safe_int(_p[6]) or 0
         try:
             import sqlite3
-            _conn = sqlite3.connect(DB_FULL_PATH)
+            _conn = _db_conn()
             try:
                 _r = _conn.execute("SELECT delivered FROM product_feed WHERE id=? AND product_id=?;", (int(feed_id), int(pid))).fetchone()
             finally:
@@ -7044,7 +7043,7 @@ def handle_callbacks(call: types.CallbackQuery):
 # ===== بررسی ادامه خرید بعد از شارژ =====
         import sqlite3
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 

@@ -46,6 +46,18 @@ _INSERT_REPLACE = re.compile(r"INSERT\s+OR\s+REPLACE\s+INTO", re.I)
 # AUTOINCREMENT
 _AUTOINC = re.compile(r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", re.I)
 
+# ALTER TABLE ... ADD COLUMN (بدون IF NOT EXISTS) — ⚠️ کشف‌شده با تست مستقیم
+# روی Postgres واقعی (نه فقط با خوندن کد): این پروژه صدها مهاجرت ALTER TABLE
+# داره که با try/except sqlite3.OperationalError: pass محافظت شدن — الگوی
+# درست روی SQLite (خطای «duplicate column» = sqlite3.OperationalError). ولی
+# روی Postgres این خطا از نوع psycopg2.errors.DuplicateColumn است (نه
+# sqlite3.OperationalError، پس اصلاً catch نمی‌شه) **و مهم‌تر**: یک دستور
+# شکست‌خورده روی Postgres کل تراکنش رو «poison» می‌کنه — هر دستور بعدی روی
+# همون کانکشن/تراکنش با InFailedSqlTransaction شکست می‌خوره، حتی اگه try/except
+# درست هم می‌بود. راه‌حل درست: به‌جای تکیه به catch کردن خطا، از سینتکس بومی
+# idempotent پستگرس (IF NOT EXISTS) استفاده می‌شه که اصلاً خطا تولید نمی‌کنه.
+_ADD_COLUMN = re.compile(r"(ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\s+)(?!IF\s+NOT\s+EXISTS)", re.I)
+
 # PRAGMA table_info(X) → information_schema query
 _PRAGMA_TABLE_INFO = re.compile(r"PRAGMA\s+table_info\(\s*(\w+)\s*\)", re.I)
 
@@ -76,6 +88,10 @@ def translate(sql: str) -> str:
 
     # ۵) AUTOINCREMENT → SERIAL
     out = _AUTOINC.sub("SERIAL PRIMARY KEY", out)
+
+    # ۵ب) ALTER TABLE ... ADD COLUMN → ADD COLUMN IF NOT EXISTS (idempotent،
+    # بدون این هیچ‌وقت transaction poisoning رخ نمی‌ده — بالاتر رو ببین)
+    out = _ADD_COLUMN.sub(r"\1IF NOT EXISTS ", out)
 
     # ۶) PRAGMA table_info(X) → information_schema equivalent
     m = _PRAGMA_TABLE_INFO.search(out)

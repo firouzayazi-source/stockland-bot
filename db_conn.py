@@ -143,8 +143,17 @@ class _PgCursor:
 
     @property
     def lastrowid(self):
-        # Postgres: باید از RETURNING استفاده شود؛ اینجا تلاش برای سازگاری
+        """معادل sqlite3.Cursor.lastrowid.
+        ⚠️ رفع‌شده (کشف‌شده با تست مستقیم روی Postgres واقعی): تلاش قبلی برای
+        fetchone() مستقیم روی نتیجهٔ INSERT همیشه شکست می‌خورد چون کد موجود
+        پروژه در ~۳۶ نقطه (db.py/iphone_valuation/db.py/payment_service.py)
+        هیچ‌وقت RETURNING به دستور INSERT اضافه نمی‌کنه — نتیجه همیشه None بود
+        (مثلاً add_product() سکوت می‌کرد و None برمی‌گردوند). راه‌حل درست:
+        lastval() مقدار سکانسی که آخرین‌بار در همین سشن با nextval() (که هر
+        INSERT روی ستون SERIAL خودکار صداش می‌زنه) گرفته شده رو برمی‌گردونه —
+        دقیقاً معادل SQLite lastrowid، بدون نیاز به تغییر خودِ INSERT."""
         try:
+            self._cur.execute("SELECT lastval();")
             r = self._cur.fetchone()
             return r[0] if r else None
         except Exception:
@@ -159,12 +168,18 @@ class _PgCursor:
 
 
 class _PgConnection:
-    """اتصال Postgres سازگار با API که کد فعلی انتظار دارد."""
+    """اتصال Postgres سازگار با API که کد فعلی انتظار دارد.
+    ⚠️ رفع‌شده (کشف‌شده با تست مستقیم روی Postgres واقعی، نه فقط خوندن کد):
+    قبلاً از RealDictCursor استفاده می‌شد که فقط دسترسی row['col'] رو پشتیبانی
+    می‌کنه، نه row[0] — در حالی که کد موجود پروژه (db.py/bot.py/admin_panel.py)
+    جاهای زیادی row[0]/row[1] (اندیس عددی) می‌زنه، دقیقاً مثل sqlite3.Row که هم
+    اندیس عددی هم نام ستون رو پشتیبانی می‌کنه. DictCursor دقیقاً همین رفتار
+    دوگانه رو داره (تست شد) — جایگزین RealDictCursor شد."""
     def __init__(self, dsn: str):
         import psycopg2
         import psycopg2.extras
         self._conn = psycopg2.connect(dsn)
-        self._dict_factory = psycopg2.extras.RealDictCursor
+        self._dict_factory = psycopg2.extras.DictCursor
 
     def execute(self, sql, params=()):
         """conn.execute مستقیم (مثل sqlite) — یک کورسر می‌سازد."""

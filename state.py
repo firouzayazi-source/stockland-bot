@@ -80,15 +80,22 @@ def _db_path() -> str:
     return os.getenv("DB_PATH") or ""
 
 
+def _state_db_connect():
+    """⚠️ رفع‌شده (ممیزی کامل پروژه، پاک‌سازی SQLite): قبلاً همیشه sqlite3.connect
+    خام می‌زد، مستقل از DB_DIALECT — یعنی چک دسترسی ادمین‌های ثانویه (غیر از
+    ADMIN_ID سوپرادمین) روی سرور Postgres همیشه شکست می‌خورد (except→False)."""
+    import db_conn
+    return db_conn.get_connection(_db_path())
+
+
 def ensure_admin(user_id: int) -> bool:
     """True if user_id is super admin or an active admin in DB."""
     if user_id == ADMIN_ID:
         return True
-    db = _db_path()
-    if not db:
+    if not _db_path():
         return False
     try:
-        conn = sqlite3.connect(db, timeout=5, check_same_thread=False)
+        conn = _state_db_connect()
         row = conn.execute(
             "SELECT 1 FROM admins WHERE telegram_id=? AND is_active=1 LIMIT 1;",
             (int(user_id),),
@@ -103,11 +110,10 @@ def admin_has_perm(user_id: int, permission: str) -> bool:
     """True if admin has a specific permission. Super admin always True."""
     if user_id == ADMIN_ID:
         return True
-    db = _db_path()
-    if not db:
+    if not _db_path():
         return False
     try:
-        conn = sqlite3.connect(db, timeout=5, check_same_thread=False)
+        conn = _state_db_connect()
         row = conn.execute(
             "SELECT permissions FROM admins WHERE telegram_id=? AND is_active=1 LIMIT 1;",
             (int(user_id),),

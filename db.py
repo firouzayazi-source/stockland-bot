@@ -8,6 +8,18 @@ from config import DB_PATH, BASE_DIR
 # اگر DB_PATH در config نسبی باشد، به BASE_DIR وصل میکنیم
 DB_FULL_PATH = DB_PATH
 
+# ⚠️ رفع‌شده (کشف‌شده با تست مستقیم روی Postgres واقعی، پاک‌سازی SQLite): چند
+# جای کد فقط except sqlite3.IntegrityError می‌زدن تا نقض یکتایی (مثلاً authority
+# تکراری تراکنش) رو بی‌صدا مدیریت کنن. زیر Postgres همین خطا از نوع
+# psycopg2.IntegrityError است (سلسله‌مراتب استثنای کاملاً جدا، DB-API 2.0) —
+# یعنی هیچ‌وقت catch نمی‌شد و به exception خام/۵۰۰ منجر می‌شد. هر دو نوع رو
+# پوشش می‌ده، بدون وابستگی سخت به psycopg2 (اگه نصب نبود، فقط sqlite3 کافیه).
+try:
+    import psycopg2 as _psycopg2_for_errors
+    _INTEGRITY_ERRORS = (sqlite3.IntegrityError, _psycopg2_for_errors.IntegrityError)
+except ImportError:
+    _INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ─── تقویم شمسی + اعداد فارسی ────────────────────────────────────────────────
@@ -1117,7 +1129,7 @@ def create_zarinpal_pending_transaction(user_id: int, amount: int, authority: st
         )
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except _INTEGRITY_ERRORS:
         return False
     finally:
         conn.close()
@@ -1481,7 +1493,7 @@ def add_other_service(service_key: str, title: str, emoji: str = "🧩") -> bool
         )
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except _INTEGRITY_ERRORS:
         return False
     finally:
         conn.close()
@@ -1802,85 +1814,23 @@ def is_partner_approved(tg_user_id: int) -> bool:
 
 def count_user_product_orders_today(user_id: int, product_id: int | None = None, buyer_type: str | None = None) -> int:
     """
-    Counts user's product orders created 'today' (server local date).
-    Safe fallback: returns 0 if table/columns aren't present.
-    NOTE: Replace with real query once order schema is confirmed.
-    """
-    import datetime
-    import sqlite3
-    try:
-        # DB_PATH should exist in this module; fallback to default path if not.
-        db_path = globals().get("DB_FULL_PATH") or globals().get("DB_PATH") or os.path.join(BASE_DIR, "db.sqlite")
-        con = sqlite3.connect(db_path, timeout=10)
-        con.row_factory = sqlite3.Row
-        try:
-            con.execute("PRAGMA journal_mode=WAL;")
-            con.execute("PRAGMA busy_timeout=10000;")
-        except Exception:
-            pass
-
-        # Heuristic table detection
-        tables = {r["name"] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        # common candidates
-        candidates = ["product_orders", "orders", "user_orders", "order_items"]
-        table = next((t for t in candidates if t in tables), None)
-        if not table:
-            return 0
-
-        cols = {r["name"] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
-        # heuristics for columns
-        user_col = "user_id" if "user_id" in cols else ("uid" if "uid" in cols else None)
-        ts_col = "created_at" if "created_at" in cols else ("created" if "created" in cols else ("ts" if "ts" in cols else None))
-        prod_col = "product_id" if "product_id" in cols else ("pid" if "pid" in cols else None)
-
-        if not user_col or not ts_col:
-            return 0
-
-        today = datetime.date.today().isoformat()  # 'YYYY-MM-DD'
-        # If timestamps stored as ISO text, this works with LIKE; otherwise returns 0.
-        q = f"SELECT COUNT(1) AS c FROM {table} WHERE {user_col}=? AND {ts_col} LIKE ?"
-        params = [user_id, today + "%"]
-        if product_id is not None and prod_col:
-            q += f" AND {prod_col}=?"
-            params.append(product_id)
-
-        row = con.execute(q, params).fetchone()
-        return int(row["c"] if row and "c" in row.keys() else 0)
-    except Exception:
-        return 0
-    finally:
-        try:
-            con.close()
-        except Exception:
-            pass
-
-
-def count_user_product_orders_today(user_id: int, product_id: int | None = None, buyer_type: str | None = None) -> int:
-    """
     Count how many orders this user placed today (optionally per product).
     If orders table has buyer_type column, it will be respected.
     buyer_type example values typically: 'customer' / 'partner'
+
+    ⚠️ رفع‌شده (ممیزی کامل پروژه، پاک‌سازی SQLite): این تابع قبلاً **دوبار** تعریف
+    شده بود (نسخهٔ اول کاملاً مرده/سایه‌خورده بود، هیچ‌وقت اجرا نمی‌شد — حذف شد).
+    نسخهٔ زنده هم با sqlite3.connect خام (مستقل از DB_DIALECT) و کوئری‌های
+    کاملاً SQLite-only (`sqlite_master`, بدون _get_connection) کار می‌کرد —
+    روی Postgres همیشه با خطا/دادهٔ فانتوم به except می‌افتاد و 0 برمی‌گردوند،
+    یعنی محدودیت خرید روزانه (daily_limit_customer/partner) عملاً هیچ‌وقت
+    اعمال نمی‌شد. حالا از _get_connection() استفاده می‌کنه — orders جدول
+    هسته‌ایه (همیشه توسط init_db ساخته می‌شه)، پس چک وجود جدول هم حذف شد.
     """
-    import datetime, sqlite3
-
-    db_path = globals().get("DB_FULL_PATH") or globals().get("DB_PATH") or os.path.join(BASE_DIR, "db.sqlite")
-    con = sqlite3.connect(db_path, timeout=30)
-    con.row_factory = sqlite3.Row
+    import datetime
+    conn = _get_connection()
     try:
-        try:
-            con.execute("PRAGMA journal_mode=WAL;")
-            con.execute("PRAGMA busy_timeout=10000;")
-        except Exception:
-            pass
-
-        # Ensure orders table exists
-        row = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'").fetchone()
-        if not row:
-            return 0
-
-        cols = {r["name"] for r in con.execute("PRAGMA table_info(orders)").fetchall()}
-
-        # Minimal required columns
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(orders);").fetchall()}
         if "user_id" not in cols or "created_at" not in cols:
             return 0
 
@@ -1893,15 +1843,16 @@ def count_user_product_orders_today(user_id: int, product_id: int | None = None,
             q += " AND product_id=?"
             params.append(product_id)
 
-        # Apply buyer_type filter only if schema supports it
         if buyer_type and "buyer_type" in cols:
             q += " AND buyer_type=?"
             params.append(buyer_type)
 
-        r = con.execute(q, params).fetchone()
+        r = conn.execute(q, params).fetchone()
         return int(r["c"] if r else 0)
+    except Exception:
+        return 0
     finally:
-        con.close()
+        conn.close()
 
 # ========= UI TEXTS =========
 
@@ -3217,13 +3168,16 @@ def subscribe_stock(user_id: int, product_id: int) -> bool:
     ensure_subscription_table()
     conn = _get_connection()
     try:
-        conn.execute(
+        # ⚠️ SELECT changes() خاص SQLite است و روی Postgres همیشه 1 برمی‌گرده (بخش
+        # پاک‌سازی SQLite سند) — به‌جاش از cursor.rowcount استفاده شد که هم روی
+        # sqlite3 هم psycopg2 درست کار می‌کنه (تست شد: 1=درج واقعی، 0=تداخل/نادیده)
+        cur = conn.execute(
             "INSERT OR IGNORE INTO stock_subscriptions (user_id, product_id) VALUES (?,?);",
             (user_id, product_id)
         )
-        changed = conn.execute("SELECT changes();").fetchone()[0]
+        changed = cur.rowcount
         conn.commit()
-        return bool(changed)
+        return bool(changed and changed > 0)
     finally:
         conn.close()
 
@@ -5499,11 +5453,14 @@ def save_rating(user_id: int, order_id: int, product_id: int, rating: int, comme
     ensure_ratings_schema()
     conn = _get_connection()
     try:
-        conn.execute("""INSERT OR IGNORE INTO product_ratings
+        # ⚠️ SELECT changes() خاص SQLite بود، روی Postgres همیشه truthy می‌شد —
+        # جایگزین با cursor.rowcount (پرتابل SQLite/Postgres)
+        cur = conn.execute("""INSERT OR IGNORE INTO product_ratings
             (user_id, order_id, product_id, rating, comment) VALUES (?,?,?,?,?);""",
             (user_id, order_id, product_id, rating, comment))
+        changed = cur.rowcount
         conn.commit()
-        return conn.execute("SELECT changes();").fetchone()[0] > 0
+        return bool(changed and changed > 0)
     finally:
         conn.close()
 
@@ -5901,8 +5858,12 @@ def set_maintenance_mode(enabled: bool):
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS bot_config
             (key TEXT PRIMARY KEY, value TEXT);""")
-        conn.execute("INSERT OR REPLACE INTO bot_config (key,value) VALUES ('maintenance',?);",
-                     ("1" if enabled else "0",))
+        # ⚠️ INSERT OR REPLACE (خاص SQLite) به ON CONFLICT تبدیل شد — پرتابل بین
+        # SQLite/Postgres، بدون نیاز به ترجمهٔ db_dialect (بخش پاک‌سازی SQLite سند)
+        conn.execute(
+            "INSERT INTO bot_config (key,value) VALUES ('maintenance',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+            ("1" if enabled else "0",))
         conn.commit()
     finally:
         conn.close()
@@ -6455,12 +6416,12 @@ def save_product_rating(user_id: int, order_id: int, product_id: int, rating: in
     ensure_growth_schema()
     conn = _get_connection()
     try:
-        conn.execute(
+        cur = conn.execute(
             "INSERT OR IGNORE INTO product_ratings (user_id,order_id,product_id,rating) VALUES (?,?,?,?);",
             (user_id, order_id, product_id, max(1, min(5, int(rating)))))
-        ok = conn.execute("SELECT changes();").fetchone()[0]
+        ok = cur.rowcount
         conn.commit()
-        return bool(ok)
+        return bool(ok and ok > 0)
     finally:
         conn.close()
 
@@ -6559,7 +6520,7 @@ def create_winback_code(user_id: int, percent: int, expire_days: int) -> str:
                              (user_id, code_id))
                 conn.commit()
                 return code
-            except sqlite3.IntegrityError:
+            except _INTEGRITY_ERRORS:
                 continue
         return ""
     finally:

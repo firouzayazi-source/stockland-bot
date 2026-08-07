@@ -4,6 +4,32 @@
 
 ---
 
+## ۲۰۲۶-۰۸-۰۷ (دور پنجاه‌ودوم) — رفع add_product/chat_enabled + تکمیل واقعی مهاجرت Postgres
+
+### رفع دو مورد «اصلاحیه» باقی‌مانده از دور قبل
+- `db.add_product()`: `cols = set()` بدون هیچ پر شدنی بود (کد مرده در لباس چک) — حالا واقعاً از `PRAGMA table_info(products)` پر می‌شه، پس `product_key` (NOT NULL) دیگه از قلم نمی‌افته.
+- `products.chat_enabled`: ستون مهاجرت شد (`db.py:init_db`) + دو تابع تازهٔ `db.get/set_product_chat_enabled()` (با `_get_connection()`) جایگزین اتصال sqlite3 موازی/مستقل قدیمی در `bot.py` شدن.
+
+### تکمیل واقعی مهاجرت Postgres
+مالک پروژه اعلام کرد از قبل به Postgres مهاجرت کامل کرده و خواست ردپای SQLite قدیمی پاک بشه. بررسی نشون داد این عملاً یعنی رفع یه باگ فعال بزرگ: بخش زیادی از کد (از جمله `admin_panel._db()` که مرکزی‌ترین اتصال کل پنله) مستقل از `DB_DIALECT` مستقیم `sqlite3.connect()` می‌زد. جزئیات کامل در `CLAUDE.md` بخش ۴۶؛ خلاصه:
+
+- **مسیریابی اتصال:** ۳۷ نقطهٔ `sqlite3.connect()` خام در `admin_panel.py`/`bot.py`/`payment_service.py`/`state.py`/`db.py` به `db_conn.get_connection()` وصل شدن (مستقیم یا از طریق توابع کمکی مثل `bot._db_conn()`).
+- **۳ باگ تازه، کشف‌شده با نصب Postgres واقعی در سندباکس و تست مستقیم (نه فقط خوندن کد):**
+  1. `ALTER TABLE ADD COLUMN` بدون `IF NOT EXISTS` → روی Postgres «transaction poisoning» می‌کنه (یک ستون تکراری کل init_db رو کرش می‌ده) — رفع در `db_dialect.py` با ترجمهٔ خودکار به `IF NOT EXISTS`.
+  2. `RealDictCursor` فقط `row['col']` رو پشتیبانی می‌کرد نه `row[0]` (که کد پروژه جای زیادی استفاده می‌کنه) — جایگزین با `DictCursor` (دقیقاً رفتار `sqlite3.Row`).
+  3. `cursor.lastrowid` همیشه `None` بود (Postgres بدون `RETURNING` صریح ID برنمی‌گردونه، ~۳۶ نقطهٔ INSERT پروژه این رو نداشتن) — رفع با `SELECT lastval()` در `_PgCursor.lastrowid`.
+- **`except sqlite3.OperationalError`/`IntegrityError`:** این کلاس‌های استثنا زیر Postgres (`psycopg2`) کاملاً متفاوتن؛ `IntegrityError` با تاپل سازگار `_INTEGRITY_ERRORS` رفع شد، `OperationalError` با رفع #۱ بالا دیگه لازم نیست trigger بشه.
+- **`INSERT OR REPLACE` → `ON CONFLICT`:** ۹ نقطهٔ واقعی (نه ترجمهٔ زمان‌اجرا) به سینتکس پرتابل SQLite+Postgres بازنویسی شدن.
+- **`SELECT changes()` → `cursor.rowcount`:** ۳ نقطه، پرتابل بین هر دو دیالوگ.
+- **سیستم بکاپ (بزرگ‌ترین ریسک):** `stbak_engine.py` فقط SQLite — یعنی همهٔ بکاپ/بازیابی/ریست پنل قبلاً بی‌صدا روی فایل فانتوم عمل می‌کردن. `pg_backup.py` (از قبل در پروژه، dormant) فعال شد: بکاپ خودکار روزانه، ۸ روت قدیمی با گارد مسدود شدن، ۲ روت تازه (`pg-backup/run`/`pg-backup/restore`)، کارت تازه در `/database`.
+- وابستگی تازه: `psycopg2-binary` به `requirements.txt` اضافه شد (قبلاً حتی با `DB_DIALECT=postgres` هم نصب نمی‌شد).
+
+**تست انجام‌شده:** بر خلاف رویهٔ همیشگی (هارنس SQLite موقت)، این دور یک Postgres 16 واقعی در سندباکس نصب و همهٔ رفع‌ها مستقیماً روش تست شدن — `init_db()` تازه+idempotent، همهٔ توابع فاز پیش (add_product/chat_enabled/subscribe_stock/ratings/maintenance_mode)، `admin_panel._db()`/`payment_service.db_connect()`/`state.ensure_admin`، `iphone_valuation` (lastrowid)، ON CONFLICT (کلید ساده+ترکیبی)، و کل مسیر بکاپ Postgres از طریق روت‌های واقعی پنل. رگرسیون کامل SQLite هم موازی هر مرحله دوباره اجرا شد — بدون تغییر رفتار.
+
+فایل‌های تغییرکرده: `db.py`، `bot.py`، `admin_panel.py`، `payment_service.py`، `api.py`، `state.py`، `db_conn.py`، `db_dialect.py`، `requirements.txt`.
+
+---
+
 ## ۲۰۲۶-۰۸-۰۷ (دور پنجاه‌ویکم) — بررسی کامل پروژه + رفع ۶ مورد امنیتی و ۵ مورد کارایی
 
 طبق درخواست صریح مالک پروژه («کل پروژه رو سریع بررسی کن، کدهای مرده/باگ/امنیتی/کارایی») یک ممیزی سریع مبتنی بر `CLAUDE.md` (بخش‌های ۱۳/۱۴) + وریفای مستقیم کد انجام شد، بعد با تأیید «تمام موارد رو با درایت خودت اصلاح کن» همهٔ یافته‌های قابل‌رفع بدون ریسک بالا رفع شدن.

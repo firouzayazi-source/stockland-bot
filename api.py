@@ -1356,8 +1356,10 @@ def _deliver_or_queue_order(uid: int, order_id: int, pid: int, title: str, price
                         );
                     """)
                     _c.execute(
-                        "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
-                        "VALUES (?,?,?,?,datetime('now'));",
+                        "INSERT INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                        "VALUES (?,?,?,?,datetime('now')) ON CONFLICT(feed_id) DO UPDATE SET "
+                        "order_id=excluded.order_id, chat_id=excluded.chat_id, "
+                        "message_id=excluded.message_id, created_at=excluded.created_at;",
                         (int(feed_id), int(order_id), int(uid), int(msg_id))
                     )
                     _c.commit()

@@ -54,13 +54,25 @@ except Exception:
 def _env(k: str, default: str = "") -> str:
     return os.getenv(k) or default
 
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(_env("DB_PATH"), timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    return conn
+# ⚠️ رفع‌شده (پاک‌سازی SQLite): except sqlite3.IntegrityError به‌تنهایی زیر
+# Postgres هیچ‌وقت catch نمی‌شه (psycopg2.IntegrityError کلاس کاملاً جداست) —
+# همون رفع db.py، اینجا هم لازم بود (بخش پاک‌سازی SQLite سند).
+try:
+    import psycopg2 as _psycopg2_for_errors
+    _INTEGRITY_ERRORS = (sqlite3.IntegrityError, _psycopg2_for_errors.IntegrityError)
+except ImportError:
+    _INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
+
+def _db():
+    """اتصال دیتابیس پنل.
+    ⚠️ رفع‌شده (ممیزی کامل پروژه): قبلاً همیشه sqlite3.connect خام می‌زد، کاملاً
+    مستقل از DB_DIALECT — یعنی روی سروری که واقعاً به Postgres مهاجرت کرده، کل
+    پنل ادمین روی یک فایل SQLite فانتوم/جدا از دادهٔ واقعی کار می‌کرد. حالا از
+    db_conn.get_connection() استفاده می‌کنه که بر اساس DB_DIALECT سوییچ می‌کنه؛
+    روی SQLite دقیقاً همون PRAGMA های قبلی (WAL/busy_timeout/synchronous) رو
+    داخل خودش تنظیم می‌کنه (db_conn._open_sqlite_connection)، بدون تغییر رفتار."""
+    import db_conn
+    return db_conn.get_connection(_env("DB_PATH"))
 
 # ─────────────────────────── Permissions ───────────────────────────────────
 
@@ -334,6 +346,20 @@ def _require_any(admin_info, perms: list):
 
 def _redir(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
+
+
+def _stbak_pg_guard():
+    """⚠️ گارد امنیت عملیاتی (ممیزی کامل پروژه، پاک‌سازی SQLite): مسیرهای
+    پشتیبان‌گیری/بازیابی/ریست مبتنی بر stbak_engine فقط روی فایل SQLite کار
+    می‌کنن — اگه پروژه واقعاً روی Postgres مهاجرت کرده، این فایل کاملاً جدا از
+    دادهٔ واقعیه. اجرای بی‌قید این مسیرها یعنی ادمین فکر می‌کنه بکاپ/بازیابی
+    موفق بوده، در حالی که هیچ ربطی به دادهٔ واقعی نداشته — خطرناک‌تر از شکست
+    آشکار. این تابع None برمی‌گردونه اگه دیالوگ SQLite باشه (بدون تغییر رفتار)،
+    وگرنه پیام خطای واضح."""
+    import db_conn
+    if db_conn.is_postgres():
+        return {"error": "این پروژه به Postgres مهاجرت کرده — بکاپ/بازیابی SQLite (.stbak قدیمی) اینجا اعمال نمی‌شه. از بخش «بکاپ Postgres (pg_dump)» بالای همین صفحه استفاده کن."}
+    return None
 
 # ─────────────────────────── کش سبک درون‌پروسه‌ای ──────────────────────────
 # چند تا کوئری (تم پنل، شمارنده‌های badge سایدبار) توی _layout() روی *هر* صفحهٔ
@@ -2346,10 +2372,16 @@ async def save_theme_pref(request: Request, dark: str = "0", classic: str = "0")
                 PRIMARY KEY (admin_id, key)
             );
         """)
-        conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
-                     (str(adm[0]), "dark_mode", dark if dark in ("1", "0", "auto") else "0"))
-        conn.execute("INSERT OR REPLACE INTO admin_preferences (admin_id,key,value) VALUES (?,?,?);",
-                     (str(adm[0]), "classic_mode", "1" if classic == "1" else "0"))
+        # ⚠️ INSERT OR REPLACE (خاص SQLite) به ON CONFLICT تبدیل شد — کلید ترکیبی
+        # (admin_id,key)، پرتابل بین SQLite/Postgres
+        conn.execute(
+            "INSERT INTO admin_preferences (admin_id,key,value) VALUES (?,?,?) "
+            "ON CONFLICT(admin_id,key) DO UPDATE SET value=excluded.value;",
+            (str(adm[0]), "dark_mode", dark if dark in ("1", "0", "auto") else "0"))
+        conn.execute(
+            "INSERT INTO admin_preferences (admin_id,key,value) VALUES (?,?,?) "
+            "ON CONFLICT(admin_id,key) DO UPDATE SET value=excluded.value;",
+            (str(adm[0]), "classic_mode", "1" if classic == "1" else "0"))
         conn.commit(); conn.close()
         _cache_invalidate(f"admin_prefs:{adm[0]}")
     except Exception:
@@ -3429,11 +3461,21 @@ async def database_page(request: Request, flash: str = ""):
     from stbak_engine import MODULES, SECTION_LABELS
     import glob as _gl, os as _os
 
-    # لیست بکاپ‌های خودکار — stbak_engine (SQLite، همون چیزی که تولید واقعاً روش کار می‌کنه؛
-    # pg_backup مخصوص Postgres است و روی نصب SQLite همیشه شکست می‌خورد)
+    # لیست بکاپ‌های خودکار — بر اساس DB_DIALECT سوییچ می‌کنه.
+    # ⚠️ رفع‌شده (ممیزی کامل پروژه، پاک‌سازی SQLite): این کامنت قبلاً می‌گفت
+    # «stbak_engine همون چیزیه که تولید روش کار می‌کنه» — اون فرض دیگه درست
+    # نیست. اگه پروژه واقعاً روی Postgres مهاجرت کرده، stbak_engine فقط از فایل
+    # SQLite فانتومِ دیگه استفاده‌نشده بکاپ می‌گیره (نه دادهٔ واقعی) — pg_backup
+    # (بر پایهٔ pg_dump/psql) جایگزین درستشه.
+    import db_conn as _dbc_page
+    _is_pg = _dbc_page.is_postgres()
     try:
-        from stbak_engine import list_local_backups as _list_stbak
-        _auto_list = _list_stbak(_BACKUP_DIR)[:_MAX_BACKUPS]
+        if _is_pg:
+            import pg_backup
+            _auto_list = pg_backup.list_local_backups()[:_MAX_BACKUPS]
+        else:
+            from stbak_engine import list_local_backups as _list_stbak
+            _auto_list = _list_stbak(_BACKUP_DIR)[:_MAX_BACKUPS]
     except Exception:
         _auto_list = []
     _auto_files = [b["path"] for b in _auto_list]
@@ -3641,10 +3683,72 @@ async def database_page(request: Request, flash: str = ""):
     }
     """
 
+    # کارت مخصوص Postgres — طبق ممیزی کامل پروژه (پاک‌سازی SQLite): کارت‌های
+    # پایین‌تر (پشتیبان‌گیری/بازیابی/ریست بخش‌بندی‌شده) همه از stbak_engine
+    # استفاده می‌کنن که فقط روی فایل SQLite کار می‌کنه — اگه پروژه واقعاً روی
+    # Postgres مهاجرت کرده، این کارت‌ها دیگه رو دادهٔ واقعی اثر ندارن (روت‌های
+    # POST متناظرشون هم با _stbak_pg_guard مسدود شدن). این کارت جایگزین واقعی
+    # (pg_dump/psql از طریق pg_backup.py) رو ارائه می‌ده.
+    _pg_backup_card = ""
+    if _is_pg:
+        _pg_restore_opts = "".join(
+            f'<option value="{e(_b["name"])}">{e(_b["name"])} ({_b["size"]//1024} KB)</option>'
+            for _b in _auto_list
+        )
+        _pg_backup_card = f"""
+        <div class="card p-6 mb-4 border-2 border-sky-200">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="w-10 h-10 bg-sky-100 text-sky-700 rounded-xl flex items-center justify-center text-xl">🐘</span>
+            <div><h2 class="font-bold text-gray-800 text-lg">بکاپ/بازیابی Postgres (pg_dump)</h2>
+                 <p class="text-xs text-gray-400">این پروژه به Postgres مهاجرت کرده — کارت‌های SQLite (.stbak) پایین‌تر دیگر دادهٔ واقعی را پوشش نمی‌دهند و مسدود شده‌اند.</p></div>
+          </div>
+          <div id="pg-result" class="text-sm mb-3"></div>
+          <button onclick="pgBackupRun()" class="w-full py-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-sm font-semibold transition mb-4">
+            💾 ساخت بکاپ کامل Postgres الان
+          </button>
+          <div class="flex gap-2">
+            <select id="pg-restore-select" class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm">
+              <option value="">— انتخاب بکاپ برای بازیابی —</option>
+              {_pg_restore_opts}
+            </select>
+            <button onclick="pgBackupRestore()" class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold transition">♻️ بازیابی</button>
+          </div>
+        </div>
+        <script>
+        async function pgBackupRun(){{
+          var box=document.getElementById('pg-result');
+          box.innerHTML='⏳ در حال ساخت بکاپ...';
+          try{{
+            var r=await fetch('/admin/database/pg-backup/run',{{method:'POST'}});
+            var d=await r.json();
+            if(d.error){{box.innerHTML='<span class="text-red-600">❌ '+d.error+'</span>';return;}}
+            box.innerHTML='<span class="text-green-600">✅ بکاپ ساخته شد: '+d.file+'</span>';
+            setTimeout(()=>location.reload(),1500);
+          }}catch(err){{box.innerHTML='<span class="text-red-600">❌ '+(err.message||'خطا')+'</span>';}}
+        }}
+        async function pgBackupRestore(){{
+          var sel=document.getElementById('pg-restore-select');
+          if(!sel.value){{alert('یک بکاپ انتخاب کنید');return;}}
+          if(!confirm('⚠️ این عملیات دادهٔ فعلی Postgres را با محتوای این بکاپ جایگزین می‌کند. ادامه؟'))return;
+          var box=document.getElementById('pg-result');
+          box.innerHTML='⏳ در حال بازیابی...';
+          try{{
+            var fd=new FormData(); fd.append('filename',sel.value);
+            var r=await fetch('/admin/database/pg-backup/restore',{{method:'POST',body:fd}});
+            var d=await r.json();
+            if(d.error){{box.innerHTML='<span class="text-red-600">❌ '+d.error+'</span>';return;}}
+            box.innerHTML='<span class="text-green-600">✅ بازیابی موفق</span>';
+          }}catch(err){{box.innerHTML='<span class="text-red-600">❌ '+(err.message||'خطا')+'</span>';}}
+        }}
+        </script>
+        """
+
     body = f"""
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold text-gray-800">💾 پشتیبان‌گیری و بازیابی</h1>
     </div>
+
+    {_pg_backup_card}
 
     <!-- پشتیبان‌گیری -->
     <div class="card p-6 mb-4">
@@ -3909,12 +4013,74 @@ async def database_page(request: Request, flash: str = ""):
     return _layout("پشتیبان‌گیری", body, adm, flash=flash)
 
 
+@router.post("/database/pg-backup/run")
+async def pg_backup_run(request: Request):
+    """بکاپ کامل Postgres (pg_dump) — جایگزین مسیرهای stbak_engine وقتی
+    DB_DIALECT=postgres. مستقیماً pg_backup.run_full_backup() رو صدا می‌زنه
+    (بکاپ محلی + آپلود به مقاصد ابری فعال، دقیقاً همون الگوی بکاپ خودکار روزانه)."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "backup")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    import db_conn
+    if not db_conn.is_postgres():
+        return JSONResponse({"error": "این مسیر فقط برای حالت Postgres است"})
+
+    def _run():
+        import pg_backup
+        return pg_backup.run_full_backup()
+
+    try:
+        rep = await run_in_threadpool(_run)
+        if not rep.get("ok"):
+            return JSONResponse({"error": rep.get("error", "خطای نامشخص")})
+        _log(request, "بکاپ کامل Postgres", "دیتابیس", rep.get("file", ""), admin_info=adm)
+        return JSONResponse({"ok": True, "file": rep.get("file"), "size": rep.get("size")})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:200]})
+
+
+@router.post("/database/pg-backup/restore")
+async def pg_backup_restore(request: Request):
+    """بازیابی از بکاپ Postgres محلی (فایل .stbak ساخته‌شده با pg_dump/pg_backup.py)."""
+    from fastapi.responses import JSONResponse
+    adm = _get_admin(request)
+    guard = _require(adm, "restore")
+    if guard: return JSONResponse({"error": "unauthorized"})
+    import db_conn
+    if not db_conn.is_postgres():
+        return JSONResponse({"error": "این مسیر فقط برای حالت Postgres است"})
+    form = await request.form()
+    filename = str(form.get("filename", "")).strip()
+    if not filename or ".." in filename or "/" in filename:
+        return JSONResponse({"error": "فایل نامعتبر"})
+
+    def _run():
+        import pg_backup
+        import os as _os
+        path = _os.path.join(pg_backup.BACKUP_DIR, filename)
+        if not _os.path.exists(path):
+            return {"ok": False, "error": "فایل یافت نشد"}
+        return pg_backup.restore_backup(path)
+
+    try:
+        rep = await run_in_threadpool(_run)
+        if not rep.get("ok"):
+            return JSONResponse({"error": rep.get("error", "خطای نامشخص")})
+        _log(request, "بازیابی بکاپ Postgres", "دیتابیس", filename, admin_info=adm)
+        return JSONResponse({"ok": True})
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)[:200]})
+
+
 @router.post("/database/backup/full-sync")
 async def backup_full_sync(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "backup")
     if guard: return guard
     from fastapi.responses import Response as FResponse, PlainTextResponse
+    _pgg = _stbak_pg_guard()
+    if _pgg: return PlainTextResponse(_pgg["error"], status_code=409)
     form = await request.form()
     is_full = form.get("full") == "1"
     sections = None if is_full else (form.getlist("sections") or None)
@@ -3955,8 +4121,22 @@ async def database_download_auto(request: Request, filename: str):
     import os
     if ".." in filename or "/" in filename:
         return PlainTextResponse("نام فایل نامعتبر", status_code=400)
-    path = os.path.join(_BACKUP_DIR, filename)
-    if not os.path.exists(path):
+    # ⚠️ رفع‌شده: pg_backup فایل‌هاش رو در pg_backup.BACKUP_DIR می‌سازه (مسیر
+    # جدا از _BACKUP_DIR که مخصوص stbak_engine/SQLite است) — بدون این چک،
+    # لینک دانلود بکاپ‌های Postgres همیشه ۴۰۴ می‌داد.
+    candidates = [_BACKUP_DIR]
+    try:
+        import pg_backup
+        candidates.append(pg_backup.BACKUP_DIR)
+    except Exception:
+        pass
+    path = None
+    for d in candidates:
+        p = os.path.join(d, filename)
+        if os.path.exists(p):
+            path = p
+            break
+    if not path:
         return PlainTextResponse("فایل یافت نشد", status_code=404)
     _log(request, "دانلود بکاپ خودکار", "دیتابیس", filename, admin_info=adm)
     return FileResponse(path, filename=filename, media_type="application/octet-stream")
@@ -3969,6 +4149,8 @@ async def restore_auto(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "restore")
     if guard: return JSONResponse({"error": "unauthorized"})
+    _pgg = _stbak_pg_guard()
+    if _pgg: return JSONResponse(_pgg)
     form = await request.form()
     filename = str(form.get("filename","")).strip()
     if not filename or ".." in filename or "/" in filename:
@@ -3994,6 +4176,8 @@ async def recover_latest(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "recovery")
     if guard: return JSONResponse({"error": "unauthorized"})
+    _pgg = _stbak_pg_guard()
+    if _pgg: return JSONResponse(_pgg)
     from stbak_engine import list_local_backups, validate_stbak, restore_stbak, StbakError
 
     candidates = list_local_backups(_BACKUP_DIR)
@@ -4042,6 +4226,8 @@ async def restore_sync(request: Request, backup_file: UploadFile = None):
     adm = _get_admin(request)
     guard = _require(adm, "restore")
     if guard: return JSONResponse({"error": "unauthorized"})
+    _pgg = _stbak_pg_guard()
+    if _pgg: return JSONResponse(_pgg)
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
@@ -4066,6 +4252,8 @@ async def reset_sync(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "database")
     if guard: return JSONResponse({"error": "unauthorized"})
+    _pgg = _stbak_pg_guard()
+    if _pgg: return JSONResponse(_pgg)
     form = await request.form()
     is_full = form.get("full") == "1"
     all_secs = form.getlist("reset_sections") or []
@@ -4113,6 +4301,8 @@ async def backup_start(request: Request):
     adm = _get_admin(request)
     if not adm: return JSONResponse({"error": "unauthorized"})
     if not _has(adm, "backup"): return JSONResponse({"error": "unauthorized"})
+    _pgg = _stbak_pg_guard()
+    if _pgg: return JSONResponse(_pgg)
     form = await request.form()
     is_full = form.get("full") == "1"
     sections = None if is_full else form.getlist("sections") or None
@@ -4159,6 +4349,8 @@ async def restore_start(request: Request, backup_file: UploadFile = None):
     adm = _get_admin(request)
     if not adm: return JSONResponse({"error": "unauthorized"})
     if not _has(adm, "restore"): return JSONResponse({"error": "unauthorized"})
+    _pgg = _stbak_pg_guard()
+    if _pgg: return JSONResponse(_pgg)
     if not backup_file or not (backup_file.filename or "").endswith(".stbak"):
         return JSONResponse({"error": "فقط فایل .stbak مجاز است"})
     raw = await backup_file.read()
@@ -4173,6 +4365,8 @@ async def reset_start(request: Request):
     from fastapi.responses import JSONResponse
     adm = _get_admin(request)
     if not adm: return JSONResponse({"error": "unauthorized"})
+    _pgg = _stbak_pg_guard()
+    if _pgg: return JSONResponse(_pgg)
     form = await request.form()
     is_full = form.get("full") == "1"
     sections = None if is_full else form.getlist("reset_sections") or None
@@ -4421,7 +4615,7 @@ async def admins_add(request: Request):
             (tg_id, name, web_username, _hash_pw(web_password), json.dumps(perms), notes, datetime.utcnow().isoformat()),
         )
         conn.commit()
-    except sqlite3.IntegrityError:
+    except _INTEGRITY_ERRORS:
         conn.close()
         return _redir("/admin/admins?flash=یوزرنیم+یا+تلگرام+تکراری+است")
     finally:
@@ -7196,8 +7390,10 @@ async def order_resend_post(request: Request, oid: int):
                         );
                     """)
                     conn2.execute(
-                        "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
-                        "VALUES (?,?,?,?,datetime('now'));",
+                        "INSERT INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                        "VALUES (?,?,?,?,datetime('now')) ON CONFLICT(feed_id) DO UPDATE SET "
+                        "order_id=excluded.order_id, chat_id=excluded.chat_id, "
+                        "message_id=excluded.message_id, created_at=excluded.created_at;",
                         (feed_id, oid, user_id, msg_id)
                     )
                     conn2.commit()
@@ -9602,10 +9798,25 @@ async def system_cache_run_now(request: Request):
 
 
 def _do_auto_backup() -> None:
-    """بکاپ خودکار روزانه با stbak_engine (SQLite — دیتابیس واقعی تولید) + آپلود به مقاصد فعال.
-    ⚠️ قبلاً این تابع pg_backup.create_backup() (مخصوص Postgres) رو صدا می‌زد که روی نصب
-    SQLite تولید همیشه با «DATABASE_URL تنظیم نشده» شکست می‌خورد — یعنی بکاپ خودکار روزانه
-    عملاً هیچ‌وقت موفق نمی‌شد، فقط بی‌صدا توی لاگ خطا می‌نوشت."""
+    """بکاپ خودکار روزانه — بر اساس DB_DIALECT سوییچ می‌کنه.
+    ⚠️ تاریخچه (رفت‌وبرگشت مستند در CLAUDE.md): این تابع قبلاً pg_backup صدا
+    می‌زد، بعد چون تولید SQLite بود به stbak_engine تغییر کرد. حالا که پروژه
+    واقعاً به Postgres مهاجرت کرده، دوباره باید pg_backup صدا بزنه — وگرنه
+    stbak_engine روی فایل SQLite فانتوم/غیرمرتبط با دادهٔ واقعی بکاپ می‌گیره
+    (بکاپ ظاهراً موفق، ولی از دادهٔ واقعی خالیه — خطرناک‌تر از شکست آشکار)."""
+    import db_conn as _dbc
+    if _dbc.is_postgres():
+        try:
+            import pg_backup
+            rep = pg_backup.run_full_backup()
+            if not rep.get("ok"):
+                _tg_logger.error("Auto-backup (Postgres) failed: %s", rep.get("error"))
+                return
+            _tg_logger.info("Auto-backup (Postgres) done: %s", rep.get("file"))
+        except Exception as ex:
+            _tg_logger.error("Auto-backup (Postgres) failed: %s", ex)
+        return
+
     try:
         from stbak_engine import save_local_backup
         try:
@@ -9622,13 +9833,17 @@ def _do_auto_backup() -> None:
 
     # ANALYZE هفتگی — برنامه‌ریز کوئری SQLite بدون آمار به‌روز، با رشد دیتابیس
     # تصمیمات کمتر بهینه می‌گیره؛ همراه همین جاب روزانهٔ بکاپ (فقط دوشنبه‌ها) اجرا می‌شه.
+    # ⚠️ فقط زیر SQLite معنی داره — Postgres خودش autovacuum/analyze خودکار داره،
+    # نیازی به کرون دستی نیست (بخش پاک‌سازی SQLite سند).
     try:
-        import datetime as _dt
-        if _dt.datetime.now().weekday() == 0:
-            _aconn = sqlite3.connect(_DB_PATH(), timeout=30)
-            _aconn.execute("ANALYZE;")
-            _aconn.close()
-            _tg_logger.info("Weekly ANALYZE done")
+        import db_conn as _dbc
+        if not _dbc.is_postgres():
+            import datetime as _dt
+            if _dt.datetime.now().weekday() == 0:
+                _aconn = sqlite3.connect(_DB_PATH(), timeout=30)
+                _aconn.execute("ANALYZE;")
+                _aconn.close()
+                _tg_logger.info("Weekly ANALYZE done")
     except Exception as ex:
         _tg_logger.error("Weekly ANALYZE failed: %s", ex)
 

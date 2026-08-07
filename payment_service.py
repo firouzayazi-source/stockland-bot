@@ -191,13 +191,14 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def db_connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    return conn
+def db_connect():
+    """اتصال دیتابیس مسیر پرداخت/callback.
+    ⚠️ رفع‌شده (ممیزی کامل پروژه): قبلاً همیشه sqlite3.connect خام می‌زد، مستقل
+    از DB_DIALECT — یعنی روی سرور Postgres، تأیید پرداخت/تحویل محصول روی یه
+    فایل SQLite فانتوم انجام می‌شد. حالا از db_conn.get_connection() استفاده
+    می‌کنه (SQLite یا Postgres بر اساس env)."""
+    import db_conn
+    return db_conn.get_connection(DB_PATH)
 
 
 def send_telegram_message(user_id: int, text: str, parse_mode: str | None = None) -> None:
@@ -384,9 +385,13 @@ def claim_feed_item(conn: sqlite3.Connection, product_id: int):
 def enqueue_pending_delivery(conn, order_id: int, user_id: int, chat_id: int, product_id: int, title: str, price: int) -> None:
     conn.execute(
         """
-        INSERT OR REPLACE INTO pending_deliveries
+        INSERT INTO pending_deliveries
             (order_id, user_id, chat_id, product_id, product_title, price, status, feed_id)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL);
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL)
+        ON CONFLICT(order_id) DO UPDATE SET
+            user_id=excluded.user_id, chat_id=excluded.chat_id, product_id=excluded.product_id,
+            product_title=excluded.product_title, price=excluded.price, status=excluded.status,
+            feed_id=excluded.feed_id;
         """,
         (int(order_id), int(user_id), int(chat_id), int(product_id), str(title), int(price)),
     )
@@ -966,8 +971,10 @@ def _finalize_paid_tx(conn, tx, ref_id, authority, extra: dict | None = None):
                         );
                     """)
                     _dc.execute(
-                        "INSERT OR REPLACE INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
-                        "VALUES (?,?,?,?,?);",
+                        "INSERT INTO delivery_messages (feed_id, order_id, chat_id, message_id, created_at) "
+                        "VALUES (?,?,?,?,?) ON CONFLICT(feed_id) DO UPDATE SET "
+                        "order_id=excluded.order_id, chat_id=excluded.chat_id, "
+                        "message_id=excluded.message_id, created_at=excluded.created_at;",
                         (int(feed_id), int(order_id), int(chat_id), int(_msg_id), now_iso())
                     )
                     _dc.commit()
