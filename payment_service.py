@@ -561,6 +561,13 @@ def on_startup() -> None:
         _ivdb.ensure_schema()
     except Exception:
         logger.exception("iphone_valuation.db.ensure_schema() در استارتاپ شکست خورد")
+    try:
+        # همون درس بالا برای گردونهٔ شانس (اسکیما+seed یک‌بارهٔ ۴ جدول) — عمداً ایگر،
+        # نه منتظر اولین کلیک ادمین روی /admin/wheel یا اولین چرخش کاربر مینی‌اپ.
+        from db import ensure_wheel_schema
+        ensure_wheel_schema()
+    except Exception:
+        logger.exception("db.ensure_wheel_schema() در استارتاپ شکست خورد")
     maybe_start_bot_polling()
     try:
         from admin_panel import _start_auto_backup_thread

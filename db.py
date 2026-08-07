@@ -3050,7 +3050,10 @@ def ensure_discount_table():
                 expires_at      TEXT    DEFAULT NULL,
                 is_active       INTEGER DEFAULT 1,
                 created_at      TEXT    DEFAULT (datetime('now','localtime')),
-                description     TEXT    DEFAULT ''
+                description     TEXT    DEFAULT '',
+                owner_user_id   INTEGER DEFAULT NULL, -- NULL=کد عمومی، پرشده=کد شخصیِ فقط همون کاربر
+                source          TEXT    DEFAULT '',    -- 'winback'|'wheel'|'referral'|... (منبع صدور)
+                source_ref_id   INTEGER DEFAULT NULL   -- شناسهٔ رکورد منبع (مثلاً wheel_spins.id)
             );
         """)
         # migration: ستونهایی که در نسخههای بعدی به جدول اضافه شدند
@@ -3068,6 +3071,9 @@ def ensure_discount_table():
             ("expires_at",        "TEXT DEFAULT NULL"),
             ("is_active",         "INTEGER DEFAULT 1"),
             ("description",       "TEXT DEFAULT ''"),
+            ("owner_user_id",     "INTEGER DEFAULT NULL"),
+            ("source",            "TEXT DEFAULT ''"),
+            ("source_ref_id",     "INTEGER DEFAULT NULL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE discount_codes ADD COLUMN {col} {default};")
@@ -3101,12 +3107,20 @@ def ensure_discount_table():
                 ("expires_at",        "TEXT DEFAULT NULL"),
                 ("is_active",         "INTEGER DEFAULT 1"),
                 ("description",       "TEXT DEFAULT ''"),
+                ("owner_user_id",     "INTEGER DEFAULT NULL"),
+                ("source",            "TEXT DEFAULT ''"),
+                ("source_ref_id",     "INTEGER DEFAULT NULL"),
             ]:
                 if col not in existing:
                     conn.execute(f"ALTER TABLE discount_codes ADD COLUMN {col} {decl};")
         except Exception:
             pass
         conn.commit()
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_discount_codes_owner ON discount_codes(owner_user_id);")
+            conn.commit()
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -3117,7 +3131,14 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
     ensure_discount_table()
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
-    now = datetime.utcnow().isoformat()
+    # ⚠️ رفع‌شده (کشف‌شده حین تست مستقیم گردونهٔ شانس روی Postgres واقعی): starts_at/
+    # expires_at با datetime('now','localtime') ذخیره می‌شن — فرمت "YYYY-MM-DD HH:MM:SS"
+    # (جداکنندهٔ فاصله). قبلاً این‌جا با datetime.utcnow().isoformat() ("...THH:MM:SS.ffffff"،
+    # جداکنندهٔ T + میکروثانیه) مقایسه می‌شد؛ چون در مقایسهٔ لغوی رشته ' '(0x20) < 'T'(0x54)
+    # همیشه برقراره، هر کدی که انقضاش *همون روز* باشه (دقیقاً سناریوی جوایز گردونه با
+    # اعتبار ۱ تا ۲۴ ساعته) همیشه اشتباهاً «منقضی‌شده» تشخیص داده می‌شد — یه باگ واقعاً
+    # موجود که فقط با تاریخ فردا/بعد قابل مشاهده نبود (تفاوت رقم روز جبرانش می‌کرد).
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     try:
         # ⚠️ COLLATE NOCASE خاص SQLite است — با LOWER(code)=LOWER(?) جایگزین شد که
         # روی هر دو دیالوگ case-insensitive کار می‌کنه (بخش پاک‌سازی SQLite سند)
@@ -3139,6 +3160,11 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
             return {"valid": False, "error": "این کد برای محصول دیگری است"}
         if row["category_id"] and category_id and int(row["category_id"]) != int(category_id):
             return {"valid": False, "error": "این کد برای دستهبندی دیگری است"}
+        # کد شخصی (owner_user_id ست‌شده — مثلاً جایزهٔ گردونه/winback) فقط برای صاحبش
+        # معتبره؛ حتی اگه کد به هر طریقی لو بره، کاربر دیگه نمی‌تونه ازش استفاده کنه.
+        if row["owner_user_id"] is not None:
+            if not user_id or int(row["owner_user_id"]) != int(user_id):
+                return {"valid": False, "error": "این کد مخصوص شماست و برای شما قابل استفاده نیست"}
         if user_id:
             if row["max_uses_per_user"] > 0:
                 uses = conn.execute(
@@ -3196,6 +3222,83 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
             "value": row["value"], "code_id": row["id"], "error": None,
             "description": row["description"] or ""
         }
+    finally:
+        conn.close()
+
+
+def issue_personal_discount_code(user_id: int, disc_type: str, value: int, *,
+                                  expire_hours: int = 0, max_value: int = 0,
+                                  description: str = "", source: str = "",
+                                  source_ref_id: int = None, code_prefix: str = "SL") -> dict:
+    """موتور مشترک صدور کد تخفیف **شخصی** یک‌بارمصرف — تک‌منبع حقیقت برای هر مکانیزم
+    پاداشی که نیاز به کد شخصی داره (گردونهٔ شانس، بازگردانی کاربر/winback، و هر
+    مکانیزم آینده مثل معرفی/تولد). خودِ `discount_codes`/`validate_discount` تغییر
+    نمی‌کنه — فقط owner_user_id ست می‌شه که مالکیت رو در validate_discount اجرایی
+    می‌کنه. `disc_type` دقیقاً همون واژگان ستون discount_codes.type است: 'percent'
+    یا 'fixed' (نوع 'wallet' معنی نداره چون اعتبار کیف‌پول مسیر جدای خودش رو داره،
+    نه از این تابع). برمی‌گردونه: {code, code_id, expires_at} یا {code:''} در صورت
+    شکست پس از چند تلاش (برخورد تصادفی کد، عملاً نزدیک به غیرممکن)."""
+    if disc_type not in ("percent", "fixed"):
+        raise ValueError(f"disc_type نامعتبر: {disc_type}")
+    ensure_discount_table()
+    import random, string
+    conn = _get_connection()
+    try:
+        expires_at = None
+        if expire_hours and expire_hours > 0:
+            row = conn.execute(
+                "SELECT datetime('now','localtime', ?) AS v;", (f"+{int(expire_hours)} hours",)
+            ).fetchone()
+            expires_at = row["v"] if row else None
+        for _ in range(8):
+            code = code_prefix + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            try:
+                cur = conn.execute(
+                    "INSERT INTO discount_codes "
+                    "(code, type, value, max_value, max_uses, max_uses_per_user, is_active, "
+                    "expires_at, description, owner_user_id, source, source_ref_id) "
+                    "VALUES (?,?,?,?,1,1,1,?,?,?,?,?);",
+                    (code, disc_type, int(value), int(max_value or 0), expires_at, description,
+                     int(user_id), source or "", source_ref_id)
+                )
+                code_id = cur.lastrowid
+                conn.commit()
+                return {"code": code, "code_id": code_id, "expires_at": expires_at}
+            except _INTEGRITY_ERRORS:
+                conn.rollback()
+                continue
+        return {"code": "", "code_id": None, "expires_at": None}
+    finally:
+        conn.close()
+
+
+def list_user_personal_codes(user_id: int) -> list[dict]:
+    """صفحهٔ «جوایز من» — همهٔ کدهای شخصی این کاربر، از هر منبعی (گردونه/winback/...)،
+    با وضعیت زنده (قابل‌استفاده/منقضی/مصرف‌شده) — بدون نیاز به جدول جدا، چون
+    owner_user_id+used_count/max_uses همون چیزیه که لازمه."""
+    ensure_discount_table()
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM discount_codes WHERE owner_user_id=? ORDER BY id DESC;", (user_id,)
+        ).fetchall()
+        # فرمت «now» باید دقیقاً با فرمت ذخیرهٔ expires_at (datetime('now','localtime'))
+        # یکی باشه، نه isoformat() با جداکنندهٔ T — همون رفع بخش بالای validate_discount.
+        now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d["used_count"] >= d["max_uses"] and d["max_uses"] > 0:
+                status = "used"
+            elif d["expires_at"] and d["expires_at"] < now:
+                status = "expired"
+            elif not d["is_active"]:
+                status = "inactive"
+            else:
+                status = "active"
+            d["status"] = status
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -5792,6 +5895,563 @@ def get_product_favoriters(product_id: int) -> list:
         conn.close()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── گردونهٔ شانس (Wheel of Fortune) — سیستم پاداش عمومی مینی‌اپ ──────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# معماری: wheel_campaigns (کمپین‌ها، فقط یکی هم‌زمان فعال) → wheel_prizes (جوایز
+# هر کمپین، کاملاً از پنل قابل‌مدیریت، بدون هیچ عدد/متن هاردکد) → wheel_spins
+# (هم لاگ کامل تاریخچه هم تنها منبع شمارش محدودیت روزانه — یک جدول، دو مصرف).
+# جایزهٔ نوع کیف‌پول از طریق add_wallet_balance موجود صادر می‌شه؛ جایزهٔ نوع کد
+# تخفیف از طریق issue_personal_discount_code (پایین‌تر) که موتور discount_codes
+# موجود رو گسترش می‌ده، نه یه سیستم موازی. انتخاب جایزه/منطق اتمیک در core/wheel.py.
+
+_ENSURE_WHEEL_SCHEMA_DONE = False
+
+WHEEL_PRIZE_TYPES = ("wallet_credit", "discount_percent", "discount_fixed", "extra_spin", "no_win", "physical_gift")
+
+_WHEEL_SETTINGS_DEFAULTS = {
+    "enabled": 0,
+    "title": "🎡 چرخ‌گردون شانس",
+    "description": "هر روز یک شانس رایگان برای بردن جایزه!",
+    "banner_url": "",
+    "primary_color": "#6366F1",
+    "theme": "default",
+    "daily_spin_limit": 1,
+    "reset_hour": 0,
+    "animation_enabled": 1,
+    "animation_duration_ms": 4200,
+    "result_display_duration_ms": 3500,
+    "sound_enabled": 1,
+    "haptic_enabled": 1,
+    "show_odds": 0,
+}
+
+
+def ensure_wheel_schema():
+    global _ENSURE_WHEEL_SCHEMA_DONE
+    if _ENSURE_WHEEL_SCHEMA_DONE:
+        return
+    _ENSURE_WHEEL_SCHEMA_DONE = True
+    conn = _get_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_campaigns (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                title            TEXT NOT NULL,
+                starts_at        TEXT,
+                ends_at          TEXT,
+                active           INTEGER NOT NULL DEFAULT 0,
+                daily_spin_limit INTEGER,
+                theme_json       TEXT NOT NULL DEFAULT '{}',
+                sort_order       INTEGER NOT NULL DEFAULT 0,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_prizes (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id       INTEGER NOT NULL,
+                title             TEXT NOT NULL,
+                icon              TEXT NOT NULL DEFAULT '🎁',
+                color             TEXT NOT NULL DEFAULT '#6366F1',
+                prize_type        TEXT NOT NULL DEFAULT 'no_win',
+                value             INTEGER NOT NULL DEFAULT 0,
+                max_discount_value INTEGER NOT NULL DEFAULT 0,
+                weight            REAL NOT NULL DEFAULT 1,
+                total_limit       INTEGER NOT NULL DEFAULT 0,
+                daily_limit       INTEGER NOT NULL DEFAULT 0,
+                issued_count      INTEGER NOT NULL DEFAULT 0,
+                validity_hours    INTEGER NOT NULL DEFAULT 0,
+                active            INTEGER NOT NULL DEFAULT 1,
+                sort_order        INTEGER NOT NULL DEFAULT 0,
+                description       TEXT NOT NULL DEFAULT '',
+                created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_spins (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id           INTEGER NOT NULL,
+                campaign_id       INTEGER,
+                prize_id          INTEGER,
+                prize_type        TEXT NOT NULL DEFAULT '',
+                prize_title       TEXT NOT NULL DEFAULT '',
+                amount            INTEGER NOT NULL DEFAULT 0,
+                discount_code     TEXT NOT NULL DEFAULT '',
+                discount_code_id  INTEGER,
+                status            TEXT NOT NULL DEFAULT 'issued',
+                ip                TEXT NOT NULL DEFAULT '',
+                device_fingerprint TEXT NOT NULL DEFAULT '',
+                session_id        TEXT NOT NULL DEFAULT '',
+                created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        # شمارندهٔ روزانهٔ اتمیک — تنها راه امن جلوگیری از دبل‌اسپین هم‌زمان (به‌جای
+        # COUNT(*) روی wheel_spins که یه مجموعه‌ست و قفل‌پذیر نیست، دقیقاً الگوی
+        # daily_checkins: یک ردیف per user+day که با SELECT...FOR UPDATE قفل می‌شه).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_daily_usage (
+                user_id     INTEGER NOT NULL,
+                campaign_id INTEGER NOT NULL,
+                usage_date  TEXT NOT NULL,
+                spins_used  INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, campaign_id, usage_date)
+            );
+        """)
+        for _name, _target in [
+            ("idx_wheel_prizes_campaign",   "wheel_prizes(campaign_id)"),
+            ("idx_wheel_spins_user",        "wheel_spins(user_id, created_at)"),
+            ("idx_wheel_spins_prize",       "wheel_spins(prize_id)"),
+            ("idx_wheel_spins_campaign",    "wheel_spins(campaign_id, created_at)"),
+        ]:
+            try:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {_name} ON {_target};")
+            except Exception:
+                pass
+        conn.commit()
+
+        # سید اولیه — فقط اگه هیچ کمپینی وجود نداره (نصب تازه)؛ صرفاً داده (مثل seed
+        # iv_coefficients)، نه منطق هاردکد — همه‌چیز بعدش از پنل قابل ویرایش/حذفه.
+        row = conn.execute("SELECT COUNT(*) c FROM wheel_campaigns;").fetchone()
+        if row and row["c"] == 0:
+            cur = conn.execute(
+                "INSERT INTO wheel_campaigns (title, active, sort_order) VALUES (?,1,0);",
+                ("کمپین پیش‌فرض",)
+            )
+            camp_id = cur.lastrowid
+            defaults = [
+                # title, icon, color, ptype, value, validity_hours, weight, description
+                ("۵ هزار تومان جایزه", "💵", "#22C55E", "wallet_credit", 5000, 0, 1, "شانس دوباره امتحان کن!"),
+                ("۱۰ هزار تومان جایزه", "💰", "#16A34A", "wallet_credit", 10000, 0, 0.5, ""),
+                ("۱۰٪ تخفیف خرید بعدی", "🏷", "#F59E0B", "discount_percent", 10, 24, 1, "روی خرید بعدیت اعمال می‌شه"),
+                ("۲۰٪ تخفیف خرید بعدی", "🎫", "#EA580C", "discount_percent", 20, 24, 0.3, ""),
+                ("یک چرخش دیگه!", "🔄", "#6366F1", "extra_spin", 1, 0, 1.5, ""),
+                ("این بار شانس نیاوردی", "😅", "#6B7280", "no_win", 0, 0, 3, "فردا دوباره امتحان کن"),
+            ]
+            for title, icon, color, ptype, value, val_hours, weight, desc in defaults:
+                conn.execute(
+                    "INSERT INTO wheel_prizes (campaign_id, title, icon, color, prize_type, value, "
+                    "validity_hours, weight, description) VALUES (?,?,?,?,?,?,?,?,?);",
+                    (camp_id, title, icon, color, ptype, value, val_hours, weight, desc)
+                )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def get_wheel_settings() -> dict:
+    return get_cfg_json("WHEEL_SETTINGS", _WHEEL_SETTINGS_DEFAULTS)
+
+
+def save_wheel_settings(values: dict) -> None:
+    merged = dict(_WHEEL_SETTINGS_DEFAULTS)
+    merged.update(get_wheel_settings())
+    merged.update({k: v for k, v in values.items() if k in _WHEEL_SETTINGS_DEFAULTS})
+    set_cfg("WHEEL_SETTINGS", json.dumps(merged, ensure_ascii=False))
+
+
+# ─── کمپین‌ها ──────────────────────────────────────────────────────────────
+
+def list_wheel_campaigns() -> list[dict]:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM wheel_campaigns ORDER BY sort_order ASC, id DESC;").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_wheel_campaign(campaign_id: int) -> dict | None:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT * FROM wheel_campaigns WHERE id=?;", (campaign_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_active_wheel_campaign() -> dict | None:
+    """کمپین فعال فعلی — طبق «همیشه فقط یکی» (اجرا در set_active_wheel_campaign)."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        now = datetime.utcnow().isoformat()
+        row = conn.execute(
+            "SELECT * FROM wheel_campaigns WHERE active=1 "
+            "AND (starts_at IS NULL OR starts_at<=?) AND (ends_at IS NULL OR ends_at>=?) "
+            "ORDER BY id DESC LIMIT 1;", (now, now)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_wheel_campaign(title: str, starts_at: str = None, ends_at: str = None,
+                           daily_spin_limit: int = None, theme_json: str = "{}", sort_order: int = 0) -> int:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO wheel_campaigns (title, starts_at, ends_at, daily_spin_limit, theme_json, sort_order) "
+            "VALUES (?,?,?,?,?,?);",
+            (title.strip(), starts_at or None, ends_at or None, daily_spin_limit, theme_json or "{}", sort_order)
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_wheel_campaign(campaign_id: int, **fields) -> None:
+    ensure_wheel_schema()
+    allowed = {"title", "starts_at", "ends_at", "daily_spin_limit", "theme_json", "sort_order"}
+    cols = [k for k in fields if k in allowed]
+    if not cols:
+        return
+    conn = _get_connection()
+    try:
+        conn.execute(f"UPDATE wheel_campaigns SET {', '.join(c+'=?' for c in cols)} WHERE id=?;",
+                     [fields[c] for c in cols] + [campaign_id])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_active_wheel_campaign(campaign_id: int) -> None:
+    """اتمیک: همه رو غیرفعال می‌کنه، بعد فقط همینو فعال — تضمین «همیشه فقط یک کمپین فعال»
+    در سطح دیتابیس، نه با تکیه به انضباط ادمین."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE wheel_campaigns SET active=0;")
+        conn.execute("UPDATE wheel_campaigns SET active=1 WHERE id=?;", (campaign_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def deactivate_all_wheel_campaigns() -> None:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE wheel_campaigns SET active=0;")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_wheel_campaign(campaign_id: int) -> None:
+    """کسکید — جوایز همون کمپین هم حذف می‌شن؛ wheel_spins دست‌نخورده می‌مونه (خودش
+    prize_title/prize_type رو denormalize کرده، دقیقاً مثل رفتار delete_model در
+    iphone_valuation — تاریخچه یتیم می‌مونه ولی دقیق و خوانا باقی می‌مونه)."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM wheel_prizes WHERE campaign_id=?;", (campaign_id,))
+        conn.execute("DELETE FROM wheel_campaigns WHERE id=?;", (campaign_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── جوایز ─────────────────────────────────────────────────────────────────
+
+def list_wheel_prizes(campaign_id: int, active_only: bool = False) -> list[dict]:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        q = "SELECT * FROM wheel_prizes WHERE campaign_id=?"
+        if active_only:
+            q += " AND active=1"
+        q += " ORDER BY sort_order ASC, id ASC;"
+        return [dict(r) for r in conn.execute(q, (campaign_id,)).fetchall()]
+    finally:
+        conn.close()
+
+
+def get_wheel_prize(prize_id: int) -> dict | None:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT * FROM wheel_prizes WHERE id=?;", (prize_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_wheel_prize(campaign_id: int, title: str, prize_type: str, **fields) -> int:
+    if prize_type not in WHEEL_PRIZE_TYPES:
+        raise ValueError(f"نوع جایزهٔ نامعتبر: {prize_type}")
+    ensure_wheel_schema()
+    allowed = {"icon", "color", "value", "max_discount_value", "weight", "total_limit",
+               "daily_limit", "validity_hours", "active", "sort_order", "description"}
+    cols = ["campaign_id", "title", "prize_type"] + [k for k in fields if k in allowed]
+    vals = [campaign_id, title.strip(), prize_type] + [fields[k] for k in fields if k in allowed]
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            f"INSERT INTO wheel_prizes ({', '.join(cols)}) VALUES ({', '.join('?'*len(cols))});", vals)
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_wheel_prize(prize_id: int, **fields) -> None:
+    ensure_wheel_schema()
+    allowed = {"title", "icon", "color", "prize_type", "value", "max_discount_value", "weight",
+               "total_limit", "daily_limit", "validity_hours", "active", "sort_order", "description"}
+    cols = [k for k in fields if k in allowed]
+    if not cols:
+        return
+    if "prize_type" in fields and fields["prize_type"] not in WHEEL_PRIZE_TYPES:
+        raise ValueError(f"نوع جایزهٔ نامعتبر: {fields['prize_type']}")
+    conn = _get_connection()
+    try:
+        conn.execute(f"UPDATE wheel_prizes SET {', '.join(c+'=?' for c in cols)} WHERE id=?;",
+                     [fields[c] for c in cols] + [prize_id])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_wheel_prize(prize_id: int) -> None:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        conn.execute("DELETE FROM wheel_prizes WHERE id=?;", (prize_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def try_claim_wheel_prize_slot(prize_id: int) -> bool:
+    """افزایش اتمیک issued_count فقط اگه هنوز به total_limit نرسیده — دقیقاً الگوی
+    UPDATE شرطی+rowcount در claim_next_feed_item (بخش ۵۱ سند)، برای محدودیت
+    عمری/سخت هر جایزه. اگه total_limit=0 (نامحدود)، همیشه موفقه."""
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE wheel_prizes SET issued_count=issued_count+1 "
+            "WHERE id=? AND (total_limit=0 OR issued_count<total_limit);",
+            (prize_id,)
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    finally:
+        conn.close()
+
+
+def count_wheel_prize_issued_today(prize_id: int) -> int:
+    """شمارش نرم (best-effort) برای اعمال daily_limit هر جایزه — بر خلاف total_limit
+    (که با شمارندهٔ اتمیک سخت‌گیرانه‌ست)، این یه محدودیت روزانهٔ نرم‌تره؛ در بار
+    همزمان خیلی سنگین ممکنه به‌ندرت یکی-دو واحد از سقف رد بشه — مستندشده، پذیرفته‌شده."""
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) c FROM wheel_spins WHERE prize_id=? AND created_at>=?;",
+            (prize_id, (datetime.utcnow().date()).isoformat())
+        ).fetchone()
+        return int(row["c"] or 0) if row else 0
+    finally:
+        conn.close()
+
+
+# ─── مصرف روزانه (قفل اتمیک ضدتقلب) ────────────────────────────────────────
+
+def try_consume_wheel_spin(user_id: int, campaign_id: int, usage_date: str, daily_limit: int) -> dict:
+    """اتمیک: اگه سقف چرخش امروز پر نشده، یک واحد مصرف می‌کنه و True برمی‌گردونه.
+    دقیقاً الگوی claim_daily_checkin (بخش ۵۱ سند) — BEGIN + قفل ردیف + آپدیت/درج
+    داخل همون تراکنش، تا دو چرخش هم‌زمان نتونن هر دو رد شن."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE;")
+        row = cur.execute(
+            f"SELECT spins_used FROM wheel_daily_usage WHERE user_id=? AND campaign_id=? AND usage_date=? "
+            f"{_row_lock_suffix()};", (user_id, campaign_id, usage_date)
+        ).fetchone()
+        used = int(row["spins_used"]) if row else 0
+        if daily_limit > 0 and used >= daily_limit:
+            conn.rollback()
+            return {"ok": False, "remaining": 0}
+        if row:
+            cur.execute(
+                "UPDATE wheel_daily_usage SET spins_used=spins_used+1 "
+                "WHERE user_id=? AND campaign_id=? AND usage_date=?;",
+                (user_id, campaign_id, usage_date)
+            )
+        else:
+            cur.execute(
+                "INSERT INTO wheel_daily_usage (user_id, campaign_id, usage_date, spins_used) VALUES (?,?,?,1);",
+                (user_id, campaign_id, usage_date)
+            )
+        conn.commit()
+        remaining = (daily_limit - used - 1) if daily_limit > 0 else -1
+        return {"ok": True, "remaining": remaining}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_wheel_spins_remaining_today(user_id: int, campaign_id: int, usage_date: str, daily_limit: int) -> int:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT spins_used FROM wheel_daily_usage WHERE user_id=? AND campaign_id=? AND usage_date=?;",
+            (user_id, campaign_id, usage_date)
+        ).fetchone()
+        used = int(row["spins_used"]) if row else 0
+        if daily_limit <= 0:
+            return -1
+        return max(0, daily_limit - used)
+    finally:
+        conn.close()
+
+
+def grant_extra_wheel_spins(user_id: int, campaign_id: int, usage_date: str, count: int) -> None:
+    """جایزهٔ نوع «چرخش اضافه» — مصرف امروز رو (حداکثر تا صفر) کم می‌کنه تا کاربر
+    بدون نیاز به فردا شدن، بلافاصله بتونه دوباره بچرخونه."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        # ⚠️ MAX(a,b) اسکالر دوآرگومانی خاص SQLite است؛ روی Postgres MAX فقط
+        # aggregate است (معادل اسکالرش GREATEST). به‌جای دوتا کوئری متفاوت،
+        # CASE...WHEN پرتابل روی هر دو دیالوگ استفاده شد.
+        conn.execute(
+            "UPDATE wheel_daily_usage SET spins_used=CASE WHEN spins_used > ? THEN spins_used-? ELSE 0 END "
+            "WHERE user_id=? AND campaign_id=? AND usage_date=?;",
+            (int(count or 0), int(count or 0), user_id, campaign_id, usage_date)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_wheel_spin(**fields) -> int:
+    ensure_wheel_schema()
+    allowed = {"user_id", "campaign_id", "prize_id", "prize_type", "prize_title", "amount",
+               "discount_code", "discount_code_id", "status", "ip", "device_fingerprint", "session_id"}
+    cols = [k for k in fields if k in allowed]
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            f"INSERT INTO wheel_spins ({', '.join(cols)}) VALUES ({', '.join('?'*len(cols))});",
+            [fields[c] for c in cols]
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+# ─── تاریخچه/آمار (پنل ادمین) ───────────────────────────────────────────────
+
+def list_wheel_spins(user_q: str = "", prize_type: str = "", campaign_id: int = None,
+                      date_from: str = "", date_to: str = "", limit: int = 50, offset: int = 0) -> list[dict]:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        where, params = [], []
+        if user_q:
+            where.append(
+                "(CAST(s.user_id AS TEXT) LIKE ? OR LOWER(COALESCE(u.username,'')) LIKE LOWER(?) "
+                "OR LOWER(COALESCE(u.full_name,'')) LIKE LOWER(?))"
+            )
+            like = f"%{user_q}%"
+            params += [like, like, like]
+        if prize_type:
+            where.append("s.prize_type=?")
+            params.append(prize_type)
+        if campaign_id:
+            where.append("s.campaign_id=?")
+            params.append(campaign_id)
+        if date_from:
+            where.append("s.created_at>=?")
+            params.append(date_from)
+        if date_to:
+            where.append("s.created_at<=?")
+            params.append(date_to)
+        w = ("WHERE " + " AND ".join(where)) if where else ""
+        rows = conn.execute(
+            f"SELECT s.*, COALESCE(u.username,'') AS username, COALESCE(u.full_name,'') AS full_name "
+            f"FROM wheel_spins s LEFT JOIN users u ON u.user_id=s.user_id {w} "
+            f"ORDER BY s.id DESC LIMIT ? OFFSET ?;", (*params, limit, offset)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_wheel_stats(date_from: str = "", date_to: str = "") -> dict:
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        where, params = [], []
+        if date_from:
+            where.append("created_at>=?")
+            params.append(date_from)
+        if date_to:
+            where.append("created_at<=?")
+            params.append(date_to)
+        w = ("WHERE " + " AND ".join(where)) if where else ""
+        today = datetime.utcnow().date().isoformat()
+        spins_today = conn.execute(
+            "SELECT COUNT(*) c FROM wheel_spins WHERE created_at>=?;", (today,)
+        ).fetchone()["c"]
+        unique_users = conn.execute(
+            f"SELECT COUNT(DISTINCT user_id) c FROM wheel_spins {w};", params
+        ).fetchone()["c"]
+        total_spins = conn.execute(f"SELECT COUNT(*) c FROM wheel_spins {w};", params).fetchone()["c"]
+        no_win = conn.execute(
+            f"SELECT COUNT(*) c FROM wheel_spins {w}{' AND ' if w else 'WHERE '}prize_type='no_win';", params
+        ).fetchone()["c"]
+        win_rate = round(100 * (1 - (no_win / total_spins)), 1) if total_spins else 0
+        wallet_paid = conn.execute(
+            f"SELECT COALESCE(SUM(amount),0) c FROM wheel_spins {w}{' AND ' if w else 'WHERE '}prize_type='wallet_credit';",
+            params
+        ).fetchone()["c"]
+        discount_issued = conn.execute(
+            f"SELECT COUNT(*) c FROM wheel_spins {w}{' AND ' if w else 'WHERE '}"
+            f"prize_type IN ('discount_percent','discount_fixed');", params
+        ).fetchone()["c"]
+        discount_used = conn.execute(
+            f"SELECT COUNT(*) c FROM wheel_spins {w}{' AND ' if w else 'WHERE '}"
+            f"prize_type IN ('discount_percent','discount_fixed') AND status='used';", params
+        ).fetchone()["c"]
+        discount_rate = round(100 * discount_used / discount_issued, 1) if discount_issued else 0
+        top_prizes = conn.execute(
+            f"SELECT prize_title, COUNT(*) c FROM wheel_spins {w} GROUP BY prize_title "
+            f"ORDER BY c DESC LIMIT 5;", params
+        ).fetchall()
+        daily = conn.execute(
+            "SELECT DATE(created_at) d, COUNT(*) c FROM wheel_spins "
+            "WHERE created_at>=DATE('now','-30 day') GROUP BY DATE(created_at) ORDER BY d ASC;"
+        ).fetchall()
+        return {
+            "spins_today": int(spins_today or 0),
+            "unique_users": int(unique_users or 0),
+            "total_spins": int(total_spins or 0),
+            "win_rate": win_rate,
+            "wallet_paid": int(wallet_paid or 0),
+            "discount_issued": int(discount_issued or 0),
+            "discount_used": int(discount_used or 0),
+            "discount_rate": discount_rate,
+            "top_prizes": [dict(r) for r in top_prizes],
+            "daily": [dict(r) for r in daily],
+        }
+    finally:
+        conn.close()
+
+
 # ─── اعلان‌های مینی‌اپ (تاریخچه، مکمل پیام تلگرام) ─────────────────────────────
 
 _ENSURE_NOTIFICATIONS_SCHEMA_DONE = False
@@ -6615,31 +7275,25 @@ def find_winback_candidates(days_inactive: int, cooldown_days: int, batch: int =
 
 
 def create_winback_code(user_id: int, percent: int, expire_days: int) -> str:
-    """کد تخفیف شخصی یک‌بارمصرف — برمی‌گرداند: متن کد."""
-    ensure_discount_table()
-    import random, string
-    conn = _get_connection()
-    try:
-        for _ in range(6):
-            code = "WB" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            try:
-                cur = conn.execute("""
-                    INSERT INTO discount_codes
-                        (code, type, value, max_uses, max_uses_per_user, is_active,
-                         expires_at, description)
-                    VALUES (?,?,?,?,?,?, datetime('now','localtime', ?), ?);
-                """, (code, "percent", int(percent), 1, 1, 1,
-                      f"+{int(expire_days)} days", f"بازگردانی کاربر {user_id}"))
-                code_id = cur.lastrowid
-                conn.execute("INSERT INTO winback_log (user_id, code_id) VALUES (?,?);",
-                             (user_id, code_id))
-                conn.commit()
-                return code
-            except _INTEGRITY_ERRORS:
-                continue
-        return ""
-    finally:
-        conn.close()
+    """کد تخفیف شخصی یک‌بارمصرف برای بازگردانی کاربر — برمی‌گرداند: متن کد.
+    از موتور مشترک issue_personal_discount_code استفاده می‌کنه (نه منطق تکراری)؛
+    یعنی این کد هم مثل جوایز گردونه owner-locked می‌شه و توی «جوایز من» دیده می‌شه."""
+    result = issue_personal_discount_code(
+        user_id, "percent", int(percent),
+        expire_hours=int(expire_days) * 24,
+        description=f"بازگردانی کاربر {user_id}",
+        source="winback", code_prefix="WB",
+    )
+    code = result.get("code") or ""
+    if code and result.get("code_id"):
+        conn = _get_connection()
+        try:
+            conn.execute("INSERT INTO winback_log (user_id, code_id) VALUES (?,?);",
+                         (user_id, result["code_id"]))
+            conn.commit()
+        finally:
+            conn.close()
+    return code
 
 
 # ─── ۴) لیدربرد هفتگی همکاران ────────────────────────────────────────────

@@ -610,6 +610,7 @@ function loadMe(){if(_m)return;_m=1;
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
     '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge" style="width:100%">＋ شارژ کیف‌پول</a></div></div>'+
     '<div class="sl-group"><a class="sl-row" href="#" id="me-notif-row"><span class="sl-ric" style="background:#7C3AED">🔔</span><span class="sl-row-grow">اعلان‌ها</span><span class="sl-badge" id="me-notif-badge" style="display:none">جدید</span><span class="sl-chev">‹</span></a>'+
+    '<a class="sl-row" href="#" id="me-prizes-row"><span class="sl-ric" style="background:#F59E0B">🎁</span><span class="sl-row-grow">جوایز من</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:var(--br)">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-favs-row"><span class="sl-ric" style="background:#EF4444">♥</span><span class="sl-row-grow">علاقه‌مندی‌ها</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
@@ -646,6 +647,8 @@ function loadMe(){if(_m)return;_m=1;
     var b=document.getElementById('me-notif-badge');
     if(b)b.style.display=items.some(function(n){return !n.is_read})?'':'none';
   }).catch(function(){});
+  var pz_=document.getElementById('me-prizes-row');
+  if(pz_)pz_.addEventListener('click',function(e){e.preventDefault();openMyPrizes()});
   var or_=document.getElementById('me-orders-row');
   if(or_)or_.addEventListener('click',function(e){e.preventDefault();openOrders()});
   var fr_=document.getElementById('me-favs-row');
@@ -2073,4 +2076,265 @@ window._doPay=function(method){
     window._slApp.dialog.alert('پرداخت لغو شد یا ناموفق بود.','نتیجه پرداخت');
     history.replaceState({},'',u.pathname);
   }
+})();
+
+/* ═══ گردونهٔ شانس ═══
+   انتخاب جایزه ۱۰۰٪ سمت سرور (core/wheel.py) — این‌جا فقط انیمیشن/صدا/لرزش
+   اجرا می‌شه، هیچ منطقی روی نتیجه اثر نداره. */
+
+/* ─── صدا (WebAudio تولیدشده، بدون فایل باینری/CDN خارجی) ─── */
+var _wheelAudioCtx=null;
+function _wheelBeep(freq,dur,type){
+  try{
+    if(!_wheelAudioCtx)_wheelAudioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    var ctx=_wheelAudioCtx;
+    if(ctx.state==='suspended')ctx.resume();
+    var o=ctx.createOscillator(),g=ctx.createGain();
+    o.type=type||'sine';o.frequency.value=freq;
+    g.gain.setValueAtTime(.0001,ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.16,ctx.currentTime+.01);
+    g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+dur);
+    o.connect(g);g.connect(ctx.destination);
+    o.start();o.stop(ctx.currentTime+dur);
+  }catch(err){}
+}
+function _wheelSoundWin(){_wheelBeep(660,.12,'sine');setTimeout(function(){_wheelBeep(880,.18,'sine')},120)}
+function _wheelSoundNoWin(){_wheelBeep(220,.25,'sine')}
+var _wheelTickTimer=null;
+function _wheelSoundTicksStart(durationMs){
+  var start=Date.now();
+  _wheelTickTimer=setInterval(function(){
+    if(Date.now()-start>durationMs){clearInterval(_wheelTickTimer);return}
+    _wheelBeep(300+Math.random()*90,.03,'square');
+  },110);
+}
+function _wheelSoundTicksStop(){if(_wheelTickTimer){clearInterval(_wheelTickTimer);_wheelTickTimer=null}}
+
+function _wheelHaptic(kind){
+  try{
+    var tg=window._slTg;if(!tg||!tg.HapticFeedback)return;
+    if(kind==='tick')tg.HapticFeedback.impactOccurred('light');
+    else if(kind==='win')tg.HapticFeedback.notificationOccurred('success');
+    else if(kind==='nowin')tg.HapticFeedback.notificationOccurred('warning');
+  }catch(err){}
+}
+
+/* ─── کانفتی سبک، بدون کتابخانهٔ خارجی ─── */
+function _wheelConfetti(container){
+  if(!container)return;
+  var canvas=document.createElement('canvas');
+  canvas.className='sl-wheel-confetti';
+  container.appendChild(canvas);
+  var ctx=canvas.getContext('2d');
+  var w=canvas.width=container.clientWidth+80,h=canvas.height=container.clientHeight+80;
+  var colors=['#F59E0B','#EF4444','#22C55E','#6366F1','#EC4899','#06B6D4'];
+  var pieces=[];
+  for(var i=0;i<70;i++){
+    pieces.push({x:w/2,y:h*0.4,vx:(Math.random()-.5)*11,vy:-Math.random()*9-4,
+      size:5+Math.random()*5,color:colors[i%colors.length],rot:Math.random()*360,
+      vr:(Math.random()-.5)*22,life:0});
+  }
+  function step(){
+    ctx.clearRect(0,0,w,h);
+    var alive=false;
+    pieces.forEach(function(p){
+      if(p.life>85)return;
+      alive=true;
+      p.vy+=.35;p.x+=p.vx;p.y+=p.vy;p.rot+=p.vr;p.life++;
+      ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot*Math.PI/180);
+      ctx.fillStyle=p.color;ctx.globalAlpha=Math.max(0,1-p.life/85);
+      ctx.fillRect(-p.size/2,-p.size/2,p.size,p.size*.6);
+      ctx.restore();
+    });
+    if(alive)requestAnimationFrame(step);else canvas.remove();
+  }
+  requestAnimationFrame(step);
+}
+
+function _wheelDeviceFp(){
+  try{
+    var k='sl_device_fp',v=localStorage.getItem(k);
+    if(!v){v='fp_'+Math.random().toString(36).slice(2)+Date.now().toString(36);localStorage.setItem(k,v)}
+    return v;
+  }catch(err){return ''}
+}
+
+var _wheelSpinning=false,_wheelRotation=0;
+
+function _wheelSegAngles(n){
+  var step=360/n,arr=[];
+  for(var i=0;i<n;i++)arr.push({start:i*step,end:(i+1)*step,mid:i*step+step/2});
+  return arr;
+}
+
+function openWheel(){
+  _accPopup('🎡 گردونهٔ شانس',skel(3));
+  api('/wheel/state',true).then(function(d){
+    var b=_accBody();if(!b)return;
+    if(!d.enabled||!d.campaign||!d.prizes||!d.prizes.length){
+      b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎡</span>گردونهٔ شانس فعلاً غیرفعاله — به‌زودی برگرد!</div>';
+      return;
+    }
+    renderWheel(b,d);
+  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت گردونه')});
+}
+window.openWheel=openWheel;
+
+function renderWheel(container,state){
+  var prizes=state.prizes,n=prizes.length,step=360/n;
+  var segAngles=_wheelSegAngles(n);
+  var gradParts=prizes.map(function(p,i){return esc(p.color)+' '+(i*step)+'deg '+((i+1)*step)+'deg'}).join(',');
+  var labelsHtml=prizes.map(function(p,i){
+    var mid=segAngles[i].mid;
+    return '<div class="sl-wheel-label" style="transform:rotate('+mid+'deg)">'+
+      '<span class="sl-wheel-label-ico" style="transform:translate(-50%,-50%) rotate('+(-mid)+'deg)">'+
+      esc(p.icon)+
+      (state.settings.show_odds&&p.percent!=null?'<b class="sl-wheel-label-pct">'+p.percent+'٪</b>':'')+
+      '</span></div>';
+  }).join('');
+  var canSpin=!!state.can_spin&&state.spins_remaining!==0;
+  var remainingText=state.spins_remaining<0?'چرخش نامحدود':
+    (state.spins_remaining>0?(fmt(state.spins_remaining)+' چرخش باقیمانده امروز'):'چرخش امروزت تمام شده — فردا دوباره بیا 🌙');
+
+  container.innerHTML=
+    '<div class="sl-wheel-wrap">'+
+      '<div class="sl-wheel-glow"></div>'+
+      '<div class="sl-wheel-pointer">🔻</div>'+
+      '<div class="sl-wheel-disc" id="wheel-disc" style="background:conic-gradient('+gradParts+')">'+labelsHtml+'</div>'+
+      '<button class="sl-wheel-hub" id="wheel-spin-btn"'+(canSpin?'':' disabled')+'>'+(canSpin?'بچرخون!':'۰')+'</button>'+
+    '</div>'+
+    '<div class="sl-wheel-remaining">'+esc(remainingText)+'</div>'+
+    (state.settings.description?'<div class="sl-wheel-desc">'+esc(state.settings.description)+'</div>':'');
+
+  var btn=document.getElementById('wheel-spin-btn');
+  if(btn&&canSpin)btn.addEventListener('click',function(){doWheelSpin(container,state)});
+}
+
+function doWheelSpin(container,state){
+  if(_wheelSpinning)return;
+  _wheelSpinning=true;
+  var btn=document.getElementById('wheel-spin-btn');
+  if(btn){btn.disabled=true;btn.textContent='…'}
+  var duration=state.settings.animation_duration_ms||4200;
+  if(state.settings.sound_enabled)_wheelSoundTicksStart(duration);
+  if(state.settings.haptic_enabled)_wheelHaptic('tick');
+
+  var headers={'Content-Type':'application/json'};
+  if(initData)headers['X-Telegram-Init-Data']=initData;
+  fetch('/api/v1/wheel/spin',{method:'POST',headers:headers,
+    body:JSON.stringify({device_fingerprint:_wheelDeviceFp()})})
+    .then(function(r){return r.json()}).then(function(res){
+      _wheelSoundTicksStop();
+      if(!res.ok){
+        _wheelSpinning=false;
+        if(btn){btn.disabled=false;btn.textContent='بچرخون!'}
+        window._slApp.dialog.alert(res.error||'خطا در چرخش گردونه','گردونهٔ شانس');
+        var rt=container.querySelector('.sl-wheel-remaining');
+        if(rt&&res.spins_remaining===0)rt.textContent='چرخش امروزت تمام شده — فردا دوباره بیا 🌙';
+        return;
+      }
+      var prizes=state.prizes,idx=prizes.findIndex(function(p){return p.id===res.prize.id});
+      if(idx<0)idx=prizes.length-1;
+      var segAngles=_wheelSegAngles(prizes.length),targetMid=segAngles[idx].mid;
+      var jitter=(Math.random()-.5)*(360/prizes.length)*.5;
+      var extraTurns=5+Math.floor(Math.random()*2);
+      var baseFloor=_wheelRotation-(_wheelRotation%360);
+      var finalRotation=baseFloor+extraTurns*360+(360-targetMid)+jitter;
+      _wheelRotation=finalRotation;
+      var disc=document.getElementById('wheel-disc');
+      if(disc){
+        disc.style.transition='transform '+duration+'ms cubic-bezier(.13,.72,.14,1)';
+        disc.style.transform='rotate('+finalRotation+'deg)';
+      }
+      setTimeout(function(){
+        _wheelSpinning=false;
+        if(state.settings.haptic_enabled)_wheelHaptic(res.prize.prize_type==='no_win'?'nowin':'win');
+        if(state.settings.sound_enabled){
+          if(res.prize.prize_type==='no_win')_wheelSoundNoWin();else _wheelSoundWin();
+        }
+        if(res.prize.prize_type!=='no_win')_wheelConfetti(container.querySelector('.sl-wheel-wrap'));
+        showWheelResult(container,state,res);
+      },duration+150);
+    }).catch(function(){
+      _wheelSoundTicksStop();
+      _wheelSpinning=false;
+      if(btn){btn.disabled=false;btn.textContent='بچرخون!'}
+      window._slApp.dialog.alert('خطای شبکه — دوباره امتحان کن','گردونهٔ شانس');
+    });
+}
+
+function showWheelResult(container,state,res){
+  var p=res.prize;
+  var win=p.prize_type!=='no_win';
+  var codeBlock='';
+  if(p.discount_code){
+    codeBlock='<div class="sl-wheel-code-box"><code id="wheel-won-code">'+esc(p.discount_code)+'</code>'+
+      '<button class="sl-wheel-copy-btn" id="wheel-copy-code">📋 کپی</button></div>'+
+      (p.expires_at?'<div class="sl-wheel-expiry">تا '+esc(p.expires_at)+' قابل استفاده</div>':'');
+  }
+  container.innerHTML=
+    '<div class="sl-wheel-result">'+
+      '<div class="sl-wheel-result-ico">'+esc(p.icon)+'</div>'+
+      '<div class="sl-wheel-result-t">'+esc(p.title)+'</div>'+
+      (p.description?'<div class="sl-wheel-result-d">'+esc(p.description)+'</div>':'')+
+      codeBlock+
+      '<div class="sl-wheel-result-acts">'+
+        (p.discount_code?'<button class="sl-checkout-btn sl-checkout-btn-wallet" id="wheel-goto-prizes">🎁 دیدن در جوایز من</button>':'')+
+        '<button class="sl-checkout-btn sl-checkout-btn-gateway" id="wheel-again-btn">بازگشت</button>'+
+      '</div>'+
+    '</div>';
+  var cp=document.getElementById('wheel-copy-code');
+  if(cp)cp.addEventListener('click',function(){
+    var code=document.getElementById('wheel-won-code').textContent;
+    if(navigator.clipboard)navigator.clipboard.writeText(code).then(function(){cp.textContent='✅ کپی شد'});
+    else cp.textContent='✅ کپی شد';
+  });
+  var gp=document.getElementById('wheel-goto-prizes');
+  if(gp)gp.addEventListener('click',function(){openMyPrizes()});
+  var ag=document.getElementById('wheel-again-btn');
+  if(ag)ag.addEventListener('click',function(){openWheel()});
+  if(res.wallet_balance!=null){
+    var e2=document.getElementById('me-bal');if(e2)e2.innerHTML='<small>تومان</small> '+fmt(res.wallet_balance);
+  }
+  if(!win){/* بدون برد — کارت نتیجه با لحن ملایم، بدون افکت اضافه */}
+}
+
+var _wheelStatusLabel={active:'✅ قابل استفاده',used:'☑️ استفاده‌شده',expired:'⌛ منقضی‌شده',inactive:'🚫 غیرفعال'};
+
+function openMyPrizes(){
+  _accPopup('🎁 جوایز من',skel(3));
+  api('/me/prizes',true).then(function(d){
+    var b=_accBody();if(!b)return;
+    var items=(d&&d.items)||[];
+    if(!items.length){
+      b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎁</span>هنوز جایزه‌ای نداری — از گردونهٔ شانس امتحان کن!</div>';
+      return;
+    }
+    b.innerHTML='<div class="sl-prizes-list">'+items.map(function(it){
+      var valTxt=it.type==='percent'
+        ?(it.value+'٪ تخفیف'+(it.max_value?' (تا سقف '+fmt(it.max_value)+' تومان)':''))
+        :(fmt(it.value)+' تومان تخفیف');
+      return '<div class="sl-prize-item sl-prize-'+esc(it.status)+'">'+
+        '<div class="sl-prize-top"><code>'+esc(it.code)+'</code>'+
+        '<span class="sl-prize-status">'+(_wheelStatusLabel[it.status]||esc(it.status))+'</span></div>'+
+        '<div class="sl-prize-val">'+esc(valTxt)+'</div>'+
+        (it.description?'<div class="sl-prize-desc">'+esc(it.description)+'</div>':'')+
+        (it.expires_at?'<div class="sl-prize-exp">تا '+esc(it.expires_at)+'</div>':'')+
+        (it.status==='active'?'<button class="sl-prize-copy" data-code="'+esc(it.code)+'">📋 کپی کد</button>':'')+
+        '</div>';
+    }).join('')+'</div>';
+    b.querySelectorAll('.sl-prize-copy').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        var code=btn.dataset.code;
+        if(navigator.clipboard)navigator.clipboard.writeText(code).then(function(){btn.textContent='✅ کپی شد'});
+        else btn.textContent='✅ کپی شد';
+      });
+    });
+  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت جوایز')});
+}
+window.openMyPrizes=openMyPrizes;
+
+(function(){
+  var card=document.getElementById('wheel-tool-card');
+  if(card)card.addEventListener('click',function(ev){ev.preventDefault();openWheel()});
 })();

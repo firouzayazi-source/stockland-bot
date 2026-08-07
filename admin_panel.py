@@ -115,6 +115,7 @@ ALL_PERMISSIONS = {
     "panel_appearance": "ظاهر و قالب پنل",
     "notifications": "اعلان‌ها و تعامل کاربر (چک‌این/امتیازها)",
     "cache_cleanup": "پاکسازی کش و فایل‌های موقت",
+    "wheel": "گردونهٔ شانس",
 }
 
 # سازگاری با ادمین‌های قدیمی: کلید جدید ← والد قدیمی — یعنی ادمینی که قبلاً «والد» رو
@@ -137,6 +138,7 @@ PERM_LEGACY = {
     "panel_appearance": "settings",
     "notifications": "settings",
     "cache_cleanup": "database",
+    "wheel": "growth",
 }
 
 # ─────────────────────────── DB Schema for Admins ──────────────────────────
@@ -831,6 +833,7 @@ def _layout(title: str, body: str, admin_info=None,
             {nav_item("/admin/iphone", "smartphone", "کارشناسی آیفون", "ai_pricing")}
             {nav_item("/admin/engagement", "star", "پاداش و تعامل", "notifications")}
             {nav_item("/admin/stock-requests", "bell-ring", "درخواست‌های موجودی", "notifications")}
+            {nav_item("/admin/wheel", "loader-circle", "گردونه شانس", "wheel")}
             <div class="nav-divider"><span>سیستم</span></div>
             {nav_item("/admin/settings/panel", "settings", "تنظیمات", "settings")}
             {nav_item("/admin/database", "database", "پشتیبان‌گیری", "database")}
@@ -13431,6 +13434,576 @@ async def stock_requests_notify_now(request: Request, pid: int, background_tasks
     background_tasks.add_task(_notify_restock_subscribers, pid, True)
     _log(request, "اطلاع‌رسانی دستی موجودی", "درخواست‌های اطلاع‌رسانی موجودی", f"product:{pid}", admin_info=adm)
     return _redir(f"/admin/stock-requests?flash={e('✅ در حال ارسال اطلاع‌رسانی…')}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ─── گردونهٔ شانس (Wheel of Fortune) ────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# معماری کامل در CLAUDE.md مستند شده — wheel_campaigns (فقط یکی فعال) →
+# wheel_prizes (کاملاً از این پنل، بدون Hard Code) → موتور core/wheel.py سمت
+# سرور جایزه صادر می‌کنه → wheel_spins (لاگ کامل). جایزهٔ کد تخفیف از موتور
+# discount_codes موجود (issue_personal_discount_code) صادر می‌شه، سیستم جدا نیست.
+
+_WHEEL_PRIZE_TYPE_LABELS = {
+    "wallet_credit":    "💵 افزایش موجودی کیف‌پول",
+    "discount_percent": "🏷 کد تخفیف درصدی",
+    "discount_fixed":   "🎫 کد تخفیف مبلغ ثابت",
+    "extra_spin":       "🔄 چرخش اضافه",
+    "no_win":           "😅 بدون برد",
+    "physical_gift":    "🎁 هدیهٔ فیزیکی (نیازمند پیگیری دستی)",
+}
+
+
+def _wheel_back_html() -> str:
+    return '<a href="/admin/wheel" class="text-indigo-600 text-sm mb-4 inline-block">← بازگشت به گردونهٔ شانس</a>'
+
+
+@router.get("/wheel", response_class=HTMLResponse)
+async def wheel_dashboard(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import get_wheel_settings, get_active_wheel_campaign, get_wheel_stats, list_wheel_campaigns
+
+    settings = get_wheel_settings()
+    campaign = get_active_wheel_campaign()
+    stats = get_wheel_stats()
+    campaigns = list_wheel_campaigns()
+
+    status_badge = ('<span class="text-emerald-600 text-xs font-bold">🟢 فعال</span>' if settings.get("enabled")
+                     else '<span class="text-red-500 text-xs font-bold">🔴 غیرفعال</span>')
+    camp_badge = (f'<span class="text-indigo-600 text-xs font-medium">{e(campaign["title"])}</span>' if campaign
+                  else '<span class="text-amber-600 text-xs font-medium">بدون کمپین فعال</span>')
+
+    top_rows = "".join(
+        f'<div class="flex items-center justify-between border-b py-1.5 text-sm">'
+        f'<span>{e(p["prize_title"])}</span><span class="text-gray-400 text-xs">{p["c"]:,} بار</span></div>'
+        for p in stats["top_prizes"]
+    ) or '<div class="text-xs text-gray-400">هنوز چرخشی ثبت نشده.</div>'
+
+    camp_rows = "".join(
+        f'<div class="flex items-center justify-between border-b py-1.5 text-sm">'
+        f'<span>{"🟢" if c["active"] else "⚪️"} {e(c["title"])}</span>'
+        f'<a href="/admin/wheel/prizes?campaign_id={c["id"]}" class="text-indigo-600 text-xs">جوایز ‹</a></div>'
+        for c in campaigns
+    ) or '<div class="text-xs text-gray-400">هنوز کمپینی ساخته نشده.</div>'
+
+    chart_labels = json.dumps([d["d"][5:] for d in stats["daily"]], ensure_ascii=False)
+    chart_values = json.dumps([int(d["c"]) for d in stats["daily"]])
+
+    body = f"""
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {_card("چرخش امروز", f'{stats["spins_today"]:,}')}
+      {_card("کاربران یکتا", f'{stats["unique_users"]:,}')}
+      {_card("نرخ برد", f'{stats["win_rate"]}٪')}
+      {_card("جمع پرداختی کیف‌پول", f'{stats["wallet_paid"]:,} تومان')}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {_card("کد تخفیف صادرشده", f'{stats["discount_issued"]:,}')}
+      {_card("نرخ استفاده از کد", f'{stats["discount_rate"]}٪')}
+      {_card("وضعیت", "", color="slate")}
+      {_card("کمپین فعال", "", color="slate")}
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-medium text-sm">📈 روند چرخش‌ها (۳۰ روز اخیر)</div>
+        <div class="flex items-center gap-3 text-xs">{status_badge}{camp_badge}</div>
+      </div>
+      <div class="chart-shell" style="height:260px"><canvas id="wheelChart"></canvas></div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-4">
+      <div class="bg-white rounded-xl shadow-sm p-4">
+        <div class="font-medium text-sm mb-2">🏆 محبوب‌ترین جوایز</div>
+        {top_rows}
+      </div>
+      <div class="bg-white rounded-xl shadow-sm p-4">
+        <div class="font-medium text-sm mb-2">🗂 کمپین‌ها</div>
+        {camp_rows}
+      </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2">
+      {_btn("⚙️ تنظیمات کلی", href="/admin/wheel/settings")}
+      {_btn("🗂 مدیریت کمپین‌ها", href="/admin/wheel/campaigns")}
+      {_btn("🎁 مدیریت جوایز", href="/admin/wheel/prizes")}
+      {_btn("🕓 تاریخچهٔ چرخش‌ها", href="/admin/wheel/history")}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <script>
+    (function(){{
+      var canvas=document.getElementById('wheelChart'); if(!canvas||!window.Chart)return;
+      new Chart(canvas.getContext('2d'), {{
+        type: 'bar',
+        data: {{ labels: {chart_labels}, datasets: [{{ label:'چرخش', data: {chart_values},
+          backgroundColor:'#6366F1', borderRadius:4 }}] }},
+        options: {{ responsive:true, maintainAspectRatio:false,
+          plugins:{{ legend:{{display:false}} }},
+          scales:{{ y:{{ beginAtZero:true, ticks:{{ precision:0 }} }} }} }}
+      }});
+    }})();
+    </script>"""
+    return _layout("🎡 گردونهٔ شانس", body, adm, flash=flash)
+
+
+# ─── تنظیمات کلی ─────────────────────────────────────────────────────────
+
+@router.get("/wheel/settings", response_class=HTMLResponse)
+async def wheel_settings_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import get_wheel_settings
+    s = get_wheel_settings()
+
+    def chk(key):
+        return "checked" if s.get(key) else ""
+
+    body = f"""
+    {_wheel_back_html()}
+    <form method="post" action="/admin/wheel/settings/save" class="bg-white rounded-xl shadow-sm p-5 space-y-4 max-w-2xl">
+      <label class="flex items-center gap-2 text-sm font-medium">
+        <input type="checkbox" name="enabled" {chk('enabled')}> فعال بودن گردونهٔ شانس
+      </label>
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">عنوان</label>
+        <input name="title" value="{e(s.get('title'))}" class="border rounded-lg p-2 text-sm w-full">
+      </div>
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">توضیحات</label>
+        <input name="description" value="{e(s.get('description'))}" class="border rounded-lg p-2 text-sm w-full">
+      </div>
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">آدرس تصویر/بنر (اختیاری)</label>
+        <input name="banner_url" value="{e(s.get('banner_url'))}" class="border rounded-lg p-2 text-sm w-full" dir="ltr">
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">رنگ اصلی</label>
+          <input type="color" name="primary_color" value="{e(s.get('primary_color') or '#6366F1')}" class="border rounded-lg h-10 w-full">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">تم ظاهری</label>
+          <select name="theme" class="border rounded-lg p-2 text-sm w-full">
+            {"".join(f'<option value="{t}" {"selected" if s.get("theme")==t else ""}>{lbl}</option>' for t,lbl in
+              [("default","پیش‌فرض"),("neon","نئون"),("gold","طلایی"),("dark","تیره")])}
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">تعداد چرخش مجاز روزانه (پیش‌فرض کمپین‌ها)</label>
+          <input type="text" inputmode="numeric" name="daily_spin_limit" value="{e(s.get('daily_spin_limit'))}" class="border rounded-lg p-2 text-sm w-full ltr-num">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">ساعت ریست روزانه (۰ تا ۲۳)</label>
+          <input type="text" inputmode="numeric" name="reset_hour" value="{e(s.get('reset_hour'))}" class="border rounded-lg p-2 text-sm w-full ltr-num">
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">مدت انیمیشن چرخش (میلی‌ثانیه)</label>
+          <input type="text" inputmode="numeric" name="animation_duration_ms" value="{e(s.get('animation_duration_ms'))}" class="border rounded-lg p-2 text-sm w-full ltr-num">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">مدت نمایش کارت جایزه (میلی‌ثانیه)</label>
+          <input type="text" inputmode="numeric" name="result_display_duration_ms" value="{e(s.get('result_display_duration_ms'))}" class="border rounded-lg p-2 text-sm w-full ltr-num">
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="animation_enabled" {chk('animation_enabled')}> انیمیشن فعال باشد</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="sound_enabled" {chk('sound_enabled')}> افکت صوتی فعال باشد</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="haptic_enabled" {chk('haptic_enabled')}> لرزش (Mini App) فعال باشد</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="show_odds" {chk('show_odds')}> نمایش درصد احتمال برد به کاربر</label>
+      </div>
+      <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium">💾 ذخیرهٔ تنظیمات</button>
+    </form>"""
+    return _layout("تنظیمات کلی گردونه", body, adm, flash=flash)
+
+
+@router.post("/wheel/settings/save")
+async def wheel_settings_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import save_wheel_settings
+    form = await request.form()
+
+    def num(key, default=0):
+        try:
+            return int(str(form.get(key) or default))
+        except ValueError:
+            return default
+
+    save_wheel_settings({
+        "enabled": 1 if form.get("enabled") else 0,
+        "title": (form.get("title") or "").strip(),
+        "description": (form.get("description") or "").strip(),
+        "banner_url": (form.get("banner_url") or "").strip(),
+        "primary_color": (form.get("primary_color") or "#6366F1").strip(),
+        "theme": (form.get("theme") or "default").strip(),
+        "daily_spin_limit": num("daily_spin_limit", 1),
+        "reset_hour": max(0, min(23, num("reset_hour", 0))),
+        "animation_enabled": 1 if form.get("animation_enabled") else 0,
+        "animation_duration_ms": num("animation_duration_ms", 4200),
+        "result_display_duration_ms": num("result_display_duration_ms", 3500),
+        "sound_enabled": 1 if form.get("sound_enabled") else 0,
+        "haptic_enabled": 1 if form.get("haptic_enabled") else 0,
+        "show_odds": 1 if form.get("show_odds") else 0,
+    })
+    _log(request, "ذخیرهٔ تنظیمات گردونه", "گردونهٔ شانس", "", admin_info=adm)
+    return _redir(f"/admin/wheel/settings?flash={e('✅ تنظیمات ذخیره شد')}")
+
+
+# ─── کمپین‌ها ──────────────────────────────────────────────────────────────
+
+@router.get("/wheel/campaigns", response_class=HTMLResponse)
+async def wheel_campaigns_page(request: Request, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import list_wheel_campaigns
+    campaigns = list_wheel_campaigns()
+
+    rows = "".join(f"""
+      <div class="flex flex-wrap gap-2 items-center border-b py-2 text-sm">
+        <span class="w-5 text-center">{"🟢" if c['active'] else "⚪️"}</span>
+        <input type="text" name="title_{c['id']}" value="{e(c['title'])}" class="border rounded p-1.5 flex-1 min-w-[140px] text-xs">
+        <input type="date" name="starts_{c['id']}" value="{e((c.get('starts_at') or '')[:10])}" class="border rounded p-1.5 text-xs">
+        <input type="date" name="ends_{c['id']}" value="{e((c.get('ends_at') or '')[:10])}" class="border rounded p-1.5 text-xs">
+        <input type="text" inputmode="numeric" name="limit_{c['id']}" placeholder="محدودیت روزانه (خالی=پیش‌فرض)"
+          value="{e(c['daily_spin_limit']) if c.get('daily_spin_limit') is not None else ''}" class="border rounded p-1.5 w-20 text-xs ltr-num">
+        <input type="number" step="1" name="sort_{c['id']}" value="{c['sort_order']}" class="border rounded p-1.5 w-16 text-xs" title="ترتیب">
+        {'' if c['active'] else f'<button type="submit" form="camp-act-{c["id"]}" class="text-emerald-600 text-xs">فعال‌سازی</button>'}
+        <a href="/admin/wheel/prizes?campaign_id={c['id']}" class="text-indigo-600 text-xs">جوایز ‹</a>
+        <button type="submit" form="camp-del-{c['id']}" class="text-red-500 text-xs">حذف</button>
+      </div>""" for c in campaigns)
+
+    hidden_forms = "".join(
+        f'<form id="camp-act-{c["id"]}" method="post" action="/admin/wheel/campaigns/{c["id"]}/activate"></form>'
+        f'<form id="camp-del-{c["id"]}" method="post" action="/admin/wheel/campaigns/{c["id"]}/delete" '
+        f'onsubmit="return confirm(\'این کمپین و همهٔ جوایزش حذف بشه؟ تاریخچهٔ چرخش‌ها دست‌نخورده می‌مونه.\')"></form>'
+        for c in campaigns
+    )
+
+    body = f"""
+    {_wheel_back_html()}
+    <div class="text-xs text-gray-400 mb-3">در هر لحظه فقط یک کمپین می‌تونه فعال باشه — فعال‌سازی یه کمپین، بقیه رو خودکار غیرفعال می‌کنه. «محدودیت روزانه» اگه خالی بمونه، از تنظیمات کلی گردونه استفاده می‌شه.</div>
+    <form method="post" action="/admin/wheel/campaigns/bulk-save">
+      <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+        {rows or '<div class="text-xs text-gray-400">هنوز کمپینی ساخته نشده.</div>'}
+      </div>
+      <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium mb-4">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
+
+    <div class="bg-white rounded-xl shadow-sm p-4">
+      <div class="font-medium text-sm mb-2">+ افزودن کمپین تازه</div>
+      <form method="post" action="/admin/wheel/campaigns/add" class="flex flex-wrap gap-2 items-center text-sm">
+        <input type="text" name="title" class="border rounded p-1.5 flex-1 min-w-[160px] text-xs" placeholder="عنوان کمپین، مثلاً نوروز ۱۴۰۵" required>
+        <input type="date" name="starts_at" class="border rounded p-1.5 text-xs">
+        <input type="date" name="ends_at" class="border rounded p-1.5 text-xs">
+        <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن</button>
+      </form>
+    </div>
+    {hidden_forms}"""
+    return _layout("مدیریت کمپین‌های گردونه", body, adm, flash=flash)
+
+
+@router.post("/wheel/campaigns/add")
+async def wheel_campaigns_add(request: Request, title: str = Form(...),
+                               starts_at: str = Form(""), ends_at: str = Form("")):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import create_wheel_campaign
+    create_wheel_campaign(title.strip(), starts_at=starts_at or None, ends_at=ends_at or None)
+    _log(request, "افزودن کمپین گردونه", "گردونهٔ شانس", title.strip(), admin_info=adm)
+    return _redir(f"/admin/wheel/campaigns?flash={e('✅ کمپین اضافه شد')}")
+
+
+@router.post("/wheel/campaigns/bulk-save")
+async def wheel_campaigns_bulk_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import list_wheel_campaigns, update_wheel_campaign
+    form = await request.form()
+    for c in list_wheel_campaigns():
+        cid = c["id"]
+        key = f"title_{cid}"
+        if key not in form:
+            continue
+        title = (form.get(key) or "").strip() or c["title"]
+        starts = (form.get(f"starts_{cid}") or "").strip() or None
+        ends = (form.get(f"ends_{cid}") or "").strip() or None
+        limit_raw = (form.get(f"limit_{cid}") or "").strip()
+        try:
+            sort_order = int(form.get(f"sort_{cid}") or 0)
+        except (TypeError, ValueError):
+            sort_order = c["sort_order"]
+        update_wheel_campaign(
+            cid, title=title, starts_at=starts, ends_at=ends,
+            daily_spin_limit=int(limit_raw) if limit_raw.isdigit() else None,
+            sort_order=sort_order,
+        )
+    _log(request, "ذخیرهٔ گروهی کمپین‌های گردونه", "گردونهٔ شانس", "", admin_info=adm)
+    return _redir(f"/admin/wheel/campaigns?flash={e('✅ تغییرات ذخیره شد')}")
+
+
+@router.post("/wheel/campaigns/{cid}/activate")
+async def wheel_campaigns_activate(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import set_active_wheel_campaign
+    set_active_wheel_campaign(cid)
+    _log(request, "فعال‌سازی کمپین گردونه", "گردونهٔ شانس", f"campaign #{cid}", admin_info=adm)
+    return _redir(f"/admin/wheel/campaigns?flash={e('✅ این کمپین فعال شد')}")
+
+
+@router.post("/wheel/campaigns/{cid}/delete")
+async def wheel_campaigns_delete(request: Request, cid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import delete_wheel_campaign
+    delete_wheel_campaign(cid)
+    _log(request, "حذف کمپین گردونه", "گردونهٔ شانس", f"campaign #{cid}", admin_info=adm)
+    return _redir(f"/admin/wheel/campaigns?flash={e('✅ کمپین حذف شد')}")
+
+
+# ─── جوایز ─────────────────────────────────────────────────────────────────
+
+@router.get("/wheel/prizes", response_class=HTMLResponse)
+async def wheel_prizes_page(request: Request, campaign_id: int = 0, flash: str = ""):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import list_wheel_campaigns, list_wheel_prizes, get_active_wheel_campaign
+
+    campaigns = list_wheel_campaigns()
+    if not campaigns:
+        body = f'{_wheel_back_html()}<div class="bg-white rounded-xl shadow-sm p-8 text-center text-sm text-gray-400">اول باید حداقل یک <a href="/admin/wheel/campaigns" class="text-indigo-600">کمپین</a> بسازید.</div>'
+        return _layout("مدیریت جوایز گردونه", body, adm, flash=flash)
+
+    if not campaign_id:
+        active = get_active_wheel_campaign()
+        campaign_id = active["id"] if active else campaigns[0]["id"]
+
+    prizes = list_wheel_prizes(campaign_id, active_only=False)
+    camp_options = "".join(
+        f'<option value="{c["id"]}" {"selected" if c["id"]==campaign_id else ""}>{"🟢 " if c["active"] else ""}{e(c["title"])}</option>'
+        for c in campaigns
+    )
+    type_options = "".join(f'<option value="{k}">{v}</option>' for k, v in _WHEEL_PRIZE_TYPE_LABELS.items())
+
+    def prize_row(p):
+        type_sel = "".join(
+            f'<option value="{k}" {"selected" if p["prize_type"]==k else ""}>{v}</option>'
+            for k, v in _WHEEL_PRIZE_TYPE_LABELS.items()
+        )
+        limit_note = f'{p["issued_count"]:,}/{p["total_limit"]:,}' if p["total_limit"] else f'{p["issued_count"]:,}/∞'
+        return f"""
+      <div class="border-b py-2">
+        <div class="flex flex-wrap gap-2 items-center text-sm mb-1">
+          <span>{"✅" if p['active'] else "🚫"}</span>
+          <input type="text" name="icon_{p['id']}" value="{e(p['icon'])}" class="border rounded p-1.5 w-12 text-center text-xs" title="آیکون">
+          <input type="text" name="title_{p['id']}" value="{e(p['title'])}" class="border rounded p-1.5 flex-1 min-w-[140px] text-xs">
+          <select name="type_{p['id']}" class="border rounded p-1.5 text-xs">{type_sel}</select>
+          <input type="color" name="color_{p['id']}" value="{e(p['color'])}" class="border rounded h-8 w-10">
+        </div>
+        <div class="flex flex-wrap gap-2 items-center text-xs text-gray-500">
+          <label>مقدار <input type="text" inputmode="numeric" name="value_{p['id']}" value="{p['value']}" class="border rounded p-1 w-20 text-xs ltr-num"></label>
+          <label>سقف تخفیف <input type="text" inputmode="numeric" name="maxdisc_{p['id']}" value="{p['max_discount_value']}" class="border rounded p-1 w-20 text-xs ltr-num"></label>
+          <label>اعتبار (ساعت) <input type="text" inputmode="numeric" name="valid_{p['id']}" value="{p['validity_hours']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
+          <label>وزن احتمال <input type="text" inputmode="decimal" name="weight_{p['id']}" value="{p['weight']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
+          <label>سقف کل <input type="text" inputmode="numeric" name="totallimit_{p['id']}" value="{p['total_limit']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
+          <label>سقف روزانه <input type="text" inputmode="numeric" name="dailylimit_{p['id']}" value="{p['daily_limit']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
+          <label>اولویت <input type="number" step="1" name="sort_{p['id']}" value="{p['sort_order']}" class="border rounded p-1 w-14 text-xs"></label>
+          <label class="flex items-center gap-1"><input type="checkbox" name="active_{p['id']}" {"checked" if p['active'] else ""}> فعال</label>
+          <span class="text-gray-400">صادرشده: {limit_note}</span>
+          <button type="submit" form="prz-del-{p['id']}" class="text-red-500">🗑 حذف</button>
+        </div>
+        <input type="text" name="desc_{p['id']}" value="{e(p['description'])}" placeholder="توضیحات (به کاربر نمایش داده می‌شه)"
+          class="border rounded p-1.5 text-xs w-full mt-1">
+      </div>"""
+
+    rows = "".join(prize_row(p) for p in prizes)
+    hidden_forms = "".join(
+        f'<form id="prz-del-{p["id"]}" method="post" action="/admin/wheel/prizes/{p["id"]}/delete" '
+        f'onsubmit="return confirm(\'این جایزه حذف بشه؟\')"></form>' for p in prizes
+    )
+    total_weight = sum(float(p["weight"] or 0) for p in prizes if p["active"]) or 1
+    weight_note = " + ".join(f"{p['title']}: {round(100*float(p['weight'] or 0)/total_weight,1)}٪"
+                              for p in prizes if p["active"]) or "—"
+
+    body = f"""
+    {_wheel_back_html()}
+    <form method="get" action="/admin/wheel/prizes" class="mb-3">
+      <label class="text-xs text-gray-500">کمپین:</label>
+      <select name="campaign_id" onchange="this.form.submit()" class="border rounded-lg p-2 text-sm">{camp_options}</select>
+    </form>
+    <div class="text-xs text-gray-400 mb-3">درصد برد هر جایزه از روی «وزن احتمال» نسبت به مجموع وزن‌های فعال محاسبه می‌شه (نیازی به جمع‌شدن روی ۱۰۰ نیست). سقف کل = محدودیت همیشگی (سخت‌گیرانه)؛ سقف روزانه = محدودیت نرم روزانه. وضعیت فعلی: {e(weight_note)}</div>
+    <form method="post" action="/admin/wheel/prizes/bulk-save">
+      <input type="hidden" name="campaign_id" value="{campaign_id}">
+      <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+        {rows or '<div class="text-xs text-gray-400">هنوز جایزه‌ای برای این کمپین ثبت نشده.</div>'}
+      </div>
+      <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium mb-4">💾 ذخیرهٔ همهٔ تغییرات</button>
+    </form>
+
+    <div class="bg-white rounded-xl shadow-sm p-4">
+      <div class="font-medium text-sm mb-2">+ افزودن جایزهٔ تازه</div>
+      <form method="post" action="/admin/wheel/prizes/add" class="flex flex-wrap gap-2 items-center text-sm">
+        <input type="hidden" name="campaign_id" value="{campaign_id}">
+        <input type="text" name="icon" value="🎁" class="border rounded p-1.5 w-12 text-center text-xs">
+        <input type="text" name="title" class="border rounded p-1.5 flex-1 min-w-[140px] text-xs" placeholder="عنوان جایزه" required>
+        <select name="prize_type" class="border rounded p-1.5 text-xs">{type_options}</select>
+        <input type="text" inputmode="numeric" name="value" placeholder="مقدار" class="border rounded p-1.5 w-20 text-xs ltr-num">
+        <input type="text" inputmode="numeric" name="validity_hours" placeholder="اعتبار (ساعت)" class="border rounded p-1.5 w-20 text-xs ltr-num">
+        <input type="text" inputmode="decimal" name="weight" placeholder="وزن" value="1" class="border rounded p-1.5 w-16 text-xs ltr-num">
+        <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن</button>
+      </form>
+    </div>
+    {hidden_forms}"""
+    return _layout("مدیریت جوایز گردونه", body, adm, flash=flash)
+
+
+@router.post("/wheel/prizes/add")
+async def wheel_prizes_add(request: Request, campaign_id: int = Form(...), title: str = Form(...),
+                            prize_type: str = Form(...), icon: str = Form("🎁"),
+                            value: str = Form("0"), validity_hours: str = Form("0"),
+                            weight: str = Form("1")):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import create_wheel_prize
+    try:
+        create_wheel_prize(
+            campaign_id, title.strip(), prize_type, icon=icon.strip() or "🎁",
+            value=int(value or 0), validity_hours=int(validity_hours or 0),
+            weight=float(weight or 1),
+        )
+    except ValueError as ex:
+        return _redir(f"/admin/wheel/prizes?campaign_id={campaign_id}&flash={e('❌ '+str(ex))}")
+    _log(request, "افزودن جایزهٔ گردونه", "گردونهٔ شانس", f"{title.strip()} ({prize_type})", admin_info=adm)
+    return _redir(f"/admin/wheel/prizes?campaign_id={campaign_id}&flash={e('✅ جایزه اضافه شد')}")
+
+
+@router.post("/wheel/prizes/bulk-save")
+async def wheel_prizes_bulk_save(request: Request):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import list_wheel_prizes, update_wheel_prize
+    form = await request.form()
+    campaign_id = int(form.get("campaign_id") or 0)
+    for p in list_wheel_prizes(campaign_id, active_only=False):
+        pid = p["id"]
+        key = f"title_{pid}"
+        if key not in form:
+            continue
+
+        def num(field, cast=int, default=0):
+            raw = (form.get(f"{field}_{pid}") or "").strip()
+            try:
+                return cast(raw) if raw else default
+            except ValueError:
+                return default
+
+        update_wheel_prize(
+            pid,
+            title=(form.get(key) or "").strip() or p["title"],
+            icon=(form.get(f"icon_{pid}") or p["icon"]).strip() or "🎁",
+            color=(form.get(f"color_{pid}") or p["color"]).strip(),
+            prize_type=(form.get(f"type_{pid}") or p["prize_type"]).strip(),
+            value=num("value"), max_discount_value=num("maxdisc"),
+            validity_hours=num("valid"), weight=num("weight", float, 1.0),
+            total_limit=num("totallimit"), daily_limit=num("dailylimit"),
+            sort_order=num("sort"),
+            active=1 if form.get(f"active_{pid}") else 0,
+            description=(form.get(f"desc_{pid}") or "").strip(),
+        )
+    _log(request, "ذخیرهٔ گروهی جوایز گردونه", "گردونهٔ شانس", f"campaign #{campaign_id}", admin_info=adm)
+    return _redir(f"/admin/wheel/prizes?campaign_id={campaign_id}&flash={e('✅ تغییرات ذخیره شد')}")
+
+
+@router.post("/wheel/prizes/{pid}/delete")
+async def wheel_prizes_delete(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import get_wheel_prize, delete_wheel_prize
+    p = get_wheel_prize(pid)
+    camp_id = p["campaign_id"] if p else 0
+    delete_wheel_prize(pid)
+    _log(request, "حذف جایزهٔ گردونه", "گردونهٔ شانس", f"prize #{pid}", admin_info=adm)
+    return _redir(f"/admin/wheel/prizes?campaign_id={camp_id}&flash={e('✅ جایزه حذف شد')}")
+
+
+# ─── تاریخچه ────────────────────────────────────────────────────────────────
+
+@router.get("/wheel/history", response_class=HTMLResponse)
+async def wheel_history_page(request: Request, q: str = "", prize_type: str = "",
+                              campaign_id: int = 0, page: int = 1):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import list_wheel_spins, list_wheel_campaigns
+    page = max(1, page)
+    per_page = 40
+    rows = list_wheel_spins(user_q=q, prize_type=prize_type, campaign_id=campaign_id or None,
+                             limit=per_page + 1, offset=(page - 1) * per_page)
+    has_next = len(rows) > per_page
+    rows = rows[:per_page]
+
+    def row_html(r):
+        who = e((r.get("full_name") or "").strip() or r.get("username") or f"کاربر {r['user_id']}")
+        code_html = f'<code class="text-xs bg-gray-100 px-1 rounded">{e(r["discount_code"])}</code>' if r["discount_code"] else "—"
+        amount_html = f'{r["amount"]:,} تومان' if r["amount"] else "—"
+        return f"""
+        <tr class="border-b text-sm">
+          <td class="p-2">{who}</td>
+          <td class="p-2">{e(r['prize_title'])}</td>
+          <td class="p-2 text-xs text-gray-400">{_WHEEL_PRIZE_TYPE_LABELS.get(r['prize_type'], r['prize_type'])}</td>
+          <td class="p-2 ltr-num text-left">{amount_html}</td>
+          <td class="p-2">{code_html}</td>
+          <td class="p-2 text-xs text-gray-400">{fa_date(r['created_at'], with_time=True)}</td>
+        </tr>"""
+
+    type_options = '<option value="">همهٔ انواع</option>' + "".join(
+        f'<option value="{k}" {"selected" if prize_type==k else ""}>{v}</option>'
+        for k, v in _WHEEL_PRIZE_TYPE_LABELS.items()
+    )
+    camps = list_wheel_campaigns()
+    camp_options = '<option value="0">همهٔ کمپین‌ها</option>' + "".join(
+        f'<option value="{c["id"]}" {"selected" if campaign_id==c["id"] else ""}>{e(c["title"])}</option>' for c in camps
+    )
+
+    body = f"""
+    {_wheel_back_html()}
+    <form method="get" action="/admin/wheel/history" class="bg-white rounded-xl shadow-sm p-4 mb-3 flex flex-wrap gap-2 items-center text-sm">
+      <input type="text" name="q" value="{e(q)}" placeholder="جست‌وجوی کاربر (نام/یوزرنیم/آیدی)" class="border rounded-lg p-2 text-xs flex-1 min-w-[160px]">
+      <select name="prize_type" class="border rounded-lg p-2 text-xs">{type_options}</select>
+      <select name="campaign_id" class="border rounded-lg p-2 text-xs">{camp_options}</select>
+      <button class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs">جست‌وجو</button>
+    </form>
+    <div class="bg-white rounded-xl shadow-sm overflow-x-auto">
+      <table class="w-full text-right">
+        <thead><tr class="text-xs text-gray-400 border-b">
+          <th class="p-2">کاربر</th><th class="p-2">جایزه</th><th class="p-2">نوع</th>
+          <th class="p-2">مبلغ</th><th class="p-2">کد تخفیف</th><th class="p-2">زمان</th>
+        </tr></thead>
+        <tbody>{"".join(row_html(r) for r in rows) or '<tr><td colspan="6" class="p-6 text-center text-xs text-gray-400">چرخشی یافت نشد</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="flex gap-2 mt-3">
+      {f'<a href="/admin/wheel/history?q={e(q)}&prize_type={e(prize_type)}&campaign_id={campaign_id}&page={page-1}" class="text-xs text-indigo-600">‹ قبلی</a>' if page>1 else ''}
+      {f'<a href="/admin/wheel/history?q={e(q)}&prize_type={e(prize_type)}&campaign_id={campaign_id}&page={page+1}" class="text-xs text-indigo-600">بعدی ›</a>' if has_next else ''}
+    </div>"""
+    return _layout("تاریخچهٔ چرخش‌های گردونه", body, adm)
 
 
 # ══════════════════════════════════════════════════════════════════════════

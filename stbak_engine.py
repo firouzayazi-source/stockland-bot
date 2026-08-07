@@ -490,6 +490,7 @@ def _run_all_schema_migrations() -> list:
         ("db.ensure_checkin_schema", _db.ensure_checkin_schema),
         ("db.ensure_favorites_schema", _db.ensure_favorites_schema),
         ("db.ensure_notifications_schema", _db.ensure_notifications_schema),
+        ("db.ensure_wheel_schema", _db.ensure_wheel_schema),
         ("db.ensure_faq_schema", _db.ensure_faq_schema),
         ("db.ensure_card_receipts_schema", _db.ensure_card_receipts_schema),
         ("db.ticket_ensure_schema", _db.ticket_ensure_schema),

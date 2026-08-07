@@ -633,3 +633,62 @@ html.dark .sl-feat-img{background:linear-gradient(135deg,#172554,#1E3A8A)}
 .sl-wal-big{font-size:30px;font-weight:800;text-align:center;padding:10px 0 18px;color:var(--br)}
 .sl-wal-big small{font-size:13px;color:var(--mu);font-weight:500}
 .sl-wal-acts{margin:14px 0}
+
+/* ═══ کارت ورودی گردونهٔ شانس در «ابزار مفید» ═══ */
+.sl-tool-wheel{background:linear-gradient(145deg,#F59E0B,#EF4444);cursor:pointer}
+
+/* ═══ گردونهٔ شانس — چرخ‌گردون + نتیجه + جوایز من ═══ */
+.sl-wheel-wrap{position:relative;width:260px;height:260px;margin:18px auto 6px;
+ display:flex;align-items:center;justify-content:center}
+.sl-wheel-glow{position:absolute;inset:-30px;border-radius:50%;
+ background:radial-gradient(circle,rgba(245,158,11,.35),transparent 70%);
+ filter:blur(6px);z-index:0;animation:slWheelGlowPulse 2.4s ease-in-out infinite}
+@keyframes slWheelGlowPulse{0%,100%{opacity:.55}50%{opacity:1}}
+.sl-wheel-pointer{position:absolute;top:-6px;left:50%;transform:translateX(-50%);
+ font-size:26px;z-index:3;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))}
+.sl-wheel-disc{position:relative;width:100%;height:100%;border-radius:50%;z-index:1;
+ box-shadow:0 0 0 6px var(--card),0 0 0 9px rgba(0,0,0,.08),0 14px 32px rgba(0,0,0,.28);
+ transform:rotate(0deg)}
+.sl-wheel-label{position:absolute;top:50%;left:50%;width:0;height:0;transform-origin:0 0}
+.sl-wheel-label-ico{position:absolute;left:0;top:-92px;transform:translate(-50%,-50%);
+ display:flex;flex-direction:column;align-items:center;gap:1px;white-space:nowrap;
+ font-size:19px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}
+.sl-wheel-label-pct{font-size:9px;font-weight:800;color:#fff;background:rgba(0,0,0,.28);
+ border-radius:999px;padding:1px 5px}
+.sl-wheel-hub{position:absolute;z-index:2;width:64px;height:64px;border-radius:50%;border:4px solid var(--card);
+ background:linear-gradient(145deg,#F59E0B,#DC2626);color:#fff;font-weight:800;font-size:13px;
+ box-shadow:0 6px 16px rgba(220,38,38,.45);cursor:pointer;transition:transform .15s}
+.sl-wheel-hub:active{transform:scale(.92)}
+.sl-wheel-hub:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
+.sl-wheel-remaining{text-align:center;font-size:12.5px;color:var(--mu);font-weight:600;margin-top:8px}
+.sl-wheel-desc{text-align:center;font-size:12px;color:var(--mu);margin-top:4px;padding:0 20px}
+.sl-wheel-confetti{position:absolute;inset:-40px;pointer-events:none;z-index:5}
+
+.sl-wheel-result{text-align:center;padding:22px 10px 6px;animation:slWheelResultIn .35s ease}
+@keyframes slWheelResultIn{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}
+.sl-wheel-result-ico{font-size:56px;margin-bottom:10px;filter:drop-shadow(0 4px 10px rgba(0,0,0,.2))}
+.sl-wheel-result-t{font-size:19px;font-weight:800;color:var(--ink)}
+.sl-wheel-result-d{font-size:13px;color:var(--mu);margin-top:6px;line-height:1.8}
+.sl-wheel-code-box{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:16px;
+ background:var(--card);border:1.5px dashed var(--br);border-radius:14px;padding:12px 16px;
+ box-shadow:var(--sh)}
+.sl-wheel-code-box code{font-size:17px;font-weight:800;letter-spacing:1px;direction:ltr;color:var(--br)}
+.sl-wheel-copy-btn{background:var(--br);color:#fff;border:none;border-radius:10px;padding:6px 12px;
+ font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
+.sl-wheel-expiry{font-size:11.5px;color:var(--mu);margin-top:6px}
+.sl-wheel-result-acts{display:flex;flex-direction:column;gap:8px;margin-top:20px}
+
+.sl-prizes-list{display:flex;flex-direction:column;gap:10px}
+.sl-prize-item{background:var(--card);border-radius:16px;padding:14px 16px;box-shadow:var(--sh)}
+.sl-prize-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sl-prize-top code{font-size:15px;font-weight:800;letter-spacing:.5px;direction:ltr;color:var(--ink)}
+.sl-prize-status{font-size:11px;font-weight:700;white-space:nowrap}
+.sl-prize-used .sl-prize-status,.sl-prize-inactive .sl-prize-status{color:var(--mu)}
+.sl-prize-expired .sl-prize-status{color:#EF4444}
+.sl-prize-active .sl-prize-status{color:#22C55E}
+.sl-prize-val{font-size:13.5px;font-weight:700;color:var(--br);margin-top:6px}
+.sl-prize-desc{font-size:12px;color:var(--mu);margin-top:4px;line-height:1.7}
+.sl-prize-exp{font-size:11px;color:var(--mu);margin-top:4px}
+.sl-prize-item.sl-prize-expired,.sl-prize-item.sl-prize-used,.sl-prize-item.sl-prize-inactive{opacity:.6}
+.sl-prize-copy{margin-top:10px;background:var(--bg);border:1px solid var(--ln);border-radius:10px;
+ padding:6px 14px;font-size:12px;font-weight:700;color:var(--ink);cursor:pointer;font-family:inherit}

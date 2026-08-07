@@ -433,6 +433,53 @@ async def api_checkin_claim(request: Request):
             "balance": wallet.get_balance(uid)}
 
 
+def _client_ip(request: Request) -> str:
+    """پشت nginx، request.client.host همیشه ۱۲۷.۰.۰.۱ است — الگوی استاندارد پروژه
+    (admin_panel.py) برای IP واقعی از X-Forwarded-For."""
+    return request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or \
+        (request.client.host if request.client else "")
+
+
+@router.get("/wheel/state")
+async def api_wheel_state(request: Request):
+    """وضعیت گردونهٔ شانس — تنظیمات/کمپین فعال/جوایز نمایشی/چرخش باقیماندهٔ امروز.
+    بدون auth هم کار می‌کنه (نمایش گردونه به کاربر مهمان)، ولی spins_remaining فقط
+    وقتی لاگین باشه محاسبه می‌شه."""
+    uid = _auth_optional(request)
+    from core import wheel
+    return {"ok": True, **wheel.get_state(uid)}
+
+
+@router.post("/wheel/spin")
+async def api_wheel_spin(request: Request):
+    """چرخش گردونه — اتمیک، سمت سرور تصمیم می‌گیره. device_fingerprint اختیاریه
+    (فقط برای لاگ ضدتقلب، نه ورودی تصمیم‌گیری)."""
+    uid = _auth(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    device_fp = str((body or {}).get("device_fingerprint") or "")[:200]
+    session_id = request.headers.get("X-Telegram-Init-Data", "")[:64]
+    from core import wheel
+    result = wheel.spin(uid, ip=_client_ip(request), device_fingerprint=device_fp, session_id=session_id)
+    return result
+
+
+@router.get("/me/prizes")
+async def api_my_prizes(request: Request):
+    """صفحهٔ «جوایز من» — همهٔ کدهای تخفیف شخصی کاربر، از هر منبعی (گردونه/winback/...)."""
+    uid = _auth(request)
+    from db import list_user_personal_codes
+    items = list_user_personal_codes(uid)
+    return {"ok": True, "items": [{
+        "code": it["code"], "type": it["type"], "value": it["value"],
+        "max_value": it.get("max_value") or 0, "status": it["status"],
+        "expires_at": it.get("expires_at"), "description": it.get("description") or "",
+        "source": it.get("source") or "", "created_at": it.get("created_at"),
+    } for it in items]}
+
+
 @router.get("/me/notifications")
 async def api_notifications_list(request: Request):
     """تاریخچهٔ اعلان‌ها — موجود شدن/تخفیف علاقه‌مندی‌ها."""
