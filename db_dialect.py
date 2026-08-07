@@ -27,16 +27,69 @@ def is_postgres() -> bool:
 # ─── ترجمه‌ی کوئری SQLite → Postgres ──────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════
 
-# الگوهای تاریخ/زمان
+# ⚠️ ترجمهٔ کامل توابع تاریخ SQLite → Postgres (بازنویسی جامع، کشف‌شده روی سرور
+# تولید واقعی که پنل با «function date(unknown,unknown) does not exist» کرش می‌کرد).
+#
+# نکتهٔ کلیدی طراحی: کل اپ ستون‌های زمانی (created_at/updated_at/...) رو به‌صورت
+# **TEXT با فرمت ISO** ذخیره می‌کنه و SQLite مقایسهٔ لغوی (lexical) متن رو انجام
+# می‌ده که برای ISO درست کار می‌کنه. Postgres سخت‌گیرتره: مقایسهٔ timestamp با
+# text خطا می‌ده. پس همهٔ این توابع به‌جای برگردوندن timestamp، با to_char به
+# **TEXT هم‌فرمت** ترجمه می‌شن تا مقایسهٔ لغوی دقیقاً مثل SQLite کار کنه (و در
+# DEFAULT هم روی ستون TEXT بی‌مشکله). ترتیب مهمه: خاص‌ترین (۳-آرگومانی با
+# modifier) اول، عام‌ترین (بدون آرگومان) آخر.
+#
+# نکتهٔ فنی: این الگوها *قبل* از تبدیل ? → %s اجرا می‌شن، پس ? دست‌نخورده می‌مونه
+# و تعداد/ترتیب bind param حفظ می‌شه (مثلاً datetime('now','localtime', ?) که ?
+# مقدار «'-30 days'» می‌گیره → CAST(? AS INTERVAL)).
+_DTS = "'YYYY-MM-DD HH24:MI:SS'"   # فرمت خروجی datetime
+_DS  = "'YYYY-MM-DD'"             # فرمت خروجی date
+_MOD = r"'((?:[+-]?\s*\d+\s*(?:day|days|hour|hours|month|months|year|years|minute|minutes|second|seconds))|(?:start of \w+))'"
+
 _DATE_PATTERNS = [
-    # datetime('now','localtime') → NOW()
-    (re.compile(r"datetime\(\s*'now'\s*,\s*'localtime'\s*\)", re.I), "NOW()"),
-    (re.compile(r"datetime\(\s*'now'\s*\)", re.I), "NOW()"),
-    (re.compile(r"date\(\s*'now'\s*,\s*'localtime'\s*\)", re.I), "CURRENT_DATE"),
-    (re.compile(r"date\(\s*'now'\s*\)", re.I), "CURRENT_DATE"),
-    # strftime('%Y-%m-%d', x) → to_char(x,'YYYY-MM-DD')
-    (re.compile(r"strftime\(\s*'%Y-%m-%d'\s*,\s*([^)]+)\)", re.I), r"to_char(\1,'YYYY-MM-DD')"),
-    (re.compile(r"strftime\(\s*'%Y-%m'\s*,\s*([^)]+)\)", re.I), r"to_char(\1,'YYYY-MM')"),
+    # ── datetime(...) با modifier به‌صورت bind param (?) ──
+    (re.compile(r"datetime\(\s*'now'\s*,\s*'localtime'\s*,\s*\?\s*\)", re.I),
+     f"to_char(NOW() + CAST(? AS INTERVAL), {_DTS})"),
+    (re.compile(r"datetime\(\s*'now'\s*,\s*\?\s*\)", re.I),
+     f"to_char(NOW() + CAST(? AS INTERVAL), {_DTS})"),
+    # ── datetime(...) با modifier ثابت (literal) ──
+    (re.compile(r"datetime\(\s*'now'\s*,\s*'localtime'\s*,\s*" + _MOD + r"\s*\)", re.I),
+     f"to_char(NOW() + INTERVAL '\\1', {_DTS})"),
+    (re.compile(r"datetime\(\s*'now'\s*,\s*(?!'localtime')" + _MOD + r"\s*\)", re.I),
+     f"to_char(NOW() + INTERVAL '\\1', {_DTS})"),
+    # ── datetime(...) بدون modifier ──
+    (re.compile(r"datetime\(\s*'now'\s*,\s*'localtime'\s*\)", re.I), f"to_char(NOW(), {_DTS})"),
+    (re.compile(r"datetime\(\s*'now'\s*\)", re.I), f"to_char(NOW(), {_DTS})"),
+
+    # ── date(...) با modifier به‌صورت bind param (?) ──
+    (re.compile(r"date\(\s*'now'\s*,\s*'localtime'\s*,\s*\?\s*\)", re.I),
+     f"to_char(NOW() + CAST(? AS INTERVAL), {_DS})"),
+    (re.compile(r"date\(\s*'now'\s*,\s*\?\s*\)", re.I),
+     f"to_char(NOW() + CAST(? AS INTERVAL), {_DS})"),
+    # ── date(...) با modifier ثابت ──
+    (re.compile(r"date\(\s*'now'\s*,\s*'localtime'\s*,\s*" + _MOD + r"\s*\)", re.I),
+     f"to_char(NOW() + INTERVAL '\\1', {_DS})"),
+    (re.compile(r"date\(\s*'now'\s*,\s*(?!'localtime')" + _MOD + r"\s*\)", re.I),
+     f"to_char(NOW() + INTERVAL '\\1', {_DS})"),
+    # ── date(...) بدون modifier ──
+    (re.compile(r"date\(\s*'now'\s*,\s*'localtime'\s*\)", re.I), f"to_char(NOW(), {_DS})"),
+    (re.compile(r"date\(\s*'now'\s*\)", re.I), f"to_char(NOW(), {_DS})"),
+
+    # ── strftime روی 'now' (باید قبل از حالت ستونی بیاد) ──
+    (re.compile(r"strftime\(\s*'%Y-%m-%d'\s*,\s*'now'\s*\)", re.I), f"to_char(NOW(), {_DS})"),
+    (re.compile(r"strftime\(\s*'%Y-%m'\s*,\s*'now'\s*\)", re.I), "to_char(NOW(), 'YYYY-MM')"),
+
+    # ── strftime روی ستون متنی → نیاز به CAST به timestamp ──
+    (re.compile(r"strftime\(\s*'%Y-%m-%d'\s*,\s*([\w.]+)\s*\)", re.I),
+     r"to_char(CAST(\1 AS timestamp), 'YYYY-MM-DD')"),
+    (re.compile(r"strftime\(\s*'%Y-%m'\s*,\s*([\w.]+)\s*\)", re.I),
+     r"to_char(CAST(\1 AS timestamp), 'YYYY-MM')"),
+
+    # ── date(col)/datetime(col) روی ستون متنی (بعد از همهٔ حالت‌های 'now') ──
+    # فقط نام ستون ساده یا table.column — استخراج بخش تاریخ از متن ISO
+    (re.compile(r"date\(\s*([\w.]+)\s*\)", re.I),
+     r"to_char(CAST(\1 AS timestamp), 'YYYY-MM-DD')"),
+    (re.compile(r"datetime\(\s*([\w.]+)\s*\)", re.I),
+     r"to_char(CAST(\1 AS timestamp), 'YYYY-MM-DD HH24:MI:SS')"),
 ]
 
 # INSERT OR IGNORE / INSERT OR REPLACE
@@ -104,6 +157,14 @@ def translate(sql: str) -> str:
 
     # ۷) SELECT changes() — خاص SQLite، در Postgres وجود ندارد
     out = out.replace("SELECT changes()", "SELECT 1")
+
+    # ۸) last_insert_rowid() → lastval() (معادل Postgres، همون سکانس آخرین INSERT)
+    out = re.sub(r"last_insert_rowid\(\s*\)", "lastval()", out, flags=re.I)
+
+    # ۹) COLLATE NOCASE — خاص SQLite (Postgres این collation رو نداره). حذف می‌شه؛
+    # جاهایی که واقعاً به مقایسهٔ case-insensitive نیاز دارن (validate_discount)
+    # در سطح کوئری با LOWER(...)=LOWER(...) بازنویسی شدن (پرتابل هر دو دیالوگ).
+    out = re.sub(r"\s+COLLATE\s+NOCASE", "", out, flags=re.I)
 
     return out
 

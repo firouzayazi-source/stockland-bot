@@ -199,6 +199,16 @@ class _PgConnection:
         cur.execute(translated, tuple(params) if params else None)
         return _PgCursor(cur)
 
+    def executemany(self, sql, seq):
+        """⚠️ رفع‌شده (کشف با تست): کد پروژه در ۴ نقطه (db.py، bulk feed upload
+        در admin_panel.py، seed سطوح همکاری) `conn.executemany(...)` مستقیم روی
+        connection صدا می‌زنه — sqlite3.Connection این متد رو داره ولی _PgConnection
+        نداشت → AttributeError. حالا مثل execute() یک کورسر می‌سازه و روش
+        executemany می‌زنه (خودِ _PgCursor.executemany ترجمهٔ SQL رو انجام می‌ده)."""
+        cur = _PgCursor(self._conn.cursor(cursor_factory=self._dict_factory))
+        cur.executemany(sql, seq)
+        return cur
+
     def cursor(self):
         return _PgCursor(self._conn.cursor(cursor_factory=self._dict_factory))
 

@@ -3084,8 +3084,10 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
     conn.row_factory = sqlite3.Row
     now = datetime.utcnow().isoformat()
     try:
+        # ⚠️ COLLATE NOCASE خاص SQLite است — با LOWER(code)=LOWER(?) جایگزین شد که
+        # روی هر دو دیالوگ case-insensitive کار می‌کنه (بخش پاک‌سازی SQLite سند)
         row = conn.execute(
-            "SELECT * FROM discount_codes WHERE code=? COLLATE NOCASE AND is_active=1 LIMIT 1;",
+            "SELECT * FROM discount_codes WHERE LOWER(code)=LOWER(?) AND is_active=1 LIMIT 1;",
             (code.strip(),)
         ).fetchone()
         if not row:
@@ -6490,7 +6492,7 @@ def get_upsell_products(product_id: int, category_id, limit: int = 2) -> list:
             WHERE p.id != ? AND COALESCE(p.is_active,1)=1
               AND (? IS NULL OR p.category_id = ?)
             GROUP BY p.id
-            HAVING stock > 0
+            HAVING (SELECT COUNT(*) FROM product_feed f WHERE f.product_id=p.id AND f.delivered=0) > 0
             ORDER BY sold DESC, p.id DESC
             LIMIT ?;
         """, (product_id, category_id, category_id, limit)).fetchall()
@@ -6523,9 +6525,12 @@ def find_winback_candidates(days_inactive: int, cooldown_days: int, batch: int =
     conn = _get_connection()
     conn.row_factory = sqlite3.Row
     try:
+        # ⚠️ Postgres سخت‌گیر GROUP BY: هر ستون غیر-aggregate باید در GROUP BY یا
+        # داخل یک تابع aggregate باشه (برخلاف SQLite که مقدار دلخواه برمی‌داره).
+        # چون join یک‌به‌یکه، MAX() روی نام معنی رو عوض نمی‌کنه، فقط قانون رو رعایت می‌کنه.
         return conn.execute("""
             SELECT CAST(o.user_id AS INTEGER) AS uid,
-                   COALESCE(u.full_name, u.username, '') AS name,
+                   MAX(COALESCE(u.full_name, u.username, '')) AS name,
                    MAX(o.created_at) AS last_order
             FROM orders o
             LEFT JOIN users u ON CAST(u.user_id AS INTEGER)=CAST(o.user_id AS INTEGER)

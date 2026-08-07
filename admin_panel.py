@@ -629,8 +629,8 @@ def _notify_low_stock():
             FROM products p
             LEFT JOIN product_feed pf ON pf.product_id = p.id
             WHERE p.is_active = 1
-            GROUP BY p.id
-            HAVING avail <= ?
+            GROUP BY p.id, p.title
+            HAVING COUNT(CASE WHEN pf.delivered=0 THEN 1 END) <= ?
             ORDER BY avail ASC LIMIT 20;
         """, (threshold,)).fetchall()
         conn.close()
@@ -2024,10 +2024,14 @@ def _dashboard_fetch() -> dict:
         """).fetchall()
 
         # محصولات کم موجودی
+        # ⚠️ Postgres اجازهٔ ارجاع به alias (`avail`) در HAVING رو نمی‌ده (برخلاف
+        # SQLite) — باید عبارت کامل تکرار بشه. GROUP BY هم p.title اضافه شد تا
+        # اگه products.id روی سرور PK اعلام‌نشده باشه، خطای grouping نده.
         low_stock = conn.execute("""
             SELECT p.id, p.title, COUNT(CASE WHEN pf.delivered=0 THEN 1 END) as avail
             FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id
-            WHERE p.is_active=1 GROUP BY p.id HAVING avail<=5 ORDER BY avail ASC LIMIT 5;
+            WHERE p.is_active=1 GROUP BY p.id, p.title
+            HAVING COUNT(CASE WHEN pf.delivered=0 THEN 1 END)<=5 ORDER BY avail ASC LIMIT 5;
         """).fetchall()
 
         # سفارش‌های اخیر
@@ -7021,7 +7025,7 @@ async def order_status_page(request: Request, oid: int, flash: str = ""):
             SELECT p.id, p.title, p.price, COUNT(pf.id) AS stock
             FROM products p LEFT JOIN product_feed pf ON pf.product_id=p.id AND pf.delivered=0
             WHERE p.is_active=1
-            GROUP BY p.id HAVING stock>0
+            GROUP BY p.id, p.title, p.price HAVING COUNT(pf.id)>0
             ORDER BY p.title;
         """).fetchall()
     finally:
