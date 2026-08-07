@@ -600,7 +600,6 @@ function loadMe(){if(_m)return;_m=1;
     '<div class="sl-me-n">'+esc(un)+'</div>'+
     '<div class="sl-me-u">'+(usr?'@'+esc(usr)+' · ':'')+'ورود از تلگرام</div>'+
     '</div>'+
-    '<div id="me-checkin-card"></div>'+
     '<div class="sl-wallet"><div class="sl-wallet-glow"></div>'+
     '<div class="sl-wallet-reward" id="me-reward-wallet" style="display:none">'+
       '<div class="sl-wallet-reward-l">🎁 کیف پول پاداش</div>'+
@@ -633,7 +632,6 @@ function loadMe(){if(_m)return;_m=1;
     }
     if(d.is_partner&&d.tier)setTierAvatar(d.tier.name,d.tier.icon);
   }).catch(function(){});
-  renderCheckinCard();
   initAvatarUpload();
   api('/me/profile',true).then(function(d){if(d&&d.avatar_url)setAvatarImg(d.avatar_url)}).catch(function(){});
   var lo_=document.getElementById('me-logout-row');
@@ -783,45 +781,10 @@ function openAvatarCropper(dataUrl,onDone){
   });
 }
 
-/* ─── پاداش سرزدن روزانه ─── */
-function renderCheckinCard(){
-  var c=document.getElementById('me-checkin-card');if(!c)return;
-  api('/me/checkin',true).then(function(d){
-    if(!d)return;
-    if(d.available){
-      c.innerHTML='<div class="sl-checkin-card"><span class="sl-checkin-e">🎁</span>'+
-        '<div class="sl-checkin-txt"><b>پاداش سرزدن امروز رو بگیر</b>'+
-        '<span>'+fmt(d.reward_amount||0)+' تومان هدیه'+(d.streak>0?' · رکورد '+fmt(d.streak)+' روزه':'')+'</span></div>'+
-        '<button class="sl-checkin-btn" id="me-checkin-btn">دریافت</button></div>';
-      var btn=document.getElementById('me-checkin-btn');
-      if(btn)btn.addEventListener('click',function(){
-        btn.disabled=true;btn.textContent='…';
-        fetch('/api/v1/me/checkin',{method:'POST',headers:{'X-Telegram-Init-Data':initData}})
-          .then(function(r){return r.json()}).then(function(res){
-            if(!res.ok){c.innerHTML='';return}
-            if(window._slTg&&window._slTg.HapticFeedback)try{window._slTg.HapticFeedback.notificationOccurred('success')}catch(e){}
-            c.innerHTML='<div class="sl-checkin-card sl-checkin-done"><span class="sl-checkin-e">✅</span>'+
-              '<div class="sl-checkin-txt"><b>'+fmt(res.reward)+' تومان به کیف‌پولت اضافه شد</b>'+
-              '<span>رکورد سرزدن: '+fmt(res.streak)+' روز پشت‌سرهم</span></div></div>';
-            var e=document.getElementById('me-bal');if(e)e.innerHTML='<small>تومان</small> '+fmt(res.balance||0);
-            _clearMeBadge();
-          }).catch(function(){btn.disabled=false;btn.textContent='دریافت'});
-      });
-    }else if(d.streak>0){
-      c.innerHTML='<div class="sl-checkin-card sl-checkin-mini"><span class="sl-checkin-e">🔥</span>'+
-        '<div class="sl-checkin-txt"><b>رکورد '+fmt(d.streak)+' روزه</b><span>فردا دوباره سر بزن برای ادامهٔ رکورد</span></div></div>';
-    }else{c.innerHTML=''}
-  }).catch(function(){c.innerHTML=''});
-}
-
-/* ─── بج «حساب» — پاداش سرزدن در دسترس، یا پاسخ جدید پشتیبانی ─── */
+/* ─── بج «حساب» — پاسخ جدید پشتیبانی یا اعلان نخوانده ─── */
 function _clearMeBadge(){var b=document.getElementById('me-tab-badge');if(b)b.hidden=true}
 function _checkMeBadge(){
   if(!loggedIn)return;
-  var show=false;
-  api('/me/checkin',true).then(function(d){
-    if(d&&d.available){show=true;_applyMeBadge(show)}
-  }).catch(function(){});
   fetch('/api/v1/support/ticket',{headers:{'X-Telegram-Init-Data':initData}})
     .then(function(r){return r.json()}).then(function(d){
       if(!d||!d.ok||!d.ticket)return;
