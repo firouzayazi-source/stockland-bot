@@ -135,6 +135,16 @@ _PRAGMA_TABLE_INFO = re.compile(r"PRAGMA\s+table_info\(\s*(\w+)\s*\)", re.I)
 # SQLite؛ چون این فقط برای Postgres صدا زده می‌شه، نگرانی نسخهٔ SQLite نیست.
 _IS_PLACEHOLDER = re.compile(r"(\w+(?:\.\w+)?)\s+IS\s+\?", re.I)
 
+# BEGIN IMMEDIATE — خاص SQLite (یه قفل نوشتنِ کل‌فایل رو فوراً می‌گیره، نه فقط
+# روی commit اول). Postgres اصلاً این سینتکس رو نمی‌شناسه — `BEGIN IMMEDIATE;`
+# مستقیم `syntax error at or near "IMMEDIATE"` می‌ده (کشف‌شده روی مسیر خرید
+# واقعی: هر تابع اتمیک پروژه — subtract_wallet_balance، claim_next_feed_item،
+# claim_daily_checkin، exchange_order، تأیید پرداخت — دقیقاً همین الگو رو
+# داشت). معادل ساده `BEGIN;` (بدون IMMEDIATE) تنها بخشی از تضمین قبلیه — قفل
+# ردیف واقعی برای هر کدوم جدا با `FOR UPDATE` روی همون SELECT اولیه اضافه شده
+# (نه اینجا، چون SQLite این سینتکس رو نداره و نباید بی‌قید همه‌جا اضافه بشه).
+_BEGIN_IMMEDIATE = re.compile(r"BEGIN\s+IMMEDIATE\s*;?", re.I)
+
 
 def translate(sql: str) -> str:
     """کوئری SQLite را به Postgres ترجمه می‌کند. در حالت sqlite بدون تغییر."""
@@ -150,6 +160,9 @@ def translate(sql: str) -> str:
     # ۱ب) col IS ? → col IS NOT DISTINCT FROM ? (باید قبل از تبدیل ? → %s باشه،
     # چون این regex دنبال ? خامه)
     out = _IS_PLACEHOLDER.sub(r"\1 IS NOT DISTINCT FROM ?", out)
+
+    # ۱ج) BEGIN IMMEDIATE → BEGIN (سینتکس SQLite که Postgres نمی‌شناسه)
+    out = _BEGIN_IMMEDIATE.sub("BEGIN;", out)
 
     # ۲) placeholder ? → %s (با حفظ ? داخل رشته‌های نقل‌قولی نمی‌کنیم چون نادر است)
     out = _replace_placeholders(out)

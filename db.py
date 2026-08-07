@@ -215,6 +215,25 @@ def _get_connection():
         return conn
 
 
+def _row_lock_suffix() -> str:
+    """`FOR UPDATE ` زیر Postgres، رشتهٔ خالی زیر SQLite.
+
+    توابع اتمیک پروژه (subtract_wallet_balance، claim_next_feed_item،
+    claim_daily_checkin، exchange_order و…) قبلاً فقط به `BEGIN IMMEDIATE`
+    تکیه می‌کردن — روی SQLite این یه قفل نوشتنِ *کل فایل* می‌گیره، پس SELECT
+    اولیهٔ هرکدوم به‌خودی‌خود در برابر race condition ایمن بود. `BEGIN IMMEDIATE`
+    روی Postgres اصلاً وجود نداره (`db_dialect.py` حالا به `BEGIN` ساده ترجمه‌ش
+    می‌کنه) و مهم‌تر، `BEGIN` سادهٔ Postgres هیچ قفلی از قبل نمی‌گیره — یعنی بدون
+    اقدام اضافه، دو تراکنش هم‌زمان می‌تونستن هر دو همون مقدار قدیمی رو بخونن و
+    هر دو موفق به آپدیت بشن (kesr دوبل کیف‌پول، claim دوبارهٔ همون آیتم فید،
+    و…). رفع: SELECT اولیهٔ هرکدوم `FOR UPDATE` می‌گیره (قفل ردیف Postgres،
+    دقیقاً معادل هدف `BEGIN IMMEDIATE` ولی به‌جای کل دیتابیس، فقط همون ردیف —
+    حتی بهتر از نظر همزمانی). SQLite این سینتکس رو نداره، پس زیر SQLite این
+    تابع رشتهٔ خالی برمی‌گردونه (بدون تغییر رفتار قبلی)."""
+    import db_conn
+    return "FOR UPDATE " if db_conn.is_postgres() else ""
+
+
 _DB_INIT_DONE_PATH = None  # مسیر DBای که init_db قبلاً کامل برایش اجرا شده (فلگ per-process)
 
 
@@ -827,7 +846,7 @@ def subtract_wallet_balance(user_id: int, amount: int) -> bool:
     cur = conn.cursor()
     try:
         cur.execute("BEGIN IMMEDIATE;")
-        cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
+        cur.execute(f"SELECT balance FROM wallets WHERE user_id = ? {_row_lock_suffix()};", (user_id,))
         row = cur.fetchone()
         if not row:
             conn.commit()
@@ -1349,9 +1368,9 @@ def claim_next_feed_item(product_id: int, order_id: int = None):
 
         cur.execute("BEGIN IMMEDIATE;")
         cur.execute(
-            """SELECT id, data FROM product_feed
+            f"""SELECT id, data FROM product_feed
                WHERE product_id=? AND delivered=0
-               ORDER BY id ASC LIMIT 1;""",
+               ORDER BY id ASC LIMIT 1 {_row_lock_suffix()};""",
             (product_id,),
         )
         row = cur.fetchone()
@@ -2760,7 +2779,7 @@ def exchange_order(
         cur = conn.cursor()
         cur.execute("BEGIN IMMEDIATE;")
         cur.execute(
-            "SELECT id, data FROM product_feed WHERE product_id=? AND delivered=0 ORDER BY id ASC LIMIT 1;",
+            f"SELECT id, data FROM product_feed WHERE product_id=? AND delivered=0 ORDER BY id ASC LIMIT 1 {_row_lock_suffix()};",
             (new_product_id,)
         )
         feed_row = cur.fetchone()
@@ -5666,7 +5685,7 @@ def claim_daily_checkin(user_id: int, reward: int) -> dict:
         cur = conn.cursor()
         cur.execute("BEGIN IMMEDIATE;")
         row = cur.execute(
-            "SELECT last_date, streak FROM daily_checkins WHERE user_id=?;", (user_id,)
+            f"SELECT last_date, streak FROM daily_checkins WHERE user_id=? {_row_lock_suffix()};", (user_id,)
         ).fetchone()
         if row and row["last_date"] == today_s:
             conn.rollback()

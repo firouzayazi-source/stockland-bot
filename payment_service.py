@@ -1070,9 +1070,17 @@ def _handle_payment_callback(gw: str, query: dict, form: dict):
         ref_id = vres.get("ref_id", "")
 
         # Lock and re-check (idempotency under concurrent callbacks)
+        # ⚠️ BEGIN IMMEDIATE (قفل کل‌فایل SQLite) روی Postgres وجود نداره —
+        # db_dialect.py حالا به BEGIN ساده ترجمه‌ش می‌کنه، ولی BEGIN ساده هیچ
+        # قفلی از قبل نمی‌گیره؛ بدون FOR UPDATE، دو کال‌بک هم‌زمان برای همون
+        # authority می‌تونستن هر دو status='paid' رو نبینن و هر دو کیف‌پول/
+        # تحویل رو دوبار پردازش کنن. FOR UPDATE ردیف رو قفل می‌کنه تا کال‌بک
+        # دوم واقعاً منتظر بمونه و بعدش status='paid' رو درست ببینه.
+        import db_conn as _dc_cb
+        _lock = "FOR UPDATE " if _dc_cb.is_postgres() else ""
         conn.execute("BEGIN IMMEDIATE;")
         tx = conn.execute(
-            "SELECT * FROM zarinpal_transactions WHERE authority=? LIMIT 1;", (authority,)
+            f"SELECT * FROM zarinpal_transactions WHERE authority=? LIMIT 1 {_lock};", (authority,)
         ).fetchone()
         if str(tx["status"]).lower() == "paid":
             conn.commit()
