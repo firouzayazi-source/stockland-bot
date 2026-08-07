@@ -184,12 +184,26 @@ def _get_connection():
     اتصال دیتابیس — سازگار SQLite/PostgreSQL از طریق db_conn wrapper.
     با DB_DIALECT=postgres + DATABASE_URL به Postgres سوییچ می‌کند،
     بدون نیاز به تغییر کوئری‌ها (ترجمه خودکار).
+
+    ⚠️ رفع‌شده (کشف‌شده هنگام بررسی آمادگی پروژه برای مشتری واقعی، ۲۰۲۶-۰۸-۰۷):
+    این تابع — پرکاربردترین نقطهٔ اتصال کل پروژه — قبلاً اگه `db_conn.get_connection()`
+    به هر دلیلی (مثلاً یه قطعی موقت شبکهٔ Postgres، یا DATABASE_URL موقتاً نامعتبر)
+    استثنا می‌داد، بی‌صدا به یه فایل SQLite محلی fallback می‌کرد. زیر Postgres،
+    این یعنی به‌جای شکست آشکار (که قابل تشخیص/لاگ/آلارمه)، اپ ساکت روی یه
+    دیتابیس فانتومِ کاملاً جدا از دادهٔ واقعی ادامه می‌داد — دقیقاً همون کلاس
+    باگی که بخش ۴۶ رو کلاً به‌وجود آورده بود (pg_backup، admin_panel._db، و…).
+    برای یه ربات که قراره پول واقعی کاربر رو جابه‌جا کنه، «ساکت رو دادهٔ اشتباه
+    ادامه بده» خیلی خطرناک‌تر از یه خطای آشکاره. حالا فقط زیر SQLite (dev/تست
+    محلی) fallback واقعی معنی داره؛ زیر Postgres همون استثنای اصلی دوباره
+    پرتاب می‌شه تا caller/لاگ سرور متوجه بشه، نه اینکه بی‌صدا قورت داده بشه.
     """
+    import db_conn
     try:
-        import db_conn
         return db_conn.get_connection(DB_FULL_PATH)
     except Exception:
-        # fallback مستقیم SQLite
+        if db_conn.is_postgres():
+            raise
+        # fallback مستقیم SQLite — فقط معنی‌دار وقتی خودِ دیالوگ SQLite است
         conn = sqlite3.connect(DB_FULL_PATH, timeout=30)
         try:
             conn.execute('PRAGMA journal_mode=WAL;')
