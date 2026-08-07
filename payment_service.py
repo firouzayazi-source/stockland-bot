@@ -28,7 +28,7 @@ from datetime import datetime, timezone, date
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 
@@ -157,6 +157,31 @@ async def _security_headers(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
+
+
+@app.middleware("http")
+async def _csrf_guard(request, call_next):
+    """محافظت CSRF درجه‌دوم (defense-in-depth) برای فرم‌های پنل ادمین (بخش ۱۳
+    آیتم ۶ سند: هیچ فرمی CSRF token ندارد، فقط SameSite=Lax کوکی).
+
+    به‌جای اضافه‌کردن CSRF token به هزاران خط فرم HTML موجود در admin_panel.py
+    (تغییری پرریسک و پراکنده روی کل فایل)، همون تکنیک توصیه‌شدهٔ OWASP به‌عنوان
+    لایهٔ دوم استفاده شده: برای هر درخواست تغییردهنده‌ی وضعیت (POST/PUT/PATCH/
+    DELETE) به /admin/*، هدر Origin (یا در نبودش Referer) باید با Host درخواست
+    هم‌خوان باشه. اگه هیچ‌کدوم از این دو هدر نباشه (بعضی کلاینت‌های غیرمرورگری/
+    قدیمی)، عمداً رد نمی‌شه — این یه لایهٔ دفاعی اضافه‌ست، نه جایگزین کامل CSRF
+    token واقعی."""
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path.startswith("/admin"):
+        origin = request.headers.get("origin") or request.headers.get("referer") or ""
+        host = request.headers.get("host", "")
+        if origin and host:
+            try:
+                origin_host = origin.split("://", 1)[-1].split("/", 1)[0]
+                if origin_host.split(":")[0].lower() != host.split(":")[0].lower():
+                    return JSONResponse({"detail": "درخواست نامعتبر (CSRF)"}, status_code=403)
+            except Exception:
+                pass
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------

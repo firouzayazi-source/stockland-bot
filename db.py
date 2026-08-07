@@ -650,6 +650,10 @@ def ensure_indexes():
         # موجودی محصولات — feed
         ("idx_feed_product",         "product_feed(product_id)"),
         ("idx_feed_delivered",       "product_feed(product_id, delivered)"),
+        # لوکاپ معکوس order_id→feed_id — order_mark_returned_advanced/exchange_order
+        # (بخش ۴۰ سند) هر برگشت/تعویض رو با این چک می‌کنن؛ بدون ایندکس با رشد
+        # product_feed هر برگشت یک full-scan کامل جدول می‌شه
+        ("idx_feed_order_id",        "product_feed(order_id)"),
         # دسته‌بندی محصولات
         ("idx_products_category",    "products(category)"),
         ("idx_products_active",      "products(is_active)"),
@@ -667,6 +671,9 @@ def ensure_indexes():
         # با رشد داده به‌طور فزاینده کند می‌شه (اسکن کامل جدول در هر بار)
         ("idx_tickets_status",       "tickets(status)"),
         ("idx_tickets_type",         "tickets(type)"),
+        # بستن خودکار تیکت راه‌اندازی وابسته موقع برگشت/تعویض سفارش (بخش ۳۶/۴۰ سند)
+        # با WHERE order_id=? جست‌وجو می‌کنه — بدون ایندکس full-scan جدول تیکت‌ها
+        ("idx_tickets_order_id",     "tickets(order_id)"),
         ("idx_ticket_messages_tid",  "ticket_messages(ticket_id)"),
         # رسیدهای کارت‌به‌کارت — لیست/شمارندهٔ badge روی status
         ("idx_card_receipts_status", "card_receipts(status)"),

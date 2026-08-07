@@ -157,10 +157,54 @@ def ensure_admins_table() -> None:
         pass
 
 # ─────────────────────────── Auth & Session ────────────────────────────────
+# ⚠️ رفع امنیتی (بخش ۱۳ آیتم‌های ۴/۵ سند): پیش‌فرض SESSION_SECRET یکپارچه شد
+# (قبلاً _hash_pw از "stockland" و _make_session/_get_admin از "stockland-panel"
+# استفاده می‌کردن — دو رمز پیش‌فرض متفاوت). هش پسورد هم از SHA256 بدون نمک به
+# PBKDF2-HMAC-SHA256 نمکی (۲۰۰هزار تکرار) تغییر کرد. سازگاری عقب‌رو کامل:
+# _verify_pw هر دو فرمت (هش قدیمی خام + فرمت جدید pbkdf2$...) رو می‌پذیره و بعد
+# از اولین ورود موفق با فرمت قدیمی، خودکار به فرمت جدید ارتقا می‌ده (login_post).
+_SESSION_SECRET_DEFAULT = "stockland-panel"
+_LEGACY_HASH_SECRET_DEFAULT = "stockland"  # فقط برای وریفای هش‌های قدیمی، دیگه برای هش تازه استفاده نمی‌شه
+_PBKDF2_ITERATIONS = 200_000
+
+def _pbkdf2_hash(password: str, salt: bytes | None = None) -> str:
+    secret = _env("SESSION_SECRET", _SESSION_SECRET_DEFAULT)
+    if salt is None:
+        salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", (secret + password).encode(), salt, _PBKDF2_ITERATIONS)
+    return f"pbkdf2${salt.hex()}${dk.hex()}"
 
 def _hash_pw(password: str) -> str:
-    secret = _env("SESSION_SECRET", "stockland")
-    return hashlib.sha256((secret + password).encode()).hexdigest()
+    """هش تازه/تغییریافته — همیشه با فرمت جدید نمکی PBKDF2."""
+    return _pbkdf2_hash(password)
+
+def _verify_pw(password: str, stored: str) -> bool:
+    """مثل _hmac.compare_digest ولی هر دو فرمت (جدید pbkdf2$salt$hash، قدیمی SHA256 خام
+    بدون نمک) رو می‌پذیره — برای admins.web_password_hash."""
+    if not stored:
+        return False
+    if stored.startswith("pbkdf2$"):
+        try:
+            _, salt_hex, hash_hex = stored.split("$", 2)
+            salt = bytes.fromhex(salt_hex)
+            secret = _env("SESSION_SECRET", _SESSION_SECRET_DEFAULT)
+            dk = hashlib.pbkdf2_hmac("sha256", (secret + password).encode(), salt, _PBKDF2_ITERATIONS)
+            return _hmac.compare_digest(dk.hex(), hash_hex)
+        except Exception:
+            return False
+    # فرمت قدیمی (پیش از این رفع): SHA256(secret_قدیمی + password) بدون نمک
+    legacy_secret = _env("SESSION_SECRET", _LEGACY_HASH_SECRET_DEFAULT)
+    legacy_hash = hashlib.sha256((legacy_secret + password).encode()).hexdigest()
+    return _hmac.compare_digest(stored, legacy_hash)
+
+def _verify_super_pw(password: str, stored: str) -> bool:
+    """برای ADMIN_WEB_PASSWORD در .env — فرمت قدیمی پسورد خام (plaintext) بود؛
+    فرمت جدید (بعد از اولین تغییر از پنل) pbkdf2$salt$hash است (بخش ۱۳ آیتم ۲)."""
+    if not stored:
+        return False
+    if stored.startswith("pbkdf2$"):
+        return _verify_pw(password, stored)
+    return _hmac.compare_digest(password, stored)
 
 IDLE_TIMEOUT_SECONDS = 300  # ۵ دقیقه عدم فعالیت → logout
 
@@ -168,7 +212,7 @@ def _make_session(admin_id: str) -> str:
     """session شامل admin_id و timestamp، امضاشده با HMAC."""
     import time as _t
     ts = str(int(_t.time()))
-    secret = _env("SESSION_SECRET", "stockland-panel")
+    secret = _env("SESSION_SECRET", _SESSION_SECRET_DEFAULT)
     payload = f"{admin_id}|{ts}"
     token = _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{token}:{admin_id}|{ts}"
@@ -190,7 +234,7 @@ def _verify_session_cookie(request: Request) -> str | None:
         admin_id, ts_str = payload, None
 
     expected_token = _hmac.new(
-        _env("SESSION_SECRET", "stockland-panel").encode(),
+        _env("SESSION_SECRET", _SESSION_SECRET_DEFAULT).encode(),
         payload.encode(),
         hashlib.sha256,
     ).hexdigest()
@@ -468,6 +512,8 @@ def _ensure_theme_table():
         conn.close()
 
 
+_ADMIN_LOGS_SCHEMA_READY = False  # فلگ per-process مشترک بین _log() و _fetch_order_logs()
+
 def _log(request: Request, action: str, section: str = "", details: str = "", admin_info=None, result: str = "ok"):
     """ثبت فعالیت ادمین — هیچ‌وقت exception نمی‌ده.
     ⚠️ قبلاً این تابع خودش هیچ‌وقت جدول admin_logs رو نمی‌ساخت — فقط به این تکیه
@@ -475,6 +521,7 @@ def _log(request: Request, action: str, section: str = "", details: str = "", ad
     شده باشه؛ روی نصب کاملاً تازه، اگه هیچ‌کدوم از اون ۳ روت هنوز باز نشده بودن،
     هر INSERT اینجا با «no such table» شکست می‌خورد و بی‌صدا قورت داده می‌شد —
     یعنی هیچ لاگی ثبت نمی‌شد، بدون هیچ نشونه‌ای. الان خودش صریح گارد می‌کنه."""
+    global _ADMIN_LOGS_SCHEMA_READY
     try:
         adm = admin_info or _get_admin(request)
         if not adm:
@@ -482,24 +529,30 @@ def _log(request: Request, action: str, section: str = "", details: str = "", ad
         ip   = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or (request.client.host if request.client else "—")
         name = adm[3] if len(adm) > 3 else f"admin#{adm[0]}"
         conn = _db()
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS admin_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_id   INTEGER,
-                admin_name TEXT,
-                action     TEXT NOT NULL,
-                section    TEXT,
-                details    TEXT,
-                ip         TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-            );
-        """)
-        # اضافه کردن ستون result اگه وجود نداشت
-        try:
-            conn.execute("ALTER TABLE admin_logs ADD COLUMN result TEXT DEFAULT 'ok';")
+        # ⚠️ رفع کارایی: چون _log() پرتکرارترین نقطهٔ لمس admin_logs است (هر اکشن
+        # ادمین)، CREATE TABLE/ALTER/INDEX قبلاً هر بار اجرا می‌شدن — ALTER هم بعد
+        # از بار اول همیشه با استثنا (ستون از قبل موجوده) شکست می‌خورد. با همون فلگ
+        # per-process که _fetch_order_logs استفاده می‌کنه یکی شد، فقط یک‌بار امتحان می‌شه.
+        if not _ADMIN_LOGS_SCHEMA_READY:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS admin_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id   INTEGER,
+                    admin_name TEXT,
+                    action     TEXT NOT NULL,
+                    section    TEXT,
+                    details    TEXT,
+                    ip         TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                );
+            """)
+            try:
+                conn.execute("ALTER TABLE admin_logs ADD COLUMN result TEXT DEFAULT 'ok';")
+            except Exception:
+                pass
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_logs_section ON admin_logs(section, id);")
             conn.commit()
-        except Exception:
-            pass
+            _ADMIN_LOGS_SCHEMA_READY = True
         conn.execute(
             "INSERT INTO admin_logs (admin_id,admin_name,action,section,details,ip,result) VALUES (?,?,?,?,?,?,?);",
             (adm[0], name, action, section, details[:500] if details else "", ip, result)
@@ -1863,9 +1916,16 @@ async def login_post(request: Request, username: str = Form(""), password: str =
     username = username.strip()
     password = password.strip()
 
-    super_un = _env("ADMIN_WEB_USERNAME", "admin")
+    # ⚠️ رفع امنیتی (بخش ۱۳ آیتم ۳ سند): قبلاً "admin"/"super" همیشه به‌عنوان
+    # نام کاربری معتبر پذیرفته می‌شدن، حتی اگه ادمین صریحاً یک ADMIN_WEB_USERNAME
+    # سفارشی تنظیم کرده باشه — یعنی سفارشی‌کردن یوزرنیم برای سخت‌ترکردن ورود عملاً
+    # بی‌اثر بود. حالا این دو نام مستعار فقط وقتی پذیرفته می‌شن که هیچ یوزرنیم
+    # سفارشی‌ای در env تنظیم نشده باشه (رفتار پیش‌فرض قدیمی دست‌نخورده می‌مونه).
+    _raw_super_un = os.environ.get("ADMIN_WEB_USERNAME", "").strip()
+    super_un = _raw_super_un or "admin"
+    allowed_super_usernames = {super_un.lower()} if _raw_super_un else {"admin", "super"}
     super_pw = _env("ADMIN_WEB_PASSWORD")
-    if username.lower() in (super_un.lower(), "admin", "super") and super_pw and _hmac.compare_digest(password, super_pw):
+    if username.lower() in allowed_super_usernames and super_pw and _verify_super_pw(password, super_pw):
         _clear_attempts(ip)
         resp = _redir("/admin/")
         resp.set_cookie("adm", _make_session("super"), max_age=300, httponly=True, samesite="lax", secure=True)
@@ -1878,13 +1938,22 @@ async def login_post(request: Request, username: str = Form(""), password: str =
             "SELECT id, web_password_hash, is_active FROM admins WHERE web_username=? LIMIT 1;",
             (username,),
         ).fetchone()
-        conn.close()
-        if row and row["is_active"] and _hmac.compare_digest(row["web_password_hash"], _hash_pw(password)):
+        if row and row["is_active"] and _verify_pw(password, row["web_password_hash"]):
+            # ارتقای خودکار هش قدیمی (SHA256 بدون نمک) به فرمت جدید PBKDF2 نمکی —
+            # فقط وقتی که پسورد درست تایپ شده باشه (یعنی همین لحظه در دسترس داریمش خام)
+            if not row["web_password_hash"].startswith("pbkdf2$"):
+                try:
+                    conn.execute("UPDATE admins SET web_password_hash=? WHERE id=?;", (_hash_pw(password), row["id"]))
+                    conn.commit()
+                except Exception:
+                    pass
+            conn.close()
             _clear_attempts(ip)
             resp = _redir("/admin/")
             resp.set_cookie("adm", _make_session(str(row["id"])), max_age=300, httponly=True, samesite="lax", secure=True)
             _log(request, "ورود", "احراز هویت", f"ادمین #{row['id']}")
             return resp
+        conn.close()
     except Exception:
         pass
 
@@ -4266,7 +4335,11 @@ async def super_change_password(request: Request, new_password: str = Form(""), 
         return _redir("/admin/login")
     if not new_password or new_password != confirm_password:
         return _redir("/admin/admins?flash=رمزها+یکسان+نیستند+یا+خالی+است")
-    # آپدیت .env
+    # ⚠️ رفع امنیتی (بخش ۱۳ آیتم ۲ سند): قبلاً رمز جدید عیناً plaintext در .env
+    # نوشته می‌شد. حالا هش نمکی PBKDF2 (همون فرمت admins.web_password_hash) ذخیره
+    # می‌شه؛ _verify_super_pw هم فرمت جدید هم plaintext قدیمی (برای مقدار bootstrap
+    # دستی‌ای که هنوز از پنل تغییر نکرده) رو می‌پذیره.
+    hashed_password = _hash_pw(new_password)
     env_path = os.path.join(os.path.dirname(__file__), ".env")
     try:
         lines = open(env_path, encoding="utf-8").readlines()
@@ -4274,14 +4347,14 @@ async def super_change_password(request: Request, new_password: str = Form(""), 
         found = False
         for line in lines:
             if line.startswith("ADMIN_WEB_PASSWORD="):
-                new_lines.append(f"ADMIN_WEB_PASSWORD={new_password}\n")
+                new_lines.append(f"ADMIN_WEB_PASSWORD={hashed_password}\n")
                 found = True
             else:
                 new_lines.append(line)
         if not found:
-            new_lines.append(f"ADMIN_WEB_PASSWORD={new_password}\n")
+            new_lines.append(f"ADMIN_WEB_PASSWORD={hashed_password}\n")
         open(env_path, "w", encoding="utf-8").writelines(new_lines)
-        os.environ["ADMIN_WEB_PASSWORD"] = new_password
+        os.environ["ADMIN_WEB_PASSWORD"] = hashed_password
     except Exception as ex:
         return _redir(f"/admin/admins?flash=خطا:+{str(ex)[:40]}")
     return _redir("/admin/admins?flash=رمز+سوپرادمین+تغییر+کرد")
@@ -6675,20 +6748,31 @@ def _fetch_order_logs(conn, limit: int = 50):
     ⚠️ طبق درخواست صریح مالک پروژه (بخش ۴۳ CLAUDE.md)، تاریخچهٔ فعالیت سفارش‌ها
     فقط در همین یک نقطه (پایین صفحهٔ لیست سفارش‌ها) نمایش داده می‌شه — نسخهٔ
     قبلی این تابع یک شاخهٔ per-order هم داشت (برای کارت تاریخچهٔ هاب «وضعیت
-    سفارش») که عمداً حذف شد تا این اطلاعات دوبار/دو-جا نمایش داده نشه."""
+    سفارش») که عمداً حذف شد تا این اطلاعات دوبار/دو-جا نمایش داده نشه.
+
+    ⚠️ رفع کارایی: CREATE TABLE/INDEX قبلاً هر بار (یعنی هر بار صفحهٔ لیست سفارش‌ها
+    باز می‌شد) اجرا می‌شد. حالا با فلگ per-process فقط یک‌بار امتحان می‌شه — دقیقاً
+    الگوی _INDEXES_DONE در db.py (بخش ۲۴ سند)."""
+    global _ADMIN_LOGS_SCHEMA_READY
     try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS admin_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_id   INTEGER,
-                admin_name TEXT,
-                action     TEXT NOT NULL,
-                section    TEXT,
-                details    TEXT,
-                ip         TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-            );
-        """)
+        if not _ADMIN_LOGS_SCHEMA_READY:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS admin_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id   INTEGER,
+                    admin_name TEXT,
+                    action     TEXT NOT NULL,
+                    section    TEXT,
+                    details    TEXT,
+                    ip         TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                );
+            """)
+            # کوئری این تابع WHERE section=? ORDER BY id DESC می‌زنه — بدون ایندکس
+            # با رشد admin_logs (هر اکشن ادمین یک ردیف) هر بار full-scan می‌شه.
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_logs_section ON admin_logs(section, id);")
+            conn.commit()
+            _ADMIN_LOGS_SCHEMA_READY = True
         return conn.execute(
             "SELECT * FROM admin_logs WHERE section=? ORDER BY id DESC LIMIT ?;",
             ("سفارش‌ها", limit)

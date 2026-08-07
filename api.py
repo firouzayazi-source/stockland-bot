@@ -113,7 +113,17 @@ def _auth(request: Request) -> int:
     # compare_digest به‌جای `in` ساده — مقایسهٔ ثابت‌زمان، هم‌راستا با بقیهٔ
     # چک‌های راز/کلید پروژه (INTERNAL_API_SECRET، initData، سشن ادمین)
     if api_key and any(hmac.compare_digest(api_key, k) for k in valid_keys):
-        # user_id از query یا هدر
+        # ⚠️ رفع امنیتی (بخش ۱۳ آیتم ۸ سند): X-User-Id بدون امضا بود — هر کسی با
+        # یک API_KEY معتبر می‌تونست خودش رو جای هر user_id دلخواه جا بزنه. حالا
+        # علاوه بر API_KEY، هدر X-Internal-Secret هم باید دقیقاً INTERNAL_API_SECRET
+        # باشه — همون رازی که از قبل /payment/create رو محافظت می‌کنه (بخش ۱۳ آیتم
+        # ۱۱، خودکار تولیدشده اگه env ست نشه). چون این مسیر صرفاً برای کلاینت‌های
+        # داخلی/تستیه، هر فراخوان مشروع از قبل به همین راز هم دسترسی داره.
+        from config import INTERNAL_API_SECRET
+        internal_secret = request.headers.get("X-Internal-Secret", "")
+        if not (INTERNAL_API_SECRET and hmac.compare_digest(internal_secret, INTERNAL_API_SECRET)):
+            raise HTTPException(status_code=401, detail="احراز هویت ناموفق")
+        # user_id از هدر
         uid = request.headers.get("X-User-Id", "")
         return int(uid) if uid.isdigit() else 0
     raise HTTPException(status_code=401, detail="احراز هویت ناموفق")
