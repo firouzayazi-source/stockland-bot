@@ -258,6 +258,15 @@ def init_db(db_path=None):
         except sqlite3.OperationalError:
             pass
 
+        # ⚠️ رفع‌شده (بخش ۱۴ آیتم ۳ سند): این ستون در هیچ نسخه‌ای، حتی نصب‌های
+        # تازه، ساخته نمی‌شد — دکمهٔ ادمین «فعال‌سازی چت محصول» همیشه بی‌اثر بود
+        # چون bot.py._get/_set_product_chat_enabled خطای «no such column» رو
+        # بی‌صدا می‌بلعیدن.
+        try:
+            cur.execute('ALTER TABLE products ADD COLUMN chat_enabled INTEGER DEFAULT 0;')
+        except sqlite3.OperationalError:
+            pass
+
 
         # جدول همکاران (نمایندگان)
         cur.execute(
@@ -990,8 +999,11 @@ def add_product(category: str, title: str, price: int, description: str = "", is
     conn = _get_connection()
     cur = conn.cursor()
     # discover columns in products table
+    # ⚠️ رفع‌شده (بخش ۱۴ آیتم ۶ سند): قبلاً اینجا `cols = set()` بدون هیچ پر شدنی
+    # بود — یعنی 'product_key' in cols همیشه False می‌شد و ستون NOT NULL
+    # product_key هیچ‌وقت درج نمی‌شد → ویزارد افزودن محصول با IntegrityError می‌شکست.
     try:
-        cols = set()  # ستون‌ها از مهاجرت تضمین شده‌اند
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(products);").fetchall()}
     except Exception:
         cols = set()
 
@@ -1022,6 +1034,30 @@ def add_product(category: str, title: str, price: int, description: str = "", is
     conn.commit()
     conn.close()
     return pid
+
+def get_product_chat_enabled(product_id: int) -> int:
+    """چک chat_enabled برای محصول — از _get_connection() استفاده می‌کنه (به‌جای
+    sqlite3.connect خام مستقلی که قبلاً در bot.py بود، بخش ۱۴ آیتم ۳ سند)."""
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def set_product_chat_enabled(product_id: int, enabled: int) -> None:
+    conn = _get_connection()
+    try:
+        conn.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
 
 def delete_product(product_id: int) -> None:
     """حذف واقعی (Hard Delete) یک محصول بر اساس id.

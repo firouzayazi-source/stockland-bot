@@ -715,6 +715,8 @@ from db import (
     ticket_get_open_product, ticket_add_message, ticket_user_sent,
     ticket_admin_replied, ticket_close, ticket_get_messages,
     ticket_count_waiting, ticket_get_all, TICKET_MAX_USER_MSGS,
+    get_product_chat_enabled as _db_get_product_chat_enabled,
+    set_product_chat_enabled as _db_set_product_chat_enabled,
 )
 
 BOT_BASE_URL = os.getenv("BOT_WEBHOOK_URL", "").rstrip("/")
@@ -722,30 +724,17 @@ PANEL_URL = "https://panel.stland.ir/admin"
 
 
 def _get_product_chat_enabled(product_id: int) -> int:
-    """چک chat_enabled برای محصول."""
-    try:
-        import sqlite3 as _sq3
-        _c = _sq3.connect(DB_FULL_PATH)
-        try:
-            row = _c.execute("SELECT chat_enabled FROM products WHERE id=? LIMIT 1;", (int(product_id),)).fetchone()
-            return int(row[0] or 0) if row else 0
-        finally:
-            _c.close()
-    except Exception:
-        return 0
+    """چک chat_enabled برای محصول.
+    ⚠️ رفع‌شده (بخش ۱۴ آیتم ۳ سند): قبلاً این تابع با sqlite3.connect خامِ
+    مستقل از db.py کار می‌کرد و روی ستون هیچ‌وقت مهاجرت‌نشدهٔ chat_enabled
+    خطای «no such column» می‌گرفت (بی‌صدا قورت داده می‌شد → همیشه 0). حالا هم
+    ستون مهاجرت شده (db.py:init_db) هم از db.get_product_chat_enabled (که
+    از _get_connection() استفاده می‌کنه، نه اتصال موازی) استفاده می‌کنه."""
+    return _db_get_product_chat_enabled(product_id)
 
 
 def _set_product_chat_enabled(product_id: int, enabled: int) -> None:
-    try:
-        import sqlite3 as _sq3
-        _c = _sq3.connect(DB_FULL_PATH)
-        try:
-            _c.execute("UPDATE products SET chat_enabled=? WHERE id=?;", (int(enabled), int(product_id)))
-            _c.commit()
-        finally:
-            _c.close()
-    except Exception:
-        pass
+    _db_set_product_chat_enabled(product_id, enabled)
 
 
 def _tg_send_to_user(user_id: int, text: str, reply_markup=None, parse_mode="HTML") -> bool:
