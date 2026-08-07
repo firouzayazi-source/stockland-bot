@@ -1804,7 +1804,9 @@ def list_partner_requests(status: str | None = None, query: str | None = None, l
             params.append(status)
         if query:
             q = f"%{query.strip()}%"
-            sql += " AND (phone LIKE ? OR username LIKE ? OR full_name LIKE ? OR city LIKE ? OR shop_name LIKE ?)"
+            # LOWER(...) LIKE LOWER(?) — یوزرنیم تلگرام همیشه لاتینه؛ LIKE خام
+            # روی SQLite حساس به بزرگ/کوچیک نیست ولی روی Postgres هست (بخش ۵۲).
+            sql += " AND (LOWER(phone) LIKE LOWER(?) OR LOWER(username) LIKE LOWER(?) OR LOWER(full_name) LIKE LOWER(?) OR LOWER(city) LIKE LOWER(?) OR LOWER(shop_name) LIKE LOWER(?))"
             params.extend([q, q, q, q, q])
         sql += " ORDER BY id DESC LIMIT ? OFFSET ?;"
         params.extend([int(limit), int(offset)])
@@ -7307,7 +7309,8 @@ def get_tutorials(category_id: int = None, tag: str = None, status: str = None,
             query += " AND category_id=?"
             params.append(int(category_id))
         if q:
-            query += " AND (title LIKE ? OR short_desc LIKE ?)"
+            # LOWER(...) LIKE LOWER(?) — پرتابل بین SQLite/Postgres (بخش ۵۲)
+            query += " AND (LOWER(title) LIKE LOWER(?) OR LOWER(short_desc) LIKE LOWER(?))"
             like = f"%{q}%"
             params += [like, like]
         rows = conn.execute(query, tuple(params)).fetchall()

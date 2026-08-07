@@ -16,7 +16,11 @@ def list_products(category: str = "", active_only: bool = True, limit: int = 100
             where.append("category=?")
             params.append(category)
         if q:
-            where.append("(title LIKE ? OR description LIKE ?)")
+            # LOWER(...) LIKE LOWER(?) به‌جای LIKE خام — روی SQLite، LIKE پیش‌فرض
+            # برای حروف ASCII حساس به بزرگ/کوچیک نیست؛ روی Postgres LIKE حساسه
+            # (باید ILIKE باشه). LOWER() هر دو دیالوگ رو یکسان و پرتابل می‌کنه —
+            # مهم چون خیلی از عنوان محصولات (اپل آیدی، iPhone، ...) کلمهٔ لاتین دارن.
+            where.append("(LOWER(title) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?))")
             like = f"%{q}%"
             params.append(like)
             params.append(like)

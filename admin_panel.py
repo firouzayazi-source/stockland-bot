@@ -5095,7 +5095,7 @@ async def products_list(request: Request, page: int = 0, q: str = "", flash: str
     PAGE = 50
     conn = _db()
     try:
-        where = "WHERE (p.title LIKE ? OR p.category LIKE ?)" if q else ""
+        where = "WHERE (LOWER(p.title) LIKE LOWER(?) OR LOWER(p.category) LIKE LOWER(?))" if q else ""
         params_q = (f"%{q}%", f"%{q}%") if q else ()
         total = conn.execute(f"SELECT COUNT(*) FROM products p {where};", params_q).fetchone()[0]
         products = conn.execute(f"""
@@ -6338,8 +6338,8 @@ async def feed_clear(request: Request, pid: int, background_tasks: BackgroundTas
             # حذف دسته‌ای با LIMIT برای جلوگیری از قفل شدن DB
             while True:
                 r = conn.execute(
-                    "DELETE FROM product_feed WHERE rowid IN "
-                    "(SELECT rowid FROM product_feed WHERE product_id=? AND delivered=1 LIMIT 500);",
+                    "DELETE FROM product_feed WHERE id IN "
+                    "(SELECT id FROM product_feed WHERE product_id=? AND delivered=1 LIMIT 500);",
                     (product_id,)
                 )
                 conn.commit()
@@ -6746,7 +6746,7 @@ async def orders_export_excel(request: Request, q: str = "", status: str = ""):
     try:
         wheres, params = [], []
         if q:
-            wheres.append("(title LIKE ? OR CAST(user_id AS TEXT) LIKE ?)")
+            wheres.append("(LOWER(title) LIKE LOWER(?) OR CAST(user_id AS TEXT) LIKE ?)")
             params += [f"%{q}%", f"%{q}%"]
         if status:
             wheres.append("status=?"); params.append(status)
@@ -7716,7 +7716,7 @@ async def users_list(request: Request, page: int = 0, q: str = "", sort: str = "
     conn = _db()
     try:
         sort_col = sort if sort in ("user_id","full_name","first_seen","last_seen","orders","balance") else "last_seen"
-        where = "WHERE u.user_id=? OR u.username LIKE ? OR u.full_name LIKE ?" if q else ""
+        where = "WHERE u.user_id=? OR LOWER(u.username) LIKE LOWER(?) OR LOWER(u.full_name) LIKE LOWER(?)" if q else ""
         params = (int(q) if q.isdigit() else 0, f"%{q}%", f"%{q}%") if q else ()
         total = conn.execute(f"SELECT COUNT(*) FROM users u {where};", params).fetchone()[0]
         users = conn.execute(f"""
@@ -8144,7 +8144,7 @@ async def admin_logs_page(request: Request, q: str = "", section: str = "", admi
 
         wheres, params = [], []
         if q:
-            wheres.append("(admin_name LIKE ? OR action LIKE ? OR details LIKE ?)")
+            wheres.append("(LOWER(admin_name) LIKE LOWER(?) OR LOWER(action) LIKE LOWER(?) OR LOWER(details) LIKE LOWER(?))")
             params += [f"%{q}%", f"%{q}%", f"%{q}%"]
         if section:
             wheres.append("section=?"); params.append(section)
