@@ -985,6 +985,10 @@ function _accPopup(title,html){
   window._slApp.popup.open('#post-popup');
 }
 function _accBody(){return document.querySelector('#post-body .sl-acc-page')}
+// این چهار helper محلیِ IIFE هستن؛ چون بخش‌های «خرید» و «گردونه» (پایین‌تر، بعد از
+// بستن IIFE اصلی) در scope سراسری اجرا می‌شن، باید مثل api/esc/fmt روی window هم
+// در دسترس باشن — وگرنه گردونه/جوایز من با «Can't find variable: _accPopup» می‌شکنن.
+window._accPopup=_accPopup;window._accBody=_accBody;window._slSkel=skel;window._slErr=err;
 
 /* ─── کیف‌پول ─── */
 function openWallet(){
@@ -2043,7 +2047,13 @@ window._doPay=function(method){
 
 /* ═══ گردونهٔ شانس ═══
    انتخاب جایزه ۱۰۰٪ سمت سرور (core/wheel.py) — این‌جا فقط انیمیشن/صدا/لرزش
-   اجرا می‌شه، هیچ منطقی روی نتیجه اثر نداره. */
+   اجرا می‌شه، هیچ منطقی روی نتیجه اثر نداره.
+
+   ⚠️ این بخش (مثل «خرید» بالاتر) بیرون از IIFE اصلی در scope سراسری اجرا می‌شه —
+   پس helperهای محلیِ IIFE مستقیم در دسترس نیستن. اینجا به‌عنوان alias از window
+   می‌گیریمشون تا کدِ زیر بتونه با همون نام‌های آشنا (_accPopup/skel/...) کار کنه. */
+var _accPopup=window._accPopup,_accBody=window._accBody,skel=window._slSkel,err=window._slErr,
+    api=window._slApi,esc=window._slEsc,fmt=window._slFmt,initData=window._slInitData;
 
 /* ─── صدا (WebAudio تولیدشده، بدون فایل باینری/CDN خارجی) ─── */
 var _wheelAudioCtx=null;
@@ -2131,8 +2141,7 @@ function _wheelSegAngles(n){
 }
 
 function openWheel(){
-  var _wtitle='\uD83C\uDFA1 گردونهٔ شانس';
-  _accPopup(_wtitle,skel(3));
+  _accPopup('🎡 گردونهٔ شانس',skel(3));
   api('/wheel/state',true).then(function(d){
     var b=_accBody();if(!b)return;
     if(!d.enabled||!d.campaign||!d.prizes||!d.prizes.length){
@@ -2266,8 +2275,7 @@ function showWheelResult(container,state,res){
 var _wheelStatusLabel={active:'✅ قابل استفاده',used:'☑️ استفاده‌شده',expired:'⌛ منقضی‌شده',inactive:'🚫 غیرفعال'};
 
 function openMyPrizes(){
-  var _ptitle='\uD83C\uDF81 جوایز من';
-  _accPopup(_ptitle,skel(3));
+  _accPopup('🎁 جوایز من',skel(3));
   api('/me/prizes',true).then(function(d){
     var b=_accBody();if(!b)return;
     var items=(d&&d.items)||[];
