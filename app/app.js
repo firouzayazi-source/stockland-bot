@@ -609,7 +609,7 @@ function loadMe(){if(_m)return;_m=1;
     '<div class="sl-wallet-b" id="me-bal"><div class="sl-skel" style="margin:0;background:transparent"><div class="b w40" style="height:24px"></div></div></div>'+
     '<div class="sl-wallet-acts"><a class="sl-wallet-a" href="#" id="me-wallet-charge" style="width:100%">＋ شارژ کیف‌پول</a></div></div>'+
     '<div class="sl-group"><a class="sl-row" href="#" id="me-notif-row"><span class="sl-ric" style="background:#7C3AED">🔔</span><span class="sl-row-grow">اعلان‌ها</span><span class="sl-badge" id="me-notif-badge" style="display:none">جدید</span><span class="sl-chev">‹</span></a>'+
-    '<a class="sl-row" href="#" id="me-prizes-row"><span class="sl-ric" style="background:#F59E0B">🎁</span><span class="sl-row-grow">جوایز من</span><span class="sl-chev">‹</span></a>'+
+    '<div class="sl-row" id="me-prizes-row"><span class="sl-ric" style="background:#F59E0B">🎁</span><span class="sl-row-grow">جوایز من</span><span class="sl-chev">‹</span></div>'+
     '<a class="sl-row" href="#" id="me-orders-row"><span class="sl-ric" style="background:var(--br)">📦</span><span class="sl-row-grow">سفارش‌های من</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-favs-row"><span class="sl-ric" style="background:#EF4444">♥</span><span class="sl-row-grow">علاقه‌مندی‌ها</span><span class="sl-chev">‹</span></a>'+
     '<a class="sl-row" href="#" id="me-partner-row"><span class="sl-ric" style="background:#F59E0B">🤝</span><span class="sl-row-grow">پنل همکاری</span><span class="sl-badge" id="me-pb" style="display:none">فعال</span><span class="sl-chev">‹</span></a>'+
@@ -645,8 +645,6 @@ function loadMe(){if(_m)return;_m=1;
     var b=document.getElementById('me-notif-badge');
     if(b)b.style.display=items.some(function(n){return !n.is_read})?'':'none';
   }).catch(function(){});
-  var pz_=document.getElementById('me-prizes-row');
-  if(pz_)pz_.addEventListener('click',function(e){e.preventDefault();openMyPrizes()});
   var or_=document.getElementById('me-orders-row');
   if(or_)or_.addEventListener('click',function(e){e.preventDefault();openOrders()});
   var fr_=document.getElementById('me-favs-row');
@@ -1775,7 +1773,9 @@ document.addEventListener('click',function(e){
   var c=e.target.closest('[data-cid]');if(c){openC(c.dataset.cid);return}
   var tu=e.target.closest('[data-tid]');if(tu){openTutorial(tu.dataset.tid);return}
   var co=e.target.closest('[data-checkout]');if(co){openCheckout(co.dataset.checkout);return}
-  var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click()}
+  var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click();return}
+  var wc=e.target.closest('#wheel-tool-card');if(wc){e.preventDefault();openWheel();return}
+  var mp=e.target.closest('#me-prizes-row');if(mp){e.preventDefault();openMyPrizes();return}
 });
 
 /* ═══ Mira-style snap navbar ═══ */
@@ -2296,8 +2296,3 @@ function openMyPrizes(){
   }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت جوایز')});
 }
 window.openMyPrizes=openMyPrizes;
-
-(function(){
-  var card=document.getElementById('wheel-tool-card');
-  if(card)card.addEventListener('click',function(ev){ev.preventDefault();openWheel()});
-})();
