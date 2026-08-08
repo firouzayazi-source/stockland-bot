@@ -981,6 +981,7 @@ window.openFavorites=openFavorites;
 /* ═══ صفحات حساب (کیف‌پول/همکاری/دعوت) — از post-popup به‌عنوان ظرف عمومی استفاده می‌کنند ═══ */
 function _accPopup(title,html){
   var t=document.getElementById('post-title'),b=document.getElementById('post-body');
+  b.classList.remove('sl-wg-host'); // ریست حالت immersive گردونه برای بقیهٔ پاپ‌آپ‌ها
   t.textContent=title;b.innerHTML='<div class="sl-acc-page">'+html+'</div>';
   window._slApp.popup.open('#post-popup');
 }
@@ -2140,169 +2141,298 @@ function _wheelSegAngles(n){
   return arr;
 }
 
+/* ═══ آیکون‌های SVG جایزه (بدون ایموجی خام — طبق درخواست redesign) ═══ */
+function _wgIcon(type){
+  var s='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">';
+  var p={
+    wallet_credit:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 9h18"/><circle cx="16.5" cy="12.5" r="1.3" fill="currentColor" stroke="none"/>',
+    discount_percent:'<path d="M8 8h.01M16 16h.01M7 17L17 7"/><circle cx="7.5" cy="7.5" r="2"/><circle cx="16.5" cy="16.5" r="2"/>',
+    discount_fixed:'<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7-7a2 2 0 0 1-.6-1.4V5a2 2 0 0 1 2-2h6.2a2 2 0 0 1 1.4.6l7 7a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1.1" fill="currentColor" stroke="none"/>',
+    extra_spin:'<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v4h-4"/>',
+    physical_gift:'<rect x="3.5" y="9" width="17" height="12" rx="1.6"/><path d="M3.5 13h17M12 9v12"/><path d="M12 9S10.5 4.5 8 5.2 8.8 9 12 9Zm0 0s1.5-4.5 4-3.8S15.2 9 12 9Z"/>',
+    no_win:'<circle cx="12" cy="12" r="9"/><path d="M9 15s1-1.4 3-1.4S15 15 15 15M9 9h.01M15 9h.01"/>'
+  }[type]||'<path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6-5.4-3-5.4 3 1.2-6L3.4 9.3l6-.7Z"/>';
+  return s+p+'</svg>';
+}
+function _wgStar(){return '<svg viewBox="0 0 24 24" fill="#8A5E12"><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 18.9 6.1 20.6l1.3-6.6-4.9-4.6 6.6-.8z"/></svg>'}
+function _wgPtr(){return '<svg viewBox="0 0 26 34"><defs><linearGradient id="wgptr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FCE08A"/><stop offset="1" stop-color="#E29B33"/></linearGradient></defs><path d="M13 33 3 12a10 10 0 1 1 20 0Z" fill="url(#wgptr)" stroke="#8A5E12" stroke-width="1"/><circle cx="13" cy="11" r="3.4" fill="#0A0918"/></svg>'}
+
+/* برچسب بزرگ ارزش جایزه (برای مودال) */
+function _wgValueBig(p){
+  if(p.prize_type==='wallet_credit')return {v:fmt(p.amount||0)+' <small style="font-size:16px">تومان</small>',plain:false};
+  if(p.prize_type==='extra_spin')return {v:'چرخش اضافه',plain:true};
+  if(p.prize_type==='no_win')return {v:'این‌بار شانس نیاوردی',plain:true};
+  return {v:esc(p.title||''),plain:false};
+}
+
+/* ═══ باز کردن گردونه — چیدمان کامل Premium ═══ */
 function openWheel(){
-  _accPopup('🎡 گردونهٔ شانس',skel(3));
+  _accPopup('گردونهٔ شانس',skel(3));
+  var pb=document.getElementById('post-body');if(pb)pb.classList.add('sl-wg-host');
   api('/wheel/state',true).then(function(d){
     var b=_accBody();if(!b)return;
     if(!d.enabled||!d.campaign||!d.prizes||!d.prizes.length){
-      b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎡</span>گردونهٔ شانس فعلاً غیرفعاله — به‌زودی برگرد!</div>';
+      b.innerHTML='<div class="sl-wg"><div class="sl-wg-empty" style="padding:80px 24px">🎡 گردونهٔ شانس فعلاً غیرفعاله — به‌زودی برگرد!</div></div>';
       return;
     }
-    renderWheel(b,d);
-  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت گردونه')});
+    renderWheelPage(b,d);
+  }).catch(function(){var b=_accBody();if(b)b.innerHTML='<div class="sl-wg"><div class="sl-wg-empty" style="padding:80px 24px">خطا در دریافت گردونه</div></div>'});
 }
 window.openWheel=openWheel;
 
-function renderWheel(container,state){
-  var prizes=state.prizes,n=prizes.length,step=360/n;
-  var segAngles=_wheelSegAngles(n);
-  var gradParts=prizes.map(function(p,i){return esc(p.color)+' '+(i*step)+'deg '+((i+1)*step)+'deg'}).join(',');
-  var labelsHtml=prizes.map(function(p,i){
-    var mid=segAngles[i].mid;
-    return '<div class="sl-wheel-label" style="transform:rotate('+mid+'deg)">'+
-      '<span class="sl-wheel-label-ico" style="transform:translate(-50%,-50%) rotate('+(-mid)+'deg)">'+
-      esc(p.icon)+
-      (state.settings.show_odds&&p.percent!=null?'<b class="sl-wheel-label-pct">'+p.percent+'٪</b>':'')+
-      '</span></div>';
-  }).join('');
-  var canSpin=!!state.can_spin&&state.spins_remaining!==0;
-  var remainingText=state.spins_remaining<0?'چرخش نامحدود':
-    (state.spins_remaining>0?(fmt(state.spins_remaining)+' چرخش باقیمانده امروز'):'چرخش امروزت تمام شده — فردا دوباره بیا 🌙');
-
+function renderWheelPage(container,state){
+  var s=state.settings||{};
+  var rem=state.spins_remaining;
+  var badge=rem<0?'∞':fmt(Math.max(0,rem));
   container.innerHTML=
-    '<div class="sl-wheel-wrap">'+
-      '<div class="sl-wheel-glow"></div>'+
-      '<div class="sl-wheel-pointer">🔻</div>'+
-      '<div class="sl-wheel-disc" id="wheel-disc" style="background:conic-gradient('+gradParts+')">'+labelsHtml+'</div>'+
-      '<button class="sl-wheel-hub" id="wheel-spin-btn"'+(canSpin?'':' disabled')+'>'+(canSpin?'بچرخون!':'۰')+'</button>'+
-    '</div>'+
-    '<div class="sl-wheel-remaining">'+esc(remainingText)+'</div>'+
-    (state.settings.description?'<div class="sl-wheel-desc">'+esc(state.settings.description)+'</div>':'');
-
-  var btn=document.getElementById('wheel-spin-btn');
-  if(btn&&canSpin)btn.addEventListener('click',function(){doWheelSpin(container,state)});
+    '<div class="sl-wg">'+
+      '<div class="sl-wg-hero">'+
+        '<div class="sl-wg-hero-ic">'+_wgIcon('extra_spin')+'</div>'+
+        '<div class="sl-wg-hero-tx"><div class="sl-wg-hero-t">'+esc(state.campaign.title||'گردونهٔ شانس')+'</div>'+
+          '<div class="sl-wg-hero-s">'+esc(s.description||'هر روز یک شانس رایگان برای بردن جایزه!')+'</div></div>'+
+        '<div class="sl-wg-hero-badge"><b>'+badge+'</b><span>چرخش امروز</span></div>'+
+      '</div>'+
+      '<div class="sl-wg-stage" id="wg-stage"></div>'+
+      '<button class="sl-wg-cta" id="wg-cta"></button>'+
+      '<div class="sl-wg-cta-sub" id="wg-cta-sub"></div>'+
+      '<div class="sl-wg-sec" id="wg-rewards" style="display:none">'+
+        '<div class="sl-wg-sec-h"><b>🎁 جوایز من</b><a href="#" id="wg-rewards-all">مشاهده همه</a></div>'+
+        '<div id="wg-rewards-list"></div>'+
+      '</div>'+
+      '<div class="sl-wg-sec" id="wg-activity" style="display:none">'+
+        '<div class="sl-wg-sec-h"><b>فعالیت اخیر</b></div>'+
+        '<div id="wg-activity-list"></div>'+
+      '</div>'+
+    '</div>';
+  buildWheel(document.getElementById('wg-stage'),state);
+  wireCta(container,state);
+  loadRewardsPreview();
+  loadActivity();
 }
 
-function doWheelSpin(container,state){
-  if(_wheelSpinning)return;
-  _wheelSpinning=true;
-  var btn=document.getElementById('wheel-spin-btn');
-  if(btn){btn.disabled=true;btn.textContent='…'}
-  var duration=state.settings.animation_duration_ms||4200;
-  if(state.settings.sound_enabled)_wheelSoundTicksStart(duration);
-  if(state.settings.haptic_enabled)_wheelHaptic('tick');
+/* ساخت گردونهٔ چندلایه */
+function buildWheel(stage,state){
+  var prizes=state.prizes,n=prizes.length,step=360/n;
+  var seg=_wheelSegAngles(n);
+  var grad=prizes.map(function(p,i){return esc(p.color)+' '+(i*step)+'deg '+((i+1)*step)+'deg'}).join(',');
+  var stageW=Math.min(window.innerWidth*0.8,320);
+  var labelR=Math.round((stageW-28)*0.30);
+  var spokes='',labels='';
+  for(var i=0;i<n;i++){
+    spokes+='<div class="sl-wg-spoke" style="transform:rotate('+(i*step)+'deg)"></div>';
+    var mid=seg[i].mid,p=prizes[i];
+    labels+='<div class="sl-wg-lbl" data-i="'+i+'" style="transform:rotate('+mid+'deg)">'+
+      '<div class="sl-wg-lbl-in" style="top:-'+labelR+'px;transform:translate(-50%,-50%) rotate('+(-mid)+'deg)">'+
+      '<span style="color:#fff">'+_wgIcon(p.prize_type)+'</span>'+
+      '<span class="sl-wg-lbl-t">'+esc(p.title||'')+'</span>'+
+      (state.settings.show_odds&&p.percent!=null?'<span class="sl-wg-lbl-pct">'+p.percent+'٪</span>':'')+
+      '</div></div>';
+  }
+  var lamps='',NL=16;
+  for(var j=0;j<NL;j++){
+    var a=j*(360/NL)*Math.PI/180;
+    lamps+='<span class="sl-wg-lamp" style="left:'+(50+46.5*Math.cos(a)).toFixed(2)+'%;top:'+(50+46.5*Math.sin(a)).toFixed(2)+'%;animation-delay:'+(j*0.09).toFixed(2)+'s"></span>';
+  }
+  stage.innerHTML=
+    '<div class="sl-wg-halo"></div>'+
+    '<div class="sl-wg-ring"><div class="sl-wg-ring-in"></div></div>'+
+    '<div class="sl-wg-disc" id="wg-disc" style="background:conic-gradient('+grad+')">'+spokes+labels+'</div>'+
+    '<div class="sl-wg-lights">'+lamps+'</div>'+
+    '<div class="sl-wg-hub">'+_wgStar()+'</div>'+
+    '<div class="sl-wg-ptr">'+_wgPtr()+'</div>';
+}
 
+function wireCta(container,state){
+  var cta=document.getElementById('wg-cta'),sub=document.getElementById('wg-cta-sub');
+  var rem=state.spins_remaining,can=!!state.can_spin&&rem!==0;
+  if(can){
+    cta.textContent='چرخوندن گردونه';cta.disabled=false;
+    sub.innerHTML=rem<0?'<b>چرخش نامحدود</b> برای امروز':(rem===1?'<b>۱ چرخش رایگان</b> امروز':'<b>'+fmt(rem)+' فرصت</b> باقی مانده');
+    cta.onclick=function(){doWheelSpin(container,state)};
+  }else{
+    cta.textContent='چرخش امروز تمام شد';cta.disabled=true;
+    sub.innerHTML='فردا دوباره برگرد و شانست رو امتحان کن 🌙';
+  }
+}
+
+/* چرخش — نتیجه ۱۰۰٪ سمت سرور؛ Frontend فقط انیمیشن */
+function doWheelSpin(container,state){
+  if(_wheelSpinning)return;_wheelSpinning=true;
+  var cta=document.getElementById('wg-cta');
+  if(cta){cta.disabled=true;cta.textContent='در حال چرخش…'}
+  var dur=state.settings.animation_duration_ms||4200;
+  if(state.settings.sound_enabled)_wheelSoundTicksStart(dur);
+  if(state.settings.haptic_enabled)_wheelHaptic('tick');
+  var disc=document.getElementById('wg-disc');
+  if(disc)disc.classList.add('spinning');
   var headers={'Content-Type':'application/json'};
   if(initData)headers['X-Telegram-Init-Data']=initData;
-  fetch('/api/v1/wheel/spin',{method:'POST',headers:headers,
-    body:JSON.stringify({device_fingerprint:_wheelDeviceFp()})})
+  fetch('/api/v1/wheel/spin',{method:'POST',headers:headers,body:JSON.stringify({device_fingerprint:_wheelDeviceFp()})})
     .then(function(r){return r.json()}).then(function(res){
       _wheelSoundTicksStop();
       if(!res.ok){
-        _wheelSpinning=false;
-        if(btn){btn.disabled=false;btn.textContent='بچرخون!'}
+        _wheelSpinning=false;if(disc)disc.classList.remove('spinning');
+        wireCta(container,{settings:state.settings,spins_remaining:(res.spins_remaining!=null?res.spins_remaining:state.spins_remaining),can_spin:res.spins_remaining!==0,campaign:state.campaign});
         window._slApp.dialog.alert(res.error||'خطا در چرخش گردونه','گردونهٔ شانس');
-        var rt=container.querySelector('.sl-wheel-remaining');
-        if(rt&&res.spins_remaining===0)rt.textContent='چرخش امروزت تمام شده — فردا دوباره بیا 🌙';
         return;
       }
       var prizes=state.prizes,idx=prizes.findIndex(function(p){return p.id===res.prize.id});
       if(idx<0)idx=prizes.length-1;
-      var segAngles=_wheelSegAngles(prizes.length),targetMid=segAngles[idx].mid;
-      var jitter=(Math.random()-.5)*(360/prizes.length)*.5;
-      var extraTurns=5+Math.floor(Math.random()*2);
-      var baseFloor=_wheelRotation-(_wheelRotation%360);
-      var finalRotation=baseFloor+extraTurns*360+(360-targetMid)+jitter;
-      _wheelRotation=finalRotation;
-      var disc=document.getElementById('wheel-disc');
-      if(disc){
-        disc.style.transition='transform '+duration+'ms cubic-bezier(.13,.72,.14,1)';
-        disc.style.transform='rotate('+finalRotation+'deg)';
-      }
+      var seg=_wheelSegAngles(prizes.length),tMid=seg[idx].mid;
+      var jitter=(Math.random()-.5)*(360/prizes.length)*.45;
+      var turns=5+Math.floor(Math.random()*2);
+      var base=_wheelRotation-(_wheelRotation%360);
+      var fin=base+turns*360+(360-tMid)+jitter;_wheelRotation=fin;
+      if(disc){disc.style.transition='transform '+dur+'ms cubic-bezier(.16,.73,.12,1)';disc.style.transform='rotate('+fin+'deg)'}
       setTimeout(function(){
-        _wheelSpinning=false;
-        if(state.settings.haptic_enabled)_wheelHaptic(res.prize.prize_type==='no_win'?'nowin':'win');
-        if(state.settings.sound_enabled){
-          if(res.prize.prize_type==='no_win')_wheelSoundNoWin();else _wheelSoundWin();
-        }
-        if(res.prize.prize_type!=='no_win')_wheelConfetti(container.querySelector('.sl-wheel-wrap'));
-        showWheelResult(container,state,res);
-      },duration+150);
+        _wheelSpinning=false;if(disc)disc.classList.remove('spinning');
+        var win=res.prize.prize_type!=='no_win';
+        if(state.settings.haptic_enabled)_wheelHaptic(win?'win':'nowin');
+        if(state.settings.sound_enabled){win?_wheelSoundWin():_wheelSoundNoWin()}
+        var lbl=disc&&disc.querySelector('.sl-wg-lbl[data-i="'+idx+'"]');
+        if(lbl&&win)lbl.classList.add('win');
+        if(win)_wheelConfetti(document.getElementById('wg-stage'));
+        // بروزرسانی موجودی کیف‌پول تب حساب
+        if(res.wallet_balance!=null){var mb=document.getElementById('me-bal');if(mb)mb.innerHTML='<small>تومان</small> '+fmt(res.wallet_balance)}
+        setTimeout(function(){showWinModal(res,function(){
+          if(lbl)lbl.classList.remove('win');
+          // رفرش وضعیت CTA + پیش‌نمایش‌ها
+          var newRem=res.spins_remaining;
+          state.spins_remaining=newRem;
+          wireCta(container,state);
+          var badge=document.querySelector('.sl-wg-hero-badge b');if(badge)badge.textContent=(newRem<0?'∞':fmt(Math.max(0,newRem)));
+          loadRewardsPreview();loadActivity();
+        })},450);
+      },dur+120);
     }).catch(function(){
-      _wheelSoundTicksStop();
-      _wheelSpinning=false;
-      if(btn){btn.disabled=false;btn.textContent='بچرخون!'}
+      _wheelSoundTicksStop();_wheelSpinning=false;if(disc)disc.classList.remove('spinning');
+      wireCta(container,state);
       window._slApp.dialog.alert('خطای شبکه — دوباره امتحان کن','گردونهٔ شانس');
     });
 }
 
-function showWheelResult(container,state,res){
-  var p=res.prize;
-  var win=p.prize_type!=='no_win';
-  var codeBlock='';
+/* مودال برد — شیشه‌ای، روی کل صفحه */
+function showWinModal(res,onClose){
+  var p=res.prize,win=p.prize_type!=='no_win';
+  var big=_wgValueBig(p);
+  var codeHtml='';
   if(p.discount_code){
-    codeBlock='<div class="sl-wheel-code-box"><code id="wheel-won-code">'+esc(p.discount_code)+'</code>'+
-      '<button class="sl-wheel-copy-btn" id="wheel-copy-code">📋 کپی</button></div>'+
-      (p.expires_at?'<div class="sl-wheel-expiry">تا '+esc(p.expires_at)+' قابل استفاده</div>':'');
+    codeHtml='<div class="sl-wm-codewrap"><div class="sl-wm-codelabel">کد تخفیف شما</div>'+
+      '<div class="sl-wm-code"><code id="wm-code">'+esc(p.discount_code)+'</code>'+
+      '<button class="sl-wm-code-copy" id="wm-copy">کپی کد</button></div>'+
+      (p.expires_at?'<div class="sl-wm-exp">اعتبار تا '+esc(p.expires_at)+'</div>':'')+'</div>';
   }
-  container.innerHTML=
-    '<div class="sl-wheel-result">'+
-      '<div class="sl-wheel-result-ico">'+esc(p.icon)+'</div>'+
-      '<div class="sl-wheel-result-t">'+esc(p.title)+'</div>'+
-      (p.description?'<div class="sl-wheel-result-d">'+esc(p.description)+'</div>':'')+
-      codeBlock+
-      '<div class="sl-wheel-result-acts">'+
-        (p.discount_code?'<button class="sl-checkout-btn sl-checkout-btn-wallet" id="wheel-goto-prizes">🎁 دیدن در جوایز من</button>':'')+
-        '<button class="sl-checkout-btn sl-checkout-btn-gateway" id="wheel-again-btn">بازگشت</button>'+
-      '</div>'+
-    '</div>';
-  var cp=document.getElementById('wheel-copy-code');
-  if(cp)cp.addEventListener('click',function(){
-    var code=document.getElementById('wheel-won-code').textContent;
-    if(navigator.clipboard)navigator.clipboard.writeText(code).then(function(){cp.textContent='✅ کپی شد'});
-    else cp.textContent='✅ کپی شد';
-  });
-  var gp=document.getElementById('wheel-goto-prizes');
-  if(gp)gp.addEventListener('click',function(){openMyPrizes()});
-  var ag=document.getElementById('wheel-again-btn');
-  if(ag)ag.addEventListener('click',function(){openWheel()});
-  if(res.wallet_balance!=null){
-    var e2=document.getElementById('me-bal');if(e2)e2.innerHTML='<small>تومان</small> '+fmt(res.wallet_balance);
-  }
-  if(!win){/* بدون برد — کارت نتیجه با لحن ملایم، بدون افکت اضافه */}
+  var subtitle=win?(p.prize_type==='wallet_credit'?'به کیف پول شما اضافه شد':(p.prize_type==='extra_spin'?'یک شانس دیگه گیرت اومد!':'شما برنده شدید')):'';
+  var ov=document.createElement('div');ov.className='sl-wm-ov';
+  ov.innerHTML='<div class="sl-wm">'+
+    '<div class="sl-wm-glow"></div>'+
+    '<div class="sl-wm-ic'+(win?'':' nowin')+'" style="color:#fff">'+_wgIcon(p.prize_type)+'</div>'+
+    '<div class="sl-wm-eyebrow">'+(win?'🎉 تبریک!':'دوباره تلاش کن')+'</div>'+
+    (subtitle?'<div class="sl-wm-title">'+esc(subtitle)+'</div>':'')+
+    '<div class="sl-wm-value'+(big.plain?' plain':'')+'">'+big.v+'</div>'+
+    (p.description&&win?'<div class="sl-wm-desc">'+esc(p.description)+'</div>':'')+
+    codeHtml+
+    '<div class="sl-wm-acts">'+
+      (p.discount_code?'<button class="sl-wm-btn sl-wm-btn-p" id="wm-prizes">مشاهده جوایز من</button>':'')+
+      '<button class="sl-wm-btn '+(p.discount_code?'sl-wm-btn-s':'sl-wm-btn-p')+'" id="wm-close">'+(win?'عالی!':'باشه')+'</button>'+
+    '</div></div>';
+  document.body.appendChild(ov);
+  function close(){ov.remove();if(onClose)onClose()}
+  var cp=ov.querySelector('#wm-copy');
+  if(cp)cp.addEventListener('click',function(){var c=ov.querySelector('#wm-code').textContent;
+    if(navigator.clipboard)navigator.clipboard.writeText(c).then(function(){cp.textContent='✅ کپی شد'});else cp.textContent='✅ کپی شد'});
+  var pz=ov.querySelector('#wm-prizes');if(pz)pz.addEventListener('click',function(){close();openMyPrizes()});
+  ov.querySelector('#wm-close').addEventListener('click',close);
+  ov.addEventListener('click',function(e){if(e.target===ov)close()});
 }
 
-var _wheelStatusLabel={active:'✅ قابل استفاده',used:'☑️ استفاده‌شده',expired:'⌛ منقضی‌شده',inactive:'🚫 غیرفعال'};
+/* پیش‌نمایش «جوایز من» روی صفحهٔ گردونه (تا ۲ کد فعال) */
+function loadRewardsPreview(){
+  api('/me/prizes',true).then(function(d){
+    var sec=document.getElementById('wg-rewards'),list=document.getElementById('wg-rewards-list');
+    if(!sec||!list)return;
+    var act=((d&&d.items)||[]).filter(function(it){return it.status==='active'}).slice(0,2);
+    if(!act.length){sec.style.display='none';return}
+    sec.style.display='';
+    list.innerHTML=act.map(function(it){
+      var vt=it.type==='percent'?(it.value+'٪ تخفیف'):(fmt(it.value)+' تومان تخفیف');
+      return '<div class="sl-wg-reward"><div class="sl-wg-reward-ic" style="color:#F5C451">'+_wgIcon(it.type==='percent'?'discount_percent':'discount_fixed')+'</div>'+
+        '<div class="sl-wg-reward-tx"><div class="sl-wg-reward-t">'+esc(vt)+'</div>'+
+        (it.expires_at?'<div class="sl-wg-reward-s">اعتبار تا '+esc(it.expires_at)+'</div>':'')+'</div>'+
+        '<span class="sl-wg-reward-code">'+esc(it.code)+'</span></div>';
+    }).join('');
+    var all=document.getElementById('wg-rewards-all');
+    if(all)all.onclick=function(e){e.preventDefault();openMyPrizes()};
+  }).catch(function(){});
+}
 
+/* فعالیت اخیر (از /me/wheel-activity — فقط‌خواندنی) */
+function loadActivity(){
+  api('/me/wheel-activity',true).then(function(d){
+    var sec=document.getElementById('wg-activity'),list=document.getElementById('wg-activity-list');
+    if(!sec||!list)return;
+    var items=((d&&d.items)||[]).slice(0,5);
+    if(!items.length){sec.style.display='none';return}
+    sec.style.display='';
+    list.innerHTML=items.map(function(it){
+      var t=it.prize_type;
+      var label=it.prize_title||(t==='wallet_credit'?(fmt(it.amount||0)+' تومان کیف پول'):'جایزه');
+      var extra=t==='wallet_credit'?(fmt(it.amount||0)+' تومان به کیف پول'):(it.discount_code?('کد: '+it.discount_code):'');
+      return '<div class="sl-wg-act"><div class="sl-wg-act-ic" style="color:#F5C451">'+_wgIcon(t)+'</div>'+
+        '<div class="sl-wg-act-tx"><div class="sl-wg-act-t">'+esc(label)+'</div>'+
+        (extra?'<div class="sl-wg-act-d">'+esc(extra)+'</div>':'')+'</div>'+
+        '<div class="sl-wg-act-d">'+esc((it.created_at||'').slice(0,10))+'</div></div>';
+    }).join('');
+  }).catch(function(){});
+}
+
+/* ═══ «جوایز من» — صفحهٔ کامل با کارت‌های پریمیوم + فیلتر ═══ */
+var _wgPzLabel={active:'قابل استفاده',used:'استفاده‌شده',expired:'منقضی‌شده',inactive:'غیرفعال'};
 function openMyPrizes(){
-  _accPopup('🎁 جوایز من',skel(3));
+  _accPopup('جوایز من',skel(3));
   api('/me/prizes',true).then(function(d){
     var b=_accBody();if(!b)return;
     var items=(d&&d.items)||[];
     if(!items.length){
-      b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎁</span>هنوز جایزه‌ای نداری — از گردونهٔ شانس امتحان کن!</div>';
+      b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎁</span>هنوز جایزه‌ای نداری — از گردونهٔ شانس شانست رو امتحان کن!</div>';
       return;
     }
-    b.innerHTML='<div class="sl-prizes-list">'+items.map(function(it){
-      var valTxt=it.type==='percent'
-        ?(it.value+'٪ تخفیف'+(it.max_value?' (تا سقف '+fmt(it.max_value)+' تومان)':''))
-        :(fmt(it.value)+' تومان تخفیف');
-      return '<div class="sl-prize-item sl-prize-'+esc(it.status)+'">'+
-        '<div class="sl-prize-top"><code>'+esc(it.code)+'</code>'+
-        '<span class="sl-prize-status">'+(_wheelStatusLabel[it.status]||esc(it.status))+'</span></div>'+
-        '<div class="sl-prize-val">'+esc(valTxt)+'</div>'+
-        (it.description?'<div class="sl-prize-desc">'+esc(it.description)+'</div>':'')+
-        (it.expires_at?'<div class="sl-prize-exp">تا '+esc(it.expires_at)+'</div>':'')+
-        (it.status==='active'?'<button class="sl-prize-copy" data-code="'+esc(it.code)+'">📋 کپی کد</button>':'')+
-        '</div>';
-    }).join('')+'</div>';
-    b.querySelectorAll('.sl-prize-copy').forEach(function(btn){
-      btn.addEventListener('click',function(){
-        var code=btn.dataset.code;
-        if(navigator.clipboard)navigator.clipboard.writeText(code).then(function(){btn.textContent='✅ کپی شد'});
-        else btn.textContent='✅ کپی شد';
-      });
-    });
+    renderMyPrizes(b,items,'all');
   }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت جوایز')});
 }
 window.openMyPrizes=openMyPrizes;
+
+function renderMyPrizes(b,items,filter){
+  var counts={all:items.length,active:0,used:0,expired:0};
+  items.forEach(function(it){if(it.status==='active')counts.active++;else if(it.status==='used')counts.used++;else if(it.status==='expired')counts.expired++});
+  var chips=[['all','همه'],['active','قابل استفاده'],['used','استفاده‌شده'],['expired','منقضی']];
+  var shown=items.filter(function(it){return filter==='all'||it.status===filter});
+  b.innerHTML=
+    '<div class="sl-pz-filters">'+chips.map(function(c){
+      return '<div class="sl-pz-chip'+(filter===c[0]?' on':'')+'" data-f="'+c[0]+'">'+c[1]+(c[0]!=='all'&&counts[c[0]]?' ('+fmt(counts[c[0]])+')':'')+'</div>';
+    }).join('')+'</div>'+
+    '<div class="sl-pz-list">'+(shown.length?shown.map(function(it){
+      var isPct=it.type==='percent';
+      var val=isPct?(it.value+'٪ تخفیف'):(fmt(it.value)+' تومان تخفیف');
+      var cap=isPct&&it.max_value?('تا سقف '+fmt(it.max_value)+' تومان'):'';
+      var dim=it.status!=='active';
+      return '<div class="sl-pz'+(dim?' is-dim':'')+'">'+
+        '<div class="sl-pz-ic" style="background:'+(isPct?'linear-gradient(145deg,#8B5CF6,#6366F1)':'linear-gradient(145deg,#F59E0B,#E29B33)')+'">'+_wgIcon(isPct?'discount_percent':'discount_fixed')+'</div>'+
+        '<div class="sl-pz-bd">'+
+          '<div class="sl-pz-top"><div class="sl-pz-val">'+esc(val)+'</div>'+
+            '<span class="sl-pz-badge '+esc(it.status)+'">'+(_wgPzLabel[it.status]||esc(it.status))+'</span></div>'+
+          (cap?'<div class="sl-pz-desc">'+esc(cap)+'</div>':(it.description?'<div class="sl-pz-desc">'+esc(it.description)+'</div>':''))+
+          (it.status==='active'?
+            '<div class="sl-pz-code"><code>'+esc(it.code)+'</code><button class="sl-pz-code-btn" data-code="'+esc(it.code)+'">کپی</button></div>':
+            '<div class="sl-pz-code" style="opacity:.7"><code>'+esc(it.code)+'</code></div>')+
+          (it.expires_at?'<div class="sl-pz-exp">اعتبار تا '+esc(it.expires_at)+'</div>':'')+
+        '</div></div>';
+    }).join(''):'<div class="sl-empty" style="padding:36px"><span class="sl-empty-e">📭</span>موردی در این دسته نیست</div>')+'</div>';
+  b.querySelectorAll('.sl-pz-code-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){var c=btn.dataset.code;
+      if(navigator.clipboard)navigator.clipboard.writeText(c).then(function(){btn.textContent='✅'});else btn.textContent='✅'});
+  });
+  b.querySelectorAll('.sl-pz-chip').forEach(function(chip){
+    chip.addEventListener('click',function(){renderMyPrizes(b,items,chip.dataset.f)});
+  });
+}

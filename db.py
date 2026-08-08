@@ -6391,6 +6391,22 @@ def list_wheel_spins(user_q: str = "", prize_type: str = "", campaign_id: int = 
         conn.close()
 
 
+def list_user_wheel_spins(user_id: int, limit: int = 8) -> list[dict]:
+    """آخرین چرخش‌های همین کاربر — برای بخش «فعالیت اخیر» مینی‌اپ (فقط‌خواندنی).
+    از همون جدول wheel_spins موجود می‌خونه، بدون هیچ منطق/جدول تازه."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT prize_type, prize_title, amount, discount_code, created_at "
+            "FROM wheel_spins WHERE user_id=? ORDER BY id DESC LIMIT ?;",
+            (user_id, int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_wheel_stats(date_from: str = "", date_to: str = "") -> dict:
     ensure_wheel_schema()
     conn = _get_connection()

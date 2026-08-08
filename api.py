@@ -480,6 +480,14 @@ async def api_my_prizes(request: Request):
     } for it in items]}
 
 
+@router.get("/me/wheel-activity")
+async def api_wheel_activity(request: Request):
+    """آخرین جوایز/چرخش‌های همین کاربر — بخش «فعالیت اخیر» مینی‌اپ. فقط‌خواندنی."""
+    uid = _auth(request)
+    from db import list_user_wheel_spins
+    return {"ok": True, "items": list_user_wheel_spins(uid, limit=8)}
+
+
 @router.get("/me/notifications")
 async def api_notifications_list(request: Request):
     """تاریخچهٔ اعلان‌ها — موجود شدن/تخفیف علاقه‌مندی‌ها."""
