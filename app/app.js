@@ -7,6 +7,31 @@ var initData=(tg&&tg.initData)||'',tgUser=(tg&&tg.initDataUnsafe&&tg.initDataUns
 var app=new Framework7({el:'#app',name:'استوک‌لند',theme:'ios',darkMode:'auto',popup:{closeByBackdropClick:true}});
 window._slApp=app;window._slApi=function(){return api.apply(null,arguments)};window._slEsc=function(){return esc.apply(null,arguments)};window._slFmt=function(){return fmt.apply(null,arguments)};window._slInitData=initData;window._slTg=tg;
 
+/* ═══ دیباگ موقت — گردونهٔ شانس/جوایز من روی آیفون فریز شده؛ این پنل روی‌صفحه نشون می‌ده
+   کدوم رویداد لمسی اصلاً به JS می‌رسه، تا مشخص بشه کجای زنجیره قطع می‌شه.
+   بعد از تشخیص، این بلوک کامل حذف بشه. ═══ */
+(function(){
+  var dbg=document.createElement('div');
+  dbg.id='sl-debug-log';
+  dbg.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:rgba(0,0,0,.88);color:#0f0;font-size:11px;line-height:1.5;padding:6px 8px;max-height:38vh;overflow:auto;direction:ltr;text-align:left;font-family:monospace;pointer-events:none';
+  document.addEventListener('DOMContentLoaded',function(){document.body.appendChild(dbg)});
+  if(document.body)document.body.appendChild(dbg);
+  function log(msg){
+    var l=document.createElement('div');
+    l.textContent=new Date().toISOString().slice(11,19)+' '+msg;
+    dbg.appendChild(l);dbg.scrollTop=dbg.scrollHeight;
+    while(dbg.children.length>40)dbg.removeChild(dbg.firstChild);
+  }
+  log('دیباگ فعال — v25-dbg');
+  ['pointerdown','touchstart','touchend','click'].forEach(function(evt){
+    document.addEventListener(evt,function(e){
+      var t=e.target,near=t&&t.closest&&(t.closest('#wheel-tool-card')||t.closest('#me-prizes-row'));
+      if(!near)return;
+      log(evt+' → '+near.id+' (target:'+(t.tagName||'?')+(t.className?'.'+String(t.className).split(' ')[0]:'')+')');
+    },true);
+  });
+})();
+
 /* هماهنگی تم روشن/تاریک با خود تلگرام — نه فقط با تنظیم سیستم‌عامل (این دو می‌تونن فرق کنن،
    مثلاً تلگرام تاریک باشه ولی گوشی روشن). tg.colorScheme همیشه اولویت داره وقتی داخل تلگراییم. */
 function _slApplyTheme(){
