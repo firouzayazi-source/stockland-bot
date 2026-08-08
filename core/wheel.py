@@ -88,11 +88,55 @@ def get_state(user_id: int = None) -> dict:
     return result
 
 
-def spin(user_id: int, ip: str = "", device_fingerprint: str = "", session_id: str = "") -> dict:
+def _replay_terminal_spin(row: dict, campaign: dict, daily_limit: int, usage_date: str) -> dict:
+    """بازپخش نتیجهٔ یه spin قبلاً تکمیل‌شده (idempotent replay) — برای دبل‌کلیک/
+    ریترای شبکه با همون client_request_id. جزئیات نمایشی (آیکون/رنگ/توضیح) از خودِ
+    جایزه اگه هنوز موجود باشه؛ چون prize_title/prize_type/amount/discount_code از
+    قبل در خودِ ردیف wheel_spins denormalized شدن، حتی اگه جایزه بعداً حذف/ویرایش
+    بشه، بازپخش هنوز درست کار می‌کنه."""
+    import db
+    if row["status"] == "failed":
+        return {"ok": False, "error": "صدور این جایزه با خطا مواجه شد — لطفاً دوباره تلاش کنید",
+                "duplicate": True}
+    prize_row = db.get_wheel_prize(row["prize_id"]) if row.get("prize_id") else None
+    icon = (prize_row or {}).get("icon") or ("😅" if row["prize_type"] == "no_win" else "🎁")
+    color = (prize_row or {}).get("color") or "#6B7280"
+    description = (prize_row or {}).get("description") or ""
+    image_url = (prize_row or {}).get("image_url") or ""
+    from core import wallet
+    remaining = db.get_wheel_spins_remaining_today(row["user_id"], campaign["id"], usage_date, int(daily_limit or 0))
+    expires_at = None
+    if row.get("discount_code_id"):
+        codes = db.list_user_personal_codes(row["user_id"])
+        match = next((c for c in codes if c["id"] == row["discount_code_id"]), None)
+        if match:
+            expires_at = match.get("expires_at")
+    return {
+        "ok": True,
+        "duplicate": True,
+        "prize": {
+            "id": row.get("prize_id"), "title": row.get("prize_title") or "", "icon": icon,
+            "color": color, "prize_type": row["prize_type"], "image_url": image_url,
+            "amount": row.get("amount") or 0, "discount_code": row.get("discount_code") or "",
+            "expires_at": expires_at, "description": description,
+        },
+        "wallet_balance": wallet.get_balance(row["user_id"]) if row["prize_type"] == "wallet_credit" else None,
+        "spins_remaining": remaining,
+    }
+
+
+def spin(user_id: int, ip: str = "", device_fingerprint: str = "", session_id: str = "",
+         client_request_id: str = "") -> dict:
     """چرخش اتمیک — تنها نقطهٔ ورودی که یه جایزه صادر می‌کنه. همیشه سمت سرور تصمیم
     می‌گیره؛ هیچ ورودی کلاینتی روی نتیجه اثر نداره (ip/device/session فقط برای لاگ
-    ضدتقلبن، نه ورودی تصمیم‌گیری)."""
-    import db
+    ضدتقلبن، نه ورودی تصمیم‌گیری).
+
+    Idempotency: اگه client_request_id داده بشه (کلاینت یه UUID تازه به‌ازای هر
+    کلیک واقعی روی دکمهٔ چرخش می‌سازه)، دبل‌کلیک/ریترای شبکهٔ همون درخواست هیچ‌وقت
+    باعث مصرف دوبارهٔ سهمیهٔ روزانه یا صدور دوبارهٔ جایزه نمی‌شه — رزرو اتمیک (یکتای
+    user_id+client_request_id در wheel_spins) *قبل* از مصرف سهمیه/انتخاب جایزه
+    انجام می‌شه، پس هیچ جایزه‌ای صادر نمی‌شه مگه رزرو موفق شده باشه."""
+    import db, time
     settings = db.get_wheel_settings()
     if not settings.get("enabled"):
         return {"ok": False, "error": "گردونهٔ شانس در حال حاضر غیرفعال است"}
@@ -105,8 +149,36 @@ def spin(user_id: int, ip: str = "", device_fingerprint: str = "", session_id: s
         daily_limit = int(settings.get("daily_spin_limit") or 1)
     usage_date = _effective_usage_date(settings.get("reset_hour"))
 
+    client_request_id = (client_request_id or "").strip()[:120]
+    reservation_id = None
+    if client_request_id:
+        existing = db.get_wheel_spin_by_request_id(user_id, client_request_id)
+        if existing is None:
+            reserve = db.reserve_wheel_spin(user_id, campaign["id"], client_request_id,
+                                             ip, device_fingerprint, session_id)
+            if reserve["ok"]:
+                reservation_id = reserve["spin_id"]
+            else:
+                # باخت مسابقهٔ رزرو — یه درخواست هم‌زمان دیگه با همون شناسه زودتر رزرو کرد.
+                existing = db.get_wheel_spin_by_request_id(user_id, client_request_id)
+        if reservation_id is None:
+            # درخواست تکراریه (یا رزرو موجود بود، یا مسابقهٔ رزرو رو باختیم) — اگه
+            # هنوز pending (در حال پردازش هم‌زمان توسط یه ریکوئست دیگه)، کمی صبر کن.
+            for _ in range(20):
+                if existing is None or existing["status"] != "pending":
+                    break
+                time.sleep(0.1)
+                existing = db.get_wheel_spin_by_request_id(user_id, client_request_id)
+            if existing is None:
+                return {"ok": False, "error": "خطا در ثبت درخواست — دوباره تلاش کنید"}
+            if existing["status"] == "pending":
+                return {"ok": False, "error": "درخواست قبلی هنوز در حال پردازش است"}
+            return _replay_terminal_spin(existing, campaign, int(daily_limit or 0), usage_date)
+
     consume = db.try_consume_wheel_spin(user_id, campaign["id"], usage_date, int(daily_limit or 0))
     if not consume["ok"]:
+        if reservation_id:
+            db.finalize_wheel_spin(reservation_id, prize_type="", prize_title="", status="failed")
         return {"ok": False, "error": "چرخش امروز شما تمام شده — فردا دوباره امتحان کنید", "spins_remaining": 0}
 
     prizes = db.list_wheel_prizes(campaign["id"], active_only=True)
@@ -130,15 +202,41 @@ def spin(user_id: int, ip: str = "", device_fingerprint: str = "", session_id: s
     if chosen is None:
         chosen = _FALLBACK_PRIZE
 
-    issued = _issue_prize(user_id, campaign, chosen, usage_date)
+    # ─ صدور واقعی جایزه — اگه به هر دلیلی (خطای دیتابیس، ...) شکست بخوره، هیچ‌وقت
+    # پیام موفقیت کاذب برنمی‌گردونیم؛ spin با status='failed' ثبت می‌شه تا هم در
+    # تاریخچه/جوایز من صادقانه دیده بشه، هم قابل بررسی/ریترای دستی بمونه. توجه:
+    # سهمیهٔ روزانه/سهم total_limit جایزه تا این نقطه مصرف شده و rollback نمی‌شه —
+    # محدودیت شناخته‌شده و مستندشده (شکست واقعی این‌جا فقط با خطای سطح دیتابیس رخ
+    # می‌ده، نه سناریوهای عادی دبل‌کلیک/ریترای که idempotency بالا کامل پوشششون می‌ده).
+    try:
+        issued = _issue_prize(user_id, campaign, chosen, usage_date)
+        failed = False
+    except Exception:
+        import logging
+        logging.getLogger("stockland.wheel").exception(
+            "صدور جایزهٔ گردونه شکست خورد — user_id=%s prize_id=%s", user_id, chosen.get("id"))
+        issued = {"amount": 0, "discount_code": "", "discount_code_id": None, "expires_at": None}
+        failed = True
 
-    db.insert_wheel_spin(
-        user_id=user_id, campaign_id=campaign["id"], prize_id=chosen["id"],
-        prize_type=chosen["prize_type"], prize_title=chosen["title"],
-        amount=issued.get("amount", 0), discount_code=issued.get("discount_code", ""),
-        discount_code_id=issued.get("discount_code_id"), status="issued",
-        ip=ip or "", device_fingerprint=device_fingerprint or "", session_id=session_id or "",
-    )
+    final_status = "failed" if failed else "issued"
+    if reservation_id:
+        db.finalize_wheel_spin(
+            reservation_id, prize_id=chosen["id"], prize_type=chosen["prize_type"],
+            prize_title=chosen["title"], amount=issued.get("amount", 0),
+            discount_code=issued.get("discount_code", ""),
+            discount_code_id=issued.get("discount_code_id"), status=final_status,
+        )
+    else:
+        db.insert_wheel_spin(
+            user_id=user_id, campaign_id=campaign["id"], prize_id=chosen["id"],
+            prize_type=chosen["prize_type"], prize_title=chosen["title"],
+            amount=issued.get("amount", 0), discount_code=issued.get("discount_code", ""),
+            discount_code_id=issued.get("discount_code_id"), status=final_status,
+            ip=ip or "", device_fingerprint=device_fingerprint or "", session_id=session_id or "",
+        )
+
+    if failed:
+        return {"ok": False, "error": "خطا در صدور جایزه — لطفاً با پشتیبانی تماس بگیرید"}
 
     remaining = db.get_wheel_spins_remaining_today(user_id, campaign["id"], usage_date, int(daily_limit or 0))
     return {

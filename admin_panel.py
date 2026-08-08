@@ -13671,8 +13671,8 @@ async def wheel_campaigns_page(request: Request, flash: str = ""):
       <div class="flex flex-wrap gap-2 items-center border-b py-2 text-sm">
         <span class="w-5 text-center">{"🟢" if c['active'] else "⚪️"}</span>
         <input type="text" name="title_{c['id']}" value="{e(c['title'])}" class="border rounded p-1.5 flex-1 min-w-[140px] text-xs">
-        <input type="date" name="starts_{c['id']}" value="{e((c.get('starts_at') or '')[:10])}" class="border rounded p-1.5 text-xs">
-        <input type="date" name="ends_{c['id']}" value="{e((c.get('ends_at') or '')[:10])}" class="border rounded p-1.5 text-xs">
+        <input type="text" inputmode="numeric" name="starts_fa_{c['id']}" value="{e(fa_date(c.get('starts_at')) if c.get('starts_at') else '')}" placeholder="شروع ۱۴۰۴/۰۱/۰۱" class="border rounded p-1.5 text-xs w-28 ltr-num">
+        <input type="text" inputmode="numeric" name="ends_fa_{c['id']}" value="{e(fa_date(c.get('ends_at')) if c.get('ends_at') else '')}" placeholder="پایان ۱۴۰۴/۰۱/۳۱" class="border rounded p-1.5 text-xs w-28 ltr-num">
         <input type="text" inputmode="numeric" name="limit_{c['id']}" placeholder="محدودیت روزانه (خالی=پیش‌فرض)"
           value="{e(c['daily_spin_limit']) if c.get('daily_spin_limit') is not None else ''}" class="border rounded p-1.5 w-20 text-xs ltr-num">
         <input type="number" step="1" name="sort_{c['id']}" value="{c['sort_order']}" class="border rounded p-1.5 w-16 text-xs" title="ترتیب">
@@ -13702,8 +13702,8 @@ async def wheel_campaigns_page(request: Request, flash: str = ""):
       <div class="font-medium text-sm mb-2">+ افزودن کمپین تازه</div>
       <form method="post" action="/admin/wheel/campaigns/add" class="flex flex-wrap gap-2 items-center text-sm">
         <input type="text" name="title" class="border rounded p-1.5 flex-1 min-w-[160px] text-xs" placeholder="عنوان کمپین، مثلاً نوروز ۱۴۰۵" required>
-        <input type="date" name="starts_at" class="border rounded p-1.5 text-xs">
-        <input type="date" name="ends_at" class="border rounded p-1.5 text-xs">
+        <input type="text" inputmode="numeric" name="starts_at_fa" placeholder="شروع ۱۴۰۴/۰۱/۰۱" class="border rounded p-1.5 text-xs w-28 ltr-num">
+        <input type="text" inputmode="numeric" name="ends_at_fa" placeholder="پایان ۱۴۰۴/۰۱/۳۱" class="border rounded p-1.5 text-xs w-28 ltr-num">
         <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن</button>
       </form>
     </div>
@@ -13713,12 +13713,14 @@ async def wheel_campaigns_page(request: Request, flash: str = ""):
 
 @router.post("/wheel/campaigns/add")
 async def wheel_campaigns_add(request: Request, title: str = Form(...),
-                               starts_at: str = Form(""), ends_at: str = Form("")):
+                               starts_at_fa: str = Form(""), ends_at_fa: str = Form("")):
     adm = _get_admin(request)
     guard = _require(adm, "wheel")
     if guard: return guard
-    from db import create_wheel_campaign
-    create_wheel_campaign(title.strip(), starts_at=starts_at or None, ends_at=ends_at or None)
+    from db import create_wheel_campaign, jalali_str_to_gregorian_iso
+    starts_at = jalali_str_to_gregorian_iso(starts_at_fa) or None
+    ends_at = jalali_str_to_gregorian_iso(ends_at_fa) or None
+    create_wheel_campaign(title.strip(), starts_at=starts_at, ends_at=ends_at)
     _log(request, "افزودن کمپین گردونه", "گردونهٔ شانس", title.strip(), admin_info=adm)
     return _redir(f"/admin/wheel/campaigns?flash={e('✅ کمپین اضافه شد')}")
 
@@ -13728,7 +13730,7 @@ async def wheel_campaigns_bulk_save(request: Request):
     adm = _get_admin(request)
     guard = _require(adm, "wheel")
     if guard: return guard
-    from db import list_wheel_campaigns, update_wheel_campaign
+    from db import list_wheel_campaigns, update_wheel_campaign, jalali_str_to_gregorian_iso
     form = await request.form()
     for c in list_wheel_campaigns():
         cid = c["id"]
@@ -13736,8 +13738,8 @@ async def wheel_campaigns_bulk_save(request: Request):
         if key not in form:
             continue
         title = (form.get(key) or "").strip() or c["title"]
-        starts = (form.get(f"starts_{cid}") or "").strip() or None
-        ends = (form.get(f"ends_{cid}") or "").strip() or None
+        starts = jalali_str_to_gregorian_iso((form.get(f"starts_fa_{cid}") or "").strip()) or None
+        ends = jalali_str_to_gregorian_iso((form.get(f"ends_fa_{cid}") or "").strip()) or None
         limit_raw = (form.get(f"limit_{cid}") or "").strip()
         try:
             sort_order = int(form.get(f"sort_{cid}") or 0)

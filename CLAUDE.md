@@ -1747,3 +1747,13 @@ systemctl restart stockland.service
 معماری جدول‌محور فعلی (`wheel_campaigns`/`wheel_prizes`/`wheel_spins`) برای افزودن مکانیزم‌های پاداشی جدید (جایزهٔ اولین خرید، معرفی دوستان، تولد، مأموریت روزانه، Level/XP، VIP، Mystery Box، رویدادهای مناسبتی) نیازی به تغییر هستهٔ گردونه نداره — یا جدول‌های مستقل خودشون رو می‌گیرن و از همون `db.issue_personal_discount_code`/`core.wallet.credit` برای صدور جایزه استفاده می‌کنن (دقیقاً همون الگویی که گردونه و winback از قبل به اشتراک می‌ذارن)، یا (برای گردونهٔ اختصاصی VIP/مناسبتی) به‌سادگی یه `wheel_campaigns` جدید با `daily_spin_limit`/جوایز اختصاصی خودش. هدیهٔ فیزیکی (`physical_gift`) فعلاً فقط لاگ می‌شه — نیازمند فاز جدا برای گردش‌کار پیگیری/ارسال دستی (آدرس، وضعیت پستی، ...) که عمداً خارج از این نسخه نگه داشته شد.
 
 فایل‌های تغییرکرده/تازه: `db.py`، `api.py`، `admin_panel.py`، `payment_service.py`، `stbak_engine.py`، `core/wheel.py` (تازه)، `app/app.js`، `app/app.css`، `app/index.html`.
+
+### ۵۵) تکمیل معماری واقعی Reward + رفع لایوت هیرو (۲۰۲۶-۰۸-۰۸، جزئیات کامل در CHANGELOG_AI.md)
+
+خلاصهٔ فوق‌فشرده برای مرجع سریع (قبل از کار روی این بخش، حتماً entry کامل `CHANGELOG_AI.md` رو بخون):
+- **رفع لایوت:** `.sl-wg-host` حالا `padding-top:calc(env(safe-area-inset-top,0px)+44px)` داره (نه `padding:0!important` خام) — وگرنه هیرو زیر نوار پاپ‌آپ می‌رفت، چون `.sl-wg` خودش با `min-height` فرض کرده بود از زیر یه navbar ۴۴px شروع می‌شه.
+- **باگ ریشه‌ای واقعی «جوایز من»:** `GET /me/prizes` فقط `discount_codes` رو می‌خوند — جوایز `wallet_credit`/`extra_spin` هیچ‌وقت دیده نمی‌شدن (با این‌که واقعاً واریز/اعمال می‌شدن). رفع با ادغام `discount_codes` + `wheel_spins` (تابع تازهٔ `db.list_user_wheel_rewards`) — **بدون هیچ جدول/کیف‌پول موازی**.
+- **Idempotency:** `wheel_spins.client_request_id` (یکتای جزئی) + `db.reserve_wheel_spin`/`finalize_wheel_spin` — رزرو *قبل* از مصرف سهمیه/انتخاب جایزه؛ دبل‌کلیک/ریترای شبکه فقط بازپخش نتیجهٔ قبلی می‌گیره (`duplicate:true`)، هیچ‌وقت دوبار صادر نمی‌شه. تست‌شده با ۱۰ ترد هم‌زمان.
+- **Error handling صادقانه:** صدور جایزه در try/except؛ شکست واقعی → `status='failed'` + `ok:false`، هیچ پیام موفقیت کاذبی نشون داده نمی‌شه.
+- **`db.add_wallet_balance` اتمیک شد** (قبلاً بدون قفل بود؛ حالا همون الگوی `BEGIN IMMEDIATE`+قفل‌ردیف `subtract_wallet_balance`).
+- **تاریخ کمپین‌های گردونه در پنل** از `<input type="date">` میلادی به فیلد متنی شمسی (الگوی `df_fa`/`dt_fa` صفحهٔ حسابداری) تبدیل شد.

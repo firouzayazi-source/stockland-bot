@@ -453,32 +453,58 @@ async def api_wheel_state(request: Request):
 @router.post("/wheel/spin")
 async def api_wheel_spin(request: Request):
     """چرخش گردونه — اتمیک، سمت سرور تصمیم می‌گیره. device_fingerprint اختیاریه
-    (فقط برای لاگ ضدتقلب، نه ورودی تصمیم‌گیری)."""
+    (فقط برای لاگ ضدتقلب، نه ورودی تصمیم‌گیری). client_request_id (اختیاری ولی
+    قویاً توصیه‌شده — کلاینت یه UUID تازه به‌ازای هر کلیک واقعی می‌سازه) برای
+    idempotency: دبل‌کلیک/ریترای شبکهٔ همون درخواست هیچ‌وقت دوبار جایزه صادر نمی‌کنه."""
     uid = _auth(request)
     try:
         body = await request.json()
     except Exception:
         body = {}
     device_fp = str((body or {}).get("device_fingerprint") or "")[:200]
+    client_request_id = str((body or {}).get("client_request_id") or "")[:120]
     session_id = request.headers.get("X-Telegram-Init-Data", "")[:64]
     from core import wheel
-    result = wheel.spin(uid, ip=_client_ip(request), device_fingerprint=device_fp, session_id=session_id)
+    result = wheel.spin(uid, ip=_client_ip(request), device_fingerprint=device_fp,
+                         session_id=session_id, client_request_id=client_request_id)
     return result
 
 
 @router.get("/me/prizes")
 async def api_my_prizes(request: Request):
-    """صفحهٔ «جوایز من» — همهٔ کدهای تخفیف شخصی کاربر، از هر منبعی (گردونه/winback/...)."""
+    """صفحهٔ «جوایز من» — همهٔ جوایز شخصی کاربر از هر منبع/نوعی (کد تخفیف، کیف‌پول،
+    چرخش اضافه، هدیهٔ فیزیکی)، با وضعیت واقعی از Backend (نه حدس Frontend). دو
+    منبع موجود ادغام می‌شن، نه یه جدول/سیستم تازه: discount_codes (کد تخفیف —
+    گردونه/winback/...) + wheel_spins (کیف‌پول/چرخش‌اضافه/هدیهٔ فیزیکیِ گردونه)."""
     uid = _auth(request)
-    from db import list_user_personal_codes
-    items = list_user_personal_codes(uid)
-    return {"ok": True, "items": [{
-        "code": it["code"], "type": it["type"], "value": it["value"],
-        "max_value": it.get("max_value") or 0, "min_amount": it.get("min_amount") or 0,
-        "status": it["status"],
-        "expires_at": it.get("expires_at"), "description": it.get("description") or "",
-        "source": it.get("source") or "", "created_at": it.get("created_at"),
-    } for it in items]}
+    from db import list_user_personal_codes, list_user_wheel_rewards
+    items = []
+    for it in list_user_personal_codes(uid):
+        items.append({
+            "kind": "discount",
+            "code": it["code"], "type": it["type"], "value": it["value"],
+            "max_value": it.get("max_value") or 0, "min_amount": it.get("min_amount") or 0,
+            "status": it["status"],
+            "expires_at": it.get("expires_at"), "description": it.get("description") or "",
+            "source": it.get("source") or "", "created_at": it.get("created_at"),
+        })
+    _reward_status = {"issued": "delivered", "failed": "failed"}
+    for it in list_user_wheel_rewards(uid):
+        kind = it["prize_type"]  # wallet_credit | extra_spin | physical_gift
+        status = _reward_status.get(it["status"], it["status"])
+        if kind == "extra_spin" and status == "delivered":
+            status = "applied"
+        elif kind == "physical_gift" and status == "delivered":
+            status = "pending_shipment"
+        items.append({
+            "kind": kind,
+            "title": it.get("prize_title") or "",
+            "amount": it.get("amount") or 0,
+            "status": status,
+            "source": "wheel", "created_at": it.get("created_at"),
+        })
+    items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return {"ok": True, "items": items}
 
 
 @router.get("/me/wheel-activity")

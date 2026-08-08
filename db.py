@@ -808,12 +808,16 @@ def get_wallet_balance(user_id: int) -> int:
 def add_wallet_balance(user_id: int, amount: int) -> int:
     """
     موجودی را افزایش میدهد و موجودی جدید را برمیگرداند.
+    اتمیک (BEGIN IMMEDIATE + قفل ردیف، دقیقاً الگوی subtract_wallet_balance) — بدون
+    این قفل، دو شارژ هم‌زمان (مثلاً دو جایزهٔ گردونه که تقریباً همزمان صادر می‌شن)
+    می‌تونستن هر دو همون موجودی قدیمی رو بخونن و یکی از دو افزایش گم بشه.
     """
     now = datetime.utcnow().isoformat()
     conn = _get_connection()
+    cur = conn.cursor()
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT balance FROM wallets WHERE user_id = ?;", (user_id,))
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute(f"SELECT balance FROM wallets WHERE user_id = ? {_row_lock_suffix()};", (user_id,))
         row = cur.fetchone()
         if row:
             new_balance = int(row[0]) + int(amount)
@@ -829,6 +833,9 @@ def add_wallet_balance(user_id: int, amount: int) -> int:
             )
         conn.commit()
         return new_balance
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -6005,6 +6012,9 @@ def ensure_wheel_schema():
             "ALTER TABLE wheel_prizes ADD COLUMN image_url TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE wheel_prizes ADD COLUMN min_purchase_amount INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE wheel_prizes ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
+            # ─ Idempotency — بخش «Reward Delivery» (۲۰۲۶-۰۸-۰۸): شناسهٔ درخواست
+            # کلاینت، برای جلوگیری از دبل‌چرخش/دبل‌واریز روی دبل‌کلیک/ریترای شبکه.
+            "ALTER TABLE wheel_spins ADD COLUMN client_request_id TEXT NOT NULL DEFAULT '';",
         ):
             try:
                 conn.execute(_ddl)
@@ -6022,6 +6032,32 @@ def ensure_wheel_schema():
             except Exception:
                 pass
         conn.commit()
+        # یکتا فقط وقتی client_request_id واقعاً پر شده — ردیف‌های قدیمی/بدون‌شناسه
+        # (رشتهٔ خالی) نباید با هم تصادم کنن. اگه (به‌ندرت) موقع مهاجرت از یه نسخهٔ
+        # خیلی قدیمی چند ردیف تکراری واقعی پیدا شد (عملاً غیرممکنه چون ستون تازه‌ست
+        # و همیشه '' شروع می‌شه)، همون الگوی dedupe-then-index بالای فایل (authority
+        # زرین‌پال) تکرار می‌شه.
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_wheel_spins_reqid "
+                "ON wheel_spins(user_id, client_request_id) WHERE client_request_id<>'';"
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            try:
+                conn.execute(
+                    "DELETE FROM wheel_spins WHERE client_request_id<>'' AND id NOT IN ("
+                    "SELECT MIN(id) FROM wheel_spins WHERE client_request_id<>'' "
+                    "GROUP BY user_id, client_request_id);"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_wheel_spins_reqid "
+                    "ON wheel_spins(user_id, client_request_id) WHERE client_request_id<>'';"
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
 
         # سید اولیه — فقط اگه هیچ کمپینی وجود نداره (نصب تازه)؛ صرفاً داده (مثل seed
         # iv_coefficients)، نه منطق هاردکد — همه‌چیز بعدش از پنل قابل ویرایش/حذفه.
@@ -6368,7 +6404,8 @@ def grant_extra_wheel_spins(user_id: int, campaign_id: int, usage_date: str, cou
 def insert_wheel_spin(**fields) -> int:
     ensure_wheel_schema()
     allowed = {"user_id", "campaign_id", "prize_id", "prize_type", "prize_title", "amount",
-               "discount_code", "discount_code_id", "status", "ip", "device_fingerprint", "session_id"}
+               "discount_code", "discount_code_id", "status", "ip", "device_fingerprint", "session_id",
+               "client_request_id"}
     cols = [k for k in fields if k in allowed]
     conn = _get_connection()
     try:
@@ -6378,6 +6415,70 @@ def insert_wheel_spin(**fields) -> int:
         )
         conn.commit()
         return cur.lastrowid
+    finally:
+        conn.close()
+
+
+# ─── Idempotency صدور جایزه (بخش «Reward Delivery»، ۲۰۲۶-۰۸-۰۸) ───────────────
+# الگو: قبل از مصرف سهمیهٔ روزانه/انتخاب جایزه، یه ردیف wheel_spins با
+# status='pending' رزرو می‌شه (کلید یکتای user_id+client_request_id). اگه همون
+# درخواست (دبل‌کلیک/ریترای شبکه) دوباره برسه، INSERT با تصادم یکتا شکست می‌خوره —
+# یعنی جایزه هیچ‌وقت دوبار صادر نمی‌شه، حتی اگه دو درخواست کاملاً هم‌زمان باشن.
+
+def reserve_wheel_spin(user_id: int, campaign_id: int, client_request_id: str,
+                        ip: str = "", device_fingerprint: str = "", session_id: str = "") -> dict:
+    """رزرو اتمیک یه spin تازه با client_request_id. موفق → {"ok":True,"spin_id":N}.
+    تصادم یکتا (همون کاربر همون client_request_id قبلاً رزرو شده) → {"ok":False}."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO wheel_spins (user_id, campaign_id, prize_type, prize_title, status, "
+            "ip, device_fingerprint, session_id, client_request_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?);",
+            (user_id, campaign_id, "", "", "pending", ip or "", device_fingerprint or "",
+             session_id or "", client_request_id)
+        )
+        conn.commit()
+        return {"ok": True, "spin_id": cur.lastrowid}
+    except _INTEGRITY_ERRORS:
+        conn.rollback()
+        return {"ok": False}
+    finally:
+        conn.close()
+
+
+def get_wheel_spin_by_request_id(user_id: int, client_request_id: str) -> dict | None:
+    if not client_request_id:
+        return None
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM wheel_spins WHERE user_id=? AND client_request_id=?;",
+            (user_id, client_request_id)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def finalize_wheel_spin(spin_id: int, *, prize_id=None, prize_type: str = "", prize_title: str = "",
+                         amount: int = 0, discount_code: str = "", discount_code_id=None,
+                         status: str = "issued") -> None:
+    """تکمیل یه رزرو (`reserve_wheel_spin`) بعد از انتخاب/صدور واقعی جایزه — یا
+    علامت‌گذاری شکست (status='failed') وقتی صدور واقعاً انجام نشده، تا کاربر هیچ‌وقت
+    پیام موفقیت کاذب نبینه و «جوایز من»/تاریخچه وضعیت واقعی رو نشون بدن."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        conn.execute(
+            "UPDATE wheel_spins SET prize_id=?, prize_type=?, prize_title=?, amount=?, "
+            "discount_code=?, discount_code_id=?, status=? WHERE id=?;",
+            (prize_id, prize_type, prize_title, int(amount or 0), discount_code or "",
+             discount_code_id, status, spin_id)
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -6427,8 +6528,29 @@ def list_user_wheel_spins(user_id: int, limit: int = 8) -> list[dict]:
     conn = _get_connection()
     try:
         rows = conn.execute(
-            "SELECT prize_type, prize_title, amount, discount_code, created_at "
-            "FROM wheel_spins WHERE user_id=? ORDER BY id DESC LIMIT ?;",
+            "SELECT prize_type, prize_title, amount, discount_code, status, created_at "
+            "FROM wheel_spins WHERE user_id=? AND status<>'pending' ORDER BY id DESC LIMIT ?;",
+            (user_id, int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_user_wheel_rewards(user_id: int, limit: int = 100) -> list[dict]:
+    """جوایز غیر-کد‌تخفیفیِ همین کاربر (کیف‌پول/چرخش‌اضافه/هدیهٔ فیزیکی) — نیمهٔ
+    دومِ «جوایز من» (نیمهٔ اول، کد تخفیف، از list_user_personal_codes میاد؛ چون
+    discount_code_id از قبل کاملاً جزئیات رو در discount_codes پوشش می‌ده، این‌جا
+    فقط انواعی که هیچ ردیف discount_codes ندارن رو برمی‌گردونه — بدون جدول/سیستم
+    جدا، دقیقاً همون wheel_spins موجود، تک‌منبع حقیقتِ وضعیت واقعی هر جایزه)."""
+    ensure_wheel_schema()
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, prize_type, prize_title, amount, status, created_at "
+            "FROM wheel_spins WHERE user_id=? AND prize_type IN "
+            "('wallet_credit','extra_spin','physical_gift') AND status<>'pending' "
+            "ORDER BY id DESC LIMIT ?;",
             (user_id, int(limit)),
         ).fetchall()
         return [dict(r) for r in rows]
