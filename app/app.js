@@ -22,7 +22,8 @@ window._slApp=app;window._slApi=function(){return api.apply(null,arguments)};win
     dbg.appendChild(l);dbg.scrollTop=dbg.scrollHeight;
     while(dbg.children.length>40)dbg.removeChild(dbg.firstChild);
   }
-  log('دیباگ فعال — v25-dbg');
+  window._slDbg=log;
+  log('دیباگ فعال — v26-dbg');
   ['pointerdown','touchstart','touchend','click'].forEach(function(evt){
     document.addEventListener(evt,function(e){
       var t=e.target,near=t&&t.closest&&(t.closest('#wheel-tool-card')||t.closest('#me-prizes-row'));
@@ -1005,9 +1006,16 @@ window.openFavorites=openFavorites;
 
 /* ═══ صفحات حساب (کیف‌پول/همکاری/دعوت) — از post-popup به‌عنوان ظرف عمومی استفاده می‌کنند ═══ */
 function _accPopup(title,html){
+  if(window._slDbg)window._slDbg('_accPopup شروع: '+title);
   var t=document.getElementById('post-title'),b=document.getElementById('post-body');
+  if(window._slDbg)window._slDbg('post-title='+(t?'yes':'NULL')+' post-body='+(b?'yes':'NULL'));
   t.textContent=title;b.innerHTML='<div class="sl-acc-page">'+html+'</div>';
-  window._slApp.popup.open('#post-popup');
+  try{
+    var r=window._slApp.popup.open('#post-popup');
+    if(window._slDbg)window._slDbg('popup.open() برگشت: '+(r?'obj':'falsy')+' opened='+(document.getElementById('post-popup')&&document.getElementById('post-popup').classList.contains('modal-in')));
+  }catch(ex){
+    if(window._slDbg)window._slDbg('popup.open() خطا داد: '+ex.message);
+  }
 }
 function _accBody(){return document.querySelector('#post-body .sl-acc-page')}
 
@@ -1799,8 +1807,14 @@ document.addEventListener('click',function(e){
   var tu=e.target.closest('[data-tid]');if(tu){openTutorial(tu.dataset.tid);return}
   var co=e.target.closest('[data-checkout]');if(co){openCheckout(co.dataset.checkout);return}
   var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click();return}
-  var wc=e.target.closest('#wheel-tool-card');if(wc){e.preventDefault();openWheel();return}
-  var mp=e.target.closest('#me-prizes-row');if(mp){e.preventDefault();openMyPrizes();return}
+  var wc=e.target.closest('#wheel-tool-card');if(wc){e.preventDefault();
+    if(window._slDbg)window._slDbg('handler: openWheel() صدا زده می‌شه');
+    try{openWheel()}catch(ex){if(window._slDbg)window._slDbg('openWheel() خطا داد: '+ex.message)}
+    return}
+  var mp=e.target.closest('#me-prizes-row');if(mp){e.preventDefault();
+    if(window._slDbg)window._slDbg('handler: openMyPrizes() صدا زده می‌شه');
+    try{openMyPrizes()}catch(ex){if(window._slDbg)window._slDbg('openMyPrizes() خطا داد: '+ex.message)}
+    return}
 });
 
 /* ═══ Mira-style snap navbar ═══ */
@@ -2157,14 +2171,16 @@ function _wheelSegAngles(n){
 
 function openWheel(){
   _accPopup('🎡 گردونهٔ شانس',skel(3));
+  if(window._slDbg)window._slDbg('openWheel: در حال فراخوانی /wheel/state');
   api('/wheel/state',true).then(function(d){
-    var b=_accBody();if(!b)return;
+    if(window._slDbg)window._slDbg('openWheel: پاسخ رسید — enabled='+d.enabled+' campaign='+(d.campaign?'yes':'no')+' prizes='+((d.prizes&&d.prizes.length)||0));
+    var b=_accBody();if(!b){if(window._slDbg)window._slDbg('openWheel: _accBody() پیدا نشد!');return}
     if(!d.enabled||!d.campaign||!d.prizes||!d.prizes.length){
       b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎡</span>گردونهٔ شانس فعلاً غیرفعاله — به‌زودی برگرد!</div>';
       return;
     }
     renderWheel(b,d);
-  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت گردونه')});
+  }).catch(function(ex){if(window._slDbg)window._slDbg('openWheel: خطای api — '+(ex&&ex.message||ex));var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت گردونه')});
 }
 window.openWheel=openWheel;
 
@@ -2291,8 +2307,10 @@ var _wheelStatusLabel={active:'✅ قابل استفاده',used:'☑️ است�
 
 function openMyPrizes(){
   _accPopup('🎁 جوایز من',skel(3));
+  if(window._slDbg)window._slDbg('openMyPrizes: در حال فراخوانی /me/prizes');
   api('/me/prizes',true).then(function(d){
-    var b=_accBody();if(!b)return;
+    if(window._slDbg)window._slDbg('openMyPrizes: پاسخ رسید — items='+((d&&d.items&&d.items.length)||0));
+    var b=_accBody();if(!b){if(window._slDbg)window._slDbg('openMyPrizes: _accBody() پیدا نشد!');return}
     var items=(d&&d.items)||[];
     if(!items.length){
       b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎁</span>هنوز جایزه‌ای نداری — از گردونهٔ شانس امتحان کن!</div>';
@@ -2318,6 +2336,6 @@ function openMyPrizes(){
         else btn.textContent='✅ کپی شد';
       });
     });
-  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت جوایز')});
+  }).catch(function(ex){if(window._slDbg)window._slDbg('openMyPrizes: خطای api — '+(ex&&ex.message||ex));var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت جوایز')});
 }
 window.openMyPrizes=openMyPrizes;
