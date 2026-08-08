@@ -13488,7 +13488,7 @@ async def wheel_dashboard(request: Request, flash: str = ""):
         for c in campaigns
     ) or '<div class="text-xs text-gray-400">هنوز کمپینی ساخته نشده.</div>'
 
-    chart_labels = json.dumps([d["d"][5:] for d in stats["daily"]], ensure_ascii=False)
+    chart_labels = json.dumps(["/".join(fa_date(d["d"]).split("/")[1:]) for d in stats["daily"]], ensure_ascii=False)
     chart_values = json.dumps([int(d["c"]) for d in stats["daily"]])
 
     body = f"""
@@ -13776,12 +13776,27 @@ async def wheel_campaigns_delete(request: Request, cid: int):
 
 # ─── جوایز ─────────────────────────────────────────────────────────────────
 
+def _wheel_prize_status_badge(p: dict) -> str:
+    """نامحدود/موجود/رو به اتمام/تمام‌شده — بر پایهٔ سقف کل و تعداد صادرشدهٔ واقعی،
+    نه یه پرچم جدا (تک‌منبع حقیقت همون issued_count/total_limit ستون‌های موجوده)."""
+    total = p.get("total_limit") or 0
+    issued = p.get("issued_count") or 0
+    if not total:
+        return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">∞ نامحدود</span>'
+    if issued >= total:
+        return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">⛔ تمام‌شده</span>'
+    if issued >= total * 0.8:
+        return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">⚠️ رو به اتمام</span>'
+    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">✅ موجود</span>'
+
+
 @router.get("/wheel/prizes", response_class=HTMLResponse)
 async def wheel_prizes_page(request: Request, campaign_id: int = 0, flash: str = ""):
     adm = _get_admin(request)
     guard = _require(adm, "wheel")
     if guard: return guard
-    from db import list_wheel_campaigns, list_wheel_prizes, get_active_wheel_campaign
+    from db import (list_wheel_campaigns, list_wheel_prizes, get_active_wheel_campaign,
+                     get_wheel_prize_kpis)
 
     campaigns = list_wheel_campaigns()
     if not campaigns:
@@ -13793,11 +13808,28 @@ async def wheel_prizes_page(request: Request, campaign_id: int = 0, flash: str =
         campaign_id = active["id"] if active else campaigns[0]["id"]
 
     prizes = list_wheel_prizes(campaign_id, active_only=False)
+    kpis = get_wheel_prize_kpis(campaign_id)
+    cur_campaign = next((c for c in campaigns if c["id"] == campaign_id), campaigns[0])
     camp_options = "".join(
         f'<option value="{c["id"]}" {"selected" if c["id"]==campaign_id else ""}>{"🟢 " if c["active"] else ""}{e(c["title"])}</option>'
         for c in campaigns
     )
     type_options = "".join(f'<option value="{k}">{v}</option>' for k, v in _WHEEL_PRIZE_TYPE_LABELS.items())
+    type_filter_options = '<option value="">همهٔ انواع</option>' + type_options
+
+    # ─── داشبورد KPI — همه از دادهٔ واقعی همین کمپین ─────────────────────────
+    active_weight_disp = f'{kpis["active_weight"]:g}'
+    low_stock_sub = "، ".join(kpis["low_stock_titles"][:2]) if kpis["low_stock_titles"] else ""
+    kpi_html = f"""
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+      {_card("جوایز فعال", f'{kpis["active_count"]:,}', f'از {kpis["total_count"]:,} کل', "green")}
+      {_card("مجموع وزن فعال", active_weight_disp, "پایهٔ محاسبهٔ احتمال", "indigo")}
+      {_card("جایزهٔ اهداشده", f'{kpis["total_issued"]:,}', "در طول عمر کمپین", "blue")}
+      {_card("محبوب‌ترین جایزه", (kpis["top_prize"] or "—")[:16], "بر اساس چرخش‌های واقعی", "amber")}
+      {_card("رو به اتمام", f'{kpis["low_stock_count"]:,}', low_stock_sub[:30], "red" if kpis["low_stock_count"] else "slate")}
+      {_card("کمپین جاری", cur_campaign["title"][:16], "🟢 فعال" if cur_campaign["active"] else "⚪️ غیرفعال", "slate")}
+    </div>
+    """
 
     def prize_row(p):
         type_sel = "".join(
@@ -13805,50 +13837,159 @@ async def wheel_prizes_page(request: Request, campaign_id: int = 0, flash: str =
             for k, v in _WHEEL_PRIZE_TYPE_LABELS.items()
         )
         limit_note = f'{p["issued_count"]:,}/{p["total_limit"]:,}' if p["total_limit"] else f'{p["issued_count"]:,}/∞'
+        img_thumb = (
+            f'<img src="{e(p.get("image_url") or "")}" class="w-9 h-9 rounded-lg object-cover border">'
+            if p.get("image_url") else
+            '<div class="w-9 h-9 rounded-lg border border-dashed flex items-center justify-center text-gray-300 text-[10px]">—</div>'
+        )
+        updated_disp = fa_date(p.get("updated_at") or p.get("created_at"), with_time=True)
+        created_disp = fa_date(p.get("created_at"), with_time=True)
         return f"""
-      <div class="border-b py-2">
-        <div class="flex flex-wrap gap-2 items-center text-sm mb-1">
-          <span>{"✅" if p['active'] else "🚫"}</span>
-          <input type="text" name="icon_{p['id']}" value="{e(p['icon'])}" class="border rounded p-1.5 w-12 text-center text-xs" title="آیکون">
-          <input type="text" name="title_{p['id']}" value="{e(p['title'])}" class="border rounded p-1.5 flex-1 min-w-[140px] text-xs">
-          <select name="type_{p['id']}" class="border rounded p-1.5 text-xs">{type_sel}</select>
-          <input type="color" name="color_{p['id']}" value="{e(p['color'])}" class="border rounded h-8 w-10">
+      <div class="wp-row border-b py-3" data-title="{e(p['title'].lower())}" data-type="{p['prize_type']}"
+           data-status="{'exhausted' if p['total_limit'] and p['issued_count']>=p['total_limit'] else ('active' if p['active'] else 'inactive')}"
+           data-pid="{p['id']}">
+        <div class="flex flex-wrap gap-2 items-center text-sm mb-1.5">
+          {img_thumb}
+          <label class="flex flex-col items-center">
+            <input type="file" accept="image/*" form="imgform-{p['id']}" name="image" class="hidden" id="imgfile-{p['id']}" onchange="this.form.requestSubmit()">
+            <span onclick="document.getElementById('imgfile-{p['id']}').click()" class="text-[10px] text-indigo-600 cursor-pointer">🖼 تصویر</span>
+          </label>
+          <input type="text" name="icon_{p['id']}" value="{e(p['icon'])}" class="border rounded p-1.5 w-12 text-center text-xs" title="ایموجی/آیکون (fallback)">
+          <input type="text" name="title_{p['id']}" value="{e(p['title'])}" class="wp-title border rounded p-1.5 flex-1 min-w-[140px] text-xs">
+          <select name="type_{p['id']}" class="wp-type border rounded p-1.5 text-xs">{type_sel}</select>
+          <input type="color" name="color_{p['id']}" value="{e(p['color'])}" class="wp-color border rounded h-8 w-10">
+          {_wheel_prize_status_badge(p)}
+          <span class="wp-prob px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700">—</span>
         </div>
         <div class="flex flex-wrap gap-2 items-center text-xs text-gray-500">
           <label>مقدار <input type="text" inputmode="numeric" name="value_{p['id']}" value="{p['value']}" class="border rounded p-1 w-20 text-xs ltr-num"></label>
           <label>سقف تخفیف <input type="text" inputmode="numeric" name="maxdisc_{p['id']}" value="{p['max_discount_value']}" class="border rounded p-1 w-20 text-xs ltr-num"></label>
+          <label>حداقل خرید <input type="text" inputmode="numeric" name="minpurchase_{p['id']}" value="{p.get('min_purchase_amount',0)}" class="border rounded p-1 w-20 text-xs ltr-num" title="فقط برای انواع تخفیف — روی discount_codes.min_amount اعمال می‌شه"></label>
           <label>اعتبار (ساعت) <input type="text" inputmode="numeric" name="valid_{p['id']}" value="{p['validity_hours']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
-          <label>وزن احتمال <input type="text" inputmode="decimal" name="weight_{p['id']}" value="{p['weight']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
+          <label>وزن احتمال <input type="text" inputmode="decimal" name="weight_{p['id']}" value="{p['weight']}" class="wp-weight border rounded p-1 w-16 text-xs ltr-num"></label>
           <label>سقف کل <input type="text" inputmode="numeric" name="totallimit_{p['id']}" value="{p['total_limit']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
           <label>سقف روزانه <input type="text" inputmode="numeric" name="dailylimit_{p['id']}" value="{p['daily_limit']}" class="border rounded p-1 w-16 text-xs ltr-num"></label>
           <label>اولویت <input type="number" step="1" name="sort_{p['id']}" value="{p['sort_order']}" class="border rounded p-1 w-14 text-xs"></label>
-          <label class="flex items-center gap-1"><input type="checkbox" name="active_{p['id']}" {"checked" if p['active'] else ""}> فعال</label>
+          <label class="wp-active-wrap flex items-center gap-1"><input type="checkbox" class="wp-active" name="active_{p['id']}" {"checked" if p['active'] else ""}> فعال</label>
           <span class="text-gray-400">صادرشده: {limit_note}</span>
-          <button type="submit" form="prz-del-{p['id']}" class="text-red-500">🗑 حذف</button>
+          <button type="submit" form="prz-dup-{p['id']}" class="text-indigo-500" title="کپی کامل این جایزه">⧉ کپی</button>
+          <button type="submit" form="prz-del-{p['id']}" class="text-red-500" onclick="return confirm('این جایزه حذف بشه؟')">🗑 حذف</button>
         </div>
         <input type="text" name="desc_{p['id']}" value="{e(p['description'])}" placeholder="توضیحات (به کاربر نمایش داده می‌شه)"
-          class="border rounded p-1.5 text-xs w-full mt-1">
+          class="border rounded p-1.5 text-xs w-full mt-1.5">
+        <div class="text-[10px] text-gray-300 mt-1">ساخته‌شده: {created_disp} · آخرین تغییر: {updated_disp}</div>
       </div>"""
 
     rows = "".join(prize_row(p) for p in prizes)
     hidden_forms = "".join(
         f'<form id="prz-del-{p["id"]}" method="post" action="/admin/wheel/prizes/{p["id"]}/delete" '
-        f'onsubmit="return confirm(\'این جایزه حذف بشه؟\')"></form>' for p in prizes
+        f'onsubmit="return confirm(\'این جایزه حذف بشه؟\')"></form>'
+        f'<form id="prz-dup-{p["id"]}" method="post" action="/admin/wheel/prizes/{p["id"]}/duplicate"></form>'
+        f'<form id="imgform-{p["id"]}" method="post" action="/admin/wheel/prizes/{p["id"]}/image" enctype="multipart/form-data"></form>'
+        for p in prizes
     )
     total_weight = sum(float(p["weight"] or 0) for p in prizes if p["active"]) or 1
     weight_note = " + ".join(f"{p['title']}: {round(100*float(p['weight'] or 0)/total_weight,1)}٪"
                               for p in prizes if p["active"]) or "—"
 
+    # ─── پیش‌نمایش زندهٔ گردونه + فیلتر/جست‌وجو — کاملاً سمت کلاینت، بدون درخواست تازه ───
+    live_js = f"""
+    <script>
+    (function(){{
+      var TYPE_LABELS={json.dumps(_WHEEL_PRIZE_TYPE_LABELS, ensure_ascii=False)};
+      function wpRows(){{return [].slice.call(document.querySelectorAll('.wp-row'))}}
+      function wpRecalc(){{
+        var rows=wpRows(), segs=[];
+        rows.forEach(function(r){{
+          var active=r.querySelector('.wp-active').checked;
+          var w=parseFloat(r.querySelector('.wp-weight').value)||0;
+          if(active&&w>0){{
+            segs.push({{
+              pid:r.dataset.pid, w:w,
+              color:r.querySelector('.wp-color').value,
+              title:r.querySelector('.wp-title').value||'—'
+            }});
+          }}
+        }});
+        var total=segs.reduce(function(s,x){{return s+x.w}},0)||1;
+        // آپدیت بج احتمال هر ردیف
+        rows.forEach(function(r){{
+          var badge=r.querySelector('.wp-prob');
+          var active=r.querySelector('.wp-active').checked;
+          var w=parseFloat(r.querySelector('.wp-weight').value)||0;
+          if(!badge)return;
+          badge.textContent=(active&&w>0)?(Math.round(1000*w/total)/10)+'٪':'غیرفعال';
+        }});
+        // پیش‌نمایش گردونه (conic-gradient زنده)
+        var disc=document.getElementById('wp-preview-disc'), legend=document.getElementById('wp-preview-legend');
+        if(!disc)return;
+        if(!segs.length){{disc.style.background='#e5e7eb';legend.innerHTML='<span class="text-gray-400">هیچ جایزهٔ فعالی با وزن مثبت نیست</span>';return}}
+        var acc=0, parts=[];
+        segs.forEach(function(s){{
+          var start=acc/total*360, end=(acc+s.w)/total*360;
+          parts.push(s.color+' '+start.toFixed(1)+'deg '+end.toFixed(1)+'deg');
+          acc+=s.w;
+        }});
+        disc.style.background='conic-gradient('+parts.join(',')+')';
+        legend.innerHTML=segs.map(function(s){{
+          return '<span class="inline-flex items-center gap-1"><span style="width:9px;height:9px;border-radius:3px;background:'+s.color+';display:inline-block"></span>'+
+            s.title.slice(0,14)+' ('+(Math.round(1000*s.w/total)/10)+'٪)</span>';
+        }}).join('');
+      }}
+      var container=document.getElementById('wp-rows');
+      if(container)container.addEventListener('input',wpRecalc);
+      if(container)container.addEventListener('change',wpRecalc);
+      wpRecalc();
+
+      window.wpFilter=function(){{
+        var q=(document.getElementById('wp-search').value||'').toLowerCase();
+        var ty=document.getElementById('wp-filter-type').value;
+        var st=document.getElementById('wp-filter-status').value;
+        wpRows().forEach(function(r){{
+          var okQ=!q||r.dataset.title.indexOf(q)>-1;
+          var okT=!ty||r.dataset.type===ty;
+          var okS=!st||r.dataset.status===st;
+          r.style.display=(okQ&&okT&&okS)?'':'none';
+        }});
+      }};
+    }})();
+    </script>
+    """
+
+    preview_html = """
+    <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+      <div class="font-medium text-sm mb-3">🎡 پیش‌نمایش زندهٔ گردونه <span class="text-gray-400 font-normal text-xs">(همزمان با تغییر رنگ/وزن/فعال‌بودن به‌روز می‌شه — قبل از ذخیره)</span></div>
+      <div id="wp-preview-disc" style="width:150px;height:150px;border-radius:50%;margin:0 auto;box-shadow:0 4px 14px rgba(0,0,0,.12)"></div>
+      <div id="wp-preview-legend" class="flex flex-wrap gap-3 justify-center mt-3 text-xs text-gray-600"></div>
+    </div>
+    """
+
+    filter_bar = f"""
+    <div class="bg-white rounded-xl shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center text-sm">
+      <input type="text" id="wp-search" oninput="wpFilter()" placeholder="🔎 جست‌وجوی عنوان جایزه…" class="border rounded-lg p-2 text-xs flex-1 min-w-[160px]">
+      <select id="wp-filter-type" onchange="wpFilter()" class="border rounded-lg p-2 text-xs">{type_filter_options}</select>
+      <select id="wp-filter-status" onchange="wpFilter()" class="border rounded-lg p-2 text-xs">
+        <option value="">همهٔ وضعیت‌ها</option>
+        <option value="active">فعال</option>
+        <option value="inactive">غیرفعال</option>
+        <option value="exhausted">تمام‌شده</option>
+      </select>
+    </div>
+    """
+
     body = f"""
     {_wheel_back_html()}
+    {kpi_html}
     <form method="get" action="/admin/wheel/prizes" class="mb-3">
       <label class="text-xs text-gray-500">کمپین:</label>
       <select name="campaign_id" onchange="this.form.submit()" class="border rounded-lg p-2 text-sm">{camp_options}</select>
     </form>
-    <div class="text-xs text-gray-400 mb-3">درصد برد هر جایزه از روی «وزن احتمال» نسبت به مجموع وزن‌های فعال محاسبه می‌شه (نیازی به جمع‌شدن روی ۱۰۰ نیست). سقف کل = محدودیت همیشگی (سخت‌گیرانه)؛ سقف روزانه = محدودیت نرم روزانه. وضعیت فعلی: {e(weight_note)}</div>
+    {preview_html}
+    {filter_bar}
+    <div class="text-xs text-gray-400 mb-3">درصد برد هر جایزه از روی «وزن احتمال» نسبت به مجموع وزن‌های فعال محاسبه می‌شه (نیازی به جمع‌شدن روی ۱۰۰ نیست) — همون‌طور که بالا زنده می‌بینی. سقف کل = محدودیت همیشگی (سخت‌گیرانه)؛ سقف روزانه = محدودیت نرم روزانه. «حداقل خرید» فقط برای انواع تخفیف معناداره و مستقیم روی کد تخفیف صادرشده اعمال می‌شه. وضعیت اولیهٔ سرور: {e(weight_note)}</div>
     <form method="post" action="/admin/wheel/prizes/bulk-save">
       <input type="hidden" name="campaign_id" value="{campaign_id}">
-      <div class="bg-white rounded-xl shadow-sm p-4 mb-3">
+      <div class="bg-white rounded-xl shadow-sm p-4 mb-3" id="wp-rows">
         {rows or '<div class="text-xs text-gray-400">هنوز جایزه‌ای برای این کمپین ثبت نشده.</div>'}
       </div>
       <button class="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium mb-4">💾 ذخیرهٔ همهٔ تغییرات</button>
@@ -13856,18 +13997,21 @@ async def wheel_prizes_page(request: Request, campaign_id: int = 0, flash: str =
 
     <div class="bg-white rounded-xl shadow-sm p-4">
       <div class="font-medium text-sm mb-2">+ افزودن جایزهٔ تازه</div>
-      <form method="post" action="/admin/wheel/prizes/add" class="flex flex-wrap gap-2 items-center text-sm">
+      <form method="post" action="/admin/wheel/prizes/add" enctype="multipart/form-data" class="flex flex-wrap gap-2 items-center text-sm">
         <input type="hidden" name="campaign_id" value="{campaign_id}">
-        <input type="text" name="icon" value="🎁" class="border rounded p-1.5 w-12 text-center text-xs">
+        <input type="text" name="icon" value="🎁" class="border rounded p-1.5 w-12 text-center text-xs" title="آیکون (fallback بدون تصویر)">
         <input type="text" name="title" class="border rounded p-1.5 flex-1 min-w-[140px] text-xs" placeholder="عنوان جایزه" required>
         <select name="prize_type" class="border rounded p-1.5 text-xs">{type_options}</select>
         <input type="text" inputmode="numeric" name="value" placeholder="مقدار" class="border rounded p-1.5 w-20 text-xs ltr-num">
+        <input type="text" inputmode="numeric" name="min_purchase_amount" placeholder="حداقل خرید" class="border rounded p-1.5 w-24 text-xs ltr-num" title="فقط برای تخفیف">
         <input type="text" inputmode="numeric" name="validity_hours" placeholder="اعتبار (ساعت)" class="border rounded p-1.5 w-20 text-xs ltr-num">
         <input type="text" inputmode="decimal" name="weight" placeholder="وزن" value="1" class="border rounded p-1.5 w-16 text-xs ltr-num">
+        <label class="text-xs text-gray-500 flex items-center gap-1">🖼 <input type="file" name="image" accept="image/*" class="text-xs"></label>
         <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs">+ افزودن</button>
       </form>
     </div>
-    {hidden_forms}"""
+    {hidden_forms}
+    {live_js}"""
     return _layout("مدیریت جوایز گردونه", body, adm, flash=flash)
 
 
@@ -13875,16 +14019,34 @@ async def wheel_prizes_page(request: Request, campaign_id: int = 0, flash: str =
 async def wheel_prizes_add(request: Request, campaign_id: int = Form(...), title: str = Form(...),
                             prize_type: str = Form(...), icon: str = Form("🎁"),
                             value: str = Form("0"), validity_hours: str = Form("0"),
-                            weight: str = Form("1")):
+                            min_purchase_amount: str = Form("0"),
+                            weight: str = Form("1"), image: UploadFile = None):
     adm = _get_admin(request)
     guard = _require(adm, "wheel")
     if guard: return guard
     from db import create_wheel_prize
+    image_url = ""
+    try:
+        if image is not None and getattr(image, "filename", ""):
+            os.makedirs(APP_MEDIA_DIR, exist_ok=True)
+            ext = os.path.splitext(image.filename)[1].lower() or ".jpg"
+            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                ext = ".jpg"
+            fname = f"wheel{int(time.time())}{ext}"
+            data = await image.read()
+            if data:
+                from image_utils import compress_image_bytes
+                with open(os.path.join(APP_MEDIA_DIR, fname), "wb") as f:
+                    f.write(compress_image_bytes(data, ext))
+                image_url = f"/app-media/{fname}"
+    except Exception:
+        pass
     try:
         create_wheel_prize(
             campaign_id, title.strip(), prize_type, icon=icon.strip() or "🎁",
             value=int(value or 0), validity_hours=int(validity_hours or 0),
-            weight=float(weight or 1),
+            weight=float(weight or 1), min_purchase_amount=int(min_purchase_amount or 0),
+            image_url=image_url,
         )
     except ValueError as ex:
         return _redir(f"/admin/wheel/prizes?campaign_id={campaign_id}&flash={e('❌ '+str(ex))}")
@@ -13920,6 +14082,7 @@ async def wheel_prizes_bulk_save(request: Request):
             color=(form.get(f"color_{pid}") or p["color"]).strip(),
             prize_type=(form.get(f"type_{pid}") or p["prize_type"]).strip(),
             value=num("value"), max_discount_value=num("maxdisc"),
+            min_purchase_amount=num("minpurchase"),
             validity_hours=num("valid"), weight=num("weight", float, 1.0),
             total_limit=num("totallimit"), daily_limit=num("dailylimit"),
             sort_order=num("sort"),
@@ -13928,6 +14091,50 @@ async def wheel_prizes_bulk_save(request: Request):
         )
     _log(request, "ذخیرهٔ گروهی جوایز گردونه", "گردونهٔ شانس", f"campaign #{campaign_id}", admin_info=adm)
     return _redir(f"/admin/wheel/prizes?campaign_id={campaign_id}&flash={e('✅ تغییرات ذخیره شد')}")
+
+
+@router.post("/wheel/prizes/{pid}/image")
+async def wheel_prizes_image(request: Request, pid: int, image: UploadFile = None):
+    """آپلود تصویر/Illustration اختصاصی یه جایزه — مستقل از فرم bulk-save (فایل
+    داخل یه POST فرم‌های زیاد ریسک داره)؛ همون الگوی آپلود تصویر محتوای اپ."""
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import get_wheel_prize, update_wheel_prize
+    p = get_wheel_prize(pid)
+    if not p:
+        return _redir(f"/admin/wheel/prizes?flash={e('❌ جایزه یافت نشد')}")
+    try:
+        if image is not None and getattr(image, "filename", ""):
+            os.makedirs(APP_MEDIA_DIR, exist_ok=True)
+            ext = os.path.splitext(image.filename)[1].lower() or ".jpg"
+            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                ext = ".jpg"
+            fname = f"wheel{pid}_{int(time.time())}{ext}"
+            data = await image.read()
+            if data:
+                from image_utils import compress_image_bytes
+                with open(os.path.join(APP_MEDIA_DIR, fname), "wb") as f:
+                    f.write(compress_image_bytes(data, ext))
+                update_wheel_prize(pid, image_url=f"/app-media/{fname}")
+                _log(request, "آپلود تصویر جایزهٔ گردونه", "گردونهٔ شانس", f"prize #{pid}", admin_info=adm)
+    except Exception:
+        pass
+    return _redir(f"/admin/wheel/prizes?campaign_id={p['campaign_id']}&flash={e('✅ تصویر ذخیره شد')}")
+
+
+@router.post("/wheel/prizes/{pid}/duplicate")
+async def wheel_prizes_duplicate(request: Request, pid: int):
+    adm = _get_admin(request)
+    guard = _require(adm, "wheel")
+    if guard: return guard
+    from db import get_wheel_prize, duplicate_wheel_prize
+    p = get_wheel_prize(pid)
+    if not p:
+        return _redir(f"/admin/wheel/prizes?flash={e('❌ جایزه یافت نشد')}")
+    duplicate_wheel_prize(pid)
+    _log(request, "کپی جایزهٔ گردونه", "گردونهٔ شانس", f"prize #{pid} → {p['title']} (کپی)", admin_info=adm)
+    return _redir(f"/admin/wheel/prizes?campaign_id={p['campaign_id']}&flash={e('✅ جایزه کپی شد')}")
 
 
 @router.post("/wheel/prizes/{pid}/delete")

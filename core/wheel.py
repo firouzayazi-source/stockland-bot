@@ -66,6 +66,7 @@ def get_state(user_id: int = None) -> dict:
         item = {
             "id": p["id"], "title": p["title"], "icon": p["icon"], "color": p["color"],
             "prize_type": p["prize_type"], "sort_order": p["sort_order"],
+            "image_url": p.get("image_url") or "",
         }
         if show_odds:
             item["percent"] = round(100 * (float(p.get("weight") or 0) / total_weight), 1)
@@ -145,6 +146,7 @@ def spin(user_id: int, ip: str = "", device_fingerprint: str = "", session_id: s
         "prize": {
             "id": chosen["id"], "title": chosen["title"], "icon": chosen["icon"],
             "color": chosen["color"], "prize_type": chosen["prize_type"],
+            "image_url": chosen.get("image_url") or "",
             "amount": issued.get("amount", 0), "discount_code": issued.get("discount_code", ""),
             "expires_at": issued.get("expires_at"), "description": chosen.get("description") or "",
         },
@@ -173,6 +175,7 @@ def _issue_prize(user_id: int, campaign: dict, prize: dict, usage_date: str) -> 
             user_id, disc_type, int(prize.get("value") or 0),
             expire_hours=int(prize.get("validity_hours") or 0),
             max_value=int(prize.get("max_discount_value") or 0),
+            min_amount=int(prize.get("min_purchase_amount") or 0),
             description=prize.get("description") or prize["title"],
             source="wheel", source_ref_id=campaign["id"],
         )

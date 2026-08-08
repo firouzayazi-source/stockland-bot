@@ -474,7 +474,8 @@ async def api_my_prizes(request: Request):
     items = list_user_personal_codes(uid)
     return {"ok": True, "items": [{
         "code": it["code"], "type": it["type"], "value": it["value"],
-        "max_value": it.get("max_value") or 0, "status": it["status"],
+        "max_value": it.get("max_value") or 0, "min_amount": it.get("min_amount") or 0,
+        "status": it["status"],
         "expires_at": it.get("expires_at"), "description": it.get("description") or "",
         "source": it.get("source") or "", "created_at": it.get("created_at"),
     } for it in items]}

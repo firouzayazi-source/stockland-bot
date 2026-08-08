@@ -3228,6 +3228,7 @@ def validate_discount(code: str, product_id: int = None, category_id: int = None
 
 def issue_personal_discount_code(user_id: int, disc_type: str, value: int, *,
                                   expire_hours: int = 0, max_value: int = 0,
+                                  min_amount: int = 0,
                                   description: str = "", source: str = "",
                                   source_ref_id: int = None, code_prefix: str = "SL") -> dict:
     """موتور مشترک صدور کد تخفیف **شخصی** یک‌بارمصرف — تک‌منبع حقیقت برای هر مکانیزم
@@ -3255,11 +3256,11 @@ def issue_personal_discount_code(user_id: int, disc_type: str, value: int, *,
             try:
                 cur = conn.execute(
                     "INSERT INTO discount_codes "
-                    "(code, type, value, max_value, max_uses, max_uses_per_user, is_active, "
+                    "(code, type, value, max_value, min_amount, max_uses, max_uses_per_user, is_active, "
                     "expires_at, description, owner_user_id, source, source_ref_id) "
-                    "VALUES (?,?,?,?,1,1,1,?,?,?,?,?);",
-                    (code, disc_type, int(value), int(max_value or 0), expires_at, description,
-                     int(user_id), source or "", source_ref_id)
+                    "VALUES (?,?,?,?,?,1,1,1,?,?,?,?,?);",
+                    (code, disc_type, int(value), int(max_value or 0), int(min_amount or 0), expires_at,
+                     description, int(user_id), source or "", source_ref_id)
                 )
                 code_id = cur.lastrowid
                 conn.commit()
@@ -5998,6 +5999,18 @@ def ensure_wheel_schema():
                 PRIMARY KEY (user_id, campaign_id, usage_date)
             );
         """)
+        # مهاجرت افزایشی (بخش «مدیریت کامل جوایز» — ۲۰۲۶-۰۸-۰۹): سه ستون تازه روی
+        # wheel_prizes، الگوی استاندارد پروژه (ALTER در try/except، بند ۷ سند).
+        for _ddl in (
+            "ALTER TABLE wheel_prizes ADD COLUMN image_url TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE wheel_prizes ADD COLUMN min_purchase_amount INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE wheel_prizes ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
+        ):
+            try:
+                conn.execute(_ddl)
+            except Exception:
+                pass
+        conn.commit()
         for _name, _target in [
             ("idx_wheel_prizes_campaign",   "wheel_prizes(campaign_id)"),
             ("idx_wheel_spins_user",        "wheel_spins(user_id, created_at)"),
@@ -6181,14 +6194,19 @@ def get_wheel_prize(prize_id: int) -> dict | None:
         conn.close()
 
 
+_WHEEL_PRIZE_FIELDS = {"icon", "color", "value", "max_discount_value", "weight", "total_limit",
+                        "daily_limit", "validity_hours", "active", "sort_order", "description",
+                        "image_url", "min_purchase_amount"}
+
+
 def create_wheel_prize(campaign_id: int, title: str, prize_type: str, **fields) -> int:
     if prize_type not in WHEEL_PRIZE_TYPES:
         raise ValueError(f"نوع جایزهٔ نامعتبر: {prize_type}")
     ensure_wheel_schema()
-    allowed = {"icon", "color", "value", "max_discount_value", "weight", "total_limit",
-               "daily_limit", "validity_hours", "active", "sort_order", "description"}
-    cols = ["campaign_id", "title", "prize_type"] + [k for k in fields if k in allowed]
-    vals = [campaign_id, title.strip(), prize_type] + [fields[k] for k in fields if k in allowed]
+    allowed = _WHEEL_PRIZE_FIELDS
+    cols = ["campaign_id", "title", "prize_type", "updated_at"] + [k for k in fields if k in allowed]
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    vals = [campaign_id, title.strip(), prize_type, now] + [fields[k] for k in fields if k in allowed]
     conn = _get_connection()
     try:
         cur = conn.execute(
@@ -6201,20 +6219,31 @@ def create_wheel_prize(campaign_id: int, title: str, prize_type: str, **fields) 
 
 def update_wheel_prize(prize_id: int, **fields) -> None:
     ensure_wheel_schema()
-    allowed = {"title", "icon", "color", "prize_type", "value", "max_discount_value", "weight",
-               "total_limit", "daily_limit", "validity_hours", "active", "sort_order", "description"}
+    allowed = {"title", "prize_type"} | _WHEEL_PRIZE_FIELDS
     cols = [k for k in fields if k in allowed]
     if not cols:
         return
     if "prize_type" in fields and fields["prize_type"] not in WHEEL_PRIZE_TYPES:
         raise ValueError(f"نوع جایزهٔ نامعتبر: {fields['prize_type']}")
+    cols.append("updated_at")
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     conn = _get_connection()
     try:
         conn.execute(f"UPDATE wheel_prizes SET {', '.join(c+'=?' for c in cols)} WHERE id=?;",
-                     [fields[c] for c in cols] + [prize_id])
+                     [fields[c] for c in cols[:-1]] + [now, prize_id])
         conn.commit()
     finally:
         conn.close()
+
+
+def duplicate_wheel_prize(prize_id: int) -> int | None:
+    """کپی کامل یه جایزه (برای «Duplicate Prize» پنل) — عنوان با پسوند «(کپی)»،
+    issued_count صفر (کپی، نه ادامهٔ شمارش قبلی)، بقیهٔ فیلدها عیناً همون اصلی."""
+    src = get_wheel_prize(prize_id)
+    if not src:
+        return None
+    fields = {k: src[k] for k in _WHEEL_PRIZE_FIELDS if k in src}
+    return create_wheel_prize(src["campaign_id"], src["title"].strip() + " (کپی)", src["prize_type"], **fields)
 
 
 def delete_wheel_prize(prize_id: int) -> None:
@@ -6466,6 +6495,36 @@ def get_wheel_stats(date_from: str = "", date_to: str = "") -> dict:
         }
     finally:
         conn.close()
+
+
+def get_wheel_prize_kpis(campaign_id: int) -> dict:
+    """داشبورد KPI بالای صفحهٔ «مدیریت جوایز» — همه از داده‌های واقعی وزن/سقف/چرخش
+    همون کمپین، بدون هیچ عدد هاردکد یا محاسبهٔ موازی."""
+    ensure_wheel_schema()
+    prizes = list_wheel_prizes(campaign_id, active_only=False)
+    active = [p for p in prizes if p["active"]]
+    active_weight = round(sum(float(p["weight"] or 0) for p in active), 2)
+    total_issued = sum(int(p["issued_count"] or 0) for p in prizes)
+    low_stock = [p for p in prizes if p["active"] and p["total_limit"] and
+                 p["issued_count"] >= p["total_limit"] * 0.8]
+    conn = _get_connection()
+    try:
+        top = conn.execute(
+            "SELECT prize_title, COUNT(*) c FROM wheel_spins WHERE campaign_id=? "
+            "AND prize_type!='no_win' GROUP BY prize_title ORDER BY c DESC LIMIT 1;",
+            (campaign_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return {
+        "active_count": len(active),
+        "total_count": len(prizes),
+        "active_weight": active_weight,
+        "total_issued": total_issued,
+        "top_prize": top["prize_title"] if top else "—",
+        "low_stock_count": len(low_stock),
+        "low_stock_titles": [p["title"] for p in low_stock],
+    }
 
 
 # ─── اعلان‌های مینی‌اپ (تاریخچه، مکمل پیام تلگرام) ─────────────────────────────

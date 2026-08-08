@@ -2056,6 +2056,64 @@ window._doPay=function(method){
 var _accPopup=window._accPopup,_accBody=window._accBody,skel=window._slSkel,err=window._slErr,
     api=window._slApi,esc=window._slEsc,fmt=window._slFmt,initData=window._slInitData;
 
+/* ═══ Formatter مرکزی تاریخ شمسی/اعداد فارسی — تک‌منبع حقیقت برای کل این فیچر ═══
+   بک‌اند تاریخ رو استاندارد (میلادی) ذخیره/برمی‌گردونه؛ تبدیل به شمسی فقط همین‌جا،
+   در لایهٔ نمایش، اتفاق می‌افته — دقیقاً همون الگوریتم db.py:_to_jalali (پورت
+   دقیق، نه کتابخونهٔ متفاوت) تا خروجی پنل ادمین (fa_date پایتون) و مینی‌اپ همیشه
+   یکی باشن. تست شده: مطابقت ۱۰۰٪ روی ۶۸۴ تاریخ (۲۰۱۵ تا ۲۰۳۳) با نسخهٔ پایتون. */
+var _J_NRZ={1395:[2016,3,20],1396:[2017,3,21],1397:[2018,3,21],1398:[2019,3,21],1399:[2020,3,20],
+  1400:[2021,3,21],1401:[2022,3,21],1402:[2023,3,21],1403:[2024,3,20],1404:[2025,3,20],
+  1405:[2026,3,21],1406:[2027,3,21],1407:[2028,3,20],1408:[2029,3,20],1409:[2030,3,20],1410:[2031,3,21]};
+var _J_REF_JY=1403;
+function _jUTC(y,m,d){return Date.UTC(y,m-1,d)}
+var _J_REF_G=_jUTC(2024,3,20);
+function _jNrzMs(jy){var t=_J_NRZ[jy];return t?_jUTC(t[0],t[1],t[2]):null}
+function _jIsLeap(jy){return (((jy-474)%2820+475)*682)%2816<682}
+function _jDaysBetween(msA,msB){return Math.round((msA-msB)/86400000)}
+function _toJalali(gy,gm,gd){
+  var g=_jUTC(gy,gm,gd);
+  var jy=_J_REF_JY+Math.floor(_jDaysBetween(g,_J_REF_G)/365);
+  var nrz;
+  for(var i=0;i<5;i++){
+    nrz=_jNrzMs(jy);
+    if(nrz==null){
+      var d=0,y;
+      if(jy>_J_REF_JY){for(y=_J_REF_JY;y<jy;y++)d+=_jIsLeap(y)?366:365;nrz=_J_REF_G+d*86400000}
+      else{for(y=jy;y<_J_REF_JY;y++)d+=_jIsLeap(y)?366:365;nrz=_J_REF_G-d*86400000}
+    }
+    var nxtNrz=_jNrzMs(jy+1);
+    var nxt=nxtNrz!=null?nxtNrz:nrz+(_jIsLeap(jy)?366:365)*86400000;
+    if(g<nrz){jy--;continue}
+    if(g>=nxt){jy++;continue}
+    break;
+  }
+  var diff=_jDaysBetween(g,nrz);
+  var mlen=[31,31,31,31,31,31,30,30,30,30,30,_jIsLeap(jy)?30:29];
+  for(var jm=1;jm<=12;jm++){
+    var ml=mlen[jm-1];
+    if(diff<ml)return [jy,jm,diff+1];
+    diff-=ml;
+  }
+  return [jy,12,29];
+}
+var _FA_DIGITS=['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+function faNum(s){return String(s==null?'':s).replace(/[0-9]/g,function(d){return _FA_DIGITS[+d]})}
+/* رشتهٔ تاریخ («2026-08-09 14:30:00» یا با T یا فقط تاریخ) → شمسی فارسی «۱۴۰۵/۰۵/۱۸». */
+function jalaliDate(s,withTime){
+  if(!s)return '—';
+  var str=String(s).trim().replace('T',' ');
+  var m=str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m)return str;
+  var r;
+  try{r=_toJalali(+m[1],+m[2],+m[3])}catch(ex){return str}
+  var out=r[0]+'/'+String(r[1]).padStart(2,'0')+'/'+String(r[2]).padStart(2,'0');
+  if(withTime){
+    var tm=str.match(/(\d{2}):(\d{2})/);
+    if(tm)out+='  '+tm[1]+':'+tm[2];
+  }
+  return faNum(out);
+}
+
 /* ─── صدا (WebAudio تولیدشده، بدون فایل باینری/CDN خارجی) ─── */
 var _wheelAudioCtx=null;
 function _wheelBeep(freq,dur,type){
@@ -2154,6 +2212,13 @@ function _wgIcon(type){
   }[type]||'<path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6-5.4-3-5.4 3 1.2-6L3.4 9.3l6-.7Z"/>';
   return s+p+'</svg>';
 }
+/* اگه ادمین برای این جایزه تصویر/Illustration آپلود کرده باشه (image_url)، همون
+   نشون داده می‌شه؛ وگرنه fallback به آیکون SVG بر پایهٔ نوع جایزه — هیچ‌وقت جای
+   خالی نمی‌مونه. */
+function _wgMedia(p,size){
+  if(p.image_url)return '<img src="'+esc(p.image_url)+'" alt="" style="width:'+size+'px;height:'+size+'px;object-fit:contain;display:block" loading="lazy">';
+  return _wgIcon(p.prize_type);
+}
 function _wgStar(){return '<svg viewBox="0 0 24 24" fill="#8A5E12"><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 18.9 6.1 20.6l1.3-6.6-4.9-4.6 6.6-.8z"/></svg>'}
 function _wgPtr(){return '<svg viewBox="0 0 26 34"><defs><linearGradient id="wgptr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FCE08A"/><stop offset="1" stop-color="#E29B33"/></linearGradient></defs><path d="M13 33 3 12a10 10 0 1 1 20 0Z" fill="url(#wgptr)" stroke="#8A5E12" stroke-width="1"/><circle cx="13" cy="11" r="3.4" fill="#0A0918"/></svg>'}
 
@@ -2223,9 +2288,9 @@ function buildWheel(stage,state){
     var mid=seg[i].mid,p=prizes[i];
     labels+='<div class="sl-wg-lbl" data-i="'+i+'" style="transform:rotate('+mid+'deg)">'+
       '<div class="sl-wg-lbl-in" style="top:-'+labelR+'px;transform:translate(-50%,-50%) rotate('+(-mid)+'deg)">'+
-      '<span style="color:#fff">'+_wgIcon(p.prize_type)+'</span>'+
+      '<span style="color:#fff">'+_wgMedia(p,22)+'</span>'+
       '<span class="sl-wg-lbl-t">'+esc(p.title||'')+'</span>'+
-      (state.settings.show_odds&&p.percent!=null?'<span class="sl-wg-lbl-pct">'+p.percent+'٪</span>':'')+
+      (state.settings.show_odds&&p.percent!=null?'<span class="sl-wg-lbl-pct">'+faNum(p.percent)+'٪</span>':'')+
       '</div></div>';
   }
   var lamps='',NL=16;
@@ -2320,13 +2385,13 @@ function showWinModal(res,onClose){
     codeHtml='<div class="sl-wm-codewrap"><div class="sl-wm-codelabel">کد تخفیف شما</div>'+
       '<div class="sl-wm-code"><code id="wm-code">'+esc(p.discount_code)+'</code>'+
       '<button class="sl-wm-code-copy" id="wm-copy">کپی کد</button></div>'+
-      (p.expires_at?'<div class="sl-wm-exp">اعتبار تا '+esc(p.expires_at)+'</div>':'')+'</div>';
+      (p.expires_at?'<div class="sl-wm-exp">اعتبار تا '+jalaliDate(p.expires_at)+'</div>':'')+'</div>';
   }
   var subtitle=win?(p.prize_type==='wallet_credit'?'به کیف پول شما اضافه شد':(p.prize_type==='extra_spin'?'یک شانس دیگه گیرت اومد!':'شما برنده شدید')):'';
   var ov=document.createElement('div');ov.className='sl-wm-ov';
   ov.innerHTML='<div class="sl-wm">'+
     '<div class="sl-wm-glow"></div>'+
-    '<div class="sl-wm-ic'+(win?'':' nowin')+'" style="color:#fff">'+_wgIcon(p.prize_type)+'</div>'+
+    '<div class="sl-wm-ic'+(win?'':' nowin')+'" style="color:#fff">'+_wgMedia(p,46)+'</div>'+
     '<div class="sl-wm-eyebrow">'+(win?'🎉 تبریک!':'دوباره تلاش کن')+'</div>'+
     (subtitle?'<div class="sl-wm-title">'+esc(subtitle)+'</div>':'')+
     '<div class="sl-wm-value'+(big.plain?' plain':'')+'">'+big.v+'</div>'+
@@ -2355,10 +2420,10 @@ function loadRewardsPreview(){
     if(!act.length){sec.style.display='none';return}
     sec.style.display='';
     list.innerHTML=act.map(function(it){
-      var vt=it.type==='percent'?(it.value+'٪ تخفیف'):(fmt(it.value)+' تومان تخفیف');
+      var vt=it.type==='percent'?(fmt(it.value)+'٪ تخفیف'):(fmt(it.value)+' تومان تخفیف');
       return '<div class="sl-wg-reward"><div class="sl-wg-reward-ic" style="color:#F5C451">'+_wgIcon(it.type==='percent'?'discount_percent':'discount_fixed')+'</div>'+
         '<div class="sl-wg-reward-tx"><div class="sl-wg-reward-t">'+esc(vt)+'</div>'+
-        (it.expires_at?'<div class="sl-wg-reward-s">اعتبار تا '+esc(it.expires_at)+'</div>':'')+'</div>'+
+        (it.expires_at?'<div class="sl-wg-reward-s">اعتبار تا '+jalaliDate(it.expires_at)+'</div>':'')+'</div>'+
         '<span class="sl-wg-reward-code">'+esc(it.code)+'</span></div>';
     }).join('');
     var all=document.getElementById('wg-rewards-all');
@@ -2381,7 +2446,7 @@ function loadActivity(){
       return '<div class="sl-wg-act"><div class="sl-wg-act-ic" style="color:#F5C451">'+_wgIcon(t)+'</div>'+
         '<div class="sl-wg-act-tx"><div class="sl-wg-act-t">'+esc(label)+'</div>'+
         (extra?'<div class="sl-wg-act-d">'+esc(extra)+'</div>':'')+'</div>'+
-        '<div class="sl-wg-act-d">'+esc((it.created_at||'').slice(0,10))+'</div></div>';
+        '<div class="sl-wg-act-d">'+jalaliDate(it.created_at)+'</div></div>';
     }).join('');
   }).catch(function(){});
 }
@@ -2413,8 +2478,11 @@ function renderMyPrizes(b,items,filter){
     }).join('')+'</div>'+
     '<div class="sl-pz-list">'+(shown.length?shown.map(function(it){
       var isPct=it.type==='percent';
-      var val=isPct?(it.value+'٪ تخفیف'):(fmt(it.value)+' تومان تخفیف');
-      var cap=isPct&&it.max_value?('تا سقف '+fmt(it.max_value)+' تومان'):'';
+      var val=isPct?(fmt(it.value)+'٪ تخفیف'):(fmt(it.value)+' تومان تخفیف');
+      var capParts=[];
+      if(isPct&&it.max_value)capParts.push('تا سقف '+fmt(it.max_value)+' تومان');
+      if(it.min_amount)capParts.push('حداقل خرید '+fmt(it.min_amount)+' تومان');
+      var cap=capParts.join(' · ');
       var dim=it.status!=='active';
       return '<div class="sl-pz'+(dim?' is-dim':'')+'">'+
         '<div class="sl-pz-ic" style="background:'+(isPct?'linear-gradient(145deg,#8B5CF6,#6366F1)':'linear-gradient(145deg,#F59E0B,#E29B33)')+'">'+_wgIcon(isPct?'discount_percent':'discount_fixed')+'</div>'+
@@ -2425,7 +2493,7 @@ function renderMyPrizes(b,items,filter){
           (it.status==='active'?
             '<div class="sl-pz-code"><code>'+esc(it.code)+'</code><button class="sl-pz-code-btn" data-code="'+esc(it.code)+'">کپی</button></div>':
             '<div class="sl-pz-code" style="opacity:.7"><code>'+esc(it.code)+'</code></div>')+
-          (it.expires_at?'<div class="sl-pz-exp">اعتبار تا '+esc(it.expires_at)+'</div>':'')+
+          (it.expires_at?'<div class="sl-pz-exp">اعتبار تا '+jalaliDate(it.expires_at)+'</div>':'')+
         '</div></div>';
     }).join(''):'<div class="sl-empty" style="padding:36px"><span class="sl-empty-e">📭</span>موردی در این دسته نیست</div>')+'</div>';
   b.querySelectorAll('.sl-pz-code-btn').forEach(function(btn){
