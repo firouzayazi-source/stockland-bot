@@ -976,7 +976,7 @@ systemctl restart stockland.service
 - `TeleBot(..., num_threads=8)` صریح.
 - `get_vendor.sh`: تأیید صریح دانلود موفق هر ۶ وزن فونت + دو فایل framework7 (قبلاً شکست نصفه‌کاره بی‌صدا بود)؛ حذف فایل زبالهٔ `app/icons/1`.
 - preload فونت `Vazirmatn-Regular` در `app/index.html` و پنل ادمین.
-- `deploy.sh`: مرحلهٔ minify اختیاری با esbuild (فقط اگه نصب باشه، بدون وابستگی جدید اجباری).
+- `deploy.sh`: مرحلهٔ minify اختیاری با esbuild (فقط اگه نصب باشه، بدون وابستگی جدید اجباری). ⚠️ **۲۰۲۶-۰۸-۰۸ (دور ۶۲): minify روی `app.js` کامل حذف شد** — یه باگ واقعی esbuild کشف شد که rename کردن اسم تابع رو بی‌صدا خراب می‌کنه وقتی بلافاصله با یه رشتهٔ emoji-شروع‌شونده صدا زده بشه (`ReferenceError` فقط سمت کلاینت، بدون هیچ اثری در لاگ سرور — دقیقاً همین باگ گردونهٔ شانس/جوایز من رو یه دور کامل غیرقابل‌کلیک کرده بود، بخش دیباگ کامل در `CHANGELOG_AI.md`). minify روی `app.css` (که این کلاس باگ رو نداره) هنوز فعاله.
 - `core/__init__.py`: اصلاح docstring اشتباه (ادعا می‌کرد «همه کلاینت‌ها استفاده می‌کنن» — دقیقاً برعکس واقعیت؛ فقط `api.py` استفاده می‌کنه، بقیه مستقیم از `db.py`).
 - ماژول تازهٔ `tg_notify.py` — `send_telegram_message()` مشترک، یکی‌سازی ۵ نقطهٔ تکراری `requests.post` به تلگرام در `payment_service.py`/`api.py`. `payment_service.send_telegram_message` موجود حالا فقط delegate می‌کنه.
 - بخش ۱۴ آیتم ۲ این سند (mismatch `redirect_url`/`payment_url`) تأیید و به «رفع‌شده» به‌روزرسانی شد — چک مستقیم کد نشون داد اصلاً mismatch نبوده.
