@@ -7,6 +7,25 @@ var initData=(tg&&tg.initData)||'',tgUser=(tg&&tg.initDataUnsafe&&tg.initDataUns
 var app=new Framework7({el:'#app',name:'استوک‌لند',theme:'ios',darkMode:'auto',popup:{closeByBackdropClick:true}});
 window._slApp=app;window._slApi=function(){return api.apply(null,arguments)};window._slEsc=function(){return esc.apply(null,arguments)};window._slFmt=function(){return fmt.apply(null,arguments)};window._slInitData=initData;window._slTg=tg;
 
+/* ═══ دیباگ موقت — دور دوم — گردونهٔ شانس/جوایز من هنوز باز نمی‌شن با این‌که
+   کیف‌پول/اعلان‌ها (همون _accPopup) درست کار می‌کنن. بعد از تشخیص حذف بشه. ═══ */
+(function(){
+  var dbg=document.createElement('div');
+  dbg.id='sl-debug-log';
+  dbg.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:rgba(0,0,0,.9);color:#0f0;font-size:11px;line-height:1.5;padding:6px 8px;max-height:42vh;overflow:auto;direction:ltr;text-align:left;font-family:monospace;pointer-events:none';
+  function mount(){if(document.body&&!document.getElementById('sl-debug-log'))document.body.appendChild(dbg)}
+  document.addEventListener('DOMContentLoaded',mount);mount();
+  function log(msg){
+    var l=document.createElement('div');
+    l.textContent=new Date().toISOString().slice(11,19)+' '+msg;
+    dbg.appendChild(l);dbg.scrollTop=dbg.scrollHeight;
+    while(dbg.children.length>50)dbg.removeChild(dbg.firstChild);
+  }
+  window._slDbg=log;
+  window.addEventListener('error',function(e){log('⚠️ GLOBAL ERROR: '+e.message+' @ '+e.filename+':'+e.lineno+':'+e.colno)});
+  log('دیباگ فعال — دور۲');
+})();
+
 /* هماهنگی تم روشن/تاریک با خود تلگرام — نه فقط با تنظیم سیستم‌عامل (این دو می‌تونن فرق کنن،
    مثلاً تلگرام تاریک باشه ولی گوشی روشن). tg.colorScheme همیشه اولویت داره وقتی داخل تلگراییم. */
 function _slApplyTheme(){
@@ -980,9 +999,11 @@ window.openFavorites=openFavorites;
 
 /* ═══ صفحات حساب (کیف‌پول/همکاری/دعوت) — از post-popup به‌عنوان ظرف عمومی استفاده می‌کنند ═══ */
 function _accPopup(title,html){
+  if(window._slDbg)window._slDbg('_accPopup: '+title);
   var t=document.getElementById('post-title'),b=document.getElementById('post-body');
   t.textContent=title;b.innerHTML='<div class="sl-acc-page">'+html+'</div>';
   window._slApp.popup.open('#post-popup');
+  if(window._slDbg)window._slDbg('_accPopup: popup.open() فراخوانی شد');
 }
 function _accBody(){return document.querySelector('#post-body .sl-acc-page')}
 
@@ -1774,8 +1795,14 @@ document.addEventListener('click',function(e){
   var tu=e.target.closest('[data-tid]');if(tu){openTutorial(tu.dataset.tid);return}
   var co=e.target.closest('[data-checkout]');if(co){openCheckout(co.dataset.checkout);return}
   var tb=e.target.closest('[data-tab]');if(tb){e.preventDefault();var l=document.querySelector('.tab-link[href="#'+tb.dataset.tab+'"]');if(l)l.click();return}
-  var wc=e.target.closest('#wheel-tool-card');if(wc){e.preventDefault();openWheel();return}
-  var mp=e.target.closest('#me-prizes-row');if(mp){e.preventDefault();openMyPrizes();return}
+  var wc=e.target.closest('#wheel-tool-card');if(wc){e.preventDefault();
+    if(window._slDbg)window._slDbg('handler: openWheel() صدا زده می‌شه');
+    try{openWheel()}catch(ex){if(window._slDbg)window._slDbg('openWheel() throw: '+ex.message+' | '+(ex.stack||'').slice(0,200))}
+    return}
+  var mp=e.target.closest('#me-prizes-row');if(mp){e.preventDefault();
+    if(window._slDbg)window._slDbg('handler: openMyPrizes() صدا زده می‌شه');
+    try{openMyPrizes()}catch(ex){if(window._slDbg)window._slDbg('openMyPrizes() throw: '+ex.message+' | '+(ex.stack||'').slice(0,200))}
+    return}
 });
 
 /* ═══ Mira-style snap navbar ═══ */
@@ -2132,14 +2159,22 @@ function _wheelSegAngles(n){
 
 function openWheel(){
   _accPopup('🎡 گردونهٔ شانس',skel(3));
+  if(window._slDbg)window._slDbg('openWheel: فراخوانی /wheel/state...');
   api('/wheel/state',true).then(function(d){
-    var b=_accBody();if(!b)return;
+    if(window._slDbg)window._slDbg('openWheel: پاسخ OK — enabled='+d.enabled+' campaign='+(d.campaign?1:0)+' prizes='+((d.prizes&&d.prizes.length)||0));
+    var b=_accBody();if(!b){if(window._slDbg)window._slDbg('openWheel: _accBody NULL');return}
     if(!d.enabled||!d.campaign||!d.prizes||!d.prizes.length){
       b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎡</span>گردونهٔ شانس فعلاً غیرفعاله — به‌زودی برگرد!</div>';
       return;
     }
-    renderWheel(b,d);
-  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت گردونه')});
+    try{renderWheel(b,d)}catch(ex){if(window._slDbg)window._slDbg('renderWheel throw: '+ex.message)}
+  }).catch(function(ex){
+    if(window._slDbg){
+      var info=(ex&&ex.status!=null)?('HTTP '+ex.status+' '+ex.statusText):(ex&&ex.message)||String(ex);
+      window._slDbg('openWheel: api CATCH — '+info);
+    }
+    var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت گردونه');
+  });
 }
 window.openWheel=openWheel;
 
@@ -2266,8 +2301,10 @@ var _wheelStatusLabel={active:'✅ قابل استفاده',used:'☑️ است�
 
 function openMyPrizes(){
   _accPopup('🎁 جوایز من',skel(3));
+  if(window._slDbg)window._slDbg('openMyPrizes: فراخوانی /me/prizes...');
   api('/me/prizes',true).then(function(d){
-    var b=_accBody();if(!b)return;
+    if(window._slDbg)window._slDbg('openMyPrizes: پاسخ OK — items='+((d&&d.items&&d.items.length)||0));
+    var b=_accBody();if(!b){if(window._slDbg)window._slDbg('openMyPrizes: _accBody NULL');return}
     var items=(d&&d.items)||[];
     if(!items.length){
       b.innerHTML='<div class="sl-empty"><span class="sl-empty-e">🎁</span>هنوز جایزه‌ای نداری — از گردونهٔ شانس امتحان کن!</div>';
@@ -2293,6 +2330,12 @@ function openMyPrizes(){
         else btn.textContent='✅ کپی شد';
       });
     });
-  }).catch(function(){var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت جوایز')});
+  }).catch(function(ex){
+    if(window._slDbg){
+      var info=(ex&&ex.status!=null)?('HTTP '+ex.status+' '+ex.statusText):(ex&&ex.message)||String(ex);
+      window._slDbg('openMyPrizes: api CATCH — '+info);
+    }
+    var b=_accBody();if(b)b.innerHTML=err('خطا در دریافت جوایز');
+  });
 }
 window.openMyPrizes=openMyPrizes;
